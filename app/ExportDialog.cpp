@@ -190,7 +190,8 @@ ExportDialog::ExportDialog(daw::EngineController& controller,
     m_writeMixdown->setChecked(remembered.writeMixdown);
     m_bypassInserts->setChecked(remembered.bypassChannelInserts);
     m_bypassMaster->setChecked(remembered.bypassMasterChain);
-    m_ignoreMuteSolo->setChecked(remembered.ignoreMuteSolo);
+    m_ignoreMuteSolo->setChecked(m_controller.hasCloudProjectBinding() || remembered.ignoreMuteSolo);
+    m_ignoreMuteSolo->setToolTip(tr("Clear this option to include your current listening mute and solo settings in the exported audio."));
     m_preFaderStems->setChecked(remembered.stemsPreFader);
     m_dither->setChecked(remembered.file.dither);
     m_artist->setText(QString::fromStdString(m_controller.project().author.empty()

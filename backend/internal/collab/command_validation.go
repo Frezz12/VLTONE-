@@ -85,8 +85,20 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 	addTrackClipLandingHead := func(trackID string) {
 		add("track:" + trackID + ":clipLanding")
 	}
+	if schemaVersion >= CollaborationCommandSchemaV6 {
+		add("project:renderGeneration")
+	}
 
 	switch kind {
+	case "track.setFreeze", "clip.setRenderState":
+		body, _ := commandPayloadObject(payload)
+		if kind == "track.setFreeze" {
+			id, _ := requiredPayloadUUID(body, "trackId")
+			add("track:" + id + ":freeze")
+		} else {
+			id, _ := requiredPayloadUUID(body, "clipId")
+			add("clip:"+id+":renderState", "clip:"+id+":descendants")
+		}
 	case "recording.prepareMidi":
 		body, _ := commandPayloadObject(payload)
 		id, _ := requiredPayloadString(body, "contentId")
@@ -107,7 +119,7 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 			return nil, nil, err
 		}
 		switch field {
-		case "name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan":
+		case "name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan", "notebookHtml":
 			add("project:" + field)
 			if field == "tempo" {
 				add("project:tempoCascade")
@@ -115,6 +127,8 @@ func deriveCommandMetadataForSchema(kind string, payload json.RawMessage,
 		default:
 			return nil, nil, invalidf("project scalar field is unsupported")
 		}
+	case "project.setNotebookCues":
+		add("project:notebookCues")
 	case "project.setTimeSignature":
 		if _, err := commandPayloadObject(payload); err != nil {
 			return nil, nil, err
@@ -988,10 +1002,20 @@ func deriveLifecycleStepsForSchema(kind string, payload json.RawMessage,
 		addLive("track:", sourceTrackID)
 		addLive("clip:", clipID)
 		addLive("clip:", afterID)
-	case "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "clip.setFade", "clip.setFadeCurve", "clip.setFadeMode", "clip.setMusicalAnalysis", "automation.setDefault", "automation.setActive":
+	case "clip.setRenderState", "clip.setProperty", "clip.setAsset", "clip.setSampleEdit", "clip.setFade", "clip.setFadeCurve", "clip.setFadeMode", "clip.setMusicalAnalysis", "automation.setDefault", "automation.setActive":
 		if err := parents(false); err != nil {
 			return nil, err
 		}
+		if kind == "clip.setRenderState" {
+			injection, _ := commandPayloadObject(body["injection"])
+			anchor, _ := requiredPayloadString(injection, "anchorChannelId")
+			if anchor != "master" {
+				addLive("track:", anchor)
+			}
+		}
+	case "track.setFreeze":
+		trackID, _ := identifier("trackId")
+		addLive("track:", trackID)
 	case "clip.setPatternOwner":
 		if err := parents(false); err != nil {
 			return nil, err

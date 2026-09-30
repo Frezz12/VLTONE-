@@ -10,7 +10,6 @@ namespace {
 void normalizeFreezeSlot(InsertModel& slot) {
     // Saving state and moving an editor do not change the baked sound.
     slot.stateFile.clear(); slot.rightStateFile.clear();
-    slot.stateAsset = {}; slot.rightStateAsset = {};
     slot.windowOpen = false;
     slot.windowX = slot.windowY = slot.windowWidth = slot.windowHeight = 0;
     slot.editorChannel = PluginEditorChannel::Left;
@@ -25,7 +24,6 @@ bool EngineController::isTrackFrozen(const std::string& id) const {
 std::string EngineController::freezeUnavailableReason(const std::string& id) {
     const auto* track = m_project.findTrack(id);
     if (!track) return "Track does not exist";
-    if (cloudProjectBound()) return "Freeze is available in local projects";
     if (track->kind != TrackKind::Audio && track->kind != TrackKind::Midi &&
         track->kind != TrackKind::Instrument) return "Only audio and MIDI source tracks can be frozen";
     if (track->armed || track->monitor) return "Disable recording and monitoring before freezing";
@@ -80,6 +78,10 @@ std::string EngineController::freezeFingerprint(const TrackModel& track) const {
 
 bool EngineController::invalidateTrackFreeze(const TrackModel& source) {
     if (!source.freeze.active() || m_rebuildingFrozenGraph) return false;
+    if (cloudProjectBound() && source.freeze.sourceFingerprint.empty() && !source.freeze.asset.empty()) {
+        if (auto* track = m_project.findTrack(source.id)) track->freeze.sourceFingerprint = freezeFingerprint(source);
+        return false;
+    }
     if (!freezeUnavailableReason(source.id).empty() ||
         source.freeze.sourceFingerprint != freezeFingerprint(source)) {
         if (auto* track = m_project.findTrack(source.id)) track->freeze = {};
@@ -92,6 +94,8 @@ bool EngineController::invalidateTrackFreeze(const TrackModel& source) {
 bool EngineController::unfreezeTrack(const std::string& id, bool undoable) {
     auto* track = m_project.findTrack(id);
     if (!track || !track->freeze.active()) return false;
+    if (cloudProjectBound()) return submitSharedMutation(collab::SetTrackFreeze{id, {}, 0, 0}, "Unfreeze Track") ==
+        collab::SharedMutationResult::Submitted;
     std::optional<ProjectModel> before;
     if (undoable) before = m_project;
     track->freeze = {};
@@ -104,6 +108,9 @@ audio::Result EngineController::freezeTrack(const std::string& id,
     const std::function<bool(const rendering::Progress&)>& onProgress,
     rendering::Report& out) {
     out = {};
+    if (cloudProjectBound() && (!sharedEditingAllowed() || !m_sharedAssetMutationSink ||
+        m_sharedMutationSink->commandSchemaVersion() < 6))
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "Freeze requires an editable connected session");
     const auto reason = freezeUnavailableReason(id);
     if (!reason.empty()) return audio::Result::fail(audio::EngineError::InvalidArgument, reason);
     if (isTrackFrozen(id)) return audio::Result::ok();
@@ -125,6 +132,10 @@ audio::Result EngineController::freezeTrack(const std::string& id,
         return proceed && projectRevision() == revision;
     }, out);
     auto discard = [&] {
+        if (cloudProjectBound()) {
+            retainSharedDerivedResult(out.files, revision, "Freeze Track", "interrupted");
+            return;
+        }
         for (const auto& file : out.files) {
             m_samples.erase(file);
             std::error_code ignored;
@@ -143,6 +154,15 @@ audio::Result EngineController::freezeTrack(const std::string& id,
     }
     auto samples = loadSamples(out.files.front());
     if (!samples) { discard(); return audio::Result::fail(audio::EngineError::FileNotFound, "Cannot read frozen audio"); }
+    if (cloudProjectBound()) {
+        const auto seconds = out.renderedSeconds, sampleRate = m_sampleRate;
+        const bool queued = submitSharedDerivedMutation(out.files, AssetKind::Audio,
+            [id, seconds, sampleRate](const auto& assets) -> collab::CommandBody {
+                return collab::SetTrackFreeze{id, assets.front(), seconds, sampleRate};
+            }, revision, "Freeze Track");
+        return queued ? audio::Result::ok() : audio::Result::fail(audio::EngineError::InvalidArgument,
+            "The project changed or freeze upload could not start");
+    }
     const auto before = m_project;
     track->freeze = {out.files.front(), out.renderedSeconds, m_sampleRate, fingerprint};
     result = rebuildGraph();

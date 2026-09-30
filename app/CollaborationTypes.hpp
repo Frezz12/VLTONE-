@@ -15,11 +15,13 @@ namespace collab {
 inline constexpr int kProtocolVersionV2 = 2;
 inline constexpr int kProtocolVersionV3 = 3;
 inline constexpr int kProtocolVersionV4 = 4;
-inline constexpr int kProtocolVersion = 5;
+inline constexpr int kProtocolVersionV5 = 5;
+inline constexpr int kProtocolVersion = 6;
 inline constexpr auto kProtocolNameV2 = "vlt-collab-v2";
 inline constexpr auto kProtocolNameV3 = "vlt-collab-v3";
 inline constexpr auto kProtocolNameV4 = "vlt-collab-v4";
-inline constexpr auto kProtocolName = "vlt-collab-v5";
+inline constexpr auto kProtocolNameV5 = "vlt-collab-v5";
+inline constexpr auto kProtocolName = "vlt-collab-v6";
 
 QString protocolNameForCommandSchema(int schemaVersion);
 bool isSupportedProtocolName(const QString& protocol);
@@ -68,6 +70,27 @@ enum class PointerPhase { Move, Press, Release, Leave };
 /// forbids the field on every other presence kind.
 enum class PointerButton : quint8 { Primary, Secondary, Middle };
 enum class TransportMode { Independent, FollowHost, FollowParticipant };
+
+/// Server-authoritative room state, distinct from the persistent song.
+struct SessionControlState {
+    QString mode = QStringLiteral("independent");
+    QString hostMemberId;
+    quint64 sessionVersion = 0;
+    quint64 transportRevision = 0;
+    quint64 auditionRevision = 0;
+    double positionSeconds = 0;
+    double rate = 1;
+    qint64 serverTimeMs = 0;
+    qint64 effectiveAtServerMs = 0;
+    bool playing = false;
+    bool loopEnabled = false;
+    double loopStartSeconds = 0;
+    double loopEndSeconds = 0;
+    QStringList mutedTrackIds;
+    QStringList soloTrackIds;
+};
+
+std::optional<SessionControlState> sessionControlFromJson(const QJsonObject& value);
 
 /// A surface is identified semantically, never by QWidget address, native
 /// handle, screen position, window title, URL or filesystem path.
@@ -193,6 +216,14 @@ enum class WireType {
     HashRequested,
     HashVerified,
     SnapshotHash,
+    SessionControl,
+    SessionControlChanged,
+    SessionModeChanged,
+    SessionCatalogChanged,
+    SessionRequirementsChanged,
+    SessionParticipantModerated,
+    ClockPing,
+    ClockPong,
 };
 
 /// Every WebSocket message uses this versioned outer envelope. Payload schemas

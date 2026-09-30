@@ -67,6 +67,55 @@ func requireCommandAssetsReadyTx(tx *gorm.DB, projectID uuid.UUID,
 func commandAssetRequirements(kind string, payload json.RawMessage,
 	allowBatch bool) ([]commandAssetRequirement, error) {
 	switch kind {
+	case "track.setFreeze":
+		body, err := commandPayloadObject(payload)
+		if err != nil {
+			return nil, err
+		}
+		if rawJSONNull(body["asset"]) {
+			return nil, nil
+		}
+		r, err := assetRequirement(body["asset"])
+		return []commandAssetRequirement{r}, err
+	case "clip.setRenderState":
+		body, err := commandPayloadObject(payload)
+		if err != nil {
+			return nil, err
+		}
+		sources := []json.RawMessage{body["source"]}
+		var history []map[string]json.RawMessage
+		if err := json.Unmarshal(body["history"], &history); err != nil {
+			return nil, err
+		}
+		for _, v := range history {
+			sources = append(sources, v["source"])
+		}
+		var result []commandAssetRequirement
+		for _, raw := range sources {
+			source, err := commandPayloadObject(raw)
+			if err != nil {
+				return nil, err
+			}
+			assets := []json.RawMessage{source["asset"]}
+			var takes []map[string]json.RawMessage
+			if err := json.Unmarshal(source["takes"], &takes); err != nil {
+				return nil, err
+			}
+			for _, take := range takes {
+				assets = append(assets, take["asset"])
+			}
+			for _, asset := range assets {
+				if rawJSONNull(asset) {
+					continue
+				}
+				r, err := assetRequirement(asset)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, r)
+			}
+		}
+		return result, nil
 	case "take.add":
 		body, err := commandPayloadObject(payload)
 		if err != nil {

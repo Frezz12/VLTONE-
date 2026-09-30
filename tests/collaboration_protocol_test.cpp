@@ -3035,6 +3035,70 @@ void masterAutomationContract() {
         "master automation cannot address an absent aux send");
 }
 
+void renderProtocolContract() {
+    SharedProjectDocument state;
+    TrackModel track; track.id = trackId("render");
+    ClipModel clip; clip.id = clipId("render"); clip.kind = ClipKind::Audio;
+    clip.durationSeconds = 1; clip.asset = testAsset("render-original", AssetKind::Audio); clip.channels = 2;
+    track.clips.push_back(clip); state.project.tracks.push_back(track);
+    auto body = sharedRenderState(track.id, clip);
+    body.history.push_back({testUuid("version", "original"), {}, "Original", body.source});
+    body.source.asset = testAsset("render-new", AssetKind::Audio, 'b'); body.source.durationSeconds = 2;
+    body.versionId = testUuid("version", "rendered");
+    body.history.push_back({body.versionId, body.history.front().id, "Rendered", body.source});
+    body.injection = {PlaybackInjectionStage::BeforeTrackFader, track.id};
+    auto render = command("render-state", body); render.meta.schemaVersion = 6;
+    auto wire = projectCommandToJson(render); const auto decoded = projectCommandFromJson(wire);
+    // Codec-produced contract artifact for schema parity validation.
+    std::ofstream(fs::temp_directory_path() / "vlt-collaboration-render-v6.json") << wire.dump(2);
+    auto applied = decoded ? ProjectReducer::apply(state, *decoded) : ApplyResult{};
+    check(decoded && applied.changed() && state.project.tracks[0].clips[0].offlineHistory.size() == 2 &&
+              state.project.tracks[0].clips[0].asset == body.source.asset,
+          "render asset, history and injection round-trip as one v6 transaction");
+    if (applied.inverse) {
+        auto undo = *applied.inverse; undo.meta = meta("undo-render"); undo.meta.schemaVersion = 6;
+        check(ProjectReducer::apply(state, undo).changed() && state.project.tracks[0].clips[0].asset == clip.asset,
+              "render undo restores the complete original audio source");
+    }
+    wire["payload"]["source"]["filePath"] = "C:/private/source.wav";
+    check(!projectCommandFromJson(wire), "render source rejects local path fields");
+    auto legacy = render; legacy.meta.schemaVersion = 5;
+    check(!projectCommandFromJson(projectCommandToJson(legacy)), "v5 cannot submit render state");
+    auto freeze = command("freeze", SetTrackFreeze{track.id, testAsset("frozen", AssetKind::Audio), 2, 48000});
+    freeze.meta.schemaVersion = 6;
+    check(ProjectReducer::apply(state, freeze).changed() && state.project.tracks[0].freeze.active(),
+          "shared freeze is active from its immutable asset without a local path");
+    auto edit = command("edit-after-freeze", SetClipProperty{track.id, clip.id, ClipProperty::Gain, 0.5}); edit.meta.schemaVersion = 6;
+    check(ProjectReducer::apply(state, edit).changed() && !state.project.tracks[0].freeze.active(),
+          "a source edit invalidates the previously rendered freeze on every peer");
+}
+
+void notebookProtocolContract() {
+    SharedProjectDocument state;
+    auto html = command("notebook-html", SetProjectScalar{ProjectScalar::NotebookHtml, std::string("<p>Notes</p>")});
+    auto cues = command("notebook-cues", SetNotebookCues{{{2.5, "Chorus"}, {0, "Intro"}}});
+    for (auto* item : {&html, &cues}) {
+        item->meta.schemaVersion = 6;
+        const auto decoded = projectCommandFromJson(projectCommandToJson(*item));
+        check(decoded && ProjectReducer::apply(state, *decoded).changed(), "v6 notebook commands round-trip and apply");
+        auto legacy = *item; legacy.meta.schemaVersion = 5;
+        check(!projectCommandFromJson(projectCommandToJson(legacy)), "v5 does not accept v6 notebook commands");
+    }
+    check(state.project.notebookHtml == "<p>Notes</p>" && state.project.notebookCues.size() == 2,
+          "notebook content belongs to the shared document");
+    auto invalid = command("invalid-cue", SetNotebookCues{{{-1, "Invalid"}}});
+    invalid.meta.schemaVersion = 6;
+    check(!ProjectReducer::apply(state, invalid).accepted(), "negative notebook cue times are rejected");
+    auto clear = command("clear-cues", SetNotebookCues{}); clear.meta.schemaVersion = 6;
+    auto inverse = ProjectReducer::apply(state, clear);
+    if (check(bool(inverse.inverse), "notebook cue edits create conditional undo")) {
+        inverse.inverse->meta = meta("undo-cues");
+        inverse.inverse->meta.schemaVersion = 6;
+        check(ProjectReducer::apply(state, *inverse.inverse).changed() && state.project.notebookCues.size() == 2,
+              "notebook cue undo restores the complete previous list");
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path dir = fs::temp_directory_path() /
@@ -3055,6 +3119,8 @@ int main() {
     multiSidechainContract();
     slideProtocolContract();
     masterAutomationContract();
+    notebookProtocolContract();
+    renderProtocolContract();
     commandV2Contracts();
     gatewayOptimisticConfirmedReplay();
 

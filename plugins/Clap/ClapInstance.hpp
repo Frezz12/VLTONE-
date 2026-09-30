@@ -109,6 +109,7 @@ private:
     static void hostRequestRestart(const clap_host_t* host) noexcept;
     static void hostRequestProcess(const clap_host_t* host) noexcept;
     static void hostRequestCallback(const clap_host_t* host) noexcept;
+    static void hostStateDirty(const clap_host_t* host) noexcept;
     static void hostParamsRescan(const clap_host_t* host,
                                  clap_param_rescan_flags flags) noexcept;
     static void hostParamsClear(const clap_host_t* host, clap_id parameter,

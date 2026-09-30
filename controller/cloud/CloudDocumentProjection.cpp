@@ -34,6 +34,7 @@ void projectInsert(InsertModel& insert, const std::string& location,
                             "dual-mono plugin state has no completed cloud asset"});
     }
     insert.path.clear();
+    insert.runtimeStateBlocked = false;
     insert.stateFile.clear();
     insert.rightStateFile.clear();
     insert.editorChannel = PluginEditorChannel::Left;
@@ -128,6 +129,9 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
         track.expandedHeight = 72.0;
         track.expanded = true;
         track.automationExpanded = false;
+        if (!track.freeze.filePath.empty() && track.freeze.asset.empty())
+            projection.blockers.push_back({CloudProjectionIssueKind::MissingAsset, location + "/freeze", "Frozen audio has no completed asset"});
+        track.freeze.filePath.clear(); track.freeze.sourceFingerprint.clear(); sanitizeAsset(track.freeze.asset);
 
         projectInsert(track.instrument, location + "/instrument",
                       projection.blockers);
@@ -154,12 +158,21 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
             // Offline history contains local audio paths and has no shared
             // asset protocol yet. Reject publication instead of uploading
             // paths or silently discarding the user's original versions.
-            if (!clip.offlineHistory.empty() || !clip.offlineProcess.empty()) {
+            if (!clip.offlineProcess.empty()) {
                 projection.blockers.push_back({CloudProjectionIssueKind::PublishBlocker,
                     clipLocation + "/offline-history", "Offline Render history is local-only"});
-                clip.offlineHistory.clear();
-                clip.offlineVersionId.clear();
                 clip.offlineProcess = {};
+            }
+            for (auto& version : clip.offlineHistory) {
+                auto& source = version.source;
+                if (!source.filePath.empty() && source.asset.empty())
+                    projection.blockers.push_back({CloudProjectionIssueKind::MissingAsset, clipLocation + "/history", "Offline audio has no completed asset"});
+                source.filePath.clear(); source.expanded = false; sanitizeAsset(source.asset);
+                for (auto& take : source.takes) {
+                    if (!take.filePath.empty() && take.asset.empty())
+                        projection.blockers.push_back({CloudProjectionIssueKind::MissingAsset, clipLocation + "/history/take", "Offline take has no completed asset"});
+                    take.filePath.clear(); sanitizeAsset(take.asset);
+                }
             }
             sanitizeAsset(clip.asset);
             projectInserts(clip.inserts, clipLocation, projection.blockers);
@@ -211,6 +224,10 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
          ++trackIndex) {
         const TrackModel& track = document.tracks[trackIndex];
         const std::string location = "track:" + std::to_string(trackIndex);
+        if (!track.freeze.filePath.empty() || !track.freeze.sourceFingerprint.empty()) {
+            if (firstLocation) *firstLocation = location + "/freeze";
+            return true;
+        }
         if (track.soloed || track.armed || track.monitor || track.monitorAuto ||
             track.recordMode != TrackRecordMode::UseGlobal ||
             track.inputEnabled || track.inputChannel != 0 ||
@@ -231,13 +248,19 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
             const ClipModel& clip = track.clips[clipIndex];
             const std::string clipLocation =
                 location + "/clip:" + std::to_string(clipIndex);
-            if (!clip.filePath.empty() || clip.expanded || !clip.offlineHistory.empty() ||
-                !clip.offlineVersionId.empty() || !clip.offlineProcess.empty() ||
+            if (!clip.filePath.empty() || clip.expanded || !clip.offlineProcess.empty() ||
                 inspectInsertsForLeak(clip.inserts, clipLocation,
                                       firstLocation)) {
                 if (firstLocation && firstLocation->empty())
                     *firstLocation = clipLocation;
                 return true;
+            }
+            for (const auto& version : clip.offlineHistory) {
+                if (!version.source.filePath.empty() || version.source.expanded ||
+                    std::any_of(version.source.takes.begin(), version.source.takes.end(), [](const auto& take) { return !take.filePath.empty(); })) {
+                    if (firstLocation) *firstLocation = clipLocation + "/history";
+                    return true;
+                }
             }
             for (std::size_t takeIndex = 0; takeIndex < clip.takes.size();
                  ++takeIndex) {

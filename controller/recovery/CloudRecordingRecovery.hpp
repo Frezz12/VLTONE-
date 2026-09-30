@@ -9,6 +9,8 @@
 /// Deletion APIs are named for the point at which they are safe to use --
 /// after the future recording commit has been durably acknowledged.
 
+#include "StripSilence.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -16,6 +18,9 @@
 #include <vector>
 
 namespace daw::recovery {
+
+/// Publish already encoded recovery data with the same durable replacement as recording manifests.
+bool writeDurableRecoveryFile(std::string_view path, std::string_view bytes);
 
 inline constexpr const char* kCloudRecordingRecoveryFile =
     "cloud-recordings.json";
@@ -96,6 +101,9 @@ struct CloudRecordingSemantics {
     bool trimTakesToRegion = true;
     bool autoExpandAfterRecord = false;
     double compCrossfadeMs = 5.0;
+    bool autoSilence = false;
+    StripSilenceSettings stripSilence;
+    double silenceTempo = 120.0;
 
     friend bool operator==(const CloudRecordingSemantics&,
                            const CloudRecordingSemantics&) = default;

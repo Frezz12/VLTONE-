@@ -97,7 +97,7 @@ private:
 /// creates a staging directory. V1 accepts exactly the built-in Sampler,
 /// Equalizer, Gravity and Graphit slots; empty slots are ignored.
 std::vector<PublicationCaptureIssue> inspectCaptureCompatibilityV1(
-    const ProjectModel& project);
+    const ProjectModel& project, bool allowExternal = false);
 
 const char* publicationCaptureIssueKindName(
     PublicationCaptureIssueKind kind) noexcept;

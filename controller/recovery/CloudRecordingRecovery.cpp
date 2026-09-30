@@ -186,6 +186,13 @@ json passToJson(const CloudRecordingPass& pass) {
             {"captureOffsetSeconds", pass.captureOffsetSeconds}};
 }
 
+json silenceToJson(const StripSilenceSettings& s) {
+    return {{"thresholdDb",s.thresholdDb},{"hysteresisDb",s.hysteresisDb},
+        {"minimumSilenceMs",s.minimumSilenceMs},{"minimumSoundMs",s.minimumSoundMs},
+        {"preRollMs",s.preRollMs},{"postRollMs",s.postRollMs},{"fadeMs",s.fadeMs},
+        {"gridBeats",s.gridBeats},{"splitInternal",s.splitInternal}};
+}
+
 json semanticsToJson(const CloudRecordingSemantics& semantics) {
     return {{"mode", modeName(semantics.mode)},
             {"complete", semantics.complete},
@@ -195,7 +202,9 @@ json semanticsToJson(const CloudRecordingSemantics& semantics) {
             {"loopCreatesTakes", semantics.loopCreatesTakes},
             {"trimTakesToRegion", semantics.trimTakesToRegion},
             {"autoExpandAfterRecord", semantics.autoExpandAfterRecord},
-            {"compCrossfadeMs", semantics.compCrossfadeMs}};
+            {"compCrossfadeMs", semantics.compCrossfadeMs},
+            {"autoSilence", semantics.autoSilence}, {"stripSilence", silenceToJson(semantics.stripSilence)},
+            {"silenceTempo", semantics.silenceTempo}};
 }
 
 json captureToJson(const CloudRecordingCapture& capture) {
@@ -364,7 +373,19 @@ bool parseSemantics(const json& value, CloudRecordingSemantics& out) {
         "mode", "complete", "loopEnabled", "loopStartSeconds",
         "loopEndSeconds", "loopCreatesTakes", "trimTakesToRegion",
         "autoExpandAfterRecord", "compCrossfadeMs"};
-    if (!exactKeys(value, keys)) return false;
+    auto legacy = value;
+    for (const auto* key : {"autoSilence", "stripSilence", "silenceTempo"}) legacy.erase(key);
+    if (!exactKeys(legacy, keys)) return false;
+    const bool hasSilence = value.contains("autoSilence") || value.contains("stripSilence") || value.contains("silenceTempo");
+    if (hasSilence) {
+        if (!readBool(value, "autoSilence", out.autoSilence) || !readDouble(value, "silenceTempo", out.silenceTempo) || !value.contains("stripSilence")) return false;
+        const auto& v = value.at("stripSilence"); auto& t = out.stripSilence;
+        static constexpr std::array silenceKeys{"thresholdDb", "hysteresisDb", "minimumSilenceMs", "minimumSoundMs", "preRollMs", "postRollMs", "fadeMs", "gridBeats", "splitInternal"};
+        if (!exactKeys(v, silenceKeys) || !readDouble(v,"thresholdDb",t.thresholdDb) || !readDouble(v,"hysteresisDb",t.hysteresisDb) ||
+            !readDouble(v,"minimumSilenceMs",t.minimumSilenceMs) || !readDouble(v,"minimumSoundMs",t.minimumSoundMs) ||
+            !readDouble(v,"preRollMs",t.preRollMs) || !readDouble(v,"postRollMs",t.postRollMs) ||
+            !readDouble(v,"fadeMs",t.fadeMs) || !readDouble(v,"gridBeats",t.gridBeats) || !readBool(v,"splitInternal",t.splitInternal)) return false;
+    }
     const auto mode = parseMode(value.at("mode"));
     if (!mode || !readBool(value, "complete", out.complete) ||
         !readBool(value, "loopEnabled", out.loopEnabled) ||
@@ -867,6 +888,19 @@ CloudRecordingRunCleanupResult deleteIntentWavs(
 
 } // namespace
 
+bool writeDurableRecoveryFile(std::string_view path, std::string_view bytes) {
+    const auto target = platform::pathFromUtf8(path);
+    if (target.empty() || bytes.empty()) return false;
+    static std::atomic<std::uint64_t> sequence{0};
+    auto temporary = target;
+    temporary += ".tmp-" + std::to_string(currentProcessId()) + "-" + std::to_string(sequence.fetch_add(1));
+    std::error_code ignored;
+    if (!writeDurably(temporary, bytes) || !replaceAtomically(temporary, target)) {
+        fs::remove(temporary, ignored); return false;
+    }
+    return syncDirectory(target.parent_path());
+}
+
 CloudRecordingCaptureStatus classifyCloudRecordingCaptureStatus(
     bool fileWriteSucceeded,
     std::uint64_t capturedFrames,
@@ -964,6 +998,8 @@ CloudRecordingRecoveryResult validateCloudRecordingRecoveryManifest(
                 semantics.mode == CloudRecordingMode::Overwrite ||
                 semantics.mode == CloudRecordingMode::Layers;
             if (!modeKnown ||
+                !boundedFinite(semantics.silenceTempo, 1.0, 1000.0) ||
+                sanitizedStripSilenceSettings(semantics.stripSilence) != semantics.stripSilence ||
                 !boundedFinite(semantics.loopStartSeconds, 0.0,
                                kMaximumTimeSeconds) ||
                 !boundedFinite(semantics.loopEndSeconds, 0.0,
@@ -977,7 +1013,7 @@ CloudRecordingRecoveryResult validateCloudRecordingRecoveryManifest(
                   semantics.loopEndSeconds != 0.0 ||
                   !semantics.loopCreatesTakes ||
                   !semantics.trimTakesToRegion ||
-                  semantics.autoExpandAfterRecord ||
+                  semantics.autoExpandAfterRecord || semantics.autoSilence ||
                   semantics.compCrossfadeMs != 5.0))) {
                 return result(CloudRecordingRecoveryCode::Invalid,
                               "cloud recording recovery semantics are invalid");

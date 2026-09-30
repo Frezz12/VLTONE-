@@ -17,7 +17,7 @@ done
 retry_get() {
     local url="$1" output="$2"
     for _ in $(seq 1 30); do
-        if curl --fail --silent --show-error --max-time 5 "$url" > "$output"; then return 0; fi
+        if curl --location --fail --silent --show-error --max-time 5 "$url" > "$output"; then return 0; fi
         sleep 1
     done
     echo "smoke: $url did not become ready" >&2
@@ -31,16 +31,20 @@ retry_get http://127.0.0.1:8080/readyz "$tmp/ready.json"
 retry_get http://127.0.0.1:8080/v1/meta "$tmp/meta.json"
 grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' "$tmp/health.json"
 grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' "$tmp/ready.json"
-grep -Eq '"protocol"[[:space:]]*:[[:space:]]*"vlt-collab-v4"' "$tmp/meta.json"
+grep -Eq '"protocol"[[:space:]]*:[[:space:]]*"vlt-collab-v6"' "$tmp/meta.json"
 grep -Eq '"protocols"[[:space:]]*:[[:space:]]*\[[^]]*"vlt-collab-v2"' "$tmp/meta.json"
 grep -Eq '"protocols"[[:space:]]*:[[:space:]]*\[[^]]*"vlt-collab-v3"' "$tmp/meta.json"
 grep -Eq '"protocols"[[:space:]]*:[[:space:]]*\[[^]]*"vlt-collab-v4"' "$tmp/meta.json"
+grep -Eq '"protocols"[[:space:]]*:[[:space:]]*\[[^]]*"vlt-collab-v5"' "$tmp/meta.json"
+grep -Eq '"protocols"[[:space:]]*:[[:space:]]*\[[^]]*"vlt-collab-v6"' "$tmp/meta.json"
 grep -Eq '"project_format"[[:space:]]*:[[:space:]]*7' "$tmp/meta.json"
-grep -Eq '"command_schema"[[:space:]]*:[[:space:]]*4' "$tmp/meta.json"
+grep -Eq '"command_schema"[[:space:]]*:[[:space:]]*6' "$tmp/meta.json"
 grep -Eq '"command_schemas"[[:space:]]*:[[:space:]]*\[[^]]*2' "$tmp/meta.json"
 grep -Eq '"command_schemas"[[:space:]]*:[[:space:]]*\[[^]]*3' "$tmp/meta.json"
 grep -Eq '"command_schemas"[[:space:]]*:[[:space:]]*\[[^]]*4' "$tmp/meta.json"
-grep -Eq '"recording"[[:space:]]*:[[:space:]]*false' "$tmp/meta.json"
+grep -Eq '"command_schemas"[[:space:]]*:[[:space:]]*\[[^]]*5' "$tmp/meta.json"
+grep -Eq '"command_schemas"[[:space:]]*:[[:space:]]*\[[^]]*6' "$tmp/meta.json"
+grep -Eq '"recording"[[:space:]]*:[[:space:]]*'"${COLLAB_RECORDING_ENABLED:-false}" "$tmp/meta.json"
 
 if [[ "${COLLABORATION_ENABLED:-false}" == true ]]; then
     grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' "$tmp/meta.json"
@@ -49,7 +53,10 @@ else
 fi
 
 retry_get http://127.0.0.1:3100/ru "$tmp/web.html"
+retry_get http://127.0.0.1:3100/ru/join "$tmp/join-ru.html"
+retry_get http://127.0.0.1:3100/en/join "$tmp/join-en.html"
 retry_get http://127.0.0.1:3101/login "$tmp/admin.html"
 retry_get "${PUBLIC_ORIGIN%/}/api/v1/meta" "$tmp/public-meta.json"
+retry_get "${PUBLIC_ORIGIN%/}/ru/join" "$tmp/public-join.html"
 retry_get "${ADMIN_ORIGIN%/}/login" "$tmp/public-admin.html"
 echo "Smoke tests passed"

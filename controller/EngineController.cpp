@@ -7,8 +7,12 @@
 #include "model/ClipLibrary.hpp"
 #include "ChannelStripPreset.hpp"
 #include "ProjectSerializer.hpp"
+#include "SettingsStore.hpp"
+#include "recovery/CloudRecordingRecovery.hpp"
 #include "collaboration/CollaborationState.hpp"
 #include "collaboration/ProjectReducer.hpp"
+#include "collaboration/CommandJson.hpp"
+#include "serialization/AssetJson.hpp"
 #include "plugins/PluginConvert.hpp"
 
 #include "Internal/SampleDecoder.hpp"
@@ -32,6 +36,7 @@
 #include <limits>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <set>
 #include <thread>
 #include <unordered_map>
@@ -42,6 +47,18 @@ namespace fs = std::filesystem;
 namespace daw {
 
 namespace {
+
+nlohmann::json recoveryAssetRequest(const collab::SharedAssetMutationRequest& request) {
+    return {{"requestId", request.requestId}, {"assetId", request.assetId},
+            {"sourcePath", request.sourcePath}, {"displayName", request.displayName},
+            {"kind", request.kind == AssetKind::PluginState ? "pluginState" : "audio"},
+            {"contentType", request.contentType}, {"sampleRate", request.sampleRate},
+            {"channels", request.channels}, {"frames", request.frames}};
+}
+
+bool writeSharedResultRecovery(const std::string& path, const nlohmann::json& value) {
+    return recovery::writeDurableRecoveryFile(path, value.dump());
+}
 
 /// Every value the host itself writes into a plugin parameter, under
 /// `DAW_PLUGIN_DIAGNOSTICS=1`. A knob that moves on its own is either the
@@ -402,7 +419,7 @@ AssetRef expectedSharedAudioAsset(
     const collab::SharedAssetMutationRequest& request) {
     AssetRef asset;
     asset.assetId = request.assetId;
-    asset.kind = AssetKind::Audio;
+    asset.kind = request.kind;
     asset.originalName = request.displayName;
     asset.mimeType = request.contentType;
     asset.codec = request.codec;
@@ -422,7 +439,8 @@ bool completeSharedAudioAsset(const AssetRef& asset,
                     });
     return hashReady && asset.byteSize > 0 &&
            asset.assetId == expected.assetId &&
-           asset.kind == AssetKind::Audio &&
+           asset.kind == expected.kind &&
+           (expected.byteSize == 0 || asset.byteSize == expected.byteSize) &&
            asset.originalName == expected.originalName &&
            asset.mimeType == expected.mimeType &&
            asset.codec == expected.codec &&
@@ -536,6 +554,18 @@ bool appendSharedChainReplacement(
     return true;
 }
 
+collab::SetClipRenderState cleanRenderState(const std::string& trackId, const ClipModel& clip) {
+    collab::SetClipRenderState result{trackId, clip.id, captureClipAudioVersion(clip),
+        clip.offlineHistory, clip.offlineVersionId, clip.playbackInjection};
+    const auto clean = [](auto& source) {
+        source.filePath.clear(); source.expanded = false;
+        for (auto& take : source.takes) take.filePath.clear();
+    };
+    clean(result.source);
+    for (auto& version : result.history) clean(version.source);
+    return result;
+}
+
 bool appendSharedClip(
     const std::shared_ptr<collab::BatchCommand>& batch,
     const std::string& trackId, const ClipModel& clip,
@@ -640,6 +670,8 @@ bool appendSharedClip(
             trackId, clip.id, segment, segmentAnchor});
         segmentAnchor = segment.id;
     }
+    if (clip.kind == ClipKind::Audio && (!clip.offlineHistory.empty() || clip.playbackInjection.active() || !clip.warp.empty()))
+        appendCommand(batch, cleanRenderState(trackId, clip));
     return true;
 }
 
@@ -871,8 +903,7 @@ bool appendSharedTrackContents(
         track.id, collab::TrackProperty::Volume, double(track.volume)});
     appendCommand(batch, collab::SetTrackProperty{
         track.id, collab::TrackProperty::Pan, double(track.pan)});
-    appendCommand(batch, collab::SetTrackProperty{
-        track.id, collab::TrackProperty::Muted, track.muted});
+    // V6 creates the durable track independently of each listener's audition mask.
     appendCommand(batch, collab::SetTrackProperty{
         track.id, collab::TrackProperty::Mono, track.mono});
     // Load-bearing: ProjectReducer::applySetTrackProperty rejects Summing for
@@ -1370,20 +1401,162 @@ collab::SharedMutationResult EngineController::submitSharedMutation(
     std::optional<std::string> transactionId) {
     if (!m_sharedMutationSink)
         return collab::SharedMutationResult::LocalFallback;
+    if (!sharedEditingAllowed()) return collab::SharedMutationResult::Blocked;
     return m_sharedMutationSink->submit(collab::SharedMutationRequest{
         std::move(body), std::move(undoLabel), std::move(transactionId)});
+}
+
+collab::CommandBody EngineController::derivedProjectCommands(const ProjectModel& before, const ProjectModel& after) const {
+    auto batch = std::make_shared<collab::BatchCommand>();
+    const auto encoded = [](const ClipModel& clip) {
+        ProjectModel project; TrackModel track; track.id = "comparison"; track.clips.push_back(clip);
+        project.tracks.push_back(std::move(track)); std::string bytes;
+        ProjectSerializer::serializeDocument(project, bytes, MediaPaths::Absolute); return bytes;
+    };
+    std::string trackAnchor;
+    for (const auto& track : after.tracks) {
+        const auto* prior = before.findTrack(track.id);
+        if (!prior) {
+            if (!appendSharedTrack(batch, track, trackAnchor)) return std::make_shared<collab::BatchCommand>();
+            trackAnchor = track.id; continue;
+        }
+        for (const auto& clip : prior->clips)
+            if (std::none_of(track.clips.begin(), track.clips.end(), [&](const auto& item) { return item.id == clip.id; }))
+                appendCommand(batch, collab::DeleteClip{track.id, clip.id});
+        std::string clipAnchor;
+        for (const auto& clip : track.clips) {
+            const auto old = std::find_if(prior->clips.begin(), prior->clips.end(), [&](const auto& item) { return item.id == clip.id; });
+            if (old == prior->clips.end()) {
+                if (!appendSharedClip(batch, track.id, clip, clipAnchor)) return std::make_shared<collab::BatchCommand>();
+            } else if (encoded(*old) != encoded(clip)) {
+                for (const auto& [property, value] : std::vector<std::pair<collab::ClipProperty, collab::ScalarValue>>{
+                    {collab::ClipProperty::StartSeconds, clip.startSeconds}, {collab::ClipProperty::DurationSeconds, clip.durationSeconds},
+                    {collab::ClipProperty::OffsetSeconds, clip.offsetSeconds}, {collab::ClipProperty::Muted, clip.muted},
+                    {collab::ClipProperty::Name, clip.name}, {collab::ClipProperty::Gain, double(clip.gain)}})
+                    appendCommand(batch, collab::SetClipProperty{track.id, clip.id, property, value});
+                if (clip.kind == ClipKind::Audio) appendCommand(batch, cleanRenderState(track.id, clip));
+                else if (clip.kind == ClipKind::Midi) {
+                    if (!appendMidiClipContentsDiff(batch, track.id, *old, clip)) return std::make_shared<collab::BatchCommand>();
+                    appendCompDiff(batch, track.id, clip.id, old->comp, clip.comp);
+                }
+            }
+            clipAnchor = clip.id;
+        }
+        trackAnchor = track.id;
+    }
+    return batch;
+}
+
+struct EngineController::SharedDerivedMutation {
+    std::vector<collab::SharedAssetMutationRequest> requests;
+    std::vector<AssetRef> assets;
+    std::function<collab::CommandBody(const std::vector<AssetRef>&)> makeCommand;
+    std::uint64_t sourceRevision = 0;
+    std::string label;
+    std::string recoveryId = newUuid();
+    bool cancelled = false;
+};
+
+bool EngineController::persistSharedDerivedResult(const SharedDerivedMutation& mutation,
+    std::string_view status, const collab::CommandBody* body) {
+    if (mutation.requests.empty()) return true;
+    nlohmann::json value{{"schemaVersion", 1}, {"type", "shared-derived-result"},
+        {"recoveryId", mutation.recoveryId}, {"transactionId", mutation.recoveryId},
+        {"status", status}, {"sourceRevision", mutation.sourceRevision}, {"label", mutation.label},
+        {"requests", nlohmann::json::array()}, {"assets", nlohmann::json::array()}};
+    for (const auto& request : mutation.requests) value["requests"].push_back(recoveryAssetRequest(request));
+    for (const auto& asset : mutation.assets) value["assets"].push_back(serialization::assetRefToJson(asset));
+    if (body) { collab::ProjectCommand command; command.meta.transactionId = mutation.recoveryId;
+        command.body = *body; value["command"] = collab::projectCommandToJson(command); }
+    const auto path = mutation.requests.front().sourcePath + ".vlt-pending.json";
+    const bool written = writeSharedResultRecovery(path, value);
+    if (written && m_sharedResultRecoveryCallback) m_sharedResultRecoveryCallback(path);
+    return written;
+}
+
+void EngineController::retainSharedDerivedResult(const std::vector<std::string>& paths,
+    std::uint64_t revision, const std::string& label, std::string_view status) {
+    SharedDerivedMutation retained; retained.sourceRevision = revision; retained.label = label;
+    for (const auto& path : paths) {
+        if (auto request = sharedAudioRequest(path)) retained.requests.push_back(std::move(*request));
+    }
+    (void)persistSharedDerivedResult(retained, status);
+}
+
+bool EngineController::submitSharedDerivedMutation(std::vector<std::string> paths, AssetKind kind,
+    std::function<collab::CommandBody(const std::vector<AssetRef>&)> makeCommand,
+    std::uint64_t sourceRevision, std::string label) {
+    std::vector<collab::SharedAssetMutationRequest> requests;
+    for (const auto& path : paths) {
+        std::optional<collab::SharedAssetMutationRequest> request;
+        if (kind == AssetKind::Audio) request = sharedAudioRequest(path);
+        else {
+            request.emplace(); request->requestId = newUuid(); request->assetId = newUuid();
+            request->sourcePath = path; request->displayName = fs::path(path).filename().string();
+            request->kind = kind; request->contentType = "application/vnd.vlt.plugin-state";
+        }
+        if (!request) {
+            // A finished render still belongs to the user when metadata cannot
+            // be read; never erase it because upload preparation failed.
+            return false;
+        }
+        requests.push_back(std::move(*request));
+    }
+    return submitSharedAssetTransaction(std::move(requests), std::move(makeCommand), sourceRevision, std::move(label));
+}
+
+bool EngineController::submitSharedAssetTransaction(std::vector<collab::SharedAssetMutationRequest> requests,
+    std::function<collab::CommandBody(const std::vector<AssetRef>&)> makeCommand,
+    std::uint64_t sourceRevision, std::string label) {
+    auto mutation = std::make_shared<SharedDerivedMutation>();
+    mutation->sourceRevision = sourceRevision; mutation->label = std::move(label);
+    mutation->makeCommand = std::move(makeCommand); mutation->requests = std::move(requests);
+    if (!persistSharedDerivedResult(*mutation, "preparing")) return false;
+    return advanceSharedDerivedMutation(mutation) == collab::SharedMutationResult::Submitted;
+}
+
+collab::SharedMutationResult EngineController::advanceSharedDerivedMutation(const std::shared_ptr<SharedDerivedMutation>& mutation) {
+    if (mutation->cancelled || !cloudProjectBound() || !sharedEditingAllowed() ||
+        projectRevision() != mutation->sourceRevision) {
+        persistSharedDerivedResult(*mutation, mutation->cancelled ? "cancelled" : "conflict");
+        return collab::SharedMutationResult::Blocked;
+    }
+    if (mutation->assets.size() == mutation->requests.size()) {
+        auto body = mutation->makeCommand(mutation->assets);
+        if (!persistSharedDerivedResult(*mutation, "ready", &body)) return collab::SharedMutationResult::Blocked;
+        const auto result = submitSharedMutation(body, mutation->label, mutation->recoveryId);
+        persistSharedDerivedResult(*mutation, result == collab::SharedMutationResult::Submitted ? "submitted" : "rejected", &body);
+        return result;
+    }
+    const auto& request = mutation->requests[mutation->assets.size()];
+    PendingSharedAssetMutation pending;
+    pending.expected = expectedSharedAudioAsset(request);
+    pending.cancelled = [this, mutation] { mutation->cancelled = true; persistSharedDerivedResult(*mutation, "cancelled"); };
+    pending.complete = [mutation](EngineController& controller, const AssetRef& asset) {
+        mutation->assets.push_back(asset);
+        return controller.advanceSharedDerivedMutation(mutation);
+    };
+    if (!persistSharedDerivedResult(*mutation, "uploading")) return collab::SharedMutationResult::Blocked;
+    return prepareSharedAssetMutation(request, std::move(pending));
 }
 
 collab::SharedMutationResult EngineController::prepareSharedAssetMutation(
     collab::SharedAssetMutationRequest request,
     PendingSharedAssetMutation pending) {
-    if (!cloudProjectBound() || !m_sharedAssetMutationSink ||
+    pending.request = request;
+    if (!cloudProjectBound() || !sharedEditingAllowed() || !m_sharedAssetMutationSink ||
         request.requestId.empty() || request.assetId.empty() ||
         request.sourcePath.empty() || !pending.complete ||
         pending.expected.assetId != request.assetId) {
+        persistSharedAssetResult(pending, "rejected");
+        if (pending.cancelled) pending.cancelled();
         return collab::SharedMutationResult::Blocked;
     }
 
+    if (!persistSharedAssetResult(pending, "uploading")) {
+        if (pending.cancelled) pending.cancelled();
+        return collab::SharedMutationResult::Blocked;
+    }
     const std::string requestId = request.requestId;
     const auto [_, inserted] = m_pendingSharedAssetMutations.emplace(
         requestId, std::move(pending));
@@ -1396,11 +1569,10 @@ collab::SharedMutationResult EngineController::prepareSharedAssetMutation(
     // synchronously in a deterministic test, hence the second lookup.
     const auto found = m_pendingSharedAssetMutations.find(requestId);
     if (found != m_pendingSharedAssetMutations.end()) {
-        if (!found->second.cleanupPath.empty()) {
-            std::error_code error;
-            fs::remove(platform::pathFromUtf8(found->second.cleanupPath), error);
-        }
+        persistSharedAssetResult(found->second, "rejected");
+        auto cancelled = std::move(found->second.cancelled);
         m_pendingSharedAssetMutations.erase(found);
+        if (cancelled) cancelled();
     }
     return collab::SharedMutationResult::Blocked;
 }
@@ -1417,10 +1589,9 @@ collab::SharedMutationResult EngineController::completeSharedAssetMutation(
     const auto result = valid
         ? pending.complete(*this, verifiedAsset)
         : collab::SharedMutationResult::Blocked;
-    if (!pending.cleanupPath.empty()) {
-        std::error_code error;
-        fs::remove(platform::pathFromUtf8(pending.cleanupPath), error);
-    }
+    if (!valid && pending.cancelled) pending.cancelled();
+    persistSharedAssetResult(pending,
+        result == collab::SharedMutationResult::Submitted ? "submitted" : "rejected", valid ? &verifiedAsset : nullptr);
     return result;
 }
 
@@ -1428,15 +1599,295 @@ void EngineController::cancelSharedAssetMutation(
     const std::string& requestId) {
     const auto found = m_pendingSharedAssetMutations.find(requestId);
     if (found == m_pendingSharedAssetMutations.end()) return;
-    if (!found->second.cleanupPath.empty()) {
-        std::error_code error;
-        fs::remove(platform::pathFromUtf8(found->second.cleanupPath), error);
-    }
+    persistSharedAssetResult(found->second, "cancelled");
+    auto cancelled = std::move(found->second.cancelled);
     m_pendingSharedAssetMutations.erase(found);
+    if (cancelled) cancelled();
 }
 
 bool EngineController::cloudProjectBound() const {
     return m_sharedMutationSink && m_sharedMutationSink->handlesCloudBinding();
+}
+
+void EngineController::restoreSharedPreview(const std::function<void()>& restore) {
+    struct RestoreFlag { bool& flag; bool before; ~RestoreFlag() { flag = before; } } reset{m_restoringSharedPreview, m_restoringSharedPreview};
+    m_restoringSharedPreview = true;
+    restore();
+}
+
+bool EngineController::persistSharedAssetResult(const PendingSharedAssetMutation& pending,
+    std::string_view status, const AssetRef* verified) {
+    if (pending.cleanupPath.empty()) return true; // Imported user files are never owned staging.
+    nlohmann::json value{{"schemaVersion", 1}, {"type", "shared-asset-result"},
+        {"recoveryId", pending.request.requestId}, {"status", status},
+        {"requests", nlohmann::json::array({recoveryAssetRequest(pending.request)})},
+        {"assets", nlohmann::json::array()}};
+    if (verified) value["assets"].push_back(serialization::assetRefToJson(*verified));
+    const auto path = pending.cleanupPath + ".vlt-pending.json";
+    std::ifstream previous(platform::pathFromUtf8(path), std::ios::binary);
+    const auto saved = nlohmann::json::parse(previous, nullptr, false);
+    previous.close();
+    if (saved.is_object()) for (const auto key : {"command", "transactionId"})
+        if (saved.contains(key)) value[key] = saved[key];
+    const bool written = writeSharedResultRecovery(path, value);
+    if (written && m_sharedResultRecoveryCallback) m_sharedResultRecoveryCallback(path);
+    return written;
+}
+
+std::vector<std::string> EngineController::sharedResultRecoveryManifests() const {
+    std::vector<std::string> result;
+    std::error_code error;
+    const auto temporary = fs::temp_directory_path(error);
+    for (const auto& root : {platform::pathFromUtf8(m_recordDir), temporary}) {
+        if (root.empty()) continue;
+        fs::directory_iterator entries(root, fs::directory_options::skip_permission_denied, error), end;
+        for (; !error && entries != end; entries.increment(error)) {
+            if (!entries->is_regular_file(error) || error) continue;
+            const auto path = platform::pathToUtf8(entries->path());
+            if (path.ends_with(".vlt-pending.json") && std::find(result.begin(), result.end(), path) == result.end())
+                result.push_back(path);
+        }
+        error.clear();
+    }
+    return result;
+}
+
+bool EngineController::discardSharedResultRecovery(const std::string& manifestPath) {
+    std::error_code error;
+    const auto temporary = fs::weakly_canonical(fs::temp_directory_path(error), error);
+    if (error) return false;
+    const auto recordings = fs::weakly_canonical(platform::pathFromUtf8(m_recordDir), error);
+    if (error) return false;
+    const auto manifest = fs::weakly_canonical(platform::pathFromUtf8(manifestPath), error);
+    if (error || (manifest.parent_path() != temporary && manifest.parent_path() != recordings) ||
+        !manifestPath.ends_with(".vlt-pending.json")) return false;
+    const auto bytes = fs::file_size(manifest, error);
+    if (error || bytes > 2u * 1024u * 1024u) return false;
+    std::ifstream input(manifest, std::ios::binary);
+    const auto value = nlohmann::json::parse(input, nullptr, false);
+    input.close(); // Windows cannot unlink a manifest while this reader is open.
+    if (!value.is_object() || !value.contains("schemaVersion") || value["schemaVersion"] != 1 ||
+        !value.contains("type") || (value["type"] != "shared-asset-result" && value["type"] != "shared-derived-result") ||
+        !value.contains("requests") || !value["requests"].is_array() || value["requests"].empty()) return false;
+    static const std::regex generated(R"(^(vlt-state|vlt-batch-state|freeze|bounce|offline|comp|crop|silence|vlt-library)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^/\\]*\.(wav|bin|flac|aiff|aif|mp3|m4a|ogg)$)");
+    std::vector<fs::path> paths;
+    for (const auto& request : value["requests"]) {
+        if (!request.is_object() || !request.contains("sourcePath") || !request["sourcePath"].is_string()) return false;
+        const auto path = fs::weakly_canonical(platform::pathFromUtf8(request["sourcePath"].get<std::string>()), error);
+        if (error || (path.parent_path() != temporary && path.parent_path() != recordings) ||
+            !std::regex_match(platform::pathToUtf8(path.filename()), generated)) return false;
+        paths.push_back(path);
+    }
+    auto expectedManifest = paths.front(); expectedManifest += ".vlt-pending.json";
+    if (manifest != expectedManifest) return false;
+    for (const auto& path : paths) { fs::remove(path, error); if (error) return false; }
+    fs::remove(manifest, error);
+    return !error;
+}
+
+bool EngineController::sharedPluginAllowed(const plugins::PluginDescriptor& descriptor) const {
+    if (!cloudProjectBound() || !m_sharedPluginCatalogEnabled) return true;
+    return sharedEditingAllowed() && std::any_of(m_sharedPluginCatalog.begin(), m_sharedPluginCatalog.end(),
+        [&](const auto& requirement) { return collab::pluginSatisfiesRequirement(descriptor, requirement); });
+}
+
+void EngineController::setSessionAuditionPolicy(bool enabled, bool writable,
+    std::function<void(const std::vector<TrackAuditionState>&)> changed) {
+    m_sessionAuditionEnabled = enabled;
+    m_sessionAuditionWritable = writable;
+    m_auditionChanged = std::move(changed);
+}
+
+std::vector<EngineController::TrackAuditionState> EngineController::trackAuditionState() const {
+    std::vector<TrackAuditionState> result;
+    result.reserve(m_project.tracks.size());
+    for (const auto& track : m_project.tracks)
+        result.push_back({track.id, track.muted, track.soloed});
+    return result;
+}
+
+void EngineController::applySessionAuditionState(const std::vector<TrackAuditionState>& state) {
+    for (const auto& value : state) {
+        if (auto* track = m_project.findTrack(value.trackId)) {
+            track->muted = value.muted;
+            track->soloed = value.soloed;
+        }
+    }
+    syncAllTrackGains();
+}
+
+struct EngineController::PluginStateUpload {
+    std::string key;
+    std::string channelId;
+    collab::PluginLocation location;
+    InsertModel baseline;
+    std::vector<InsertParameter> parameters;
+    std::vector<InsertParameter> rightParameters;
+    std::vector<std::uint8_t> left;
+    std::vector<std::uint8_t> right;
+    AssetRef stateAsset;
+    AssetRef rightStateAsset;
+    std::uint64_t generation = 0;
+    std::string transactionId = newUuid();
+    std::vector<collab::SharedAssetMutationRequest> requests;
+};
+
+void EngineController::queuePluginStateSync(const std::string& channelId,
+                                           const std::string& insertId) {
+    if (!cloudProjectBound() || !sharedEditingAllowed() || !m_sharedAssetMutationSink) return;
+    const auto* slot = insertModel(channelId, insertId);
+    if (!slot || !slot->isLoaded()) return;
+    const std::string key = channelId + "/" + insertId;
+    auto& pending = m_pluginStateSync[key];
+    pending.channelId = channelId;
+    pending.insertId = insertId;
+    pending.dirty = true;
+    ++pending.generation;
+}
+
+void EngineController::finishPluginStateUpload(
+    const std::shared_ptr<PluginStateUpload>& upload, const std::string& error) {
+    if (auto found = m_pluginStateSync.find(upload->key); found != m_pluginStateSync.end()) {
+        found->second.pending = false;
+        if (error.empty()) {
+            found->second.left = std::move(upload->left);
+            found->second.right = std::move(upload->right);
+        }
+    }
+    if (m_pluginStateSyncCallback) m_pluginStateSyncCallback(upload->baseline.id, error, false);
+}
+
+void EngineController::uploadPluginStatePart(
+    const std::shared_ptr<PluginStateUpload>& upload, bool right) {
+    const auto& bytes = right ? upload->right : upload->left;
+    std::error_code error;
+    const fs::path directory = fs::temp_directory_path(error);
+    if (error) { finishPluginStateUpload(upload, "Cannot create plugin state staging file"); return; }
+    collab::SharedAssetMutationRequest request;
+    request.requestId = newUuid();
+    request.assetId = newUuid();
+    request.kind = AssetKind::PluginState;
+    request.displayName = right ? "plugin-state-right.bin" : "plugin-state.bin";
+    request.contentType = "application/vnd.vlt.plugin-state";
+    request.sourcePath = platform::pathToUtf8(directory / ("vlt-state-" + request.requestId + ".bin"));
+    {
+        std::ofstream stream(platform::pathFromUtf8(request.sourcePath), std::ios::binary | std::ios::trunc);
+        stream.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+        stream.flush();
+        if (!stream) {
+            stream.close();
+            fs::remove(platform::pathFromUtf8(request.sourcePath), error);
+            finishPluginStateUpload(upload, "Cannot write plugin state staging file");
+            return;
+        }
+    }
+    PendingSharedAssetMutation pending;
+    pending.expected = expectedSharedAudioAsset(request);
+    pending.expected.byteSize = bytes.size();
+    pending.cleanupPath = request.sourcePath;
+    upload->requests.push_back(request);
+    pending.cancelled = [this, upload] { finishPluginStateUpload(upload, "Plugin state upload was cancelled or rejected"); };
+    pending.complete = [upload, right](EngineController& controller, const AssetRef& asset) {
+        if (right) upload->rightStateAsset = asset;
+        else upload->stateAsset = asset;
+        if (!right && !upload->right.empty()) {
+            controller.uploadPluginStatePart(upload, true);
+            return collab::SharedMutationResult::Submitted;
+        }
+        const InsertModel* current = controller.insertModel(upload->channelId, upload->baseline.id);
+        const auto sameParameters = [](const auto& a, const auto& b) {
+            return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(),
+                [](const auto& x, const auto& y) { return x.id == y.id && x.value == y.value; });
+        };
+        const auto& before = upload->baseline;
+        const auto entry = controller.m_pluginStateSync.find(upload->key);
+        const bool currentGeneration = entry != controller.m_pluginStateSync.end() &&
+            entry->second.generation == upload->generation;
+        if (!current || !currentGeneration || current->format != before.format || current->uid != before.uid ||
+            current->pluginVersion != before.pluginVersion || current->stateSchemaVersion != before.stateSchemaVersion ||
+            current->channelMode != before.channelMode || current->stateAsset != before.stateAsset ||
+            current->rightStateAsset != before.rightStateAsset || current->assetBindings != before.assetBindings ||
+            !sameParameters(current->parameters, before.parameters) || !sameParameters(current->rightParameters, before.rightParameters)) {
+            controller.finishPluginStateUpload(upload, "Plugin changed while its state was uploading; capture it again");
+            return collab::SharedMutationResult::Blocked;
+        }
+        const collab::CommandBody body = collab::SetPluginState{
+            upload->location, before.id, before.pluginVersion, before.stateSchemaVersion,
+            upload->stateAsset, upload->rightStateAsset, upload->parameters, upload->rightParameters,
+            before.assetBindings};
+        for (const auto& request : upload->requests) {
+            collab::ProjectCommand command; command.meta.transactionId = upload->transactionId; command.body = body;
+            nlohmann::json recovery{{"schemaVersion", 1}, {"type", "shared-asset-result"},
+                {"recoveryId", request.requestId}, {"transactionId", upload->transactionId},
+                {"label", "Edit Plugin State"}, {"status", "ready"},
+                {"requests", nlohmann::json::array({recoveryAssetRequest(request)})},
+                {"command", collab::projectCommandToJson(command)}};
+            if (!writeSharedResultRecovery(request.sourcePath + ".vlt-pending.json", recovery)) {
+                controller.finishPluginStateUpload(upload, "Could not save recovery metadata; plugin state bytes were retained");
+                return collab::SharedMutationResult::Blocked;
+            }
+        }
+        const auto result = controller.submitSharedMutation(body, "Edit Plugin State", upload->transactionId);
+        controller.finishPluginStateUpload(upload,
+            result == collab::SharedMutationResult::Submitted ? std::string{} : "Plugin state could not be submitted");
+        return result;
+    };
+    if (m_pluginStateSyncCallback) m_pluginStateSyncCallback(upload->baseline.id, {}, true);
+    if (prepareSharedAssetMutation(std::move(request), std::move(pending)) != collab::SharedMutationResult::Submitted)
+        finishPluginStateUpload(upload, "Plugin state upload is unavailable");
+}
+
+void EngineController::pumpPluginStateSync(std::size_t maxCaptures) {
+    if (!cloudProjectBound() || !sharedEditingAllowed() || !m_sharedAssetMutationSink) return;
+    std::vector<std::string> keys;
+    for (const auto& [key, state] : m_pluginStateSync)
+        if (state.dirty && !state.pending && keys.size() < maxCaptures) keys.push_back(key);
+    for (const auto& key : keys) {
+        auto& state = m_pluginStateSync.at(key);
+        auto upload = std::make_shared<PluginStateUpload>();
+        upload->key = key;
+        upload->channelId = state.channelId;
+        upload->generation = state.generation;
+        const InsertModel* slot = insertModel(state.channelId, state.insertId);
+        InsertSlot* live = liveInsertSlot(state.channelId, state.insertId);
+        state.dirty = false;
+        if (!slot || !live || !live->node || !live->node->instance()) {
+            m_pluginStateSync.erase(key);
+            continue;
+        }
+        upload->baseline = *slot;
+        upload->location = channelPluginLocation(state.channelId);
+        if (const auto* track = m_project.findTrack(state.channelId)) {
+            if (track->instrument.id == slot->id) upload->location.chain = collab::PluginChain::Instrument;
+            for (const auto& insert : track->samplerFx.inserts)
+                if (insert.id == slot->id) upload->location.chain = collab::PluginChain::SamplerFx;
+            for (const auto& clip : track->clips) for (const auto& insert : clip.inserts)
+                if (insert.id == slot->id) { upload->location.chain = collab::PluginChain::Clip; upload->location.clipId = clip.id; }
+        }
+        bool saved = false;
+        {
+            const engine::RealtimeEngine::RenderGate gate(m_engine);
+            auto* instance = live->node->instance();
+            if (auto* sampler = dynamic_cast<plugins::sampler::SamplerInstance*>(instance))
+                saved = sampler->saveProjectState(upload->left, {});
+            else saved = instance->saveState(upload->left);
+            snapshotParameters(*instance, upload->parameters);
+            if (slot->channelMode == PluginChannelMode::DualMono) {
+                auto* right = live->rightNode ? live->rightNode->instance() : nullptr;
+                saved = saved && right && right->saveState(upload->right);
+                if (right) snapshotParameters(*right, upload->rightParameters);
+            }
+        }
+        constexpr std::size_t maximum = 64u * 1024u * 1024u;
+        if (!saved || upload->left.empty() || upload->left.size() > maximum || upload->right.size() > maximum ||
+            (slot->channelMode == PluginChannelMode::DualMono && upload->right.empty())) {
+            finishPluginStateUpload(upload, "Plugin cannot save a shareable state (maximum 64 MiB per channel)");
+            continue;
+        }
+        if (state.left == upload->left && state.right == upload->right) continue;
+        state.pending = true;
+        uploadPluginStatePart(upload, false);
+    }
 }
 
 EngineController::~EngineController() {
@@ -3245,6 +3696,7 @@ bool EngineController::anyMuted() const {
 }
 
 void EngineController::clearAllSolos() {
+    if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return;
     bool changed = false;
     for (TrackModel& t : m_project.tracks) {
         if (!t.soloed) continue;
@@ -3252,10 +3704,12 @@ void EngineController::clearAllSolos() {
         changed = true;
     }
     if (changed) syncAllTrackGains();
+    if (changed && m_sessionAuditionEnabled && m_auditionChanged) m_auditionChanged(trackAuditionState());
 }
 
 collab::SharedMutationResult EngineController::clearAllMutes() {
-    if (m_sharedMutationSink) {
+    if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return collab::SharedMutationResult::Blocked;
+    if (m_sharedMutationSink && !m_sessionAuditionEnabled) {
         std::vector<std::string> mutedTrackIds;
         mutedTrackIds.reserve(m_project.tracks.size());
         for (const TrackModel& track : m_project.tracks) {
@@ -3276,6 +3730,7 @@ collab::SharedMutationResult EngineController::clearAllMutes() {
         changed = true;
     }
     if (changed) syncAllTrackGains();
+    if (changed && m_sessionAuditionEnabled && m_auditionChanged) m_auditionChanged(trackAuditionState());
     return collab::SharedMutationResult::LocalFallback;
 }
 
@@ -3325,8 +3780,20 @@ void EngineController::syncSlots(const std::string& channelId,
         descriptor.uid = slot.uid;
         descriptor.path = slot.path;
         descriptor.name = slot.name;
-        if (const auto known =
-                m_pluginManager.find(descriptor.format, descriptor.uid)) {
+        if (cloudProjectBound()) {
+            collab::PluginRequirement requirement;
+            requirement.format = slot.format; requirement.nativeUid = slot.uid;
+            requirement.vendor = slot.vendor; requirement.version = slot.pluginVersion;
+            requirement.stateSchemaVersion = slot.stateSchemaVersion;
+            requirement.instrument = owner && owner->instrument.id == slot.id;
+            requirement.channelMode = slot.channelMode;
+            requirement.parameterFingerprint = slot.parameterFingerprint;
+            const auto installed = m_pluginManager.plugins();
+            const auto found = std::find_if(installed.begin(), installed.end(),
+                [&](const auto& candidate) { return collab::pluginSatisfiesRequirement(candidate, requirement); });
+            if (found == installed.end()) return plugins::PluginDescriptor{};
+            descriptor = *found;
+        } else if (const auto known = m_pluginManager.find(descriptor.format, descriptor.uid)) {
             descriptor = *known;
         }
         // Loading directly from a descriptor is valid before this controller's
@@ -3345,6 +3812,7 @@ void EngineController::syncSlots(const std::string& channelId,
     };
 
     for (const InsertModel& slot : slots) {
+        if (slot.runtimeStateBlocked) continue;
         const std::uint16_t preferredChannels =
             slot.channelMode == PluginChannelMode::Mono ||
                     slot.channelMode == PluginChannelMode::DualMono
@@ -3358,7 +3826,11 @@ void EngineController::syncSlots(const std::string& channelId,
         // edit that happens to rebuild the graph.
         auto existing = std::find_if(
             live.begin(), live.end(), [&](const InsertSlot& candidate) {
-                return candidate.slotId == slot.id && candidate.uid == slot.uid;
+                if (candidate.slotId != slot.id || candidate.uid != slot.uid) return false;
+                if (!cloudProjectBound() || !candidate.node || !candidate.node->instance()) return true;
+                const auto& descriptor = candidate.node->instance()->descriptor();
+                return descriptor.version == slot.pluginVersion && descriptor.format == toHostFormat(slot.format) &&
+                    (slot.parameterFingerprint.empty() || descriptor.parameterFingerprint == slot.parameterFingerprint);
             });
         InsertSlot loaded;
         if (existing != live.end() && existing->node) {
@@ -4402,12 +4874,21 @@ audio::Result EngineController::saveProject(const std::string& packageDir) {
 }
 
 cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
-    const std::string& stagingParent) {
+    const std::string& stagingParent, bool allowExternal) {
     // This entry point is deliberately synchronous and control-thread-only.
     // It is called from Publish Project before any worker hashes or uploads a
     // byte; RenderGate makes opaque state reads disjoint from process().
     cloud::CloudPublicationCapture capture(m_project);
-    capture.blockers = cloud::inspectCaptureCompatibilityV1(m_project);
+    if (!capture.document.clipLibrary.empty()) {
+        const auto preserved = persistLocalClipShelf(true);
+        if (!preserved) {
+            capture.addIssue({cloud::PublicationCaptureIssueKind::StagingIo, "project/clipLibrary", {}, {}, "Local Clip Shelf",
+                "Cannot preserve the project's clip library before publishing: " + preserved.message()});
+            return capture;
+        }
+        capture.document.clipLibrary.clear();
+    }
+    capture.blockers = cloud::inspectCaptureCompatibilityV1(m_project, allowExternal);
     if (!capture.blockers.empty()) return capture;
 
     capture.document.sampleRate = m_sampleRate;
@@ -4462,6 +4943,13 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
         }
         slot.pluginVersion = descriptor.version;
         slot.stateSchemaVersion = descriptor.stateSchemaVersion;
+        if (const auto known = m_pluginManager.find(descriptor.format, descriptor.uid);
+            known && known->version == descriptor.version) slot.parameterFingerprint = known->parameterFingerprint;
+        if (!internal && slot.parameterFingerprint.size() != 64) {
+            issueForSlot(cloud::PublicationCaptureIssueKind::PluginStateCaptureFailed, slot, location,
+                "The external plugin must be scanned before publishing its parameter contract");
+            return;
+        }
         snapshotParameters(*left, slot.parameters);
 
         CapturedPluginState state;
@@ -4563,18 +5051,44 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
 
     // Resolve every ordinary document-owned media path before creating the
     // staging directory. A missing source therefore leaves no partial output.
+    const auto bindDerivedAudio = [&](AssetRef& asset, const std::string& path, const std::string& location) {
+        if (!path.empty()) {
+            const AssetRef preferred = asset;
+            (void)capture.bindLocalFile(asset, preferred, path, AssetKind::Audio, location);
+        } else if (!asset.empty()) {
+            capture.addIssue({cloud::PublicationCaptureIssueKind::MissingLocalSource, location, asset.assetId,
+                {}, asset.originalName, "Derived audio has no local upload source"});
+        }
+    };
     for (std::size_t trackIndex = 0;
          trackIndex < capture.document.tracks.size(); ++trackIndex) {
         TrackModel& track = capture.document.tracks[trackIndex];
         const std::string trackLocation =
             "track:" + (track.id.empty() ? std::to_string(trackIndex)
                                           : track.id);
+        bindDerivedAudio(track.freeze.asset, track.freeze.filePath, trackLocation + "/freeze");
         for (std::size_t clipIndex = 0; clipIndex < track.clips.size();
              ++clipIndex) {
             ClipModel& clip = track.clips[clipIndex];
             const std::string clipLocation =
                 trackLocation + "/clip:" +
                 (clip.id.empty() ? std::to_string(clipIndex) : clip.id);
+            if (!clip.offlineProcess.empty()) {
+                clip.offlineHistory.push_back({newUuid(), {}, "Original", captureClipAudioVersion(clip)});
+                ClipAudioVersionSource rendered;
+                rendered.filePath = clip.offlineProcess.renderedFilePath;
+                rendered.asset = clip.offlineProcess.renderedAsset;
+                rendered.durationSeconds = clip.offlineProcess.renderedDurationSeconds;
+                rendered.channels = clip.channels;
+                clip.offlineHistory.push_back({newUuid(), clip.offlineHistory.back().id, "Rendered", rendered});
+                clip.offlineVersionId = clip.offlineHistory.back().id;
+                applyClipAudioVersion(clip, rendered); clip.offlineProcess = {};
+            }
+            for (auto& version : clip.offlineHistory) {
+                bindDerivedAudio(version.source.asset, version.source.filePath, clipLocation + "/history:" + version.id);
+                for (auto& take : version.source.takes)
+                    bindDerivedAudio(take.asset, take.filePath, clipLocation + "/history:" + version.id + "/take:" + take.id);
+            }
             if (clip.kind == ClipKind::Audio && !clip.filePath.empty()) {
                 const AssetRef preferred = clip.asset;
                 (void)capture.bindLocalFile(
@@ -5523,6 +6037,9 @@ audio::Result EngineController::openProject(const std::string& packageDir) {
 
 audio::Result EngineController::materializeCollaborationProject(
     ProjectModel runtimeDocument, bool clearLegacyUndo) {
+    if (const auto shelf = loadLocalClipShelf(); !shelf) return shelf;
+    runtimeDocument.clipLibrary = m_localClipShelf;
+    ++m_sharedProjectionRevision;
     // Collaboration owns its durable history and hands us a disposable
     // runtime copy.  Keep every piece that rebuildGraph mutates so a malformed
     // route cannot leave the audible graph and the UI-facing model disagreeing.
@@ -5704,6 +6221,8 @@ audio::Result EngineController::materializeCollaborationProject(
         }
     });
 
+    std::string pluginStateError;
+    std::vector<std::pair<std::string, std::string>> failedPluginStates;
     {
         // Plugin state replacement is not realtime-safe.  Park at a block
         // boundary only for instance mutation.  File reads above remain on the
@@ -5711,8 +6230,12 @@ audio::Result EngineController::materializeCollaborationProject(
         const engine::RealtimeEngine::RenderGate gate(m_engine);
         const auto projectSlot = [&](const std::string& channelId,
                                      const InsertModel& slot) {
+            if (slot.runtimeStateBlocked) return;
             InsertSlot* live = liveInsertSlot(channelId, slot.id);
-            if (!live) return;
+            if (!live || !live->node || !live->node->instance()) {
+                if (slot.isLoaded()) pluginStateError = "Shared plugin is unavailable: " + slot.name;
+                return;
+            }
             const InsertModel* before = previousInsert(channelId, slot.id);
             const bool slotChanged = !before || before->uid != slot.uid;
 
@@ -5723,8 +6246,12 @@ audio::Result EngineController::materializeCollaborationProject(
                 if (!node || !node->instance()) return;
                 if (slotChanged || path != previousPath) {
                     const auto state = stateBytes.find(path);
-                    if (state != stateBytes.end())
-                        (void)node->instance()->loadState(state->second);
+                    if (!path.empty() && (state == stateBytes.end() || !node->instance()->loadState(state->second))) {
+                        node->setBypassed(true);
+                        pluginStateError = "Shared plugin state could not be restored: " + slot.name;
+                        failedPluginStates.emplace_back(channelId, slot.id);
+                        return;
+                    }
                 }
                 // The inline mirror is authoritative over an older state blob
                 // and is also the complete fallback for a missing blob.
@@ -5750,13 +6277,25 @@ audio::Result EngineController::materializeCollaborationProject(
     // after all state/parameter projection, not once per slot.
     built = rebuildGraph();
     if (!built) return restorePrevious(built);
+    if (!failedPluginStates.empty()) {
+        const engine::RealtimeEngine::RenderGate gate(m_engine);
+        for (const auto& [channelId, insertId] : failedPluginStates) {
+            if (auto* slot = liveInsertSlot(channelId, insertId)) {
+                if (slot->node) slot->node->setBypassed(true);
+                if (slot->rightNode) slot->rightNode->setBypassed(true);
+            }
+        }
+    }
     if (clearLegacyUndo) m_undo.clear();
     retireOrphanedPendingAudioImports();
-    return built;
+    return pluginStateError.empty() ? built : audio::Result::fail(audio::EngineError::UnsupportedFormat, pluginStateError);
 }
 
 audio::Result EngineController::projectCollaborationChange(
     ProjectModel runtimeDocument, const collab::ChangeImpact& impact) {
+    if (const auto shelf = loadLocalClipShelf(); !shelf) return shelf;
+    runtimeDocument.clipLibrary = m_localClipShelf;
+    ++m_sharedProjectionRevision;
     ProjectModel previousProject = std::move(m_project);
     const bool topologyChanged =
         !sameCollaborationTopology(previousProject, runtimeDocument);
@@ -5930,7 +6469,7 @@ audio::Result EngineController::projectCollaborationChange(
         bytes.resize(static_cast<std::size_t>(size));
         input.read(reinterpret_cast<char*>(bytes.data()),
                    std::streamsize(bytes.size()));
-        if (!input.good() && !input.eof()) bytes.clear();
+        if (input.gcount() != std::streamsize(bytes.size())) bytes.clear();
     };
     for (const std::string& insertId : pluginIds) {
         const auto [channelId, slot] = locateInsert(m_project, insertId);
@@ -5952,29 +6491,39 @@ audio::Result EngineController::projectCollaborationChange(
         pluginProjections.push_back(std::move(projection));
     }
 
+    std::string pluginStateError;
     if (!pluginProjections.empty()) {
         const engine::RealtimeEngine::RenderGate gate(m_engine);
         for (const PluginRuntimeProjection& projection : pluginProjections) {
+            if (projection.slot->runtimeStateBlocked) continue;
             InsertSlot* live =
                 liveInsertSlot(projection.channelId, projection.slot->id);
-            if (!live) continue;
+            if (!live || !live->node || !live->node->instance()) {
+                pluginStateError = "Shared plugin is unavailable: " + projection.slot->name;
+                continue;
+            }
             const InsertModel& slot = *projection.slot;
             const auto apply = [&](plugins::PluginNode* node,
                                    bool loadState,
+                                   const std::string& statePath,
                                    const std::vector<std::uint8_t>& state,
                                    const std::vector<InsertParameter>& values) {
                 if (!node || !node->instance()) return;
                 node->setBypassed(slot.bypassed);
                 node->setMix(slot.mix);
-                if (loadState && !state.empty())
-                    (void)node->instance()->loadState(state);
+                if (loadState && !statePath.empty() &&
+                    (state.empty() || !node->instance()->loadState(state))) {
+                    node->setBypassed(true);
+                    pluginStateError = "Shared plugin state could not be restored: " + slot.name;
+                    return;
+                }
                 applyStoredParameters(*node, values);
                 node->setSlideDelivery(plugins::SlideDelivery(slot.slideDelivery),slot.slideBendRange,slot.slideReleaseReserve);
             };
-            apply(live->node.get(), projection.loadLeft,
+            apply(live->node.get(), projection.loadLeft, slot.stateFile,
                   projection.leftState, slot.parameters);
             if (slot.channelMode == PluginChannelMode::DualMono) {
-                apply(live->rightNode.get(), projection.loadRight,
+                apply(live->rightNode.get(), projection.loadRight, slot.rightStateFile,
                       projection.rightState,
                       slot.rightParameters.empty() ? slot.parameters
                                                    : slot.rightParameters);
@@ -5989,7 +6538,8 @@ audio::Result EngineController::projectCollaborationChange(
     // attach to. This is the point where the document has settled, so it is
     // where that upload is called off.
     retireOrphanedPendingAudioImports();
-    return audio::Result::ok();
+    return pluginStateError.empty() ? audio::Result::ok() :
+        audio::Result::fail(audio::EngineError::UnsupportedFormat, pluginStateError);
 }
 
 audio::Result EngineController::restoreRecoveryProject(
@@ -6399,6 +6949,7 @@ void EngineController::applyTransportStartPolicy() {
 }
 
 void EngineController::play() {
+    if (m_sessionTransportHandler) { m_sessionTransportHandler("play", positionSeconds(), loopEndSeconds(), isLoopEnabled()); return; }
     for (const auto& track : m_project.tracks) (void)invalidateTrackFreeze(track);
     // An audition is a thing you do *instead* of playing; letting it run into
     // the transport would put a stray sample over the first bar, and into a
@@ -6427,13 +6978,20 @@ void EngineController::play() {
     m_engine.preparePlayback(t.position());
     t.play();
 }
-void EngineController::stop() { m_engine.transport().stop(); }
-void EngineController::pause() { m_engine.transport().pause(); }
+void EngineController::stop() {
+    if (m_sessionTransportHandler) { m_sessionTransportHandler("stop", positionSeconds(), loopEndSeconds(), isLoopEnabled()); return; }
+    m_engine.transport().stop();
+}
+void EngineController::pause() {
+    if (m_sessionTransportHandler) { m_sessionTransportHandler("pause", positionSeconds(), loopEndSeconds(), isLoopEnabled()); return; }
+    m_engine.transport().pause();
+}
 void EngineController::seekSeconds(double seconds) {
     // A recording owns the transport until it is stopped. Letting any UI
     // surface relocate it mid-take makes the visible playhead disagree with
     // the recorder's continuous stream and can create a malformed clip.
     if (isRecording()) return;
+    if (m_sessionTransportHandler) { m_sessionTransportHandler("seek", seconds, loopEndSeconds(), isLoopEnabled()); return; }
     const double s = std::max(0.0, seconds);
     // Any repositioning while stopped/paused is the start of the next run, so
     // Restart mode can return there. Seeks during playback don't move it.
@@ -6629,13 +7187,24 @@ bool EngineController::setNotebookHtml(std::string html) {
     constexpr std::size_t kMaxNotebookBytes = 4 * 1024 * 1024;
     if (html.size() > kMaxNotebookBytes) html.resize(kMaxNotebookBytes);
     if (m_project.notebookHtml == html) return false;
+    if (cloudProjectBound()) {
+        if (m_sharedMutationSink->commandSchemaVersion() < 6 || html.size() > 524288) return false;
+        return submitSharedMutation(collab::SetProjectScalar{collab::ProjectScalar::NotebookHtml,
+            std::move(html)}, "Edit Notebook") == collab::SharedMutationResult::Submitted;
+    }
     m_project.notebookHtml = std::move(html);
     return true;
 }
 
 bool EngineController::setNotebookCues(std::vector<NotebookCueModel> cues) {
+    if (cloudProjectBound() && cues.size() > 2000) return false;
     if (cues.size() > 2000) cues.resize(2000);
     if (m_project.notebookCues == cues) return false;
+    if (cloudProjectBound()) {
+        if (m_sharedMutationSink->commandSchemaVersion() < 6) return false;
+        return submitSharedMutation(collab::SetNotebookCues{std::move(cues)}, "Edit Notebook Cues") ==
+            collab::SharedMutationResult::Submitted;
+    }
     m_project.notebookCues = std::move(cues);
     return true;
 }
@@ -6662,6 +7231,7 @@ bool EngineController::setMetronomeSample(const std::string& filePath) {
 }
 
 void EngineController::setLoopEnabled(bool enabled) {
+    if (m_sessionTransportHandler) { m_sessionTransportHandler("loop", loopStartSeconds(), loopEndSeconds(), enabled); return; }
     m_engine.transport().setLoopEnabled(enabled);
     // Mirrored into the document as it is set, so saving needs no separate
     // "collect the transport state" pass that could be forgotten.
@@ -6671,6 +7241,7 @@ bool EngineController::isLoopEnabled() const {
     return m_engine.transport().isLoopEnabled();
 }
 void EngineController::setLoopRangeSeconds(double startSeconds, double endSeconds) {
+    if (m_sessionTransportHandler) { m_sessionTransportHandler("loop", startSeconds, endSeconds, isLoopEnabled()); return; }
     m_engine.transport().setLoopRange(toSamples(startSeconds), toSamples(endSeconds));
     m_project.loopStartSeconds = std::max(0.0, startSeconds);
     m_project.loopEndSeconds = std::max(0.0, endSeconds);
@@ -6854,6 +7425,7 @@ std::string EngineController::addPatternInstrument(
     const std::string& patternId,
     const plugins::PluginDescriptor& descriptor,
     double startSeconds) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     const TrackModel* pattern = m_project.findTrack(patternId);
     if (!pattern || pattern->kind != TrackKind::Pattern ||
         !descriptor.isInstrument) {
@@ -7525,6 +8097,7 @@ void EngineController::setTrackPan(const std::string& trackId, float pan) {
 
 void EngineController::setTrackVolumeLive(const std::string& trackId,
                                           float volume) {
+    if (!sharedGestureAllowed("track:" + trackId + ":volume")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float applied = std::clamp(volume, 0.0f, 2.0f);
@@ -7537,6 +8110,7 @@ void EngineController::setTrackVolumeLive(const std::string& trackId,
 }
 
 void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
+    if (!sharedGestureAllowed("track:" + trackId + ":pan")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float applied = std::clamp(pan, -1.0f, 1.0f);
@@ -7550,6 +8124,7 @@ void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
 
 void EngineController::setTrackVolumeGestureSample(
     const std::string& trackId, float volume) {
+    if (!sharedGestureAllowed("track:" + trackId + ":volume")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float applied = std::clamp(volume, 0.0f, 2.0f);
@@ -7564,6 +8139,7 @@ void EngineController::setTrackVolumeGestureSample(
 
 void EngineController::setTrackPanGestureSample(const std::string& trackId,
                                                  float pan) {
+    if (!sharedGestureAllowed("track:" + trackId + ":pan")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float applied = std::clamp(pan, -1.0f, 1.0f);
@@ -7594,6 +8170,9 @@ void EngineController::commitTrackVolumeEdit(
         for (const auto& [trackId, value] : values)
             setTrackVolumeLive(trackId, value);
     };
+    if (cloudProjectBound() && std::any_of(to.begin(), to.end(), [&](const auto& value) { return !sharedGestureAllowed("track:" + value.first + ":volume"); })) {
+        restoreSharedPreview([&] { apply(from); }); return;
+    }
     auto batch = std::make_shared<collab::BatchCommand>();
     batch->commands.reserve(to.size());
     for (const auto& [trackId, value] : to) {
@@ -7605,7 +8184,7 @@ void EngineController::commitTrackVolumeEdit(
     const auto shared = submitSharedMutation(
         collab::CommandBody{std::move(batch)}, label);
     if (shared == collab::SharedMutationResult::Blocked) {
-        apply(from);
+        restoreSharedPreview([&] { apply(from); });
         return;
     }
     if (shared == collab::SharedMutationResult::Submitted) return;
@@ -7634,6 +8213,9 @@ void EngineController::commitTrackPanEdit(
         for (const auto& [trackId, value] : values)
             setTrackPanLive(trackId, value);
     };
+    if (cloudProjectBound() && std::any_of(to.begin(), to.end(), [&](const auto& value) { return !sharedGestureAllowed("track:" + value.first + ":pan"); })) {
+        restoreSharedPreview([&] { apply(from); }); return;
+    }
     auto batch = std::make_shared<collab::BatchCommand>();
     batch->commands.reserve(to.size());
     for (const auto& [trackId, value] : to) {
@@ -7645,7 +8227,7 @@ void EngineController::commitTrackPanEdit(
     const auto shared = submitSharedMutation(
         collab::CommandBody{std::move(batch)}, label);
     if (shared == collab::SharedMutationResult::Blocked) {
-        apply(from);
+        restoreSharedPreview([&] { apply(from); });
         return;
     }
     if (shared == collab::SharedMutationResult::Submitted) return;
@@ -7700,10 +8282,11 @@ void EngineController::setTrackMono(const std::string& trackId, bool mono) {
 
 collab::SharedMutationResult EngineController::setTrackMuted(
     const std::string& trackId, bool muted) {
+    if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return collab::SharedMutationResult::Blocked;
     const TrackModel* current = m_project.findTrack(trackId);
     if (!current || current->muted == muted)
         return collab::SharedMutationResult::LocalFallback;
-    if (m_sharedMutationSink) {
+    if (m_sharedMutationSink && !m_sessionAuditionEnabled) {
         const auto result = m_sharedMutationSink->setTrackMuted(trackId, muted);
         if (result != collab::SharedMutationResult::LocalFallback)
             return result;
@@ -7713,11 +8296,13 @@ collab::SharedMutationResult EngineController::setTrackMuted(
     track->muted = muted;
     syncTrackGain(*track);
     refreshAutomaticMonitoring();
+    if (m_sessionAuditionEnabled && m_auditionChanged) m_auditionChanged(trackAuditionState());
     return collab::SharedMutationResult::LocalFallback;
 }
 
 collab::SharedMutationResult EngineController::setTracksMuted(
     std::span<const std::string> trackIds, bool muted) {
+    if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return collab::SharedMutationResult::Blocked;
     std::vector<std::string> targets;
     std::unordered_set<std::string> seen;
     const auto appendIfChanged = [&](const std::string& id) {
@@ -7742,7 +8327,7 @@ collab::SharedMutationResult EngineController::setTracksMuted(
     }
 
     if (targets.empty()) return collab::SharedMutationResult::LocalFallback;
-    if (m_sharedMutationSink) {
+    if (m_sharedMutationSink && !m_sessionAuditionEnabled) {
         const auto result = m_sharedMutationSink->setTracksMuted(targets, muted);
         if (result != collab::SharedMutationResult::LocalFallback)
             return result;
@@ -7751,13 +8336,17 @@ collab::SharedMutationResult EngineController::setTracksMuted(
         if (TrackModel* track = m_project.findTrack(id)) track->muted = muted;
     }
     syncAllTrackGains();
+    if (m_sessionAuditionEnabled && m_auditionChanged) m_auditionChanged(trackAuditionState());
     return collab::SharedMutationResult::LocalFallback;
 }
 
 void EngineController::setTrackSoloed(const std::string& trackId, bool soloed) {
+    if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return;
     if (auto* t = m_project.findTrack(trackId)) {
+        if (t->soloed == soloed) return;
         t->soloed = soloed;
         syncAllTrackGains();   // solo changes every other channel's gain
+        if (m_sessionAuditionEnabled && m_auditionChanged) m_auditionChanged(trackAuditionState());
     }
 }
 
@@ -8771,6 +9360,7 @@ SendModel* findSend(TrackModel* track, const std::string& sendId) {
 
 void EngineController::setSendLevel(const std::string& trackId,
                                     const std::string& sendId, float level) {
+    if (!sharedGestureAllowed("send:" + sendId + ":level")) return;
     auto* track = m_project.findTrack(trackId);
     auto* send = findSend(track, sendId);
     if (!send) return;
@@ -8797,12 +9387,15 @@ void EngineController::commitSendLevelEdit(const std::string& trackId,
     const auto* send = findSend(m_project.findTrack(trackId), sendId);
     if (!send || send->level == before) return;
     const float after = send->level;
+    if (!sharedGestureAllowed("send:" + sendId + ":level")) {
+        restoreSharedPreview([&] { setSendLevel(trackId, sendId, before); }); return;
+    }
     const auto shared = submitSharedMutation(
         collab::SetSendProperty{trackId, sendId,
                                 collab::SendProperty::Level, double(after)},
         label);
     if (shared == collab::SharedMutationResult::Blocked) {
-        setSendLevel(trackId, sendId, before);
+        restoreSharedPreview([&] { setSendLevel(trackId, sendId, before); });
         return;
     }
     if (shared == collab::SharedMutationResult::Submitted) return;
@@ -8904,6 +9497,7 @@ void EngineController::ensureMasterInsertSlots(size_t count) {
 std::string EngineController::addInsert(const std::string& channelId,
                                         const plugins::PluginDescriptor& descriptor,
                                         size_t index) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return {};
 
@@ -9026,6 +9620,7 @@ void EngineController::moveInsert(const std::string& channelId,
 bool EngineController::replaceInsert(const std::string& channelId,
                                      const std::string& insertId,
                                      const plugins::PluginDescriptor& descriptor) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return false;
     auto found = std::find_if(slots->begin(), slots->end(),
@@ -9164,6 +9759,7 @@ void EngineController::setAllInsertsBypassed(const std::string& channelId,
 
 void EngineController::setInsertMix(const std::string& channelId,
                                     const std::string& insertId, float mix) {
+    if (!sharedGestureAllowed("plugin:" + insertId)) return;
     InsertModel* slot = mutableInsertSlot(channelId, insertId);
     if (!slot) return;
     slot->mix = std::clamp(mix, 0.0f, 1.0f);
@@ -9181,6 +9777,9 @@ void EngineController::commitInsertMixEdit(const std::string& channelId,
     if (!slot) return;
     const float afterMix = slot->mix;
     if (std::abs(afterMix - beforeMix) < 1e-6f) return;
+    if (!sharedGestureAllowed("plugin:" + insertId)) {
+        restoreSharedPreview([&] { setInsertMix(channelId, insertId, beforeMix); }); return;
+    }
     const auto shared = submitSharedMutation(
         collab::SetPluginProperty{channelPluginLocation(channelId), insertId,
                                   collab::PluginProperty::Mix,
@@ -9188,7 +9787,7 @@ void EngineController::commitInsertMixEdit(const std::string& channelId,
         label);
     if (shared != collab::SharedMutationResult::LocalFallback) {
         if (shared == collab::SharedMutationResult::Blocked)
-            setInsertMix(channelId, insertId, beforeMix);
+            restoreSharedPreview([&] { setInsertMix(channelId, insertId, beforeMix); });
         return;
     }
     m_undo.push(label,
@@ -9352,6 +9951,7 @@ const SamplerFxModel* EngineController::samplerFx(
 std::string EngineController::addSamplerFxInsert(
     const std::string& trackId, const std::string& samplerSlotId,
     const plugins::PluginDescriptor& descriptor, size_t index) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     std::vector<InsertModel>* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
     if (!slots || slots->size() >= kSamplerFxSlots || descriptor.isInstrument) return {};
 
@@ -9479,6 +10079,7 @@ void EngineController::moveSamplerFxInsert(const std::string& trackId,
 bool EngineController::replaceSamplerFxInsert(
     const std::string& trackId, const std::string& samplerSlotId,
     const std::string& insertId, const plugins::PluginDescriptor& descriptor) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     if (descriptor.isInstrument) return false;
     auto* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
     if (!slots) return false;
@@ -9577,6 +10178,7 @@ void EngineController::setAllSamplerFxBypassed(const std::string& trackId,
 void EngineController::setSamplerFxVolume(const std::string& trackId,
                                            const std::string& samplerSlotId,
                                            float volume) {
+    if (!sharedGestureAllowed("samplerFx:" + samplerSlotId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     if (!track || track->instrument.id != samplerSlotId ||
         !track->samplerFx.isOwnedBy(track->instrument)) return;
@@ -9589,6 +10191,7 @@ void EngineController::setSamplerFxVolume(const std::string& trackId,
 void EngineController::setSamplerFxPan(const std::string& trackId,
                                         const std::string& samplerSlotId,
                                         float pan) {
+    if (!sharedGestureAllowed("samplerFx:" + samplerSlotId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     if (!track || track->instrument.id != samplerSlotId ||
         !track->samplerFx.isOwnedBy(track->instrument)) return;
@@ -9606,14 +10209,15 @@ void EngineController::commitSamplerFxLevelEdit(
     const float afterVolume = model->volume;
     const float afterPan = model->pan;
     if (beforeVolume == afterVolume && beforePan == afterPan) return;
+    const auto restore = [&] { restoreSharedPreview([&] { setSamplerFxVolume(trackId, samplerSlotId, beforeVolume); setSamplerFxPan(trackId, samplerSlotId, beforePan); }); };
+    if (!sharedGestureAllowed("samplerFx:" + samplerSlotId)) { restore(); return; }
     const auto shared = submitSharedMutation(
         collab::SetSamplerFxLevels{trackId, samplerSlotId,
                                    double(afterVolume), double(afterPan)},
         label);
     if (shared != collab::SharedMutationResult::LocalFallback) {
         if (shared == collab::SharedMutationResult::Blocked) {
-            setSamplerFxVolume(trackId, samplerSlotId, beforeVolume);
-            setSamplerFxPan(trackId, samplerSlotId, beforePan);
+            restore();
         }
         return;
     }
@@ -9635,6 +10239,7 @@ const std::vector<InsertModel>* EngineController::clipFx(
 std::string EngineController::addClipFxInsert(
     const std::string& trackId, const std::string& clipId,
     const plugins::PluginDescriptor& descriptor, size_t index) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     auto* slots = mutableClipFxInserts(trackId, clipId);
     if (!slots || slots->size() >= kSamplerFxSlots || descriptor.isInstrument) return {};
     InsertModel slot;
@@ -9754,6 +10359,7 @@ void EngineController::moveClipFxInsert(const std::string& trackId,
 bool EngineController::replaceClipFxInsert(
     const std::string& trackId, const std::string& clipId,
     const std::string& insertId, const plugins::PluginDescriptor& descriptor) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     if (descriptor.isInstrument) return false;
     auto* slots = mutableClipFxInserts(trackId, clipId);
     if (!slots) return false;
@@ -9850,6 +10456,7 @@ void EngineController::setAllClipFxBypassed(const std::string& trackId,
 
 void EngineController::setClipFxVolume(const std::string& trackId,
                                         const std::string& clipId, float volume) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
     if (!track || !clip || clip->kind != ClipKind::Audio) return;
@@ -9871,6 +10478,7 @@ void EngineController::setClipFxVolume(const std::string& trackId,
 
 void EngineController::setClipFxPan(const std::string& trackId,
                                      const std::string& clipId, float pan) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
     if (!track || !clip || clip->kind != ClipKind::Audio) return;
@@ -9895,6 +10503,8 @@ void EngineController::commitClipFxLevelEdit(
     const float afterVolume = clip->gain;
     const float afterPan = clip->pan;
     if (beforeVolume == afterVolume && beforePan == afterPan) return;
+    const auto restore = [&] { restoreSharedPreview([&] { setClipFxVolume(trackId, clipId, beforeVolume); setClipFxPan(trackId, clipId, beforePan); }); };
+    if (!sharedGestureAllowed("clip:" + clipId)) { restore(); return; }
     auto batch = std::make_shared<collab::BatchCommand>();
     appendCommand(batch, collab::SetClipProperty{
         trackId, clipId, collab::ClipProperty::Gain, double(afterVolume)});
@@ -9904,8 +10514,7 @@ void EngineController::commitClipFxLevelEdit(
         collab::CommandBody{std::move(batch)}, label);
     if (shared != collab::SharedMutationResult::LocalFallback) {
         if (shared == collab::SharedMutationResult::Blocked) {
-            setClipFxVolume(trackId, clipId, beforeVolume);
-            setClipFxPan(trackId, clipId, beforePan);
+            restore();
         }
         return;
     }
@@ -9943,6 +10552,8 @@ void EngineController::setInsertParameter(const std::string& channelId,
                                           const std::string& insertId,
                                           const std::string& parameterId,
                                           double plainValue) {
+    if (!sharedGestureAllowed("plugin:" + insertId)) return;
+    if (!sharedEditingAllowed()) return;
     unfreezeTrack(channelId, false);
     plugins::PluginNode* node = editorInsertNode(channelId, insertId);
     if (!node || !node->instance()) return;
@@ -10158,9 +10769,7 @@ bool EngineController::pasteChannelInserts(const std::string& channelId,
             !sharedBatchApplies(m_project, batch)) {
             return false;
         }
-        const auto result = submitSharedMutation(
-            collab::CommandBody{std::move(batch)}, "Paste Plugins");
-        return result == collab::SharedMutationResult::Submitted;
+        return submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Paste Plugins");
     }
     const std::vector<ChainSlotSnapshot> next = mintChain(what.inserts);
     if (before.inserts.empty() && next.empty()) return false;
@@ -10204,8 +10813,8 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
             appendCommand(batch, collab::SetTrackProperty{
                 channelId, collab::TrackProperty::Pan,
                 double(std::clamp(what.pan, -1.0f, 1.0f))});
-            appendCommand(batch, collab::SetTrackProperty{
-                channelId, collab::TrackProperty::Muted, what.muted});
+            // Mute/solo are session audition controls in v6, never a durable
+            // side effect of pasting another participant's channel strip.
             appendCommand(batch, collab::SetTrackProperty{
                 channelId, collab::TrackProperty::Mono, what.mono});
             const bool routable = !what.outputBusId.empty() &&
@@ -10230,9 +10839,7 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
             }
         }
         if (!sharedBatchApplies(m_project, batch)) return false;
-        const auto result = submitSharedMutation(
-            collab::CommandBody{std::move(batch)}, "Paste Channel Strip");
-        return result == collab::SharedMutationResult::Submitted;
+        return submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Paste Channel Strip");
     }
 
     const ChannelSnapshot before = copyChannelStrip(channelId, /*withSettings=*/true);
@@ -10320,10 +10927,7 @@ bool EngineController::pasteChannelStripPreset(const std::string& channelId,
                 double(std::clamp(what.pan, -1.0f, 1.0f))});
         }
         if (!sharedBatchApplies(m_project, batch)) return false;
-        const auto result = submitSharedMutation(
-            collab::CommandBody{std::move(batch)},
-            "Apply Channel Strip Preset");
-        return result == collab::SharedMutationResult::Submitted;
+        return submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Apply Channel Strip Preset");
     }
 
     const ChannelSnapshot before =
@@ -10414,10 +11018,7 @@ bool EngineController::moveInsertBetweenChannels(const std::string& fromChannel,
             !sharedBatchApplies(m_project, batch)) {
             return false;
         }
-        const auto result = submitSharedMutation(
-            collab::CommandBody{std::move(batch)},
-            copy ? "Copy Plugin" : "Move Plugin");
-        return result == collab::SharedMutationResult::Submitted;
+        return submitSharedPluginSnapshotBatch(std::move(batch), {*moved}, copy ? "Copy Plugin" : "Move Plugin");
     }
 
     std::vector<ChainSlotSnapshot> nextTarget = target.inserts;
@@ -10854,6 +11455,7 @@ bool EngineController::pumpPluginEvents() {
         plugins::PluginEvent event;
         if (slot.node) {
             slot.node->beginMainThreadPump();
+            if (slot.node->takeStateChanged()) queuePluginStateSync(channelId, slot.slotId);
 
             if (slot.node->takeReloadRequested()) {
                 // kReloadComponent means unload/recreate, not re-activate the
@@ -10936,6 +11538,7 @@ bool EngineController::pumpPluginEvents() {
         applyPitchQuality(slot.node.get());
         if (!slot.rightNode) return;
         slot.rightNode->beginMainThreadPump();
+        if (slot.rightNode->takeStateChanged()) queuePluginStateSync(channelId, slot.slotId);
         if (slot.rightNode->takeReloadRequested()) {
             std::vector<std::uint8_t> state;
             {
@@ -11033,6 +11636,22 @@ bool EngineController::pumpPluginEvents() {
                 for (InsertParameter& parameter : values)
                     if (parameter.id == edit.parameterId)
                         parameter.value = edit.before;
+            }
+            // A native editor already changed its DSP before the callback.
+            // Restore it as well as the mirror when editing is forbidden.
+            if (auto* live = liveInsertSlot(edit.channelId, edit.insertId)) {
+                auto* node = edit.right ? live->rightNode.get() : live->node.get();
+                if (node && node->instance()) {
+                    const auto index = node->instance()->parameterIndexForId(edit.parameterId);
+                    if (index >= 0) {
+                        plugins::PluginEvent event;
+                        event.kind = plugins::PluginEvent::Kind::ParamValue;
+                        event.paramIndex = std::uint32_t(index);
+                        event.value = edit.before;
+                        node->pushEvent(event);
+                        node->instance()->setParameterFromHost(std::uint32_t(index), edit.before);
+                    }
+                }
             }
         }
     }
@@ -11191,11 +11810,13 @@ std::string EngineController::importAudio(const std::string& filePath,
 void EngineController::setClipStartSeconds(const std::string& trackId,
                                            const std::string& clipId,
                                            double startSeconds) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     const ClipStartChange change{trackId, clipId, startSeconds};
     setClipStartsSeconds(std::span<const ClipStartChange>(&change, 1));
 }
 
 void EngineController::beginClipPositionEdit() {
+    if (!sharedEditingAllowed()) return;
     // A second UI gesture means the first one lost its matching release. Flush
     // its endpoint before opening another transaction rather than leaving the
     // realtime graph indefinitely behind the document.
@@ -11600,6 +12221,7 @@ void EngineController::publishClipPositionAudio(const std::unordered_set<std::st
 
 void EngineController::setClipStartsSeconds(
     std::span<const ClipStartChange> changes) {
+    for (const auto& change : changes) if (!sharedGestureAllowed("clip:" + change.clipId)) return;
     ++m_clipGeometryRevision;
     if (cloudProjectBound() && !m_clipPositionEdit.active) {
         auto batch = std::make_shared<collab::BatchCommand>();
@@ -11872,6 +12494,7 @@ void EngineController::setClipSampleParameter(const std::string& trackId,
                                               const std::string& clipId,
                                               const std::string& id,
                                               double value) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
     if (!track || !clip || clip->kind != ClipKind::Audio) return;
@@ -12079,6 +12702,7 @@ void EngineController::setClipGain(const std::string& trackId,
 void EngineController::setClipFade(const std::string& trackId,
                                    const std::string& clipId,
                                    double fadeInSeconds, double fadeOutSeconds) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     for (auto& clip : track->clips) {
@@ -12138,6 +12762,7 @@ void EngineController::commitClipFadeEdit(const std::string& trackId,
 void EngineController::setClipFadeCurve(const std::string& trackId,
                                         const std::string& clipId,
                                         bool fadeIn, double curve) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     for (auto& clip : track->clips) {
@@ -12303,6 +12928,8 @@ void EngineController::beginClipTrimEdit(const std::string& trackId,
 
 void EngineController::beginClipTrimEdit(
     const std::vector<std::pair<std::string, std::string>>& clips) {
+    for (const auto& [trackId, clipId] : clips) if (!sharedGestureAllowed("clip:" + clipId)) return;
+    if (!sharedEditingAllowed()) return;
     if (m_clipTrimEdit.active) endClipTrimEdit();
     m_clipTrimEdit = {};
     m_clipTrimEdit.origins.reserve(clips.size());
@@ -12563,6 +13190,7 @@ void EngineController::endClipTrimEdit(const std::string& label) {
 void EngineController::setClipTrim(const std::string& trackId,
                                    const std::string& clipId, double startSeconds,
                                    double offsetSeconds, double durationSeconds) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     for (auto& clip : track->clips) {
@@ -14609,6 +15237,7 @@ std::string EngineController::insertPatternClipCopyImpl(
 
 bool EngineController::setTrackInstrumentPlugin(
     const std::string& trackId, const plugins::PluginDescriptor& descriptor) {
+    if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return false;
 
@@ -15463,6 +16092,8 @@ void EngineController::setNotePan(const std::string& trackId,
 
 void EngineController::beginNoteEdit(const std::string& trackId,
                                      const std::string& clipId) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
+    if (!sharedEditingAllowed()) return;
     if (m_noteEdit.active) endNoteEdit("Edit Notes");
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
@@ -16804,6 +17435,7 @@ void EngineController::setAutomationPoints(const std::string& trackId,
                                             const std::string& clipId,
                                             std::vector<AutomationPoint> points,
                                             bool active) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip) return;
     ensureUniqueAutomationPointIds(points);
@@ -17010,6 +17642,7 @@ void EngineController::setLanePoints(const std::string& trackId,
                                       const std::string& clipId,
                                       const std::string& laneId,
                                       std::vector<AutomationPoint> points) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* lane = findLane(findMidiClip(m_project, trackId, clipId), laneId);
     if (!lane) return;
     ensureUniqueAutomationPointIds(points);
@@ -17315,6 +17948,7 @@ void EngineController::setMasterPan(float pan) {
 }
 
 void EngineController::setMasterVolumeLive(float volume) {
+    if (!sharedGestureAllowed("project:masterVolume")) return;
     const float applied = std::clamp(volume, 0.0f, 2.0f);
     if (m_project.masterVolume == applied) return;
     const bool audibilityChanged = (m_project.masterVolume > 0) != (applied > 0);
@@ -17330,12 +17964,15 @@ void EngineController::commitMasterVolumeEdit(float before,
                                               const std::string& label) {
     const float after = m_project.masterVolume;
     if (after == before) return;
+    if (!sharedGestureAllowed("project:masterVolume")) {
+        restoreSharedPreview([&] { setMasterVolumeLive(before); }); return;
+    }
     const auto shared = submitSharedMutation(
         collab::SetProjectScalar{collab::ProjectScalar::MasterVolume,
                                  double(after)},
         label);
     if (shared == collab::SharedMutationResult::Blocked) {
-        setMasterVolumeLive(before);
+        restoreSharedPreview([&] { setMasterVolumeLive(before); });
         return;
     }
     if (shared == collab::SharedMutationResult::Submitted) return;
@@ -17344,6 +17981,7 @@ void EngineController::commitMasterVolumeEdit(float before,
 }
 
 void EngineController::setMasterPanLive(float pan) {
+    if (!sharedGestureAllowed("project:masterPan")) return;
     const float applied = std::clamp(pan, -1.0f, 1.0f);
     if (m_project.masterPan == applied) return;
     m_project.masterPan = applied;
@@ -17358,12 +17996,15 @@ void EngineController::commitMasterPanEdit(float before,
                                            const std::string& label) {
     const float after = m_project.masterPan;
     if (after == before) return;
+    if (!sharedGestureAllowed("project:masterPan")) {
+        restoreSharedPreview([&] { setMasterPanLive(before); }); return;
+    }
     const auto shared = submitSharedMutation(
         collab::SetProjectScalar{collab::ProjectScalar::MasterPan,
                                  double(after)},
         label);
     if (shared == collab::SharedMutationResult::Blocked) {
-        setMasterPanLive(before);
+        restoreSharedPreview([&] { setMasterPanLive(before); });
         return;
     }
     if (shared == collab::SharedMutationResult::Submitted) return;
@@ -17533,6 +18174,7 @@ EngineController::frozenRecordingSemantics(const std::string& trackId) const {
     semantics.midiOverdubMerge = m_recording.midiOverdubMerge;
     semantics.autoSilence = m_recording.autoSilence;
     semantics.stripSilence = m_recording.stripSilence;
+    semantics.silenceTempo = tempo();
     semantics.trimTakesToRegion = m_recording.trimTakesToRegion;
     semantics.autoExpandAfterRecord = m_recording.autoExpandAfterRecord;
     semantics.compCrossfadeMs = m_recording.compCrossfadeMs;
@@ -18637,6 +19279,8 @@ void EngineController::setClipExpanded(const std::string& trackId,
 
 void EngineController::beginCompEdit(const std::string& trackId,
                                      const std::string& clipId) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
+    if (!sharedEditingAllowed()) return;
     if (m_compEdit.active) return;
     const ClipModel* clip = findClip(trackId, clipId);
     if (!clip) return;
@@ -19253,16 +19897,50 @@ std::string EngineController::flattenComp(const std::string& trackId,
                                           const std::string& clipId,
                                           bool recordUndo) {
     const bool shared = cloudProjectBound();
+    if (!sharedEditingAllowed()) return {};
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->comp.empty()) return {};
-    if (clip->kind != ClipKind::Audio) return {};   // MIDI bake is a note merge
+    if (clip->kind == ClipKind::Midi) {
+        TrackModel source; source.clips.push_back(*clip);
+        ClipModel merged; merged.kind = ClipKind::Midi;
+        const double bps = tempo() / 60.0;
+        // Use the playback slicer so trimmed notes, slide gestures and
+        // controller boundaries are identical to the audible comp.
+        for (auto& part : midiPlaybackClips(source, tempo())) {
+            auto data = sliceMidiPerformance({part.notes, part.lanes, part.slideNotes}, 0, part.durationSeconds * bps, true);
+            const double offset = (part.startSeconds - clip->startSeconds) * bps;
+            mergeMidiPerformance(merged, std::move(data), offset, offset + part.durationSeconds * bps);
+        }
+        TakeModel take; take.id = newUuid(); take.name = "Comp " + std::to_string(clip->takes.size() + 1);
+        take.lengthSeconds = clip->durationSeconds; take.clipOffsetSeconds = clip->offsetSeconds; take.color = clip->color;
+        take.notes = std::move(merged.notes); take.lanes = std::move(merged.lanes); take.slideNotes = std::move(merged.slideNotes);
+        const auto before = *clip;
+        auto after = before; after.takes.push_back(take); selectWholeTake(after, take.id);
+        if (shared) {
+            auto batch = std::make_shared<collab::BatchCommand>();
+            appendCommand(batch, collab::AddTake{trackId, clipId, take, before.takes.empty() ? std::string{} : before.takes.back().id});
+            appendCompDiff(batch, trackId, clipId, before.comp, after.comp);
+            return submitSharedMutation(batch, "Flatten MIDI Comp") == collab::SharedMutationResult::Submitted ? take.id : std::string{};
+        }
+        *clip = after; syncClipOwner(trackId);
+        if (recordUndo) {
+            const auto apply = [this, trackId, clipId](const ClipModel& value) {
+                if (auto* target = findClip(trackId, clipId)) { *target = value; syncClipOwner(trackId); }
+            };
+            m_undo.push("Flatten MIDI Comp", [apply, before] { apply(before); }, [apply, after] { apply(after); });
+        }
+        return take.id;
+    }
+    if (clip->kind != ClipKind::Audio) return {};
 
     // Render through the very same node that plays the comp, so what is baked is
     // what was heard — crossfades, take gains and all. Anything else would be a
     // second implementation of the comp renderer, free to disagree with the
     // first.
     engine::ClipPlayerNode::ClipList list;
+    const auto soloClip = std::exchange(m_soloClipId, std::string{});
     const PlacementSpan span = emitClipPlacements(*clip, list);
+    m_soloClipId = soloClip;
     if (span.count == 0) return {};
 
     // Placements are timeline-absolute; the bake is clip-relative, so the whole
@@ -19407,10 +20085,38 @@ std::string EngineController::flattenComp(const std::string& trackId,
 
 void EngineController::commitComp(const std::string& trackId,
                                   const std::string& clipId) {
-    // A non-trivial commit first renders an asset. Until that verified-asset
-    // pipeline exists, block every cloud entry consistently before even the
-    // single-whole-take shortcut can mutate the local projection.
-    if (cloudProjectBound()) return;
+    // Build the result separately, then publish its complete source atomically
+    // after every generated audio asset has been verified.
+    if (cloudProjectBound()) {
+        if (!sharedEditingAllowed() || !findClip(trackId, clipId)) return;
+        const auto revision = projectRevision();
+        const auto before = m_project;
+        EngineController draft;
+        if (!draft.initialize(m_sampleRate, m_bufferSize, false)) return;
+        draft.m_project = before; draft.m_recordDir = m_recordDir;
+        draft.commitComp(trackId, clipId);
+        auto* clip = draft.findClip(trackId, clipId);
+        if (!clip || !clip->takes.empty()) return;
+        std::vector<std::string> paths;
+        if (clip->kind == ClipKind::Audio && clip->asset.empty() && !clip->filePath.empty()) {
+            const auto* original = findClip(trackId, clipId);
+            const bool existingSource = clip->filePath == original->filePath ||
+                std::any_of(original->takes.begin(), original->takes.end(), [&](const auto& take) { return take.filePath == clip->filePath; });
+            if (existingSource) return;
+            paths.push_back(clip->filePath);
+        }
+        if (clip->kind == ClipKind::Midi) mintClipIdentities(*clip, {}, true);
+        auto after = draft.m_project;
+        (void)submitSharedDerivedMutation(paths, AssetKind::Audio,
+            [this, before, after = std::move(after), paths](const auto& assets) mutable -> collab::CommandBody {
+                for (auto& track : after.tracks) for (auto& clip : track.clips) {
+                    const auto found = std::find(paths.begin(), paths.end(), clip.filePath);
+                    if (found != paths.end()) clip.asset = assets[std::size_t(found - paths.begin())];
+                }
+                return derivedProjectCommands(before, after);
+            }, revision, "Commit Comp");
+        return;
+    }
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->takes.empty()) return;
 
@@ -19445,17 +20151,19 @@ void EngineController::commitComp(const std::string& trackId,
     after.gain = before.gain * keep->gain;
     if (before.kind == ClipKind::Audio) {
         after.filePath = keep->filePath;
+        after.asset = keep->asset;
         after.offsetSeconds = keep->offsetSeconds;
         if (keep->channels > 0) after.channels = keep->channels;
     } else {
         after.notes = keep->notes;
         after.slideNotes=keep->slideNotes;after.lanes=keep->lanes;
+        after.offsetSeconds = keep->offsetSeconds + std::max(0.0, before.offsetSeconds - keep->clipOffsetSeconds);
     }
     // A take need not span the whole clip — a trimmed punch-in sits inside it —
     // and a plain clip has no way to say that, so the clip's own geometry moves
     // to where the material actually is.
     const double insetSeconds =
-        std::clamp(keep->clipOffsetSeconds, 0.0, before.durationSeconds);
+        std::clamp(keep->clipOffsetSeconds - before.offsetSeconds, 0.0, before.durationSeconds);
     double length = keep->lengthSeconds > 0.0 ? keep->lengthSeconds
                                               : before.durationSeconds - insetSeconds;
     length = std::clamp(length, 0.01, std::max(0.01, before.durationSeconds - insetSeconds));
@@ -19591,7 +20299,32 @@ size_t EngineController::cropToComp(const std::string& trackId,
                                     const std::string& clipId) {
     // Cropping creates replacement files; cloud mutation must wait for the
     // upload/verify planner that can attach durable AssetRefs atomically.
-    if (cloudProjectBound()) return 0;
+    if (cloudProjectBound()) {
+        if (!sharedEditingAllowed()) return 0;
+        const auto* original = findClip(trackId, clipId);
+        if (!original) return 0;
+        const auto revision = projectRevision();
+        const auto before = m_project;
+        EngineController draft;
+        if (!draft.initialize(m_sampleRate, m_bufferSize, false)) return 0;
+        draft.m_project = before; draft.m_recordDir = m_recordDir;
+        const auto count = draft.cropToComp(trackId, clipId);
+        if (!count) return 0;
+        std::vector<std::string> paths;
+        for (const auto& take : draft.findClip(trackId, clipId)->takes) {
+            const auto prior = std::find_if(original->takes.begin(), original->takes.end(), [&](const auto& old) { return old.id == take.id; });
+            if (prior != original->takes.end() && prior->filePath != take.filePath) paths.push_back(take.filePath);
+        }
+        auto after = draft.m_project;
+        return submitSharedDerivedMutation(paths, AssetKind::Audio,
+            [this, before, after = std::move(after), paths](const auto& assets) mutable -> collab::CommandBody {
+                for (auto& track : after.tracks) for (auto& clip : track.clips) for (auto& take : clip.takes) {
+                    const auto found = std::find(paths.begin(), paths.end(), take.filePath);
+                    if (found != paths.end()) take.asset = assets[std::size_t(found - paths.begin())];
+                }
+                return derivedProjectCommands(before, after);
+            }, revision, "Crop to Comp") ? count : 0;
+    }
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->comp.empty()) return 0;
 
@@ -19654,6 +20387,7 @@ size_t EngineController::cropToComp(const std::string& trackId,
         m_waveforms.peaks(path);
 
         take.filePath = path;
+        take.asset = {};
         take.clipOffsetSeconds += from - take.offsetSeconds;
         take.offsetSeconds = 0.0;
         take.lengthSeconds = to - from;
@@ -20052,6 +20786,39 @@ const ClipLibraryEntry* EngineController::libraryClip(const std::string& id) con
     return found == m_project.clipLibrary.end() ? nullptr : &*found;
 }
 
+audio::Result EngineController::loadLocalClipShelf() {
+    if (m_localClipShelfLoaded) return audio::Result::ok();
+    const auto root = platform::pathFromUtf8(SettingsStore::defaultPath()).parent_path() / "ClipShelf";
+    std::error_code error;
+    if (!fs::exists(root, error)) { m_localClipShelfLoaded = true; return audio::Result::ok(); }
+    EngineController reader;
+    if (const auto result = ProjectSerializer::load(reader.m_project, platform::pathToUtf8(root)); !result) return result;
+    reader.loadLibraryStates(platform::pathToUtf8(root));
+    m_localClipShelf = std::move(reader.m_project.clipLibrary);
+    for (auto& [name, bytes] : reader.m_clipLibraryStates) m_clipLibraryStates.try_emplace(name, std::move(bytes));
+    m_localClipShelfLoaded = true;
+    return audio::Result::ok();
+}
+
+audio::Result EngineController::persistLocalClipShelf(bool mergeCurrent) {
+    if (const auto result = loadLocalClipShelf(); !result) return result;
+    auto entries = mergeCurrent ? m_localClipShelf : std::vector<ClipLibraryEntry>{};
+    for (const auto& entry : m_project.clipLibrary) {
+        const auto prior = std::find_if(entries.begin(), entries.end(), [&](const auto& item) { return item.id == entry.id; });
+        if (prior == entries.end()) entries.push_back(entry); else *prior = entry;
+    }
+    recovery::RecoverySnapshot snapshot;
+    snapshot.project.clipLibrary = std::move(entries);
+    appendLibraryStates(snapshot);
+    const auto root = platform::pathFromUtf8(SettingsStore::defaultPath()).parent_path() / "ClipShelf";
+    const auto saved = writePreparedProject(snapshot, platform::pathToUtf8(root));
+    if (!saved) return saved;
+    m_localClipShelfLoaded = false;
+    if (const auto loaded = loadLocalClipShelf(); !loaded) return loaded;
+    if (cloudProjectBound()) m_project.clipLibrary = m_localClipShelf;
+    return audio::Result::ok();
+}
+
 audio::Result EngineController::captureLibraryPlugins(std::vector<TrackModel>& tracks) {
     audio::Result result = audio::Result::ok();
     for (auto& track : tracks) visitStoredPlugins(track, [&](InsertModel& slot) {
@@ -20109,8 +20876,6 @@ audio::Result EngineController::captureLibraryPlugins(std::vector<TrackModel>& t
 
 audio::Result EngineController::saveClipToLibrary(const ClipAddress& address, std::string& entryId) {
     entryId.clear();
-    if (cloudProjectBound()) return audio::Result::fail(audio::EngineError::InvalidArgument,
-        "The clip library is available in local projects.");
     const auto* source = m_project.findTrack(address.trackId);
     const auto* clip = findClip(address.trackId, address.clipId);
     if (!source || !clip) return audio::Result::fail(audio::EngineError::InvalidArgument, "Clip no longer exists.");
@@ -20157,6 +20922,11 @@ audio::Result EngineController::saveClipToLibrary(const ClipAddress& address, st
     const auto saved = std::make_shared<const ClipLibraryEntry>(std::move(entry));
     const auto beforeBytes = estimatedProjectBytes(m_project);
     m_project.clipLibrary.push_back(*saved);
+    if (cloudProjectBound()) {
+        const auto result = persistLocalClipShelf(false);
+        if (!result) { std::erase_if(m_project.clipLibrary, [&](const auto& entry) { return entry.id == saved->id; }); entryId.clear(); }
+        return result;
+    }
     m_undo.push("Save Clip to Library",
         [this, saved] { std::erase_if(m_project.clipLibrary, [&](const auto& e) { return e.id == saved->id; }); },
         [this, saved] { m_project.clipLibrary.push_back(*saved); },
@@ -20166,24 +20936,29 @@ audio::Result EngineController::saveClipToLibrary(const ClipAddress& address, st
 
 bool EngineController::renameLibraryClip(const std::string& id, const std::string& name) {
     const auto* entry = libraryClip(id);
-    if (cloudProjectBound() || !entry || name.empty() || entry->name == name) return false;
+    if (!entry || name.empty() || entry->name == name) return false;
     const std::string before = entry->name;
     const auto apply = [this, id](const std::string& label) {
         for (auto& e : m_project.clipLibrary) if (e.id == id) { e.name = label; break; }
     };
     apply(name);
+    if (cloudProjectBound()) { if (persistLocalClipShelf(false)) return true; apply(before); return false; }
     m_undo.push("Rename Library Clip", [apply, before] { apply(before); }, [apply, name] { apply(name); });
     return true;
 }
 
 bool EngineController::removeLibraryClip(const std::string& id) {
     const auto* entry = libraryClip(id);
-    if (cloudProjectBound() || !entry) return false;
+    if (!entry) return false;
     const auto saved = std::make_shared<const ClipLibraryEntry>(*entry);
     const std::size_t index = std::size_t(entry - m_project.clipLibrary.data());
     const auto beforeBytes = estimatedProjectBytes(m_project);
     const auto remove = [this, id] { std::erase_if(m_project.clipLibrary, [&](const auto& e) { return e.id == id; }); };
     remove();
+    if (cloudProjectBound()) {
+        if (persistLocalClipShelf(false)) return true;
+        m_project.clipLibrary.insert(m_project.clipLibrary.begin() + std::ptrdiff_t(index), *saved); return false;
+    }
     m_undo.push("Remove Library Clip", [this, saved, index] {
         m_project.clipLibrary.insert(m_project.clipLibrary.begin() +
             std::ptrdiff_t(std::min(index, m_project.clipLibrary.size())), *saved);
@@ -20322,8 +21097,89 @@ audio::Result EngineController::restoreLibraryPluginStates(const std::vector<Tra
 audio::Result EngineController::restoreLibraryClip(const std::string& id, const std::string& targetTrackId,
     double startSeconds, ClipAddress& restored, bool originalPosition) {
     restored = {};
-    if (cloudProjectBound()) return audio::Result::fail(audio::EngineError::InvalidArgument,
-        "The clip library is available in local projects.");
+    if (cloudProjectBound()) {
+        if (!sharedEditingAllowed()) return audio::Result::fail(audio::EngineError::InvalidArgument, "This session is read-only.");
+        const auto* saved = libraryClip(id);
+        if (!saved) return audio::Result::fail(audio::EngineError::InvalidArgument, "Saved clip no longer exists.");
+        bool compatible = true;
+        for (const auto& track : saved->tracks) visitStoredPlugins(track, [&](const InsertModel& slot) {
+            if (!slot.isLoaded()) return;
+            const auto descriptor = m_pluginManager.find(toHostFormat(slot.format), slot.uid);
+            if (!descriptor || !sharedPluginAllowed(*descriptor) ||
+                (slot.format != PluginFormat::Internal && descriptor->version != slot.pluginVersion)) compatible = false;
+        });
+        if (!compatible) return audio::Result::fail(audio::EngineError::InvalidArgument,
+            "The saved clip uses a plugin outside this session's compatible catalog.");
+        const auto revision = projectRevision();
+        const auto before = m_project;
+        EngineController draft;
+        if (const auto ready = draft.initialize(m_sampleRate, m_bufferSize, false); !ready) return ready;
+        draft.m_pluginManager.copyCatalogFrom(m_pluginManager);
+        draft.m_recordDir = m_recordDir;
+        draft.m_clipLibraryStates = m_clipLibraryStates;
+        draft.m_project = before;
+        if (const auto ready = draft.rebuildGraph(); !ready) return ready;
+        ClipAddress inserted;
+        if (const auto ready = draft.restoreLibraryClip(id, targetTrackId, startSeconds, inserted, originalPosition); !ready) return ready;
+        auto after = draft.m_project;
+        auto content = after.headerCopy(); content.clipLibrary.clear(); content.masterInserts.clear();
+        for (const auto& track : after.tracks) {
+            const auto* old = before.findTrack(track.id);
+            if (!old) { content.tracks.push_back(track); continue; }
+            auto added = track;
+            std::erase_if(added.clips, [&](const auto& clip) {
+                return std::any_of(old->clips.begin(), old->clips.end(), [&](const auto& original) { return original.id == clip.id; });
+            });
+            if (added.clips.empty()) continue;
+            added.instrument = {}; added.inserts.clear(); added.samplerFx = {}; added.sends.clear(); added.freeze = {};
+            content.tracks.push_back(std::move(added));
+        }
+        // Capture only inserted content using the already restored scratch
+        // instances. This reuses sampler packaging and exact plugin contracts.
+        draft.m_project = std::move(content);
+        auto capture = draft.captureCloudPublicationV1({}, true);
+        if (!capture.readyForHashing()) return audio::Result::fail(audio::EngineError::InvalidArgument,
+            capture.blockers.front().detail);
+        std::vector<collab::SharedAssetMutationRequest> requests;
+        std::vector<std::string> sourceAssetIds;
+        for (const auto& source : capture.sources) {
+            const auto sourcePath = platform::pathFromUtf8(source.localPath);
+            const auto extension = source.asset.kind == AssetKind::PluginState ? fs::path(".bin") : sourcePath.extension();
+            const auto path = platform::pathFromUtf8(m_recordDir) / ("vlt-library-" + newUuid() + platform::pathToUtf8(extension));
+            std::error_code error;
+            fs::create_directories(path.parent_path(), error);
+            fs::copy_file(sourcePath, path, fs::copy_options::none, error);
+            if (error) return audio::Result::fail(audio::EngineError::FileWriteError, "Cannot stage saved clip media: " + error.message());
+            std::optional<collab::SharedAssetMutationRequest> request;
+            if (source.asset.kind == AssetKind::Audio) request = sharedAudioRequest(platform::pathToUtf8(path));
+            else { request.emplace(); request->requestId = newUuid(); request->kind = AssetKind::PluginState;
+                request->sourcePath = platform::pathToUtf8(path); request->displayName = platform::pathToUtf8(path.filename());
+                request->contentType = "application/vnd.vlt.plugin-state"; }
+            if (!request) return audio::Result::fail(audio::EngineError::InvalidArgument, "Cannot read saved clip media.");
+            request->assetId = newUuid(); sourceAssetIds.push_back(source.asset.assetId); requests.push_back(std::move(*request));
+        }
+        const bool queued = submitSharedAssetTransaction(std::move(requests),
+            [this, before, after = std::move(after), content = std::move(capture.document), sourceAssetIds](const auto& assets) mutable -> collab::CommandBody {
+                const auto bind = [&](AssetRef& asset) {
+                    const auto found = std::find(sourceAssetIds.begin(), sourceAssetIds.end(), asset.assetId);
+                    if (found != sourceAssetIds.end()) asset = assets[std::size_t(found - sourceAssetIds.begin())];
+                };
+                const auto bindSource = [&](auto& source) { bind(source.asset); for (auto& take : source.takes) bind(take.asset); };
+                for (auto& track : content.tracks) {
+                    bind(track.freeze.asset);
+                    visitStoredPlugins(track, [&](InsertModel& slot) { bind(slot.stateAsset); bind(slot.rightStateAsset);
+                        for (auto& binding : slot.assetBindings) bind(binding.asset); });
+                    for (auto& clip : track.clips) { bindSource(clip); for (auto& version : clip.offlineHistory) bindSource(version.source); }
+                    auto* destination = after.findTrack(track.id);
+                    if (!before.findTrack(track.id)) *destination = track;
+                    else for (const auto& clip : track.clips)
+                        for (auto& target : destination->clips) if (target.id == clip.id) { target = clip; break; }
+                }
+                return derivedProjectCommands(before, after);
+            }, revision, "Restore Library Clip");
+        if (!queued) return audio::Result::fail(audio::EngineError::InvalidArgument, "The project changed or saved clip upload could not start.");
+        restored = std::move(inserted); return audio::Result::ok();
+    }
     const auto* entry = libraryClip(id);
     if (!entry || entry->tracks.empty() || entry->tracks.front().clips.empty())
         return audio::Result::fail(audio::EngineError::InvalidArgument, "Saved clip no longer exists.");

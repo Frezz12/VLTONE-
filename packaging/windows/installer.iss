@@ -75,6 +75,11 @@ Name: "{autoprograms}\VLTONE"; Filename: "{app}\bin\VLTONE.exe"; WorkingDir: "{a
 Name: "{autodesktop}\VLTONE"; Filename: "{app}\bin\VLTONE.exe"; WorkingDir: "{app}\bin"; Tasks: desktopicon
 
 [Registry]
+; Session links contain only a bounded numeric invitation code.
+Root: HKLM; Subkey: "Software\Classes\vlt"; ValueType: string; ValueName: ""; ValueData: "URL:VLTONE session"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\vlt"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\vlt\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\VLTONE.exe,0"
+Root: HKLM; Subkey: "Software\Classes\vlt\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\VLTONE.exe"" ""%1"""
 ; Keep the existing ProgID so project associations survive the rename.
 Root: HKLM; Subkey: "Software\Classes\.vlt"; ValueType: string; ValueName: ""; ValueData: "VLTStudioPro.Project"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\VLTStudioPro.Project"; ValueType: string; ValueName: ""; ValueData: "VLTONE Project"; Flags: uninsdeletekey

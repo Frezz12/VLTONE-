@@ -214,19 +214,27 @@ func (s *Server) publishReapedSessionMembers(events []collab.ReapedSessionMember
 		return
 	}
 	for _, event := range events {
+		protocol := collab.CollaborationProtocol
+		if event.Control != nil {
+			protocol = collab.CollaborationProtocolV6
+		}
+		if event.Control != nil {
+			payload, _ := json.Marshal(map[string]any{"control": event.Control, "hostParticipantId": event.HostMemberID, "reason": "heartbeat_timeout"})
+			s.Rooms.Publish(event.ProjectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(collab.CollaborationProtocolV6, "session.host_changed", payload, uuid.Nil, nil, 0)})
+		}
 		for _, memberID := range event.MemberIDs {
 			payload, _ := json.Marshal(map[string]any{
 				"participantId": memberID, "reason": "heartbeat_timeout",
 			})
 			s.Rooms.Publish(event.ProjectID, memberID, collab.RoomMessage{
-				Data: collaborationEnvelope("presence.leave", payload,
+				Data: collaborationEnvelopeFor(protocol, "presence.leave", payload,
 					uuid.Nil, nil, 0),
 			})
 			s.Rooms.DisconnectParticipant(memberID, collab.RoomClose{
 				Code: "heartbeat_timeout", Reason: "participant heartbeat timed out",
 			})
 		}
-		if !sameOptionalUUID(event.PreviousHostMemberID, event.HostMemberID) {
+		if event.Control == nil && !sameOptionalUUID(event.PreviousHostMemberID, event.HostMemberID) {
 			payload, _ := json.Marshal(map[string]any{
 				"hostParticipantId": event.HostMemberID,
 				"reason":            "heartbeat_timeout",

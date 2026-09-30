@@ -524,6 +524,7 @@ void PluginEditorWindow::prepareNativeHostHierarchy() {
 }
 
 bool PluginEditorWindow::requiresNativeSurface() const {
+    if ((m_controller && !m_controller->sharedEditingAllowed()) || (m_editAccessCheck && !m_editAccessCheck())) return false;
     const auto* plugin = instance();
     return plugin && plugin->hasEditor();
 }
@@ -760,6 +761,20 @@ void PluginEditorWindow::rebuildEditorContent() {
     }
     setWindowTitle(title);
 
+    m_readOnly = (m_controller && !m_controller->sharedEditingAllowed()) || (m_editAccessCheck && !m_editAccessCheck());
+    if (m_readOnly) {
+        buildGenericEditor();
+        if (m_generic) m_generic->setEnabled(false);
+        if (m_wrapper) m_wrapper->setEnabled(false);
+        if (m_dock) m_dock->setEnabled(false);
+        setToolTip(tr("Plugin parameters are read-only until editing permission and the shared edit lock are available."));
+        finishEditorContent();
+        return;
+    }
+    if (m_wrapper) m_wrapper->setEnabled(true);
+    if (m_dock) m_dock->setEnabled(true);
+    setToolTip({});
+
     const bool hasNativeEditor = plugin && plugin->hasEditor();
     const bool trustedInternal =
         plugin && plugin->descriptor().format == daw::plugins::Format::Internal;
@@ -942,6 +957,10 @@ void PluginEditorWindow::rebuildEditorContent() {
 void PluginEditorWindow::tryAttachNativeEditor(std::uint64_t generation,
                                                int attempt) {
     if (generation != m_loadGeneration || !m_container) return;
+    if ((m_controller && !m_controller->sharedEditingAllowed()) || (m_editAccessCheck && !m_editAccessCheck())) {
+        rebuildEditorContent();
+        return;
+    }
 
     daw::plugins::PluginInstance* plugin = instance();
     if (!plugin || plugin != m_pendingEditorPlugin) {
@@ -1129,9 +1148,18 @@ daw::plugins::PluginInstance* PluginEditorWindow::instance() const {
 }
 
 void PluginEditorWindow::pollEditorState() {
+    refreshAccessPolicy();
     refreshWrapper();
     refreshGenericEditor();
     refreshParameterDock();
+}
+
+void PluginEditorWindow::refreshAccessPolicy() {
+    const bool readOnly = (m_controller && !m_controller->sharedEditingAllowed()) || (m_editAccessCheck && !m_editAccessCheck());
+    if (m_readOnly != readOnly && !m_closing) {
+        m_readOnly = readOnly;
+        rebuildEditorContent();
+    }
 }
 
 void PluginEditorWindow::syncPollTimer() {

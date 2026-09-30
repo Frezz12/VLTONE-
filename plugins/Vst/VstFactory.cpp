@@ -136,6 +136,8 @@ PluginDescriptor describe(AEffect* effect, const std::string& path,
     descriptor.wantsMidi = descriptor.isInstrument ||
         effect->dispatcher(effect, effCanDo, 0, 0,
                            const_cast<char*>("receiveVstMidiEvent"), 0.0f) > 0;
+    descriptor.producesMidi = effect->dispatcher(effect, effCanDo, 0, 0,
+        const_cast<char*>("sendVstMidiEvent"), 0.0f) > 0;
     descriptor.mainInputChannels = static_cast<std::uint16_t>(std::clamp<VstInt32>(
         effect->numInputs, 0, std::numeric_limits<std::uint16_t>::max()));
     descriptor.mainOutputChannels = static_cast<std::uint16_t>(std::clamp<VstInt32>(

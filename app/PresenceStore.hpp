@@ -48,8 +48,10 @@ public:
     std::optional<ParticipantIdentity> participantById(
         const QString& participantId) const;
     int participantCount() const { return m_entries.size(); }
+    bool remoteCursorsVisible() const { return m_remoteCursorsVisible; }
+    void setRemoteCursorsVisible(bool visible);
     QVector<PresenceCursorSnapshot> cursorsForSurface(
-        const SurfaceAddress& surface, qint64 nowMs = 0) const;
+        const SurfaceAddress& surface, qint64 nowMs = 0, bool interpolate = true) const;
     std::optional<SurfaceKind> recentSurfaceForParticipant(
         const QString& participantId, qint64 nowMs = 0) const;
 
@@ -71,6 +73,7 @@ signals:
     /// track list and the transport as well.
     void surfacePresenceChanged(SurfaceKind surface);
     void participantsChanged();
+    void remoteCursorsVisibleChanged(bool visible);
 
 private:
     struct Entry {
@@ -94,6 +97,7 @@ private:
     QHash<QString, Entry> m_entries;
     QString m_localParticipantId;
     QTimer m_expiryTimer;
+    bool m_remoteCursorsVisible = true;
 };
 
 } // namespace collab

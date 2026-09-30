@@ -203,6 +203,7 @@ QJsonObject pluginRequirementJson(
          QString::fromStdString(requirement.nativeUid)},
         {QStringLiteral("vendor"), QString::fromStdString(requirement.vendor)},
         {QStringLiteral("version"), QString::fromStdString(requirement.version)},
+        {QStringLiteral("parameterFingerprint"), QString::fromStdString(requirement.parameterFingerprint)},
         {QStringLiteral("stateSchemaVersion"), requirement.stateSchemaVersion},
         {QStringLiteral("kind"),
          requirement.instrument ? QStringLiteral("instrument")
@@ -236,6 +237,8 @@ QJsonObject pluginReadinessJson(
     if (!result.buildHmac.empty())
         value.insert(QStringLiteral("buildHmac"),
                      QString::fromStdString(result.buildHmac));
+    if (!result.requirement.parameterFingerprint.empty())
+        value.insert(QStringLiteral("parameterFingerprint"), QString::fromStdString(result.requirement.parameterFingerprint));
     return value;
 }
 
@@ -255,7 +258,7 @@ std::optional<daw::collab::PluginRequirement> parsePluginRequirement(
     const QJsonObject& object) {
     if (!exactKeys(object,
                    {"format", "nativeUid", "vendor", "version",
-                    "stateSchemaVersion", "kind", "channelMode"})) {
+                    "stateSchemaVersion", "kind", "channelMode"}, {"parameterFingerprint"})) {
         return std::nullopt;
     }
     const QString format = object.value(QStringLiteral("format")).toString();
@@ -282,6 +285,7 @@ std::optional<daw::collab::PluginRequirement> parsePluginRequirement(
     result.nativeUid = uid.toStdString();
     result.vendor = vendor.toStdString();
     result.version = version.toStdString();
+    result.parameterFingerprint = object.value(QStringLiteral("parameterFingerprint")).toString().toStdString();
     result.stateSchemaVersion = *stateSchema;
     result.instrument = kind == QLatin1String("instrument");
     result.channelMode = daw::pluginChannelModeFromString(mode.toStdString());
@@ -293,7 +297,7 @@ std::optional<daw::collab::PluginReadinessResult> parsePluginReadiness(
     if (!exactKeys(object,
                    {"format", "nativeUid", "vendor", "version",
                     "stateSchemaVersion", "kind", "channelMode", "status"},
-                   {"buildHmac"})) {
+                   {"buildHmac", "parameterFingerprint"})) {
         return std::nullopt;
     }
     QJsonObject requirementJson{
@@ -307,6 +311,7 @@ std::optional<daw::collab::PluginReadinessResult> parsePluginReadiness(
         {QStringLiteral("channelMode"), object.value(QStringLiteral("channelMode"))},
     };
     auto requirement = parsePluginRequirement(requirementJson);
+    if (requirement) requirement->parameterFingerprint = object.value(QStringLiteral("parameterFingerprint")).toString().toStdString();
     const QString status = object.value(QStringLiteral("status")).toString();
     if (!requirement) return std::nullopt;
     daw::collab::PluginReadinessResult result;
@@ -405,7 +410,7 @@ std::optional<CloudProject> parseProject(const QJsonObject& object,
                     "format_version", "engine_version",
                     "minimum_app_version", "head_seq", "snapshot_seq",
                     "created_at", "updated_at"},
-                   {"archived_at"})) {
+                   {"archived_at", "plugin_policy"})) {
         if (error) error->message = QStringLiteral("Invalid project shape");
         return std::nullopt;
     }
@@ -440,6 +445,11 @@ std::optional<CloudProject> parseProject(const QJsonObject& object,
     project.formatVersion = *formatVersion;
     project.headSequence = *head;
     project.snapshotSequence = *snapshot;
+    const auto policy = object.value(QStringLiteral("plugin_policy"));
+    if (!policy.isUndefined()) {
+        project.pluginPolicy = policy.toString();
+        if (project.pluginPolicy != QLatin1String("builtin_only") && project.pluginPolicy != QLatin1String("external_checked")) return std::nullopt;
+    }
     return project;
 }
 
@@ -788,7 +798,8 @@ std::optional<CloudLiveSession> parseLiveSession(const QJsonObject& object,
                     "created_at", "updated_at"},
                    {"created_by", "host_member_id", "started_at",
                     "ended_at", "command_schema_version",
-                    "plugin_requirements_revision", "plugin_requirements"})) {
+                    "plugin_requirements_revision", "plugin_requirements", "plugin_policy", "catalog_revision", "app_version",
+                    "transport_state", "audition_state", "transport_revision", "audition_revision"})) {
         if (error) error->message = QStringLiteral("Invalid session shape");
         return std::nullopt;
     }
@@ -814,7 +825,7 @@ std::optional<CloudLiveSession> parseLiveSession(const QJsonObject& object,
         !optionalUuid(object, "created_by", &session.createdBy) ||
         !optionalUuid(object, "host_member_id", &session.hostMemberId) ||
         !mode || !status || !version || !commandSchema ||
-        (*commandSchema != 2 && *commandSchema != 3) ||
+        !daw::collab::supportedProjectCommandSchemaVersion(std::uint32_t(*commandSchema)) ||
         !requirementsRevision ||
         !dateTimeValue(object.value(QStringLiteral("created_at")),
                        &session.createdAt) ||
@@ -859,7 +870,7 @@ std::optional<CloudSessionMember> parseSessionMember(
                     "joined_at", "last_seen_at"},
                    {"desktop_session_id", "left_at", "effective_role",
                     "readiness_status", "readiness_revision",
-                    "plugin_readiness"})) {
+                    "plugin_readiness", "plugin_inventory"})) {
         if (error) error->message = QStringLiteral("Invalid session-member shape");
         return std::nullopt;
     }
@@ -923,7 +934,7 @@ std::optional<CloudSessionState> parseSessionState(const QJsonObject& object,
                                                    ParseFailure* error) {
     // passwordRequired is optional so a client stays compatible with a server
     // that predates session passwords; absent simply means unprotected.
-    if (!exactKeys(object, {"session", "members"}, {"passwordRequired"}) ||
+    if (!exactKeys(object, {"session", "members"}, {"passwordRequired", "control"}) ||
         !object.value(QStringLiteral("session")).isObject() ||
         !object.value(QStringLiteral("members")).isArray()) {
         if (error) error->message = QStringLiteral("Invalid session-state shape");
@@ -944,6 +955,7 @@ std::optional<CloudSessionState> parseSessionState(const QJsonObject& object,
         return std::nullopt;
     }
     CloudSessionState state;
+    state.control = object.value(QStringLiteral("control")).toObject();
     state.session = std::move(*session);
     state.session.passwordRequired = passwordRequired.toBool(false);
     QSet<QString> memberIds;
@@ -963,7 +975,7 @@ std::optional<CloudSessionState> parseSessionState(const QJsonObject& object,
         memberIds.insert(member->id);
         state.members.push_back(std::move(*member));
     }
-    if (!state.session.hostMemberId.isEmpty() &&
+    if (state.session.commandSchemaVersion < 6 && !state.session.hostMemberId.isEmpty() &&
         !memberIds.contains(state.session.hostMemberId)) {
         if (error) error->message = QStringLiteral("Session host is not online");
         return std::nullopt;
@@ -1011,7 +1023,7 @@ std::optional<CloudProjectTrackLease> parseTrackLease(
 
 bool projectsEqual(const CloudProject& left, const CloudProject& right) {
     return left.id == right.id && left.ownerUserId == right.ownerUserId &&
-           left.title == right.title && left.status == right.status &&
+           left.title == right.title && left.status == right.status && left.pluginPolicy == right.pluginPolicy &&
            left.formatVersion == right.formatVersion &&
            left.engineVersion == right.engineVersion &&
            left.minimumAppVersion == right.minimumAppVersion &&
@@ -1084,11 +1096,12 @@ CloudClientError parseApiError(const QByteArray& body, int status) {
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
         return error;
     const QJsonObject object = document.object();
-    if (!exactKeys(object, {"code", "message", "request_id"},
-                   {"field_errors"}) ||
+    if (!exactKeys(object, {"code", "message"},
+                   {"request_id", "field_errors", "holder_member_id", "expires_at", "conflicts",
+                    "required_app_version", "required_engine_version", "minimum_app_version"}) ||
         !object.value(QStringLiteral("code")).isString() ||
         !object.value(QStringLiteral("message")).isString() ||
-        !object.value(QStringLiteral("request_id")).isString()) {
+        (!object.value(QStringLiteral("request_id")).isUndefined() && !object.value(QStringLiteral("request_id")).isString())) {
         return error;
     }
     static const QRegularExpression codePattern(
@@ -1108,6 +1121,26 @@ CloudClientError parseApiError(const QByteArray& body, int status) {
     if (serverMessage.size() > 240)
         return failure(CloudClientErrorCode::UnexpectedStatus,
                        statusMessage(status), status, error.retryable);
+    if (apiCode == QLatin1String("version_mismatch")) {
+        error.safeMessage = QObject::tr("The application or engine version differs from the project. Install the same version as its owner.");
+        const auto required = object.value(QStringLiteral("required_app_version")).toString();
+        static const QRegularExpression versionPattern(QStringLiteral("^[0-9][A-Za-z0-9.+-]{0,63}$"));
+        if (versionPattern.match(required).hasMatch()) error.safeMessage += QObject::tr(" Required version: %1.").arg(required);
+    }
+    else if (apiCode == QLatin1String("plugin_not_ready"))
+        error.safeMessage = QObject::tr("Required plugins or their state are not ready. Check compatibility in session settings.");
+    else if (apiCode == QLatin1String("session_excluded"))
+        error.safeMessage = QObject::tr("The owner removed you from this session. Ask the owner to readmit you.");
+    else if (apiCode == QLatin1String("project_banned"))
+        error.safeMessage = QObject::tr("The owner blocked access to this project.");
+    else if (apiCode == QLatin1String("session_version_changed"))
+        error.safeMessage = QObject::tr("The session mode or leader changed. Wait for synchronization and retry.");
+    else if (apiCode == QLatin1String("recording_active"))
+        error.safeMessage = QObject::tr("Wait for all participants to finish recording before changing the session mode.");
+    else if (apiCode == QLatin1String("edit_lease_held") || apiCode == QLatin1String("track_lease_held"))
+        error.safeMessage = QObject::tr("Another participant is editing or recording this element. Retry when their gesture finishes.");
+    else if (apiCode == QLatin1String("base_sequence_stale") || apiCode == QLatin1String("operation_precondition_failed"))
+        error.safeMessage = QObject::tr("The source changed while this result was being prepared. Your local result is retained; review the conflict before retrying.");
     return error;
 }
 
@@ -1148,6 +1181,8 @@ struct CloudProjectClient::Impl {
     int timeoutMs = kDefaultTimeoutMs;
     quint64 bootstrapGeneration = 0;
     quint64 bootstrapRequestId = 0;
+    std::vector<daw::collab::PluginRequirement> pluginInventory;
+    QString pluginPolicy = QStringLiteral("builtin_only");
 
     Impl(CloudProjectClient* owner, CredentialProvider provider,
          QNetworkAccessManager* manager)
@@ -1822,6 +1857,84 @@ CloudProjectClient::CloudProjectClient(CredentialProvider credentials,
 
 CloudProjectClient::~CloudProjectClient() = default;
 
+void CloudProjectClient::setPluginInventory(const std::vector<daw::collab::PluginRequirement>& inventory) {
+    m_impl->pluginInventory = inventory;
+}
+
+void CloudProjectClient::setPluginPolicy(const QString& policy) {
+    if (policy == QLatin1String("builtin_only") || policy == QLatin1String("external_checked"))
+        m_impl->pluginPolicy = policy;
+}
+
+quint64 CloudProjectClient::renameProject(const QString& projectId, const QString& title) {
+    const auto project = m_impl->uuidInput(projectId);
+    if (!project || title.trimmed().isEmpty() || title.trimmed().size() > 160)
+        return m_impl->invalid(CloudRequestKind::RenameProject, QStringLiteral("Invalid project title"));
+    const QJsonObject body{{QStringLiteral("title"), title.trimmed()}};
+    return m_impl->requestProject(CloudRequestKind::RenameProject, QByteArrayLiteral("PATCH"),
+        QStringLiteral("desktop/projects/%1").arg(*project), &body, 200, *project);
+}
+
+quint64 CloudProjectClient::updateSessionMode(const QString& projectId, const QString& sessionId,
+    const QString& mode, quint64 expectedVersion, const QJsonObject& seed) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto session = m_impl->uuidInput(sessionId);
+    if (!project || !session || !sessionMode(mode) || !expectedVersion)
+        return m_impl->invalid(CloudRequestKind::UpdateSessionMode, QStringLiteral("Invalid session mode"));
+    QJsonObject body = seed;
+    body.insert(QStringLiteral("mode"), mode);
+    body.insert(QStringLiteral("expectedVersion"), double(expectedVersion));
+    return m_impl->requestSession(CloudRequestKind::UpdateSessionMode, QByteArrayLiteral("PATCH"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/mode").arg(*project, *session), &body, 200, *project, *session);
+}
+
+quint64 CloudProjectClient::migrateProjectVersion(const QString& projectId, const QString& engineVersion,
+    const QString& minimumAppVersion, quint64 expectedHeadSequence) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto engine = engineVersion.trimmed();
+    const auto app = minimumAppVersion.trimmed();
+    if (!project || engine.isEmpty() || engine.size() > 64 || app.isEmpty() || app.size() > 64 ||
+        expectedHeadSequence > quint64(kLargestExactJsonInteger))
+        return m_impl->invalid(CloudRequestKind::MigrateProjectVersion, QStringLiteral("Invalid project migration"));
+    const QJsonObject body{{QStringLiteral("engine_version"), engine},
+        {QStringLiteral("minimum_app_version"), app},
+        {QStringLiteral("expected_head_seq"), double(expectedHeadSequence)}};
+    return m_impl->requestProject(CloudRequestKind::MigrateProjectVersion, QByteArrayLiteral("PATCH"),
+        QStringLiteral("desktop/projects/%1").arg(*project), &body, 200, *project);
+}
+
+quint64 CloudProjectClient::moderateSession(const QString& projectId, const QString& sessionId,
+    const QString& userId, const QString& action) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto session = m_impl->uuidInput(sessionId);
+    const auto user = m_impl->uuidInput(userId);
+    if (!project || !session || !user || (action != QLatin1String("kick") && action != QLatin1String("readmit") &&
+        action != QLatin1String("ban") && action != QLatin1String("unban")))
+        return m_impl->invalid(CloudRequestKind::ModerateSession, QStringLiteral("Invalid participant action"));
+    const QJsonObject body{{QStringLiteral("action"), action}, {QStringLiteral("targetUserId"), *user}};
+    return m_impl->requestSession(CloudRequestKind::ModerateSession, QByteArrayLiteral("POST"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/moderation").arg(*project, *session), &body, 200, *project, *session);
+}
+
+quint64 CloudProjectClient::pluginCatalog(const QString& projectId, const QString& sessionId, bool update) {
+    const auto project = m_impl->uuidInput(projectId);
+    const auto session = m_impl->uuidInput(sessionId);
+    if (!project || !session) return m_impl->invalid(CloudRequestKind::PluginCatalog, QStringLiteral("Invalid session"));
+    QJsonArray inventory;
+    for (const auto& plugin : m_impl->pluginInventory) inventory.append(pluginRequirementJson(plugin));
+    const auto id = m_impl->allocate();
+    m_impl->issue(id, CloudRequestKind::PluginCatalog, update ? QByteArrayLiteral("PUT") : QByteArrayLiteral("GET"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/plugins/catalog").arg(*project, *session), {},
+        update ? QJsonDocument(QJsonObject{{QStringLiteral("pluginInventory"), inventory}}).toJson(QJsonDocument::Compact) : QByteArray{},
+        {200}, kMaxRegularResponseBytes, true, [this, id](const QByteArray& response) {
+            const auto value = m_impl->responseObject(id, CloudRequestKind::PluginCatalog, response);
+            if (value && value->value(QStringLiteral("plugins")).isArray()) emit pluginCatalogReceived(id, *value);
+            else m_impl->invalidResponse(id, CloudRequestKind::PluginCatalog,
+                {CloudClientErrorCode::InvalidResponse, QStringLiteral("Invalid shared plugin catalog")});
+        });
+    return id;
+}
+
 int CloudProjectClient::requestTimeoutMs() const {
     return m_impl ? m_impl->timeoutMs : kDefaultTimeoutMs;
 }
@@ -1851,12 +1964,18 @@ quint64 CloudProjectClient::createProject(
         return m_impl->invalid(CloudRequestKind::CreateProject,
                                QStringLiteral("Invalid cloud project metadata"));
     }
-    const QJsonObject body{
+    QJsonObject body{
         {QStringLiteral("title"), title},
         {QStringLiteral("format_version"), input.formatVersion},
         {QStringLiteral("engine_version"), engineVersion},
         {QStringLiteral("minimum_app_version"), minimumVersion},
+        {QStringLiteral("pluginPolicy"), input.pluginPolicy},
     };
+    if (!input.projectId.isEmpty()) {
+        const auto id = m_impl->uuidInput(input.projectId);
+        if (!id) return m_impl->invalid(CloudRequestKind::CreateProject, QStringLiteral("Invalid publication identity"));
+        body.insert(QStringLiteral("projectId"), *id);
+    }
     return m_impl->requestProject(
         CloudRequestKind::CreateProject, QByteArrayLiteral("POST"),
         QStringLiteral("desktop/projects"), &body, 201);
@@ -2087,6 +2206,12 @@ quint64 CloudProjectClient::startSession(const QString& projectId,
         body.insert(QStringLiteral("readiness"),
                     pluginReadinessReportJson(readiness));
     }
+    if (daw::collab::kProjectCommandSchemaVersion >= 6) {
+        QJsonArray inventory;
+        for (const auto& plugin : m_impl->pluginInventory) inventory.append(pluginRequirementJson(plugin));
+        body.insert(QStringLiteral("pluginInventory"), inventory);
+        body.insert(QStringLiteral("pluginPolicy"), m_impl->pluginPolicy);
+    }
     if (!password.isEmpty())
         body.insert(QStringLiteral("password"), password);
     return m_impl->requestSession(
@@ -2122,6 +2247,11 @@ quint64 CloudProjectClient::joinSession(const QString& projectId,
     if (commandSchemaVersion >= 3)
         body.insert(QStringLiteral("readiness"),
                     pluginReadinessReportJson(readiness));
+    if (commandSchemaVersion >= 6) {
+        QJsonArray inventory;
+        for (const auto& plugin : m_impl->pluginInventory) inventory.append(pluginRequirementJson(plugin));
+        body.insert(QStringLiteral("pluginInventory"), inventory);
+    }
     if (!password.isEmpty())
         body.insert(QStringLiteral("password"), password);
     return m_impl->requestSession(
@@ -2653,6 +2783,78 @@ quint64 CloudProjectClient::acceptInviteCode(const QString& numericCode) {
     return requestId;
 }
 
+quint64 CloudProjectClient::acquireEditLease(const QString& projectId, const QString& sessionId,
+    const QStringList& fields, quint64 policyVersion) {
+    const auto project = m_impl->uuidInput(projectId), session = m_impl->uuidInput(sessionId);
+    if (!project || !session || fields.isEmpty() || fields.size() > 64 || !policyVersion)
+        return m_impl->invalid(CloudRequestKind::AcquireEditLease, QStringLiteral("Invalid edit lock request"));
+    QJsonArray keys;
+    for (const auto& field : fields) {
+        if (field.isEmpty() || field.toUtf8().size() > 512)
+            return m_impl->invalid(CloudRequestKind::AcquireEditLease, QStringLiteral("Invalid edit lock resource"));
+        keys.append(field);
+    }
+    const QJsonObject body{{QStringLiteral("fieldKeys"), keys}, {QStringLiteral("ttlSeconds"), 15},
+        {QStringLiteral("expectedSessionVersion"), double(policyVersion)}};
+    const quint64 request = m_impl->allocate();
+    m_impl->issue(request, CloudRequestKind::AcquireEditLease, QByteArrayLiteral("POST"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/edit-leases").arg(*project, *session), {},
+        QJsonDocument(body).toJson(QJsonDocument::Compact), {200, 201}, kMaxRegularResponseBytes, true,
+        [this, request, session = *session](const QByteArray& response) {
+            const auto value = m_impl->responseObject(request, CloudRequestKind::AcquireEditLease, response);
+            QString id, holder, room;
+            QDateTime expires;
+            if (!value || !exactKeys(*value, {"leaseId", "sessionId", "holderMemberId", "fieldKeys", "expiresAt"}) ||
+                !normalizedUuid(value->value(QStringLiteral("leaseId")), &id) ||
+                !normalizedUuid(value->value(QStringLiteral("sessionId")), &room) || room != session ||
+                !normalizedUuid(value->value(QStringLiteral("holderMemberId")), &holder) ||
+                !dateTimeValue(value->value(QStringLiteral("expiresAt")), &expires) ||
+                !value->value(QStringLiteral("fieldKeys")).isArray()) {
+                if (value) m_impl->invalidResponse(request, CloudRequestKind::AcquireEditLease, {CloudClientErrorCode::InvalidResponse, QStringLiteral("Invalid edit lock response")});
+                return;
+            }
+            emit editLeaseReceived(request, *value);
+        });
+    return request;
+}
+
+quint64 CloudProjectClient::renewEditLease(const QString& projectId, const QString& sessionId,
+    const QString& leaseId, quint64 policyVersion) {
+    const auto project = m_impl->uuidInput(projectId), session = m_impl->uuidInput(sessionId), lease = m_impl->uuidInput(leaseId);
+    if (!project || !session || !lease || !policyVersion)
+        return m_impl->invalid(CloudRequestKind::RenewEditLease, QStringLiteral("Invalid edit lock renewal"));
+    const QJsonObject body{{QStringLiteral("ttlSeconds"), 15}, {QStringLiteral("expectedSessionVersion"), double(policyVersion)}};
+    const quint64 request = m_impl->allocate();
+    m_impl->issue(request, CloudRequestKind::RenewEditLease, QByteArrayLiteral("PATCH"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/edit-leases/%3").arg(*project, *session, *lease), {},
+        QJsonDocument(body).toJson(QJsonDocument::Compact), {200}, kMaxRegularResponseBytes, true,
+        [this, request, expected = *lease, room = *session](const QByteArray& response) {
+            const auto value = m_impl->responseObject(request, CloudRequestKind::RenewEditLease, response);
+            if (!value) return;
+            QString holder;
+            QDateTime expires;
+            if (!exactKeys(*value, {"leaseId", "sessionId", "holderMemberId", "fieldKeys", "expiresAt"}) ||
+                value->value(QStringLiteral("leaseId")).toString() != expected ||
+                value->value(QStringLiteral("sessionId")).toString() != room ||
+                !normalizedUuid(value->value(QStringLiteral("holderMemberId")), &holder) ||
+                !dateTimeValue(value->value(QStringLiteral("expiresAt")), &expires) ||
+                !value->value(QStringLiteral("fieldKeys")).isArray()) {
+                m_impl->invalidResponse(request, CloudRequestKind::RenewEditLease, {CloudClientErrorCode::InvalidResponse, QStringLiteral("Edit lock renewal mismatch")});
+                return;
+            }
+            emit editLeaseReceived(request, *value);
+        });
+    return request;
+}
+
+quint64 CloudProjectClient::releaseEditLease(const QString& projectId, const QString& sessionId, const QString& leaseId) {
+    const auto project = m_impl->uuidInput(projectId), session = m_impl->uuidInput(sessionId), lease = m_impl->uuidInput(leaseId);
+    if (!project || !session || !lease)
+        return m_impl->invalid(CloudRequestKind::ReleaseEditLease, QStringLiteral("Invalid edit lock release"));
+    return m_impl->requestVoid(CloudRequestKind::ReleaseEditLease, QByteArrayLiteral("DELETE"),
+        QStringLiteral("desktop/projects/%1/sessions/%2/edit-leases/%3").arg(*project, *session, *lease), *lease);
+}
+
 bool CloudProjectClient::cancel(quint64 requestId) {
     return m_impl && m_impl->cancel(requestId);
 }
@@ -2858,7 +3060,8 @@ QJsonObject testOperation(const QString& projectId, quint64 sequence,
                      {QStringLiteral("value"), tempo}}},
         {QStringLiteral("preconditions"), QJsonArray{}},
         {QStringLiteral("touchedFields"),
-         QJsonArray{QStringLiteral("project:tempo"),
+         QJsonArray{QStringLiteral("project:renderGeneration"),
+                    QStringLiteral("project:tempo"),
                     QStringLiteral("project:tempoCascade")}},
         {QStringLiteral("created_at"),
          QStringLiteral("2026-08-29T10:01:00Z")},
@@ -3074,7 +3277,8 @@ bool checkCloudProjectClientForTest(QString* error) {
     const QJsonDocument joinBody = QJsonDocument::fromJson(
         network.captured.back().body, &joinParseError);
     if (joinParseError.error != QJsonParseError::NoError ||
-        !joinBody.isObject() || joinBody.object().size() != 5 ||
+        !joinBody.isObject() || joinBody.object().size() != 6 ||
+        !joinBody.object().value(QStringLiteral("pluginInventory")).isArray() ||
         joinBody.object().value(QStringLiteral("appVersion")).toString() !=
             QCoreApplication::applicationVersion() ||
         joinBody.object().value(QStringLiteral("engineVersion")).toString() !=
@@ -3676,6 +3880,51 @@ bool checkCloudProjectClientForTest(QString* error) {
         failures != 1 || lastFailureKind != CloudRequestKind::AcceptInvite) {
         return fail(QStringLiteral("a malformed invitation code was sent"));
     }
+    failures = 0;
+
+    // Gesture leases carry the policy revision and are bound to the requested
+    // session and lease even when a crossed response has HTTP 200.
+    const QString editKey = QStringLiteral("clip:") + trackId;
+    const QJsonObject editLease{
+        {QStringLiteral("leaseId"), leaseId},
+        {QStringLiteral("sessionId"), sessionId},
+        {QStringLiteral("holderMemberId"), sessionMemberId},
+        {QStringLiteral("fieldKeys"), QJsonArray{editKey}},
+        {QStringLiteral("expiresAt"), QStringLiteral("2099-08-29T10:01:00Z")},
+    };
+    int editLeaseSignals = 0;
+    QObject::connect(&client, &CloudProjectClient::editLeaseReceived,
+                     [&](quint64, const QJsonObject&) { ++editLeaseSignals; });
+    network.scripts.push_back({201, compact(editLease)});
+    client.acquireEditLease(projectId, sessionId, {editKey}, 3);
+    if (!waitUntil([&] { return editLeaseSignals == 1 || failures != 0; }) || failures != 0)
+        return fail(QStringLiteral("edit lease grant was not accepted"));
+    const auto editBody = QJsonDocument::fromJson(network.captured.back().body).object();
+    if (network.captured.back().method != QByteArrayLiteral("POST") ||
+        editBody.value(QStringLiteral("expectedSessionVersion")).toInt() != 3 ||
+        editBody.value(QStringLiteral("fieldKeys")).toArray() != QJsonArray{editKey} ||
+        editBody.value(QStringLiteral("ttlSeconds")).toInt() != 15)
+        return fail(QStringLiteral("edit lease omitted its resource or policy revision"));
+    auto wrongRoom = editLease;
+    wrongRoom.insert(QStringLiteral("sessionId"), secondProjectId);
+    network.scripts.push_back({201, compact(wrongRoom)});
+    client.acquireEditLease(projectId, sessionId, {editKey}, 3);
+    if (!waitUntil([&] { return failures != 0; }) || editLeaseSignals != 1 ||
+        lastError.code != CloudClientErrorCode::InvalidResponse)
+        return fail(QStringLiteral("edit lease from another session was accepted"));
+    failures = 0;
+    auto wrongLease = editLease;
+    wrongLease.insert(QStringLiteral("leaseId"), otherLeaseId);
+    network.scripts.push_back({200, compact(wrongLease)});
+    client.renewEditLease(projectId, sessionId, leaseId, 3);
+    if (!waitUntil([&] { return failures != 0; }) || editLeaseSignals != 1 ||
+        lastError.code != CloudClientErrorCode::InvalidResponse)
+        return fail(QStringLiteral("renewal replaced the requested edit lease"));
+    failures = 0;
+    const auto beforeInvalidEditLease = network.captured.size();
+    client.acquireEditLease(projectId, sessionId, {editKey}, 0);
+    if (network.captured.size() != beforeInvalidEditLease || failures != 1)
+        return fail(QStringLiteral("edit lease without policy revision reached the network"));
     failures = 0;
 
     return true;

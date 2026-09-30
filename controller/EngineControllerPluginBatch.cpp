@@ -1,15 +1,60 @@
 #include "EngineController.hpp"
 #include "plugins/PluginConvert.hpp"
+#include "platform/PathUtils.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
+#include <filesystem>
+#include <fstream>
 
 namespace daw {
 namespace {
 audio::Result batchError(const std::string& message) {
     return audio::Result::fail(audio::EngineError::InvalidArgument, message);
 }
+}
+
+bool EngineController::submitSharedPluginSnapshotBatch(std::shared_ptr<collab::BatchCommand> batch,
+    const std::vector<ChainSlotSnapshot>& snapshots, std::string label) {
+    if (!sharedEditingAllowed() || !m_sharedMutationSink || m_sharedMutationSink->commandSchemaVersion() < 6) return false;
+    for (const auto& source : snapshots) {
+        const auto descriptor = m_pluginManager.find(toHostFormat(source.model.format), source.model.uid);
+        if (!descriptor || !sharedPluginAllowed(*descriptor) ||
+            (source.model.format != PluginFormat::Internal && descriptor->version != source.model.pluginVersion)) return false;
+        if ((!source.model.stateFile.empty() && source.state.empty() && source.model.stateAsset.empty()) ||
+            (!source.model.rightStateFile.empty() && source.rightState.empty() && source.model.rightStateAsset.empty())) return false;
+        if (source.state.size() > 64u * 1024u * 1024u || source.rightState.size() > 64u * 1024u * 1024u) return false;
+    }
+    std::vector<std::string> files;
+    struct Binding { std::size_t source; bool right; };
+    std::vector<Binding> bindings;
+    for (std::size_t i = 0; i < snapshots.size(); ++i) {
+        const auto& source = snapshots[i];
+        for (bool right : {false, true}) {
+            if (right && source.model.channelMode != PluginChannelMode::DualMono) continue;
+            const auto& bytes = right && !source.rightState.empty() ? source.rightState : source.state;
+            if (bytes.empty()) continue;
+            const auto path = std::filesystem::temp_directory_path() / ("vlt-batch-state-" + newUuid() + ".bin");
+            std::ofstream output(path, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size())); output.close();
+            files.push_back(platform::pathToUtf8(path));
+            if (!output) { for (const auto& file : files) { std::error_code ignored; std::filesystem::remove(platform::pathFromUtf8(file), ignored); } return false; }
+            bindings.push_back({i, right});
+        }
+    }
+    const auto sourceCount = snapshots.size();
+    return submitSharedDerivedMutation(std::move(files), AssetKind::PluginState,
+        [batch, bindings, sourceCount](const auto& assets) -> collab::CommandBody {
+            std::size_t next = 0;
+            for (auto& command : batch->commands) if (auto* add = std::get_if<collab::AddPluginInsert>(&command.body)) {
+                if (!sourceCount) return std::make_shared<collab::BatchCommand>();
+                const auto source = next++ % sourceCount;
+                for (std::size_t i = 0; i < bindings.size(); ++i) if (bindings[i].source == source)
+                    (bindings[i].right ? add->insert.rightStateAsset : add->insert.stateAsset) = assets[i];
+            }
+            return batch;
+        }, projectRevision(), std::move(label));
 }
 
 audio::Result EngineController::validatePluginBatch(
@@ -85,10 +130,72 @@ audio::Result EngineController::appendPluginBatch(
     if (chain.inserts.empty()) return batchError("Add an effect first.");
     if (isRecording() || m_exportInProgress || m_pluginAuditionNode)
         return batchError("Stop recording, rendering or preview before applying plugins.");
-    // Native state chunks have no shared mutation representation yet, as in
-    // createTracks. Never turn configured vendor plugins into default copies.
-    if (cloudProjectBound()) return audio::Result::fail(audio::EngineError::NotSupported,
-        "Configured plugin batches are available in local projects.");
+    if (cloudProjectBound()) {
+        if (!sharedEditingAllowed() || !m_sharedAssetMutationSink || m_sharedMutationSink->commandSchemaVersion() < 6)
+            return batchError("Configured plugins require an editable connected session.");
+        std::vector<InsertModel> models;
+        std::vector<std::string> files;
+        struct Binding { std::size_t model; bool right; };
+        std::vector<Binding> bindings;
+        for (const auto& source : chain.inserts) {
+            const auto descriptor = m_pluginManager.find(toHostFormat(source.model.format), source.model.uid);
+            if (!descriptor || descriptor->isInstrument || !sharedPluginAllowed(*descriptor) ||
+                (source.model.format != PluginFormat::Internal && source.model.pluginVersion != descriptor->version))
+                return batchError("This effect is not in the session's compatible catalog: " + source.model.name);
+        }
+        for (const auto& source : chain.inserts) {
+            const auto descriptor = m_pluginManager.find(toHostFormat(source.model.format), source.model.uid);
+            if (!descriptor || descriptor->isInstrument || !sharedPluginAllowed(*descriptor))
+                return batchError("This effect is not in the session's compatible catalog: " + source.model.name);
+            auto model = source.model;
+            model.path.clear(); model.stateFile.clear(); model.rightStateFile.clear();
+            model.windowOpen = false; model.windowX = model.windowY = model.windowWidth = model.windowHeight = 0;
+            model.editorChannel = PluginEditorChannel::Left; model.sidechainTrackIds.clear();
+            models.push_back(std::move(model));
+            for (bool right : {false, true}) {
+                if (right && source.model.channelMode != PluginChannelMode::DualMono) continue;
+                const auto& bytes = right && !source.rightState.empty() ? source.rightState : source.state;
+                if (bytes.empty()) continue;
+                const auto path = std::filesystem::temp_directory_path() / ("vlt-batch-state-" + newUuid() + ".bin");
+                std::ofstream output(path, std::ios::binary);
+                if (bytes.size() <= 64u * 1024u * 1024u)
+                    output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+                output.close();
+                if (!output || bytes.size() > 64u * 1024u * 1024u) {
+                    files.push_back(platform::pathToUtf8(path));
+                    for (const auto& file : files) { std::error_code ignored; std::filesystem::remove(platform::pathFromUtf8(file), ignored); }
+                    return batchError("Could not stage plugin batch state (maximum 64 MiB per channel).");
+                }
+                files.push_back(platform::pathToUtf8(path)); bindings.push_back({models.size() - 1, right});
+            }
+        }
+        std::vector<std::vector<std::string>> ids;
+        for (const auto& target : targets) { auto& row = ids.emplace_back(); for (const auto& model : models) row.push_back(newUuid()); }
+        const bool queued = submitSharedDerivedMutation(std::move(files), AssetKind::PluginState,
+            [targets, models = std::move(models), bindings, ids, this](const auto& assets) mutable -> collab::CommandBody {
+                for (std::size_t i = 0; i < assets.size(); ++i) {
+                    auto& model = models[bindings[i].model];
+                    (bindings[i].right ? model.rightStateAsset : model.stateAsset) = assets[i];
+                }
+                auto batch = std::make_shared<collab::BatchCommand>();
+                for (std::size_t t = 0; t < targets.size(); ++t) {
+                    const auto& target = targets[t];
+                    const auto* current = target.clipId.empty() ? channelInserts(target.trackId) : clipFx(target.trackId, target.clipId);
+                    if (!current) return std::make_shared<collab::BatchCommand>();
+                    std::string anchor = current->empty() ? std::string{} : current->back().id;
+                    for (std::size_t i = 0; i < models.size(); ++i) {
+                        auto model = models[i]; model.id = ids[t][i];
+                        collab::ProjectCommand command;
+                        command.body = collab::AddPluginInsert{{target.clipId.empty() ? collab::PluginChain::Track : collab::PluginChain::Clip,
+                            target.trackId, target.clipId}, model, anchor};
+                        anchor = model.id; batch->commands.push_back(std::move(command));
+                    }
+                }
+                return batch;
+            }, projectRevision(), "Apply Shared Plugins");
+        if (!queued) return batchError("The project changed or plugin state upload could not start.");
+        addedIds = std::move(ids); return audio::Result::ok();
+    }
     for (const auto& slot : chain.inserts) {
         const auto descriptor = m_pluginManager.find(toHostFormat(slot.model.format), slot.model.uid);
         if (!descriptor || descriptor->isInstrument)

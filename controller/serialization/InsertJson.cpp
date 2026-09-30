@@ -48,6 +48,7 @@ json insertToJson(const InsertModel& i) {
     j["path"] = i.path;
     j["vendor"] = i.vendor;
     if (!i.pluginVersion.empty()) j["pluginVersion"] = i.pluginVersion;
+    if (!i.parameterFingerprint.empty()) j["parameterFingerprint"] = i.parameterFingerprint;
     if (i.stateSchemaVersion > 0)
         j["stateSchemaVersion"] = i.stateSchemaVersion;
     j["mix"] = i.mix;
@@ -97,6 +98,7 @@ InsertModel insertFromJson(const json& j) {
     i.path = j.value("path", "");
     i.vendor = j.value("vendor", "");
     i.pluginVersion = j.value("pluginVersion", "");
+    i.parameterFingerprint = j.value("parameterFingerprint", "");
     i.stateSchemaVersion = std::max(0, j.value("stateSchemaVersion", 0));
     i.mix = j.value("mix", 1.0f);
     i.slideDelivery = std::clamp(j.value("slideDelivery",0),0,4);

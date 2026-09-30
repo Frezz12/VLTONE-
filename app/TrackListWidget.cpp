@@ -2393,7 +2393,7 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
         for (const auto& selectedId : m_selectedIds) targets.push_back({selectedId.toStdString(), {}});
         if (m_controller->validatePluginBatch(targets, 1)) {
             sharedPlugins = menu.addAction(tr("Shared Plugins…"));
-            sharedPlugins->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording());
+            sharedPlugins->setEnabled(m_controller->sharedEditingAllowed() && !m_controller->isRecording());
             menu.addSeparator();
         }
     }

@@ -6,11 +6,24 @@
 
 namespace daw::collab {
 
+SetClipRenderState sharedRenderState(const std::string& trackId, const ClipModel& clip) {
+    SetClipRenderState result{trackId, clip.id, captureClipAudioVersion(clip), clip.offlineHistory,
+        clip.offlineVersionId, clip.playbackInjection};
+    const auto clean = [](auto& source) {
+        source.filePath.clear(); source.expanded = false;
+        for (auto& take : source.takes) take.filePath.clear();
+    };
+    clean(result.source);
+    for (auto& version : result.history) clean(version.source);
+    return result;
+}
+
 std::string projectScalarName(ProjectScalar field) {
     switch (field) {
         case ProjectScalar::Name: return "name";
         case ProjectScalar::Tempo: return "tempo";
         case ProjectScalar::AiInstructions: return "aiInstructions";
+        case ProjectScalar::NotebookHtml: return "notebookHtml";
         case ProjectScalar::RenderSampleRate: return "renderSampleRate";
         case ProjectScalar::MasterVolume: return "masterVolume";
         case ProjectScalar::MasterPan: return "masterPan";
@@ -22,6 +35,7 @@ bool projectScalarFromName(const std::string& name, ProjectScalar& out) {
     if (name == "name") out = ProjectScalar::Name;
     else if (name == "tempo") out = ProjectScalar::Tempo;
     else if (name == "aiInstructions") out = ProjectScalar::AiInstructions;
+    else if (name == "notebookHtml") out = ProjectScalar::NotebookHtml;
     else if (name == "renderSampleRate") out = ProjectScalar::RenderSampleRate;
     else if (name == "masterVolume") out = ProjectScalar::MasterVolume;
     else if (name == "masterPan") out = ProjectScalar::MasterPan;
@@ -205,6 +219,12 @@ std::string commandKind(const ProjectCommand& command) {
             return "project.setTimeSignature";
         else if constexpr (std::is_same_v<T, SetProjectKey>)
             return "project.setKey";
+        else if constexpr (std::is_same_v<T, SetNotebookCues>)
+            return "project.setNotebookCues";
+        else if constexpr (std::is_same_v<T, SetTrackFreeze>)
+            return "track.setFreeze";
+        else if constexpr (std::is_same_v<T, SetClipRenderState>)
+            return "clip.setRenderState";
         else if constexpr (std::is_same_v<T, AddTrack>)
             return "track.add";
         else if constexpr (std::is_same_v<T, DeleteTrack>)
@@ -423,8 +443,11 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireOptionalUuid(body.parentId, "parentId") &&
                        requireOptionalUuid(body.afterId, "afterId");
-            } else if constexpr (std::is_same_v<T, DeleteTrack> ||
-                                 std::is_same_v<T, SetTrackProperty>) {
+            } else if constexpr (std::is_same_v<T, SetTrackProperty>) {
+                if (value.meta.schemaVersion >= 6 && body.property == TrackProperty::Muted)
+                    return fail("track mute belongs to session audition in v6");
+                return requireUuid(body.trackId, "trackId");
+            } else if constexpr (std::is_same_v<T, DeleteTrack>) {
                 return requireUuid(body.trackId, "trackId");
             } else if constexpr (std::is_same_v<T, RestoreTrack>) {
                 return requireUuid(body.trackId, "trackId") &&
@@ -459,6 +482,14 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.sendId, "sendId") &&
                        requireOptionalUuid(body.afterId, "afterId");
+            } else if constexpr (std::is_same_v<T, SetTrackFreeze>) {
+                return value.meta.schemaVersion >= 6 && requireUuid(body.trackId, "trackId") &&
+                    requireAssetId(body.asset, "asset.assetId", true);
+            } else if constexpr (std::is_same_v<T, SetClipRenderState>) {
+                return value.meta.schemaVersion >= 6 && requireUuid(body.trackId, "trackId") &&
+                    requireUuid(body.clipId, "clipId") && requireOptionalUuid(body.versionId, "versionId") &&
+                    (body.injection.anchorChannelId.empty() || body.injection.anchorChannelId == "master" ||
+                     requireUuid(body.injection.anchorChannelId, "anchorChannelId"));
             } else if constexpr (std::is_same_v<T, AddClip>) {
                 return requireUuid(body.trackId, "trackId") &&
                        requireUuid(body.clipId, "clipId") &&
@@ -766,6 +797,7 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
                         std::holds_alternative<AddClip>(child.body) ||
                         std::holds_alternative<SetClipProperty>(child.body) ||
                         std::holds_alternative<SetClipAsset>(child.body) ||
+                        (value.meta.schemaVersion >= 6 && std::holds_alternative<SetClipFade>(child.body)) ||
                         std::holds_alternative<AddTake>(child.body) ||
                         std::holds_alternative<UpsertCompSegment>(child.body) ||
                         (value.meta.schemaVersion >= 4 && (std::holds_alternative<ApplyMidiContent>(child.body) || std::holds_alternative<DeleteClip>(child.body) || std::holds_alternative<SetClipPatternOwner>(child.body)));
@@ -880,6 +912,7 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
         fields.insert("plugin:" + insertId + ":generation");
     };
     const auto collect = [&](const auto& self, const ProjectCommand& value) -> void {
+        if (value.meta.schemaVersion >= 6) fields.insert("project:renderGeneration");
         std::visit([&](const auto& body) {
             using T = std::decay_t<decltype(body)>;
             if constexpr (std::is_same_v<T, SetProjectScalar>) {
@@ -890,6 +923,13 @@ std::vector<std::string> commandTouchedFields(const ProjectCommand& command) {
                 fields.insert("project:timeSignature");
             } else if constexpr (std::is_same_v<T, SetProjectKey>) {
                 fields.insert("project:key");
+            } else if constexpr (std::is_same_v<T, SetTrackFreeze>) {
+                fields.insert("track:" + body.trackId + ":freeze");
+            } else if constexpr (std::is_same_v<T, SetClipRenderState>) {
+                fields.insert("clip:" + body.clipId + ":renderState");
+                fields.insert("clip:" + body.clipId + ":descendants");
+            } else if constexpr (std::is_same_v<T, SetNotebookCues>) {
+                fields.insert("project:notebookCues");
             } else if constexpr (std::is_same_v<T, AddTrack> ||
                                  std::is_same_v<T, RestoreTrack>) {
                 fields.insert("track:" + body.trackId + ":lifecycle");

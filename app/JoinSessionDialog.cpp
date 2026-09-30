@@ -5,6 +5,7 @@
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "EngineController.hpp"
+#include "PluginReadinessProbe.hpp"
 
 #include <QCloseEvent>
 #include <QCoreApplication>
@@ -15,6 +16,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -68,6 +70,8 @@ struct JoinFlowState::Impl {
     bool membershipGranted = false;
     bool done = false;
     bool ok = false;
+    std::shared_ptr<int> probeLifetime = std::make_shared<int>(0);
+    quint64 probeGeneration = 0;
 
     quint64 requestId = 0;
     /// Set while a port is being called, so a fake port that answers
@@ -146,6 +150,16 @@ struct JoinFlowState::Impl {
             return;
         }
         enter(JoinStep::NegotiatePlugins);
+        const quint64 generation = ++probeGeneration;
+        if (ports.inspectPluginsAsync) {
+            const std::weak_ptr<int> alive = probeLifetime;
+            ports.inspectPluginsAsync(pluginRequirements, pluginRequirementsRevision,
+                [this, alive, generation](daw::collab::PluginReadinessReport report) {
+                    if (alive.expired() || generation != probeGeneration || done) return;
+                    finishPluginInspection(std::move(report));
+                });
+            return;
+        }
         daw::collab::PluginReadinessReport readiness;
         if (ports.inspectPlugins) {
             readiness = ports.inspectPlugins(pluginRequirements,
@@ -157,6 +171,21 @@ struct JoinFlowState::Impl {
         } else {
             readiness.revision = std::max<qint64>(1,
                                                   pluginRequirementsRevision);
+        }
+        finishPluginInspection(std::move(readiness));
+    }
+
+    void advanceWhenReady() {
+        if (!done && !sessionId.isEmpty() &&
+            states[index(JoinStep::HydrateAssets)] == JoinStepState::Done &&
+            states[index(JoinStep::NegotiatePlugins)] == JoinStepState::Pending)
+            advanceToConnect();
+    }
+
+    void finishPluginInspection(daw::collab::PluginReadinessReport readiness) {
+        if (commandSchemaVersion >= 3 && readiness.revision != pluginRequirementsRevision) {
+            fail(JoinStep::NegotiatePlugins, JoinFlowState::tr("Project requirements changed. Retry compatibility checks."));
+            return;
         }
         complete(JoinStep::NegotiatePlugins);
         const auto blocked = std::ranges::count_if(
@@ -228,7 +257,8 @@ QString JoinFlowState::stepDetail(JoinStep step) const {
 
 JoinStep JoinFlowState::currentStep() const noexcept { return m_impl->current; }
 bool JoinFlowState::running() const noexcept {
-    return !m_impl->done && m_impl->requestId != 0;
+    return !m_impl->done && (m_impl->requestId != 0 ||
+        m_impl->states[Impl::index(JoinStep::NegotiatePlugins)] == JoinStepState::Running);
 }
 bool JoinFlowState::finished() const noexcept { return m_impl->done; }
 bool JoinFlowState::succeeded() const noexcept {
@@ -263,10 +293,23 @@ bool JoinFlowState::begin(const QString& code, const QString& password) {
     // Resuming after a password prompt: membership is already granted and the
     // project is already known, so redeeming the code again would only burn a
     // single-use invitation.
-    if (m_impl->membershipGranted && !m_impl->projectId.isEmpty()) {
+    if (m_impl->membershipGranted && !m_impl->projectId.isEmpty() && m_impl->passwordRequired) {
         m_impl->setInfo(JoinFlowState::tr("Joining the session…"));
         m_impl->advanceToConnect();
         return !m_impl->done || m_impl->ok;
+    }
+    if (m_impl->membershipGranted && !m_impl->projectId.isEmpty()) {
+        // Retry a failed bootstrap or session lookup without spending the
+        // invitation again. A failed download has no state safe to probe yet.
+        m_impl->reset();
+        m_impl->sessionId.clear();
+        m_impl->pluginRequirements.clear();
+        ++m_impl->probeGeneration;
+        m_impl->complete(JoinStep::ResolveCode);
+        if (!m_impl->ports.fetchProject) return false;
+        m_impl->setInfo(JoinFlowState::tr("Opening the project…"));
+        return m_impl->issue(JoinStep::VerifyMembership,
+            [&] { return m_impl->ports.fetchProject(m_impl->projectId); });
     }
 
     const QString normalized = normalizeCode(code);
@@ -408,7 +451,7 @@ void JoinFlowState::onHydrationSettled(bool degraded) {
     m_impl->details[Impl::index(JoinStep::HydrateAssets)] =
         degraded ? JoinFlowState::tr("Some files are still missing")
                  : QString();
-    m_impl->advanceToConnect();
+    m_impl->advanceWhenReady();
 }
 
 void JoinFlowState::onActiveSession(const CloudSessionState& state) {
@@ -426,6 +469,13 @@ void JoinFlowState::onActiveSession(const CloudSessionState& state) {
         m_impl->fail(JoinStep::Compatibility,
                      JoinFlowState::tr("This session uses an unsupported collaboration protocol."));
     }
+    m_impl->advanceWhenReady();
+}
+
+void JoinFlowState::onActiveSessionUnavailable(const QString& projectId, const QString& safeMessage) {
+    if (m_impl->done || projectId != m_impl->projectId || !m_impl->sessionId.isEmpty()) return;
+    m_impl->fail(JoinStep::Connect, collab::dialog::boundedSafeMessage(safeMessage,
+        JoinFlowState::tr("The live session is no longer available.")));
 }
 
 void JoinFlowState::onSessionState(quint64 requestId,
@@ -482,6 +532,7 @@ void JoinFlowState::requirePassword() {
 }
 
 void JoinFlowState::shutdown() {
+    ++m_impl->probeGeneration;
     const quint64 request = m_impl->requestId;
     m_impl->requestId = 0;
     m_impl->issuing = false;
@@ -634,6 +685,14 @@ JoinSessionDialog::JoinSessionDialog(CloudProjectClient* projects,
         return daw::collab::evaluatePluginReadiness(
             requirements, controller->pluginManager(), revision);
     };
+    ports.inspectPluginsAsync = [this, controller](const auto& requirements, qint64 revision, auto complete) {
+        if (!controller) return;
+        probePluginReadiness(this, controller->project(), controller->pluginManager(), requirements, revision,
+            [this, complete = std::move(complete)](auto report) mutable {
+                complete(std::move(report));
+                m_impl->refresh();
+            });
+    };
     const QPointer<CollaborationService> serviceGuard(service);
     ports.selectProtocol = [serviceGuard](int version) {
         return serviceGuard && serviceGuard->setCommandSchemaVersion(version);
@@ -746,6 +805,15 @@ JoinSessionDialog::JoinSessionDialog(CloudProjectClient* projects,
     connect(m_impl->cancel, &QPushButton::clicked, this,
             &JoinSessionDialog::reject);
 
+    const QPointer<CloudProjectAssetHydrator> hydratorGuard(hydrator);
+    const auto settleAssets = [this, hydratorGuard] {
+        if (!hydratorGuard || hydratorGuard->projectId() != m_impl->flow->projectId() ||
+            hydratorGuard->pendingCount() != 0) return;
+        const auto state = hydratorGuard->state();
+        if (state != CloudHydrationState::Ready && state != CloudHydrationState::Degraded) return;
+        m_impl->flow->onHydrationSettled(state == CloudHydrationState::Degraded);
+        m_impl->refresh();
+    };
     if (projects) {
         connect(projects, &CloudProjectClient::inviteAccepted, this,
                 [this](quint64 requestId, const CloudProjectView& project) {
@@ -763,6 +831,7 @@ JoinSessionDialog::JoinSessionDialog(CloudProjectClient* projects,
                        const CloudSessionState& state) {
                     if (kind == CloudRequestKind::GetActiveSession) {
                         m_impl->flow->onActiveSession(state);
+                        m_impl->refresh();
                         return;
                     }
                     if (kind != CloudRequestKind::JoinSession) return;
@@ -778,26 +847,37 @@ JoinSessionDialog::JoinSessionDialog(CloudProjectClient* projects,
     }
     if (sync) {
         connect(sync, &CloudProjectSyncCoordinator::phaseChanged, this,
-                [this](CloudSyncPhase phase) {
+                [this, settleAssets](CloudSyncPhase phase) {
                     m_impl->flow->onSyncPhase(phase);
+                    m_impl->refresh();
+                    // Empty or cached assets may have settled before the
+                    // synchronizer announced that the snapshot was installed.
+                    if (phase == CloudSyncPhase::CheckingLiveSession || phase == CloudSyncPhase::Ready)
+                        QTimer::singleShot(0, this, settleAssets);
+                });
+        connect(sync, &CloudProjectSyncCoordinator::noActiveSession, this,
+                [this](const QString& projectId) {
+                    m_impl->flow->onActiveSessionUnavailable(projectId, {});
+                    m_impl->refresh();
+                });
+        connect(sync, &CloudProjectSyncCoordinator::activeSessionCheckFailed, this,
+                [this](const QString& projectId, const QString& message, bool) {
+                    m_impl->flow->onActiveSessionUnavailable(projectId, message);
                     m_impl->refresh();
                 });
     }
     if (hydrator) {
         connect(hydrator, &CloudProjectAssetHydrator::progressChanged, this,
-                [this](qsizetype done, qsizetype total) {
+                [this, hydratorGuard](qsizetype done, qsizetype total) {
+                    if (!hydratorGuard || hydratorGuard->projectId() != m_impl->flow->projectId()) return;
                     m_impl->flow->onHydrationProgress(done, total);
                     m_impl->refresh();
                 });
-        connect(hydrator, &CloudProjectAssetHydrator::stateChanged, this,
-                [this](CloudHydrationState state) {
-                    if (state != CloudHydrationState::Ready &&
-                        state != CloudHydrationState::Degraded) {
-                        return;
-                    }
-                    m_impl->flow->onHydrationSettled(
-                        state == CloudHydrationState::Degraded);
-                    m_impl->refresh();
+        connect(hydrator, &CloudProjectAssetHydrator::hydrationSettled, this,
+                [this, settleAssets](const QString&, qsizetype) {
+                    // Let the last assetReady projection install local plugin
+                    // state paths before constructing the immutable probe jobs.
+                    QTimer::singleShot(0, this, settleAssets);
                 });
     }
 
@@ -813,13 +893,20 @@ void JoinSessionDialog::presetCode(const QString& code) {
     const QString normalized = JoinFlowState::normalizeCode(code);
     if (!JoinFlowState::validCode(normalized)) return;
     m_impl->code->setText(normalized);
-    // Focus the button, never press it. A link from a web page must not be
-    // able to join a room on the user's behalf.
+    // Ordinary prefill leaves control with the user. Explicitly activated
+    // invitation links use joinFromLink to submit after the dialog is ready.
     m_impl->join->setFocus();
 }
 
 QString JoinSessionDialog::joinedProjectId() const {
     return m_impl->flow->succeeded() ? m_impl->joinedProjectId : QString();
+}
+
+void JoinSessionDialog::joinFromLink(const QString& code) {
+    const auto normalized = JoinFlowState::normalizeCode(code);
+    if (!JoinFlowState::validCode(normalized)) return;
+    presetCode(normalized);
+    QTimer::singleShot(0, this, [this] { m_impl->submit(); });
 }
 
 void JoinSessionDialog::reject() {
@@ -938,6 +1025,56 @@ bool checkJoinSessionDialogForTest(QString* error) {
             flow.projectId() != projectId) {
             return fail(QStringLiteral("a successful join did not settle"));
         }
+    }
+
+    // Cached files can settle before the session lookup. Both inputs are
+    // required; duplicate notifications must not launch multiple probes.
+    {
+        Recorder log;
+        auto ports = makePorts(log);
+        int probes = 0;
+        std::function<void(daw::collab::PluginReadinessReport)> finishProbe;
+        ports.inspectPluginsAsync = [&](const auto&, qint64, auto complete) {
+            ++probes;
+            finishProbe = std::move(complete);
+        };
+        JoinFlowState flow(std::move(ports));
+        flow.begin(QStringLiteral("123456789012"), {});
+        flow.onCodeAccepted(log.next, projectView(CloudProjectStatus::Active));
+        flow.onProjectReceived(log.next, projectView(CloudProjectStatus::Active));
+        flow.onSyncPhase(CloudSyncPhase::CheckingLiveSession);
+        flow.onHydrationSettled(true);
+        if (flow.finished() || probes != 0 || log.joinCalls != 0)
+            return fail(QStringLiteral("assets advanced before live session lookup"));
+        flow.onActiveSession(joined);
+        flow.onActiveSession(joined);
+        flow.onHydrationSettled(false);
+        if (probes != 1 || log.joinCalls != 0 || !finishProbe ||
+            flow.stepDetail(JoinStep::HydrateAssets).isEmpty())
+            return fail(QStringLiteral("degraded assets or probe ordering was lost"));
+        daw::collab::PluginReadinessReport report;
+        report.revision = joined.session.pluginRequirementsRevision;
+        finishProbe(std::move(report));
+        if (log.joinCalls != 1) return fail(QStringLiteral("completed probe did not join"));
+    }
+
+    // A failed live lookup is actionable. Retrying re-fetches the same
+    // project instead of consuming its invitation or probing absent assets.
+    {
+        Recorder log;
+        JoinFlowState flow(makePorts(log));
+        flow.begin(QStringLiteral("123456789012"), {});
+        flow.onCodeAccepted(log.next, projectView(CloudProjectStatus::Active));
+        flow.onProjectReceived(log.next, projectView(CloudProjectStatus::Active));
+        flow.onSyncPhase(CloudSyncPhase::CheckingLiveSession);
+        flow.onActiveSessionUnavailable(QStringLiteral("another-project"), {});
+        if (flow.finished()) return fail(QStringLiteral("another project's lookup ended the join"));
+        flow.onActiveSessionUnavailable(projectId, QStringLiteral("Connection failed"));
+        if (!flow.finished() || !flow.messageIsError() || flow.succeeded())
+            return fail(QStringLiteral("failed live lookup did not surface an error"));
+        if (!flow.begin({}, {}) || log.codeCalls != 1 || log.joinCalls != 0 ||
+            flow.stepState(JoinStep::VerifyMembership) != JoinStepState::Running)
+            return fail(QStringLiteral("retry skipped bootstrap or spent invitation twice"));
     }
 
     // A protected session parks on Connect and resumes without spending the

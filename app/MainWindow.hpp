@@ -62,6 +62,10 @@ class AssetCache;
 class CloudProjectClient;
 class CloudProjectAssetHydrator;
 class CloudProjectPublisher;
+class EditLeaseCoordinator;
+class EngineProjectProjectionAdapter;
+class CloudProjectTitleCoordinator;
+class CloudProjectVersionCoordinator;
 class CloudProjectSyncCoordinator;
 class CloudSharedAssetMutationBridge;
 class CloudSessionLifecycleController;
@@ -140,6 +144,11 @@ public:
         collab::CloudRecordingAssetCoordinator* recordingAssets = nullptr);
     void setCloudSharedAssetMutationBridge(
         collab::CloudSharedAssetMutationBridge* bridge);
+    void setCloudProjectionAdapter(collab::EngineProjectProjectionAdapter* adapter);
+    void finishPublicationHandoff();
+    bool resumeSavedCloudPublication(const QString& projectId, const QString& backupPath);
+    void pumpPublicationQueue();
+    void showLocalResultRecovery(const QString& path);
 #endif
 
     /// Populate a few coloured tracks (used for screenshots / demos).
@@ -252,7 +261,7 @@ public:
     /// Public so the DAW_SHOT_JOIN screenshot hook can reach it, like the other
     /// demo surfaces here.
     QString openJoinSessionDialog(const QString& seedCode = {},
-                                  QWidget* parent = nullptr);
+                                  QWidget* parent = nullptr, bool fromLink = false);
     /// Public alongside the other demo surfaces so the DAW_SHOT_CLOUD
     /// screenshot hook can open it.
     void onOpenCloudProjects();
@@ -733,6 +742,12 @@ private:
     void setCpuStatusBarVisible(bool visible);
     void publishSessionTransport(bool force = false);
     void applySessionTransport(const collab::TransportFrame& frame);
+    void refreshSessionPolicy();
+    void applySharedSessionControl();
+    void requestSharedSessionMode(const QString& mode);
+    void refreshCollaborationInventory();
+    void startSessionWithPluginChecks(QString secret = {});
+    void applyCommonPluginCatalog(const QJsonObject& catalog);
     void updateWindowTitle();
     void syncViews();
     /// Rebuild the lane/header structure in the current frame, then leave
@@ -816,7 +831,7 @@ private:
     bool openCloudProject(const QString& projectId,
                           const QString& localBackupPath = {});
     void persistCloudBinding();
-    void restoreCloudBinding();
+    void showCloudProjectSettings(const QString& projectId);
     void onMakeLocalCopy();
     void updateCloudPublicationAction();
     void updateCloudSessionActions();
@@ -873,6 +888,8 @@ private:
     std::unique_ptr<PublicationUiState> m_publicationUi;
     collab::CloudProjectPublisher* m_cloudPublisher = nullptr;
     collab::CloudProjectSyncCoordinator* m_cloudProjectSync = nullptr;
+    std::unique_ptr<collab::CloudProjectTitleCoordinator> m_cloudProjectTitles;
+    std::unique_ptr<collab::CloudProjectVersionCoordinator> m_cloudProjectVersions;
     collab::CloudSessionLifecycleController* m_cloudSessionLifecycle = nullptr;
     collab::CollaborationCommandBridge* m_collaborationCommandBridge = nullptr;
     QPointer<collab::CloudProjectClient> m_cloudProjectClient;
@@ -900,6 +917,28 @@ private:
     QAction* m_retryAssetMutationAction = nullptr;
     QAction* m_cancelAssetMutationAction = nullptr;
     QString m_cloudProjectId;
+    QString m_autoStartCloudProjectId;
+    QString m_deferredSessionMode;
+    QString m_requestedSessionMode;
+    quint64 m_sessionModeRequest = 0;
+    QElapsedTimer m_modeRetryClock;
+    QString m_lastSessionMode = QStringLiteral("independent");
+    QJsonObject m_privateAudition;
+    QHash<QString, QPair<bool, bool>> m_observedAudition;
+    bool m_cloudExternalPluginsEnabled = false;
+    quint64 m_pluginProbeGeneration = 0;
+    bool m_pluginProbePending = false;
+    QString m_pendingJoinCode;
+    bool m_joinDialogActive = false;
+    qint64 m_pendingRequirementsRevision = 0;
+    QElapsedTimer m_pluginStateCheckpointClock;
+    QHash<QString, QStringList> m_localResultRecovery;
+    std::unique_ptr<collab::EditLeaseCoordinator> m_editLeases;
+    quint64 m_appliedTransportRevision = 0;
+    quint64 m_appliedAuditionRevision = 0;
+    quint64 m_appliedSessionVersion = 0;
+    bool m_appliedControl = false;
+    bool m_applyingSharedControl = false;
     QString m_candidateCloudProjectId;
     QString m_candidateCloudBackupPath;
     /// The local package published into the cloud is retained as an immutable

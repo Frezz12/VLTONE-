@@ -158,6 +158,7 @@ public:
     std::optional<daw::collab::SharedProjectDocument> confirmedSnapshotAt(
         quint64 serverSequence) const;
     quint64 confirmedServerSequence() const noexcept;
+    void reapplyCurrentProjection();
     bool resyncPending() const noexcept { return m_resyncPending; }
     /// Latches the command path while an external bootstrap coordinator proves
     /// a newer canonical generation. Incoming committed ops are bounded and
@@ -173,6 +174,7 @@ public slots:
     void handleProjectionFailure(const QString& projectionError);
 
 signals:
+    void localTransactionDurablyObserved(const QString& transactionId);
     void resyncRequired(quint64 expectedServerSequence,
                         quint64 receivedServerSequence,
                         const QString& safeReason);

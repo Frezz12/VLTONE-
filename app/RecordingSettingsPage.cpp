@@ -215,8 +215,7 @@ void RecordingSettingsPage::reload() {
     m_trimTakes->setChecked(prefs.trimTakesToRegion);
     m_autoExpand->setChecked(prefs.autoExpandAfterRecord);
     m_autoSilence->setChecked(prefs.autoSilence);
-    const bool silenceAvailable = !m_controller->hasCloudProjectBinding() &&
-        !m_controller->isRecording() && !m_controller->isCountingIn();
+    const bool silenceAvailable = !m_controller->isRecording() && !m_controller->isCountingIn();
     m_autoSilence->setEnabled(silenceAvailable);
     m_silenceSettings->setEnabled(silenceAvailable);
     m_crossfade->setValue(prefs.compCrossfadeMs);

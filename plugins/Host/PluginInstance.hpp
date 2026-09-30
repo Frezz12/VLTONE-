@@ -53,6 +53,8 @@ public:
     virtual void onRestartRequested() noexcept = 0;
     /// The format explicitly requires destroying and recreating the component.
     virtual void onReloadRequested() noexcept = 0;
+    /// Opaque non-parameter state (preset, sample map, MIDI learn) changed.
+    virtual void onStateChanged() noexcept {}
 };
 
 /// Editor → host notifications, delivered on the control thread.

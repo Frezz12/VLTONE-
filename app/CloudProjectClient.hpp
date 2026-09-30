@@ -5,6 +5,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QJsonObject>
 #include <QMetaType>
 #include <QObject>
 #include <QString>
@@ -48,6 +49,14 @@ enum class CloudRequestKind : quint8 {
     ReleaseRecordingLease,
     UpdateSessionReadiness,
     ActivateSession,
+    UpdateSessionMode,
+    ModerateSession,
+    PluginCatalog,
+    RenameProject,
+    MigrateProjectVersion,
+    AcquireEditLease,
+    RenewEditLease,
+    ReleaseEditLease,
 };
 
 enum class CloudClientErrorCode : quint8 {
@@ -107,6 +116,7 @@ struct CloudProject {
     QDateTime createdAt;
     QDateTime updatedAt;
     QDateTime archivedAt;
+    QString pluginPolicy = QStringLiteral("external_checked");
 };
 
 struct CloudProjectView {
@@ -119,6 +129,8 @@ struct CreateCloudProjectInput {
     QString engineVersion;
     QString minimumAppVersion;
     int formatVersion = 7;
+    QString projectId;
+    QString pluginPolicy = QStringLiteral("builtin_only");
 };
 
 struct CloudSnapshotDescriptor {
@@ -261,6 +273,7 @@ struct CloudSessionMember {
 struct CloudSessionState {
     CloudLiveSession session;
     QVector<CloudSessionMember> members;
+    QJsonObject control;
 };
 
 struct CloudProjectTrackLease {
@@ -292,6 +305,17 @@ public:
     quint64 createProject(const CreateCloudProjectInput& input);
     quint64 listProjects();
     quint64 getProject(const QString& projectId);
+    quint64 renameProject(const QString& projectId, const QString& title);
+    quint64 migrateProjectVersion(const QString& projectId, const QString& engineVersion,
+                                  const QString& minimumAppVersion, quint64 expectedHeadSequence);
+    void setPluginInventory(const std::vector<daw::collab::PluginRequirement>& inventory);
+    void setPluginPolicy(const QString& policy);
+    quint64 updateSessionMode(const QString& projectId, const QString& sessionId,
+                              const QString& mode, quint64 expectedVersion,
+                              const QJsonObject& seed = {});
+    quint64 moderateSession(const QString& projectId, const QString& sessionId,
+                            const QString& userId, const QString& action);
+    quint64 pluginCatalog(const QString& projectId, const QString& sessionId, bool update = false);
     quint64 archiveProject(const QString& projectId);
     quint64 publishProject(const QString& projectId);
 
@@ -367,9 +391,14 @@ public:
     quint64 acceptInviteCode(const QString& numericCode);
 
     bool cancel(quint64 requestId);
+    quint64 acquireEditLease(const QString& project, const QString& session, const QStringList& fields, quint64 policyVersion);
+    quint64 renewEditLease(const QString& project, const QString& session, const QString& lease, quint64 policyVersion);
+    quint64 releaseEditLease(const QString& project, const QString& session, const QString& lease);
     void cancelAll();
 
 signals:
+    void editLeaseReceived(quint64 requestId, const QJsonObject& lease);
+    void pluginCatalogReceived(quint64 requestId, const QJsonObject& catalog);
     void projectsListed(quint64 requestId,
                         const QVector<collab::CloudProjectView>& projects);
     void projectReceived(quint64 requestId, collab::CloudRequestKind kind,

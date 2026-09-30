@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vlt.studio/protocol/schema/session-control-v6.schema.json",
+  "title": "VLT authoritative session control v6",
+  "description": "Full control snapshot. SessionVersion protects policy/host changes; transport and audition revisions are independent monotonic counters.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "sessionVersion",
+    "hostMemberId",
+    "transport",
+    "audition"
+  ],
+  "properties": {
+    "mode": {
+      "enum": [
+        "independent",
+        "follow_host",
+        "synchronized"
+      ]
+    },
+    "sessionVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "hostMemberId": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "playing",
+        "positionSeconds",
+        "rate",
+        "serverTimeMs",
+        "effectiveAtServerMs",
+        "loopEnabled",
+        "loopStartSeconds",
+        "loopEndSeconds"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "playing": {
+          "type": "boolean"
+        },
+        "positionSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "rate": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4
+        },
+        "serverTimeMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "effectiveAtServerMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "loopEnabled": {
+          "type": "boolean"
+        },
+        "loopStartSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "loopEndSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000
+        }
+      },
+      "$comment": "When loopEnabled is true, runtime requires loopEndSeconds > loopStartSeconds."
+    },
+    "audition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "mutedTrackIds",
+        "soloTrackIds"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "mutedTrackIds": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "soloTrackIds": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  }
+}

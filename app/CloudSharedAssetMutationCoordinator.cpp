@@ -32,6 +32,7 @@ ClosedRecordingAsset recordingInput(
     asset.projectId = input.projectId;
     asset.uploadId = input.uploadId;
     asset.assetId = input.assetId;
+    asset.kind = input.kind;
     asset.sourcePath = input.sourcePath;
     asset.displayName = input.displayName;
     asset.contentType = input.contentType;

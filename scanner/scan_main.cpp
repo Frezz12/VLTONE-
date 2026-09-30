@@ -32,6 +32,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <cmath>
 #include <string>
 #include <thread>
 #include <algorithm>
@@ -184,8 +186,46 @@ int scannerMain(const std::vector<std::string>& arguments) {
         std::unique_ptr<PluginInstance> instance = factory->create(*found);
         if (!instance) return fail("plugin could not be initialized");
 
+        const std::string statePath = optionValue(arguments, "--state");
+        const bool sharedState = hasFlag(arguments, "--shared-state");
+        if (!statePath.empty()) {
+            const auto stateFile = daw::platform::pathFromUtf8(statePath);
+            std::error_code error;
+            const auto size = std::filesystem::file_size(stateFile, error);
+            if (!stateFile.is_absolute() || error || size == 0 || size > 64u * 1024u * 1024u)
+                return fail("plugin state asset is missing or exceeds 64 MiB");
+            std::ifstream input(stateFile, std::ios::binary);
+            std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+            input.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()));
+            if (input.gcount() != std::streamsize(bytes.size()) || !instance->loadState(bytes))
+                return fail("plugin could not restore the shared state");
+        }
+        if (sharedState) {
+            if (!instance->supportsState()) return fail("plugin has no portable state interface");
+            std::vector<std::pair<std::string, double>> values;
+            for (const auto& parameter : instance->parameters())
+                values.emplace_back(parameter.id, instance->parameterValue(parameter.index));
+            std::vector<std::uint8_t> bytes;
+            if (!instance->saveState(bytes) || bytes.empty() || bytes.size() > 64u * 1024u * 1024u || !instance->loadState(bytes))
+                return fail("plugin could not round-trip shared state");
+            for (const auto& [id, before] : values) {
+                const auto index = instance->parameterIndexForId(id);
+                if (index < 0) return fail("plugin parameter identity changed during state restore");
+                const auto after = instance->parameterValue(std::uint32_t(index));
+                if (!std::isfinite(before) || !std::isfinite(after) ||
+                    std::abs(before - after) > 1e-7 * std::max(1.0, std::abs(before)))
+                    return fail("plugin parameters did not survive state restore");
+            }
+        }
+
         PluginProcessInfo setup;
         setup.sampleRate = 48000.0;
+        const std::string sampleRateText = optionValue(arguments, "--sample-rate");
+        if (!sampleRateText.empty()) {
+            try { setup.sampleRate = std::stod(sampleRateText); } catch (...) { return fail("invalid probe sample rate"); }
+            if (!std::isfinite(setup.sampleRate) || setup.sampleRate < 8000 || setup.sampleRate > 768000)
+                return fail("invalid probe sample rate");
+        }
         setup.maxBlockSize = 64;
         if (!instance->activate(setup)) return fail("plugin refused activation");
         instance->startProcessing();
@@ -221,16 +261,33 @@ int scannerMain(const std::vector<std::string>& arguments) {
                                   ? std::span<const PluginEvent>(&note, 1)
                                   : std::span<const PluginEvent>{};
         instance->process(context);
+        const bool nonFiniteAudio = sharedState && std::any_of(outputStorage.begin(), outputStorage.end(),
+                [](float sample) { return !std::isfinite(sample); });
         instance->stopProcessing();
         instance->deactivate();
+        if (nonFiniteAudio) return fail("plugin produced non-finite audio");
         // Bundle metadata cannot tell whether a VST3/CLAP controller can
         // actually create a platform view. Validation has a live instance, so
         // persist the real answer instead of leaving every descriptor at the
         // inspect-time default (`false`).
         PluginDescriptor validated = *found;
+        validated.wantsMidi = instance->descriptor().wantsMidi;
+        validated.producesMidi = instance->descriptor().producesMidi;
         validated.hasEditor = instance->hasEditor();
         validated.mainInputChannels = inputChannels;
         validated.mainOutputChannels = outputChannels;
+        nlohmann::json parameters = nlohmann::json::array();
+        std::vector<ParameterInfo> sorted(instance->parameters().begin(), instance->parameters().end());
+        std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+        for (const auto& parameter : sorted) {
+            parameters.push_back({{"id", parameter.id}, {"unit", parameter.unit},
+                {"minimum", parameter.minValue}, {"maximum", parameter.maxValue},
+                {"default", parameter.defaultValue}, {"stepped", parameter.isStepped},
+                {"automatable", parameter.isAutomatable}, {"bypass", parameter.isBypass}});
+        }
+        validated.parameterSchema = nlohmann::json{{"version", 2},
+            {"parameters", parameters}, {"inputs", layout.inputs}, {"outputs", layout.outputs},
+            {"wantsMidi", validated.wantsMidi}, {"producesMidi", validated.producesMidi}}.dump();
         writeResult(scan::encodeResult({validated}));
         return 0;
     }

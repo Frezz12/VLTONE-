@@ -189,14 +189,16 @@ std::optional<QJsonObject> commandToQt(const ProjectCommand& command,
 }
 
 bool supportedRejectionCode(const QString& code) {
-    static constexpr std::array<const char*, 19> codes{
+    static constexpr std::array<const char*, 26> codes{
         "invalid_message", "forbidden", "read_only", "session_inactive",
         "version_mismatch", "stale_precondition", "entity_deleted",
         "asset_incomplete", "lease_required", "lease_conflict",
         "sequence_gap", "operation_id_reused", "conflict", "rate_limited",
         "collaboration_not_enabled", "hash_consensus_required",
         "cloud_recording_disabled", "storage_quota_exceeded",
-        "upload_concurrency_exceeded"};
+        "upload_concurrency_exceeded", "recording_active", "edit_lease_held",
+        "session_version_changed", "session_excluded", "project_banned",
+        "plugin_not_ready", "session_starting"};
     return std::any_of(codes.begin(), codes.end(), [&](const char* candidate) {
         return code == QLatin1String(candidate);
     });
@@ -628,6 +630,14 @@ CollaborationCommandBridge::submitShared(
     command.meta = freshMeta(true);
     if (transactionId) command.meta.transactionId = *transactionId;
     command.body = std::move(body);
+    if (const auto* state = std::get_if<daw::collab::SetPluginState>(&command.body)) {
+        if (const auto confirmed = confirmedSnapshotAt(confirmedServerSequence())) {
+            const std::string field = "plugin:" + state->insertId + ":generation";
+            const auto writer = confirmed->lastWriterByField.find(field);
+            if (writer != confirmed->lastWriterByField.end())
+                command.conditions.push_back(daw::collab::FieldWriterIs{field, writer->second});
+        }
+    }
     const std::string operationId = command.meta.operationId;
     m_pendingHistory.emplace(
         operationId,
@@ -926,6 +936,12 @@ void CollaborationCommandBridge::requireResync(
                    : safeReason);
 }
 
+void CollaborationCommandBridge::reapplyCurrentProjection() {
+    if (!m_gateway) return;
+    const auto confirmed = m_gateway->confirmed();
+    m_gateway->replaceConfirmed(confirmed, confirmed.confirmedSequence);
+}
+
 void CollaborationCommandBridge::handleProjectionFailure(
     const QString& projectionError) {
     (void)projectionError;
@@ -1179,6 +1195,7 @@ void CollaborationCommandBridge::receiveCommitted(const QJsonObject& payload) {
     command->meta.serverSequence = *sequence;
     const QString operationId =
         QString::fromStdString(command->meta.operationId);
+    const QString transactionId = QString::fromStdString(command->meta.transactionId);
     const bool localAcknowledgement = std::any_of(
         m_gateway->pending().begin(), m_gateway->pending().end(),
         [&](const ProjectCommand& pending) {
@@ -1219,6 +1236,7 @@ void CollaborationCommandBridge::receiveCommitted(const QJsonObject& payload) {
     reportDropped(update.droppedPendingOperationIds);
     observeDurableOperation(operationId.toStdString(), *sequence, false);
     emit operationCommitted(operationId, *sequence, localAcknowledgement);
+    if (localAcknowledgement && !transactionId.isEmpty()) emit localTransactionDurablyObserved(transactionId);
 }
 
 void CollaborationCommandBridge::receiveRejected(const QJsonObject& payload) {
@@ -1583,6 +1601,8 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     service.m_shouldConnect = true;
     service.m_transportConnected = true;
     service.m_state = CollaborationState::Synced;
+    service.m_localRole = QStringLiteral("editor");
+    service.m_control.sessionVersion = 1;
     CommandGateway serviceGateway;
     CollaborationCommandBridge serviceBridge(&service, &serviceGateway);
     int serviceOutbound = 0;
@@ -1651,7 +1671,15 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
 
     WireEnvelope welcomeAhead;
     welcomeAhead.type = WireType::Welcome;
+    const QJsonObject serviceControl = QJsonDocument::fromJson(R"({
+        "mode":"independent","sessionVersion":1,"hostMemberId":null,
+        "transport":{"revision":0,"playing":false,"positionSeconds":0,"rate":1,
+          "serverTimeMs":0,"effectiveAtServerMs":0,"loopEnabled":false,
+          "loopStartSeconds":0,"loopEndSeconds":0},
+        "audition":{"revision":0,"mutedTrackIds":[],"soloTrackIds":[]}
+    })").object();
     welcomeAhead.payload = {
+        {QStringLiteral("control"), serviceControl},
         {QStringLiteral("projectId"), projectId},
         {QStringLiteral("sessionId"),
          serviceSessionId},
@@ -1743,11 +1771,11 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     daw::TrackModel firstTrack;
     firstTrack.id = firstTrackId.toStdString();
     firstTrack.name = "First";
-    firstTrack.muted = false;
+    firstTrack.mono = false;
     daw::TrackModel secondTrack;
     secondTrack.id = secondTrackId.toStdString();
     secondTrack.name = "Second";
-    secondTrack.muted = true;
+    secondTrack.mono = true;
     mutationDocument.project.tracks = {firstTrack, secondTrack};
 
     CommandGateway mutationGateway(std::move(mutationDocument));
@@ -1771,8 +1799,13 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
                              ++blockedNotices;
                      });
 
-    const std::array<std::string, 2> mutedTrackIds{
-        firstTrackId.toStdString(), secondTrackId.toStdString()};
+    auto monoBatch = std::make_shared<daw::collab::BatchCommand>();
+    for (const QString& id : {firstTrackId, secondTrackId}) {
+        ProjectCommand child;
+        child.body = daw::collab::SetTrackProperty{
+            id.toStdString(), daw::collab::TrackProperty::Mono, false};
+        monoBatch->commands.push_back(std::move(child));
+    }
     if (mutationBridge.setTimeSignature(7, 8) !=
             daw::collab::SharedMutationResult::Submitted ||
         mutationBridge.setProjectKey(11, "dorian") !=
@@ -1781,9 +1814,10 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
             daw::collab::SharedMutationResult::Submitted ||
         mutationBridge.renameTrack(firstTrackId.toStdString(), "Lead") !=
             daw::collab::SharedMutationResult::Submitted ||
-        mutationBridge.setTrackMuted(firstTrackId.toStdString(), true) !=
+        mutationBridge.submit({daw::collab::SetTrackProperty{
+            firstTrackId.toStdString(), daw::collab::TrackProperty::Mono, true}, "Set mono", std::nullopt}) !=
             daw::collab::SharedMutationResult::Submitted ||
-        mutationBridge.clearAllMutes(mutedTrackIds) !=
+        mutationBridge.submit({daw::collab::CommandBody{monoBatch}, "Clear mono", std::nullopt}) !=
             daw::collab::SharedMutationResult::Submitted ||
         mutationSent.size() != 6) {
         return fail(QStringLiteral("shared mutation sink did not submit its typed slice"));
@@ -1806,7 +1840,7 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         mutationSent.at(2).value(QStringLiteral("payload")).toObject();
     const QJsonObject namePayload =
         mutationSent.at(3).value(QStringLiteral("payload")).toObject();
-    const QJsonObject mutePayload =
+    const QJsonObject monoPayload =
         mutationSent.at(4).value(QStringLiteral("payload")).toObject();
     const QJsonObject batchPayload =
         mutationSent.at(5).value(QStringLiteral("payload")).toObject();
@@ -1836,10 +1870,10 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
             QLatin1String("name") ||
         namePayload.value(QStringLiteral("value")).toString() !=
             QLatin1String("Lead") ||
-        mutePayload.value(QStringLiteral("trackId")).toString() != firstTrackId ||
-        mutePayload.value(QStringLiteral("property")).toString() !=
-            QLatin1String("muted") ||
-        !mutePayload.value(QStringLiteral("value")).toBool(false) ||
+        monoPayload.value(QStringLiteral("trackId")).toString() != firstTrackId ||
+        monoPayload.value(QStringLiteral("property")).toString() !=
+            QLatin1String("mono") ||
+        !monoPayload.value(QStringLiteral("value")).toBool(false) ||
         mutationSent.at(5).value(QStringLiteral("kind")).toString() !=
             QLatin1String("batch") ||
         batchChildren.size() != 2 ||
@@ -1850,9 +1884,8 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         return fail(QStringLiteral("shared mutation command mapping or metadata drifted"));
     }
 
-    // Multi-selection/folder mute is one durable outer batch. The controller
-    // normally supplies unique IDs, but the bridge remains a linear-time
-    // boundary against duplicate/empty children.
+    // V6 audition belongs to authoritative session control. Neither a direct
+    // legacy setter nor a deduplicated batch may enter durable project history.
     CommandGateway atomicMuteGateway(mutationGateway.confirmed());
     QVector<QJsonObject> atomicMuteSent;
     CollaborationCommandBridge atomicMuteBridge(
@@ -1866,39 +1899,16 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         firstTrackId.toStdString(), firstTrackId.toStdString(), std::string{},
         secondTrackId.toStdString()};
     const std::array<std::string, 0> emptyMuteIds{};
-    if (atomicMuteBridge.setTracksMuted(duplicateMuteIds, true) !=
-            daw::collab::SharedMutationResult::Submitted ||
+    if (atomicMuteBridge.setTrackMuted(firstTrackId.toStdString(), true) !=
+            daw::collab::SharedMutationResult::Blocked ||
+        atomicMuteBridge.setTracksMuted(duplicateMuteIds, true) !=
+            daw::collab::SharedMutationResult::Blocked ||
+        atomicMuteBridge.clearAllMutes(duplicateMuteIds) !=
+            daw::collab::SharedMutationResult::Blocked ||
         atomicMuteBridge.setTracksMuted(emptyMuteIds, false) !=
             daw::collab::SharedMutationResult::Submitted ||
-        atomicMuteSent.size() != 1 ||
-        !validFreshEnvelope(atomicMuteSent.front()) ||
-        atomicMuteSent.front().value(QStringLiteral("kind")).toString() !=
-            QLatin1String("batch")) {
-        return fail(QStringLiteral(
-            "atomic mute did not produce exactly one fresh outer batch"));
-    }
-    const QJsonArray atomicMuteChildren =
-        atomicMuteSent.front()
-            .value(QStringLiteral("payload"))
-            .toObject()
-            .value(QStringLiteral("commands"))
-            .toArray();
-    if (atomicMuteChildren.size() != 2) {
-        return fail(QStringLiteral("atomic mute batch did not deduplicate children"));
-    }
-    for (qsizetype index = 0; index < atomicMuteChildren.size(); ++index) {
-        const QJsonObject child = atomicMuteChildren.at(index).toObject();
-        const QJsonObject payload =
-            child.value(QStringLiteral("payload")).toObject();
-        const QString expectedId = index == 0 ? firstTrackId : secondTrackId;
-        if (child.value(QStringLiteral("kind")).toString() !=
-                QLatin1String("track.setProperty") ||
-            payload.value(QStringLiteral("trackId")).toString() != expectedId ||
-            payload.value(QStringLiteral("property")).toString() !=
-                QLatin1String("muted") ||
-            !payload.value(QStringLiteral("value")).toBool(false)) {
-            return fail(QStringLiteral("atomic mute child payload drifted"));
-        }
+        !atomicMuteSent.isEmpty()) {
+        return fail(QStringLiteral("v6 audition escaped into durable history"));
     }
 
     QVector<DurableSignal> mutationDurableSignals;
@@ -1947,7 +1957,7 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
         mutationGateway.confirmed().project.findTrack(
             firstTrackId.toStdString())->name != "Lead" ||
         mutationGateway.confirmed().project.findTrack(
-            secondTrackId.toStdString())->muted ||
+            secondTrackId.toStdString())->mono ||
         mutationDurableSignals.size() != 6 ||
         watchedLiveSignalCount != 1 ||
         mutationDurableSignals.front().operationId != watchedLiveOperationId ||
@@ -1983,18 +1993,18 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     acknowledgeMutation(6, 8);
     if (!mutationBridge.canUndo() || !mutationBridge.canRedo() ||
         !mutationGateway.confirmed().project.findTrack(
-            firstTrackId.toStdString())->muted ||
+            firstTrackId.toStdString())->mono ||
         !mutationGateway.confirmed().project.findTrack(
-            secondTrackId.toStdString())->muted ||
+            secondTrackId.toStdString())->mono ||
         !mutationBridge.requestRedo() || mutationSent.size() != 8) {
         return fail(QStringLiteral("confirmed cloud undo did not enable redo"));
     }
     acknowledgeMutation(7, 9);
     if (!mutationBridge.canUndo() || mutationBridge.canRedo() ||
         mutationGateway.confirmed().project.findTrack(
-            firstTrackId.toStdString())->muted ||
+            firstTrackId.toStdString())->mono ||
         mutationGateway.confirmed().project.findTrack(
-            secondTrackId.toStdString())->muted) {
+            secondTrackId.toStdString())->mono) {
         return fail(QStringLiteral("confirmed cloud redo did not restore history"));
     }
 
@@ -2638,6 +2648,8 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     projectionFailureService.m_shouldConnect = true;
     projectionFailureService.m_transportConnected = true;
     projectionFailureService.m_state = CollaborationState::Synced;
+    projectionFailureService.m_localRole = QStringLiteral("editor");
+    projectionFailureService.m_control.sessionVersion = 1;
     CommandGateway projectionFailureGateway;
     CollaborationCommandBridge projectionFailureBridge(
         &projectionFailureService, &projectionFailureGateway);

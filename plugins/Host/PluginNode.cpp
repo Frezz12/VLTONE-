@@ -347,6 +347,11 @@ void PluginNode::onReloadRequested() noexcept {
     requestMainThreadPump();
 }
 
+void PluginNode::onStateChanged() noexcept {
+    m_stateChanged.store(true, std::memory_order_release);
+    requestMainThreadPump();
+}
+
 void PluginNode::process(const engine::ProcessContext& context) {
     const engine::ChannelCount outChannels = context.output.numChannels();
     const engine::FrameCount frames = context.frames;

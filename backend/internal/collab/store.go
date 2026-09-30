@@ -31,7 +31,7 @@ type Store struct {
 func NewStore(db *gorm.DB, maximumParticipants ...int) *Store {
 	maximum := 8
 	if len(maximumParticipants) != 0 && maximumParticipants[0] > 0 {
-		maximum = maximumParticipants[0]
+		maximum = min(maximumParticipants[0], 8)
 	}
 	return &Store{DB: db, Now: func() time.Time { return time.Now().UTC() }, MaxParticipants: maximum}
 }
@@ -81,6 +81,8 @@ type ProjectView struct {
 }
 
 type CreateProjectInput struct {
+	PluginPolicy      string
+	ProjectID         uuid.UUID
 	OwnerUserID       uuid.UUID
 	Title             string
 	FormatVersion     int
@@ -89,6 +91,8 @@ type CreateProjectInput struct {
 }
 
 type UpdateProjectInput struct {
+	ExpectedHeadSeq   *int64
+	PluginPolicy      *string
 	Title             *string
 	EngineVersion     *string
 	MinimumAppVersion *string
@@ -139,6 +143,12 @@ func (s *Store) CreateProject(ctx context.Context, input CreateProjectInput) (Pr
 	if err != nil {
 		return ProjectView{}, err
 	}
+	if input.PluginPolicy == "" {
+		input.PluginPolicy = "builtin_only"
+	}
+	if input.PluginPolicy != "builtin_only" && input.PluginPolicy != "external_checked" {
+		return ProjectView{}, invalidf("invalid project plugin policy")
+	}
 	engineVersion, minimumVersion, err := validateCreateCompatibility(input.FormatVersion,
 		input.EngineVersion, input.MinimumAppVersion)
 	if err != nil {
@@ -146,10 +156,14 @@ func (s *Store) CreateProject(ctx context.Context, input CreateProjectInput) (Pr
 	}
 	now := s.now()
 	project := model.CloudProject{
-		ID: uuid.New(), OwnerUserID: input.OwnerUserID, Title: title,
+		PluginPolicy: input.PluginPolicy,
+		ID:           uuid.New(), OwnerUserID: input.OwnerUserID, Title: title,
 		Status: model.ProjectUploading, FormatVersion: input.FormatVersion,
 		EngineVersion: engineVersion, MinimumAppVersion: minimumVersion,
 		CreatedAt: now, UpdatedAt: now,
+	}
+	if input.ProjectID != uuid.Nil {
+		project.ID = input.ProjectID
 	}
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if _, err := lockActiveUsersTx(tx, input.OwnerUserID); err != nil {
@@ -157,6 +171,20 @@ func (s *Store) CreateProject(ctx context.Context, input CreateProjectInput) (Pr
 				return ErrForbidden
 			}
 			return err
+		}
+		if input.ProjectID != uuid.Nil {
+			var existing model.CloudProject
+			lookup := tx.First(&existing, "id = ?", input.ProjectID)
+			if lookup.Error == nil {
+				if existing.OwnerUserID != input.OwnerUserID || existing.Title != title || existing.FormatVersion != input.FormatVersion || existing.EngineVersion != engineVersion || existing.MinimumAppVersion != minimumVersion || existing.PluginPolicy != input.PluginPolicy {
+					return ErrConflict
+				}
+				project = existing
+				return nil
+			}
+			if !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
+				return lookup.Error
+			}
 		}
 		return tx.Create(&project).Error
 	})
@@ -288,6 +316,15 @@ func (s *Store) UpdateProject(ctx context.Context, projectID, actorUserID uuid.U
 			return ErrForbidden
 		}
 		updates := map[string]any{"updated_at": s.now()}
+		if input.ExpectedHeadSeq != nil && (*input.ExpectedHeadSeq < 0 || current.Project.HeadSeq != *input.ExpectedHeadSeq) {
+			return ErrConflict
+		}
+		if input.PluginPolicy != nil {
+			if *input.PluginPolicy != "builtin_only" && *input.PluginPolicy != "external_checked" {
+				return invalidf("invalid project plugin policy")
+			}
+			updates["plugin_policy"] = *input.PluginPolicy
+		}
 		if input.Title != nil {
 			title, err := validateProjectTitle(*input.Title)
 			if err != nil {
@@ -312,8 +349,9 @@ func (s *Store) UpdateProject(ctx context.Context, projectID, actorUserID uuid.U
 			}
 			updates["minimum_app_version"] = value
 		}
-		if _, changesEngine := updates["engine_version"]; changesEngine ||
-			updates["minimum_app_version"] != nil {
+		// Live document names are changed only through the ordered journal.
+		// Metadata-only changes cannot alter a running replica's canonical state.
+		if len(updates) > 1 {
 			var liveSessions int64
 			if err := tx.Model(&model.ProjectSession{}).
 				Where("project_id = ? AND status IN ?", projectID,
@@ -686,12 +724,15 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 			return err
 		}
 		var liveSession model.ProjectSession
-		if err := tx.Select("command_schema_version", "plugin_requirements").First(&liveSession,
+		if err := tx.First(&liveSession,
 			"id = ?", member.SessionID).Error; err != nil {
 			return err
 		}
 		if normalized.SchemaVersion != liveSession.CommandSchemaVersion {
 			return ErrVersionMismatch
+		}
+		if liveSession.CommandSchemaVersion >= CollaborationCommandSchemaV6 && normalized.SessionVersion != liveSession.Version {
+			return ErrSessionVersion
 		}
 		if liveSession.CommandSchemaVersion >= CollaborationCommandSchemaV3 &&
 			!RoleAllows(member.EffectiveRole, PermissionEdit) {
@@ -703,6 +744,13 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 			if err != nil {
 				return err
 			}
+			if liveSession.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+				catalog, err := s.pluginCatalogTx(tx, liveSession)
+				if err != nil {
+					return err
+				}
+				requirements = catalog.Plugins
+			}
 			if err := requireExternalPluginCapabilities(normalized.Kind,
 				normalized.Payload, requirements); err != nil {
 				return err
@@ -711,6 +759,12 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 		if err := validateOperationBaseSeq(normalized.Kind, normalized.BaseSeq,
 			view.Project.HeadSeq); err != nil {
 			return err
+		}
+		if commandContainsRender(normalized.Kind, normalized.Payload) && normalized.BaseSeq != view.Project.HeadSeq {
+			return ErrBaseSeqMismatch
+		}
+		if unguardedProjectTitleWrite(normalized) && normalized.BaseSeq != view.Project.HeadSeq {
+			return ErrBaseSeqMismatch
 		}
 		if err := s.validateRecordingCommitRebaseTx(tx, normalized.ProjectID,
 			normalized.Kind, normalized.BaseSeq, view.Project.HeadSeq,
@@ -723,6 +777,9 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 			return err
 		}
 		if err := s.checkPreconditionsTx(tx, normalized.ProjectID, normalized.Preconditions); err != nil {
+			return err
+		}
+		if err := s.enforceEditLeasesTx(tx, liveSession, member.ID, normalized.TouchedFields); err != nil {
 			return err
 		}
 		if err := s.checkLifecycleStepsTx(tx, normalized.ProjectID, normalized.OpID,
@@ -751,13 +808,20 @@ func (s *Store) AppendOperation(ctx context.Context, input AppendOperationInput)
 		if err := tx.Create(&operation).Error; err != nil {
 			return err
 		}
+		if liveSession.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+			if err := extendPluginRequirementsTx(tx, liveSession, normalized.Kind, normalized.Payload); err != nil {
+				return err
+			}
+		}
 		if err := retainOperationAssetReferencesTx(tx, normalized.ProjectID,
 			operation.Seq, normalized.Kind, normalized.Payload); err != nil {
 			return err
 		}
-		if err := tx.Model(&model.CloudProject{}).Where("id = ?", normalized.ProjectID).Updates(map[string]any{
-			"head_seq": operation.Seq, "updated_at": now,
-		}).Error; err != nil {
+		projectUpdates := map[string]any{"head_seq": operation.Seq, "updated_at": now}
+		if title, found := commandProjectTitle(normalized.Kind, normalized.Payload); found {
+			projectUpdates["title"] = title
+		}
+		if err := tx.Model(&model.CloudProject{}).Where("id = ?", normalized.ProjectID).Updates(projectUpdates).Error; err != nil {
 			return err
 		}
 		heads := make([]model.ProjectFieldHead, 0, len(normalized.TouchedFields))
@@ -884,6 +948,9 @@ func (s *Store) requireActiveSessionMemberTx(tx *gorm.DB, projectID, userID,
 		if errors.Is(err, ErrNotFound) {
 			return model.ProjectSessionMember{}, ErrLiveSessionRequired
 		}
+		return model.ProjectSessionMember{}, err
+	}
+	if err := SessionAllowsEdit(session, member); err != nil {
 		return model.ProjectSessionMember{}, err
 	}
 	return member, nil
@@ -1120,6 +1187,9 @@ func validateLifecycleSequence(current map[string]lifecycleState, operationID uu
 }
 
 func (s *Store) projectAccess(tx *gorm.DB, projectID, userID uuid.UUID, lock bool) (ProjectView, error) {
+	if err := requireNotBannedTx(tx, projectID, userID); err != nil {
+		return ProjectView{}, err
+	}
 	if projectID == uuid.Nil || userID == uuid.Nil {
 		return ProjectView{}, ErrNotFound
 	}

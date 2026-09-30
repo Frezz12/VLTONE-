@@ -1,0 +1,830 @@
+asyncapi: 2.6.0
+id: urn:vltstudio:collaboration:v6
+info:
+  title: VLTONE Collaboration Protocol
+  version: 6.0.0
+  description: |
+    V6 adds atomic live mode switching, reliable session transport/audition,
+    owner moderation, exact-version inventories, and readiness barriers. Durable
+    state is recovered through REST bootstrap and project-command-v6; this
+    stream is never the sole copy of an operation.
+defaultContentType: application/json
+servers:
+  production:
+    url: api.vltstudio.example
+    protocol: wss
+    security:
+      - desktopBearer: []
+    description: Clients must negotiate the vlt-collab-v6 subprotocol.
+channels:
+  /v1/desktop/projects/{projectId}/live:
+    parameters:
+      projectId:
+        schema:
+          type: string
+          format: uuid
+    bindings:
+      ws:
+        headers:
+          type: object
+          properties:
+            Sec-WebSocket-Protocol:
+              const: vlt-collab-v6
+          required:
+            - Sec-WebSocket-Protocol
+        bindingVersion: 0.1.0
+    publish:
+      operationId: receiveV6ClientMessage
+      message:
+        oneOf:
+          - $ref: '#/components/messages/Hello'
+          - $ref: '#/components/messages/OpSubmit'
+          - $ref: '#/components/messages/PresenceClick'
+          - $ref: '#/components/messages/SnapshotHash'
+          - $ref: '#/components/messages/SessionControl'
+          - $ref: '#/components/messages/ClockPing'
+    subscribe:
+      operationId: receiveV6ServerMessage
+      message:
+        oneOf:
+          - $ref: '#/components/messages/Welcome'
+          - $ref: '#/components/messages/OpCommitted'
+          - $ref: '#/components/messages/OpRejected'
+          - $ref: '#/components/messages/SessionReadinessChanged'
+          - $ref: '#/components/messages/SessionActivated'
+          - $ref: '#/components/messages/HashRequested'
+          - $ref: '#/components/messages/HashVerified'
+          - $ref: '#/components/messages/SessionControlChanged'
+          - $ref: '#/components/messages/SessionPolicyChanged'
+          - $ref: '#/components/messages/SessionCatalogChanged'
+          - $ref: '#/components/messages/SessionRequirementsChanged'
+          - $ref: '#/components/messages/ClockPong'
+          - $ref: '#/components/messages/SessionParticipantModerated'
+components:
+  securitySchemes:
+    desktopBearer:
+      type: httpApiKey
+      name: Authorization
+      in: header
+  messages:
+    SessionControl:
+      name: session.control
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            required:
+              - type
+              - payload
+            properties:
+              type:
+                const: session.control
+              payload:
+                $ref: ../protocol/schema/session-control-action-v6.schema.json
+    SessionControlChanged:
+      name: session.control_changed
+      description: >-
+        Acknowledged ordered action, including the submitting participant. Retry with the same actionId never applies
+        twice.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: session.control_changed
+              payload:
+                $ref: ../backend/openapi/openapi.yaml#/components/schemas/SessionControlResult
+    SessionPolicyChanged:
+      name: session.mode_changed
+      description: >-
+        Full snapshot after a live mode change or conductor handoff. Greater sessionVersion retires queued gestures from
+        the previous policy.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                enum:
+                  - session.mode_changed
+                  - session.host_changed
+              payload:
+                $ref: '#/components/schemas/SessionPolicyPayload'
+    SessionCatalogChanged:
+      name: session.catalog_changed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: session.catalog_changed
+              payload:
+                $ref: ../backend/openapi/openapi.yaml#/components/schemas/SessionPluginCatalog
+    SessionRequirementsChanged:
+      name: session.requirements_changed
+      description: >-
+        Fetch active session, probe required plugins and PUT readiness at this revision before further writes; receiving
+        committed commands continues.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: session.requirements_changed
+              payload:
+                type: object
+                required:
+                  - pluginRequirementsRevision
+                  - pluginRequirements
+                  - control
+                properties:
+                  pluginRequirementsRevision:
+                    type: integer
+                    minimum: 1
+                  pluginRequirements:
+                    type: array
+                    maxItems: 512
+                    items:
+                      $ref: ../backend/openapi/openapi.yaml#/components/schemas/PluginRequirement
+                  control:
+                    $ref: ../protocol/schema/session-control-v6.schema.json
+    ClockPing:
+      name: clock.ping
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type:
+                const: clock.ping
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - clientSentAtMs
+                properties:
+                  clientSentAtMs:
+                    type: integer
+                    minimum: 0
+    ClockPong:
+      name: clock.pong
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: clock.pong
+              payload:
+                type: object
+                required:
+                  - clientSentAtMs
+                  - serverTimeMs
+                properties:
+                  clientSentAtMs:
+                    type: integer
+                    minimum: 0
+                  serverTimeMs:
+                    type: integer
+                    minimum: 0
+    Hello:
+      name: hello
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type:
+                const: hello
+              payload:
+                $ref: '#/components/schemas/HelloPayload'
+            required:
+              - type
+              - payload
+    Welcome:
+      name: welcome
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: welcome
+              payload:
+                $ref: '#/components/schemas/WelcomePayload'
+            required:
+              - type
+              - payload
+    OpSubmit:
+      name: op.submit
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type:
+                const: op.submit
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - command
+                  - sessionVersion
+                properties:
+                  command:
+                    $ref: ../protocol/schema/project-command-v6.schema.json
+                  sessionVersion:
+                    type: integer
+                    minimum: 1
+            required:
+              - type
+              - payload
+    OpCommitted:
+      name: op.committed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: op.committed
+              payload:
+                type: object
+                required:
+                  - projectId
+                  - serverSeq
+                  - actorUserId
+                  - actorDeviceId
+                  - committedAtMs
+                  - command
+                properties:
+                  projectId:
+                    type: string
+                    format: uuid
+                  serverSeq:
+                    type: integer
+                    minimum: 1
+                  actorUserId:
+                    type: string
+                    format: uuid
+                  actorDeviceId:
+                    type: string
+                    format: uuid
+                  committedAtMs:
+                    type: integer
+                    minimum: 0
+                  command:
+                    $ref: ../protocol/schema/project-command-v6.schema.json
+            required:
+              - type
+              - payload
+    OpRejected:
+      name: op.rejected
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: op.rejected
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - requestMessageId
+                  - code
+                  - message
+                  - retryable
+                properties:
+                  requestMessageId:
+                    type: string
+                    format: uuid
+                  opId:
+                    type: string
+                    format: uuid
+                  actionId:
+                    type: string
+                    format: uuid
+                  code:
+                    enum:
+                      - invalid_message
+                      - forbidden
+                      - read_only
+                      - session_inactive
+                      - session_starting
+                      - plugin_not_ready
+                      - version_mismatch
+                      - session_version_changed
+                      - session_excluded
+                      - project_banned
+                      - hash_consensus_required
+                      - stale_precondition
+                      - entity_deleted
+                      - asset_incomplete
+                      - lease_required
+                      - lease_conflict
+                      - sequence_gap
+                      - operation_id_reused
+                      - conflict
+                      - rate_limited
+                  message:
+                    type: string
+                    maxLength: 240
+                  retryable:
+                    type: boolean
+                  headSeq:
+                    type: integer
+                    minimum: 0
+            required:
+              - type
+              - payload
+    PresenceClick:
+      name: presence.click
+      description: Visual-only semantic pointer feedback; it never invokes QWidget, QAction, native input, or a remote command.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type:
+                const: presence.click
+              ephemeralSeq:
+                type: integer
+                minimum: 0
+              payload:
+                $ref: '#/components/schemas/SafeClick'
+            required:
+              - type
+              - ephemeralSeq
+              - payload
+    SnapshotHash:
+      name: snapshot.hash
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ClientEnvelope'
+          - type: object
+            properties:
+              type:
+                const: snapshot.hash
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - roundId
+                  - serverSeq
+                  - sha256
+                properties:
+                  roundId:
+                    type: string
+                    format: uuid
+                  serverSeq:
+                    type: integer
+                    minimum: 0
+                  sha256:
+                    $ref: '#/components/schemas/Sha256'
+            required:
+              - type
+              - payload
+    SessionReadinessChanged:
+      name: session.readiness_changed
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: session.readiness_changed
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - participantId
+                  - effectiveRole
+                  - readinessStatus
+                  - readinessRevision
+                properties:
+                  participantId:
+                    type: string
+                    format: uuid
+                  effectiveRole:
+                    enum:
+                      - owner
+                      - editor
+                      - viewer
+                  readinessStatus:
+                    enum:
+                      - ready
+                      - blocked
+                      - viewer
+                  readinessRevision:
+                    type: integer
+                    minimum: 1
+            required:
+              - type
+              - payload
+    SessionActivated:
+      name: session.activated
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: session.activated
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - sessionId
+                  - status
+                properties:
+                  sessionId:
+                    type: string
+                    format: uuid
+                  status:
+                    const: active
+            required:
+              - type
+              - payload
+    HashRequested:
+      name: hash.requested
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: hash.requested
+              payload:
+                $ref: '#/components/schemas/HashRound'
+            required:
+              - type
+              - payload
+    HashVerified:
+      name: hash.verified
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            properties:
+              type:
+                const: hash.verified
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - roundId
+                  - serverSeq
+                properties:
+                  roundId:
+                    type: string
+                    format: uuid
+                  serverSeq:
+                    type: integer
+                    minimum: 0
+            required:
+              - type
+              - payload
+    SessionParticipantModerated:
+      name: session.participant_moderated
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/ServerEnvelope'
+          - type: object
+            required:
+              - type
+              - payload
+            properties:
+              type:
+                const: session.participant_moderated
+              payload:
+                type: object
+                additionalProperties: false
+                required:
+                  - action
+                  - targetUserId
+                  - control
+                properties:
+                  action:
+                    enum:
+                      - kick
+                      - readmit
+                      - ban
+                      - unban
+                  targetUserId:
+                    type: string
+                    format: uuid
+                  control:
+                    $ref: ../protocol/schema/session-control-v6.schema.json
+  schemas:
+    ClientEnvelope:
+      type: object
+      properties:
+        protocol:
+          const: vlt-collab-v6
+        type:
+          type: string
+          maxLength: 64
+        messageId:
+          type: string
+          format: uuid
+        sentAtMs:
+          type: integer
+          minimum: 0
+        sessionVersion:
+          type: integer
+          minimum: 1
+          description: Required for op.submit; stale policy revisions are rejected.
+      required:
+        - protocol
+        - type
+        - messageId
+        - sentAtMs
+    ServerEnvelope:
+      type: object
+      properties:
+        protocol:
+          const: vlt-collab-v6
+        type:
+          type: string
+          maxLength: 64
+        messageId:
+          type: string
+          format: uuid
+        serverTimeMs:
+          type: integer
+          minimum: 0
+      required:
+        - protocol
+        - type
+        - messageId
+        - serverTimeMs
+    HelloPayload:
+      type: object
+      additionalProperties: false
+      required:
+        - appVersion
+        - engineVersion
+        - commandSchemaVersion
+        - projectFormatVersion
+        - afterServerSeq
+      properties:
+        appVersion:
+          type: string
+          maxLength: 64
+        engineVersion:
+          type: string
+          maxLength: 64
+        commandSchemaVersion:
+          const: 6
+        projectFormatVersion:
+          const: 7
+        afterServerSeq:
+          type: integer
+          minimum: 0
+        stateHash:
+          oneOf:
+            - $ref: '#/components/schemas/Sha256'
+            - type: 'null'
+    WelcomePayload:
+      type: object
+      additionalProperties: false
+      required:
+        - projectId
+        - sessionId
+        - participant
+        - headSeq
+        - readOnly
+        - hashRound
+        - writeBlockedReason
+        - effectiveRole
+        - pluginRequirementsRevision
+        - participants
+        - limits
+        - control
+        - ownerUserId
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        participant:
+          $ref: '#/components/schemas/Participant'
+        hostParticipantId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        headSeq:
+          type: integer
+          minimum: 0
+        control:
+          $ref: ../protocol/schema/session-control-v6.schema.json
+        ownerUserId:
+          type: string
+          format: uuid
+        readOnly:
+          type: boolean
+        hashRound:
+          oneOf:
+            - $ref: '#/components/schemas/HashRound'
+            - type: 'null'
+        writeBlockedReason:
+          enum:
+            - session_starting
+            - plugin_not_ready
+            - hash_consensus_required
+            - role_read_only
+        effectiveRole:
+          enum:
+            - owner
+            - editor
+            - viewer
+        pluginRequirementsRevision:
+          type: integer
+          minimum: 1
+        participants:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/Participant'
+        limits:
+          type: object
+          additionalProperties: false
+          required:
+            - maxParticipants
+            - cursorHz
+            - transportHz
+            - maxMessageBytes
+            - roomQueueBytes
+          properties:
+            maxParticipants:
+              type: integer
+              minimum: 1
+              maximum: 8
+            cursorHz:
+              type: integer
+              minimum: 1
+              maximum: 30
+            transportHz:
+              type: integer
+              minimum: 1
+              maximum: 15
+            maxMessageBytes:
+              type: integer
+              minimum: 1024
+            roomQueueBytes:
+              type: integer
+              minimum: 2097152
+              maximum: 67108864
+    Participant:
+      type: object
+      additionalProperties: false
+      required:
+        - participantId
+        - userId
+        - nickname
+        - role
+        - color
+        - host
+        - joinedAtMs
+      properties:
+        participantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        nickname:
+          type: string
+          minLength: 1
+          maxLength: 80
+        role:
+          enum:
+            - owner
+            - editor
+            - viewer
+        color:
+          type: string
+          pattern: ^#[0-9A-Fa-f]{6}$
+        host:
+          type: boolean
+        joinedAtMs:
+          type: integer
+          minimum: 0
+    HashRound:
+      type: object
+      additionalProperties: false
+      required:
+        - roundId
+        - sessionId
+        - serverSeq
+        - deadlineMs
+      properties:
+        roundId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        serverSeq:
+          type: integer
+          minimum: 0
+        deadlineMs:
+          type: integer
+          minimum: 0
+    SafeClick:
+      type: object
+      additionalProperties: false
+      required:
+        - surface
+        - precision
+        - phase
+        - button
+      properties:
+        surface:
+          enum:
+            - hidden
+            - timeline
+            - track_list
+            - transport
+            - mixer
+            - piano_roll
+            - automation_editor
+            - sample_editor
+            - builtin_plugin
+            - file_browser
+            - browser
+            - ai
+            - settings
+            - toolbar
+        precision:
+          enum:
+            - hidden
+            - coarse
+            - exact
+        phase:
+          enum:
+            - press
+            - release
+        button:
+          enum:
+            - primary
+            - secondary
+            - middle
+        targetId:
+          type: string
+          maxLength: 96
+        trackId:
+          type: string
+          maxLength: 64
+        clipId:
+          type: string
+          maxLength: 64
+        controlId:
+          type: string
+          maxLength: 96
+        u:
+          type: number
+          minimum: 0
+          maximum: 1
+        v:
+          type: number
+          minimum: 0
+          maximum: 1
+        timeSeconds:
+          type: number
+          minimum: 0
+        beat:
+          type: number
+          minimum: 0
+        pitch:
+          type: integer
+          minimum: 0
+          maximum: 127
+        laneFraction:
+          type: number
+          minimum: 0
+          maximum: 1
+    Sha256:
+      type: string
+      pattern: ^[0-9a-f]{64}$
+    SessionPolicyPayload:
+      type: object
+      additionalProperties: false
+      required:
+        - control
+        - hostParticipantId
+      properties:
+        control:
+          $ref: ../protocol/schema/session-control-v6.schema.json
+        hostParticipantId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'

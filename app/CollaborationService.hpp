@@ -6,6 +6,7 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QUrl>
 
@@ -45,7 +46,7 @@ public:
     int commandSchemaVersion() const noexcept { return m_commandSchemaVersion; }
     QString protocolName() const;
     /// Selects the immutable protocol of the REST-discovered live session.
-    /// Existing v2 rooms remain joinable; newly created rooms use v3.
+    /// Existing versioned rooms remain joinable; newly created rooms use v6.
     bool setCommandSchemaVersion(int version);
 
     /// Opening a local project never uploads it or connects. A cloud flow must
@@ -81,6 +82,7 @@ public:
     /// Marks a non-retryable transport/configuration failure. A user-triggered
     /// reconnect clears this latch and requests fresh authorization.
     void trustedTransportUnavailable(const QString& safeReason);
+    void trustedSessionExcluded(const QString& action);
     /// Blocks every durable submit path while a verified snapshot/log replay
     /// is required. `readOnly` is sticky for the current room welcome and a
     /// conflict is never downgraded by a later duplicate resync request.
@@ -111,8 +113,21 @@ public:
     void sendPresence(const PresencePacket& packet);
     void sendTransport(const TransportFrame& frame);
     bool sendSnapshotHash();
+    bool hashRoundInFlight() const { return !m_hashRoundId.isEmpty(); }
+    const SessionControlState& sessionControl() const { return m_control; }
+    bool hasSharedTransport() const { return m_commandSchemaVersion >= 6 && m_control.mode != QLatin1String("independent"); }
+    bool canControlSession() const;
+    bool canChangeSessionMode() const;
+    bool mayModerate() const { return !m_ownerUserId.isEmpty() && accountUserId() == m_ownerUserId; }
+    qint64 estimatedServerTimeMs() const;
+    bool submitSessionControl(const QString& kind, const QJsonObject& values = {});
+    bool installSessionControl(const QJsonObject& control);
 
 signals:
+    void hashRoundChanged(bool active);
+    void sessionControlChanged();
+    void pluginCatalogChanged(const QJsonObject& catalog);
+    void sessionActionRejected(const QString& message);
     void stateChanged(collab::CollaborationState state,
                       const QString& detail);
     void projectChanged(const QString& projectId);
@@ -143,6 +158,10 @@ signals:
     void liveSessionEnding(const QString& sessionId);
     void liveSessionEnded(const QString& sessionId);
     void liveSessionActivated(const QString& sessionId);
+    void liveSessionRequirementsChanged(const QString& sessionId,
+                                        qint64 requirementsRevision);
+    /// Stop shared playback and reload authorization after local exclusion.
+    void localSessionExcluded(const QString& action);
     void participantReadinessChanged(const QString& participantId,
                                      const QString& effectiveRole,
                                      const QString& readinessStatus,
@@ -158,6 +177,10 @@ private:
     void handleEnvelope(const WireEnvelope& envelope);
     bool acceptHashRound(const QJsonObject& payload);
     void requestOrSendRoundHash();
+    void clearHashRound();
+    void clearSessionControl();
+    void sendPendingControl();
+    bool acknowledgeControl(const QString& actionId);
 
     account::Service* m_account = nullptr;
     PresenceStore m_presenceStore;
@@ -185,9 +208,21 @@ private:
     bool m_lastTransportPlaying = false;
     QElapsedTimer m_monotonicClock;
     QElapsedTimer m_lastTransportSent;
+    SessionControlState m_control;
+    QString m_ownerUserId;
+    QString m_localRole;
+    // One action in flight preserves play/stop/seek ordering, including retries.
+    QList<QJsonObject> m_pendingControls;
+    QHash<QString, quint64> m_readinessRevisions;
+    quint64 m_requirementsRevision = 0;
+    qint64 m_clockEpochMs = 0;
+    qint64 m_serverClockOffsetMs = 0;
+    qint64 m_clockPingAt = 0;
+    qint64 m_bestClockRttMs = 60000;
 
     friend bool checkCollaborationCommandBridgeForTest(QString* error);
     friend bool checkSnapshotRequestUploaderForTest(QString* error);
+    friend bool checkCollaborationPresenceSafetyForTest(QString* error);
 };
 
 /// Non-network self-test for the final AsyncAPI presence whitelist, including

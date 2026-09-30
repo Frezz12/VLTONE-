@@ -61,6 +61,23 @@ func TestCollaborationJoinCloseReason(t *testing.T) {
 	}
 }
 
+func TestCompatibilityErrorNamesRequiredVersions(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/join", nil)
+	response := httptest.NewRecorder()
+	server := &Server{}
+	server.writeCollaborationError(response, request, &collab.CompatibilityError{
+		Message:            "This session requires application version 2.4.1.",
+		RequiredAppVersion: "2.4.1", RequiredEngineVersion: "engine-9",
+	})
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusUnprocessableEntity || body["code"] != "version_mismatch" || body["required_app_version"] != "2.4.1" || body["required_engine_version"] != "engine-9" {
+		t.Fatalf("compatibility detail lost: %s", response.Body.String())
+	}
+}
+
 func TestWelcomeParticipantsContainOnlyConnectedSockets(t *testing.T) {
 	connectedID := uuid.New()
 	offlineID := uuid.New()

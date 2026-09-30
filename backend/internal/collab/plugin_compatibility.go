@@ -21,24 +21,26 @@ const (
 // installation record. Paths, binary names and window coordinates never cross
 // the collaboration boundary.
 type PluginRequirement struct {
-	Format             string `json:"format"`
-	NativeUID          string `json:"nativeUid"`
-	Vendor             string `json:"vendor"`
-	Version            string `json:"version"`
-	StateSchemaVersion int    `json:"stateSchemaVersion"`
-	Kind               string `json:"kind"`
-	ChannelMode        string `json:"channelMode"`
+	Format               string `json:"format"`
+	NativeUID            string `json:"nativeUid"`
+	Vendor               string `json:"vendor"`
+	Version              string `json:"version"`
+	StateSchemaVersion   int    `json:"stateSchemaVersion"`
+	Kind                 string `json:"kind"`
+	ChannelMode          string `json:"channelMode"`
+	ParameterFingerprint string `json:"parameterFingerprint,omitempty"`
 }
 
 type PluginReadinessResult struct {
-	Format             string `json:"format"`
-	NativeUID          string `json:"nativeUid"`
-	Vendor             string `json:"vendor"`
-	Version            string `json:"version"`
-	StateSchemaVersion int    `json:"stateSchemaVersion"`
-	Kind               string `json:"kind"`
-	ChannelMode        string `json:"channelMode"`
-	Status             string `json:"status"`
+	Format               string `json:"format"`
+	NativeUID            string `json:"nativeUid"`
+	Vendor               string `json:"vendor"`
+	Version              string `json:"version"`
+	StateSchemaVersion   int    `json:"stateSchemaVersion"`
+	Kind                 string `json:"kind"`
+	ChannelMode          string `json:"channelMode"`
+	ParameterFingerprint string `json:"parameterFingerprint,omitempty"`
+	Status               string `json:"status"`
 	// BuildHMAC is an optional session-scoped proof. It is never a module hash,
 	// and therefore cannot be correlated outside this session.
 	BuildHMAC string `json:"buildHmac,omitempty"`
@@ -54,7 +56,7 @@ func normalizePluginRequirements(values []PluginRequirement) ([]PluginRequiremen
 	if len(values) > MaxPluginRequirements {
 		return nil, invalidf("plugin manifest contains too many requirements")
 	}
-	result := append([]PluginRequirement(nil), values...)
+	result := append([]PluginRequirement{}, values...)
 	seen := make(map[string]bool, len(result))
 	for index := range result {
 		value := &result[index]
@@ -70,7 +72,8 @@ func normalizePluginRequirements(values []PluginRequirement) ([]PluginRequiremen
 			!safePluginContractText(value.Version, 200) ||
 			(value.Kind != "instrument" && value.Kind != "effect") ||
 			!validPluginChannelMode(value.ChannelMode) || value.StateSchemaVersion < 0 ||
-			(value.Format == "internal" && value.StateSchemaVersion == 0) {
+			(value.Format == "internal" && value.StateSchemaVersion == 0) ||
+			(value.ParameterFingerprint != "" && !validLowerHex(value.ParameterFingerprint, 64)) {
 			return nil, invalidf("plugin requirement is invalid")
 		}
 		key := pluginRequirementKey(*value)
@@ -111,7 +114,8 @@ func normalizePluginReadiness(requirements []PluginRequirement, revision int64,
 			(result.Kind != "instrument" && result.Kind != "effect") ||
 			!validPluginChannelMode(result.ChannelMode) ||
 			!validPluginReadinessStatus(result.Status) ||
-			(result.BuildHMAC != "" && !validLowerHex(result.BuildHMAC, 64)) {
+			(result.BuildHMAC != "" && !validLowerHex(result.BuildHMAC, 64)) ||
+			(result.ParameterFingerprint != "" && !validLowerHex(result.ParameterFingerprint, 64)) {
 			return PluginReadinessReport{}, "", "", invalidf("plugin readiness result is invalid")
 		}
 		key := pluginReadinessKey(result)
@@ -168,7 +172,7 @@ func unmarshalPluginRequirements(value json.RawMessage) ([]PluginRequirement, er
 func pluginRequirementKey(value PluginRequirement) string {
 	return strings.Join([]string{value.Format, value.NativeUID, value.Vendor,
 		value.Version, value.Kind, value.ChannelMode}, "\x00") +
-		"\x00" + strconv.Itoa(value.StateSchemaVersion)
+		"\x00" + strconv.Itoa(value.StateSchemaVersion) + "\x00" + value.ParameterFingerprint
 }
 
 func pluginReadinessKey(value PluginReadinessResult) string {
@@ -176,7 +180,7 @@ func pluginReadinessKey(value PluginReadinessResult) string {
 		Format: value.Format, NativeUID: value.NativeUID,
 		Vendor: value.Vendor, Version: value.Version,
 		StateSchemaVersion: value.StateSchemaVersion,
-		Kind:               value.Kind, ChannelMode: value.ChannelMode,
+		Kind:               value.Kind, ChannelMode: value.ChannelMode, ParameterFingerprint: value.ParameterFingerprint,
 	})
 }
 
@@ -297,12 +301,13 @@ func externalPluginRequirements(kind string, payload json.RawMessage) (
 		insert = command.Replacement
 	}
 	var wire struct {
-		Format             string `json:"format"`
-		NativeUID          string `json:"uid"`
-		Vendor             string `json:"vendor"`
-		Version            string `json:"pluginVersion"`
-		StateSchemaVersion int    `json:"stateSchemaVersion"`
-		ChannelMode        string `json:"channelMode"`
+		Format               string `json:"format"`
+		NativeUID            string `json:"uid"`
+		Vendor               string `json:"vendor"`
+		Version              string `json:"pluginVersion"`
+		StateSchemaVersion   int    `json:"stateSchemaVersion"`
+		ChannelMode          string `json:"channelMode"`
+		ParameterFingerprint string `json:"parameterFingerprint,omitempty"`
 	}
 	if err := json.Unmarshal(insert, &wire); err != nil {
 		return nil, invalidf("plugin capability insert is invalid")
@@ -313,7 +318,7 @@ func externalPluginRequirements(kind string, payload json.RawMessage) (
 	requirement := PluginRequirement{
 		Format: wire.Format, NativeUID: wire.NativeUID, Vendor: wire.Vendor,
 		Version: wire.Version, StateSchemaVersion: wire.StateSchemaVersion,
-		Kind: "effect", ChannelMode: wire.ChannelMode,
+		Kind: "effect", ChannelMode: wire.ChannelMode, ParameterFingerprint: wire.ParameterFingerprint,
 	}
 	if command.Location.Chain == "instrument" {
 		requirement.Kind = "instrument"

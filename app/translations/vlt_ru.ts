@@ -2981,6 +2981,66 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <source>Archive “%1”? Nobody will be able to open or join it afterwards.</source>
         <translation>Отправить «%1» в архив? После этого его нельзя будет ни открыть, ни войти в него.</translation>
     </message>
+    <message>
+        <source>Resume publication</source>
+        <translation>Продолжить публикацию</translation>
+    </message>
+    <message>
+        <source>No projects match your search.</source>
+        <translation>По вашему запросу проекты не найдены.</translation>
+    </message>
+    <message>
+        <source>Publish current…</source>
+        <translation>Опубликовать текущий…</translation>
+    </message>
+    <message>
+        <source>New cloud project…</source>
+        <translation>Новый облачный проект…</translation>
+    </message>
+    <message>
+        <source>Rename…</source>
+        <translation>Переименовать…</translation>
+    </message>
+    <message>
+        <source>Manage…</source>
+        <translation>Управление…</translation>
+    </message>
+    <message>
+        <source>Search projects</source>
+        <translation>Поиск проектов</translation>
+    </message>
+    <message>
+        <source>Project filter</source>
+        <translation>Фильтр проектов</translation>
+    </message>
+    <message>
+        <source>All projects</source>
+        <translation>Все проекты</translation>
+    </message>
+    <message>
+        <source>My projects</source>
+        <translation>Мои проекты</translation>
+    </message>
+    <message>
+        <source>Shared with me</source>
+        <translation>Доступные мне</translation>
+    </message>
+    <message>
+        <source>Rename project</source>
+        <translation>Переименование проекта</translation>
+    </message>
+    <message>
+        <source>Project name</source>
+        <translation>Название проекта</translation>
+    </message>
+    <message>
+        <source>Use a project name from 1 to 160 characters.</source>
+        <translation>Введите название проекта длиной от 1 до 160 символов.</translation>
+    </message>
+    <message>
+        <source>The project could not be updated.</source>
+        <translation>Не удалось обновить проект.</translation>
+    </message>
 </context>
 <context>
     <name>ContextPanel</name>
@@ -6119,6 +6179,10 @@ Release to keep this clip in the project</source><translation>Сохранить
         <source>Enter the invitation code you were given, or open the invitation link. The project, shared assets, and exact plugin versions are checked before editing is enabled.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Project requirements changed. Retry compatibility checks.</source>
+        <translation>Требования проекта изменились. Повторите проверку совместимости.</translation>
+    </message>
 </context>
 <context>
     <name>MainWindow</name>
@@ -8272,23 +8336,35 @@ Make sure the project folder still contains a matching .vlt manifest and its Con
     </message>
     <message>
         <source>Recorded audio remains queued for retry</source>
-        <translation type="unfinished"></translation>
+        <translation>Записанное аудио сохранено в очереди для повторной отправки</translation>
+    </message>
+    <message>
+        <source>Processing recorded audio…</source>
+        <translation>Обработка записанного аудио…</translation>
+    </message>
+    <message>
+        <source>The recording is saved, but silence processing could not be prepared: %1</source>
+        <translation>Запись сохранена, но не удалось подготовить удаление тишины: %1</translation>
+    </message>
+    <message>
+        <source>Cloud recording requires a collaboration v6 session</source>
+        <translation>Для записи в облачном проекте нужна совместная сессия версии 6</translation>
     </message>
     <message>
         <source>Uploading recorded audio…</source>
-        <translation type="unfinished"></translation>
+        <translation>Загрузка записанного аудио на сервер…</translation>
     </message>
     <message>
         <source>Recorded audio is uploaded but its project edit must be retried</source>
-        <translation type="unfinished"></translation>
+        <translation>Аудио загружено, но изменение проекта нужно отправить повторно</translation>
     </message>
     <message>
         <source>Recording uploaded; waiting for server commit</source>
-        <translation type="unfinished"></translation>
+        <translation>Запись загружена; ожидаем подтверждения сервера</translation>
     </message>
     <message>
         <source>Recording committed to the shared project</source>
-        <translation type="unfinished"></translation>
+        <translation>Запись добавлена в общий проект</translation>
     </message>
     <message>
         <source>Cloud recording requires a collaboration v3 session</source>
@@ -8589,6 +8665,230 @@ The current project has not been changed.</source>
     <message>
         <source>Auto Silence: audio retained without trimming. %1</source>
         <translation>Auto Silence: запись сохранена без обрезки. %1</translation>
+    </message>
+    <message>
+        <source> Your edits remain saved locally. Retry from session details.</source>
+        <translation> Ваши изменения сохранены на этом компьютере. Повторите попытку в сведениях о сессии.</translation>
+    </message>
+    <message>
+        <source> The publication edits remain in local recovery.</source>
+        <translation> Изменения публикации сохранены в локальной копии восстановления.</translation>
+    </message>
+    <message>
+        <source>Publication transfers paused. Saved edits can be retried in session details.</source>
+        <translation>Передача файлов публикации приостановлена. Повторите отправку сохранённых изменений в сведениях о сессии.</translation>
+    </message>
+    <message>
+        <source>This element is being edited by another participant, or its edit lock expired. Try the gesture again.</source>
+        <translation>Этот элемент редактирует другой участник, либо срок блокировки истёк. Повторите действие.</translation>
+    </message>
+    <message>
+        <source>Plugin compatibility is waiting for the current project files. Retry any failed downloads in session details.</source>
+        <translation>Для проверки совместимости плагинов нужны актуальные файлы проекта. Повторите неудачные скачивания в сведениях о сессии.</translation>
+    </message>
+    <message>
+        <source>The session mode will change when all recordings finish.</source>
+        <translation>Режим сессии изменится после завершения всех записей.</translation>
+    </message>
+    <message>
+        <source>Plugin state could not be synchronized. The local result is retained; retry the upload in session details.</source>
+        <translation>Не удалось синхронизировать состояние плагина. Локальный результат сохранён; повторите загрузку в сведениях о сессии.</translation>
+    </message>
+    <message>
+        <source>Synchronizing plugin state…</source>
+        <translation>Синхронизация состояния плагина…</translation>
+    </message>
+    <message>
+        <source>Processed result</source>
+        <translation>Обработанный результат</translation>
+    </message>
+    <message>
+        <source>The saved publication did not match the server response.</source>
+        <translation>Сохранённая публикация не совпадает с ответом сервера.</translation>
+    </message>
+    <message>
+        <source>This publication cannot resume: the complete local recovery files and project owner access are required.</source>
+        <translation>Для продолжения публикации нужны все локальные файлы восстановления и права владельца проекта.</translation>
+    </message>
+    <message>
+        <source>
+
+Retry in session details to continue this publication.</source>
+        <translation>
+
+Повторите попытку в сведениях о сессии, чтобы продолжить публикацию.</translation>
+    </message>
+    <message>
+        <source>Saving publication files locally. Wait for this step before closing or changing projects.</source>
+        <translation>Сохраняются локальные файлы публикации. Дождитесь завершения перед закрытием или сменой проекта.</translation>
+    </message>
+    <message>
+        <source>Wait for the current publication or cancel it in session details before opening another project.</source>
+        <translation>Дождитесь завершения публикации или отмените её в сведениях о сессии, прежде чем открывать другой проект.</translation>
+    </message>
+    <message>
+        <source>Checking the saved publication before resuming…</source>
+        <translation>Проверка сохранённой публикации перед продолжением…</translation>
+    </message>
+    <message>
+        <source>The project could not be renamed. Retry after synchronization.</source>
+        <translation>Не удалось переименовать проект. Повторите после синхронизации.</translation>
+    </message>
+    <message>
+        <source>Sign in to join the invitation. The session will open after sign-in.</source>
+        <translation>Войдите в аккаунт, чтобы принять приглашение. После входа откроется сессия.</translation>
+    </message>
+    <message>
+        <source>Wait for pending edits to synchronize before joining another session.</source>
+        <translation>Дождитесь синхронизации изменений, прежде чем присоединяться к другой сессии.</translation>
+    </message>
+    <message>
+        <source>Allow compatible external plugins</source>
+        <translation>Разрешить совместимые внешние плагины</translation>
+    </message>
+    <message>
+        <source>The plugin profile is selected when the cloud project is created.</source>
+        <translation>Профиль плагинов выбирается при создании облачного проекта.</translation>
+    </message>
+    <message>
+        <source>Create cloud project</source>
+        <translation>Создание облачного проекта</translation>
+    </message>
+    <message>
+        <source>Project name</source>
+        <translation>Название проекта</translation>
+    </message>
+    <message>
+        <source>Built-in plugins only</source>
+        <translation>Только встроенные плагины</translation>
+    </message>
+    <message>
+        <source>Compatible external plugins</source>
+        <translation>Совместимые внешние плагины</translation>
+    </message>
+    <message>
+        <source>Plugin profile</source>
+        <translation>Профиль плагинов</translation>
+    </message>
+    <message>
+        <source>Every participant needs the same application version. External plugins are checked before editing is enabled.</source>
+        <translation>У всех участников должна быть одинаковая версия приложения. Внешние плагины проверяются перед разрешением редактирования.</translation>
+    </message>
+    <message>
+        <source>Create and open</source>
+        <translation>Создать и открыть</translation>
+    </message>
+    <message>
+        <source>The local recovery copy could not be created.</source>
+        <translation>Не удалось создать локальную копию восстановления.</translation>
+    </message>
+    <message>
+        <source>Waiting for project files before checking plugins…</source>
+        <translation>Ожидание файлов проекта для проверки плагинов…</translation>
+    </message>
+    <message>
+        <source>Some project files could not be downloaded. Retry them in session details before starting.</source>
+        <translation>Не удалось скачать некоторые файлы проекта. Повторите скачивание в сведениях о сессии перед запуском.</translation>
+    </message>
+    <message>
+        <source>This project contains external plugins. Choose the external plugin profile to host it.</source>
+        <translation>В проекте есть внешние плагины. Для запуска сессии выберите профиль с внешними плагинами.</translation>
+    </message>
+    <message>
+        <source>Checking plugin state in isolated processes…</source>
+        <translation>Проверка состояния плагинов в изолированных процессах…</translation>
+    </message>
+    <message>
+        <source>Plugin state could not be loaded. Open session settings to inspect compatibility and retry.</source>
+        <translation>Не удалось загрузить состояние плагина. Откройте настройки сессии, проверьте совместимость и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>The project changed during compatibility checks. Start the session again.</source>
+        <translation>Проект изменился во время проверки совместимости. Запустите сессию снова.</translation>
+    </message>
+    <message>
+        <source>The session could not be started. Retry from session settings.</source>
+        <translation>Не удалось запустить сессию. Повторите попытку в настройках сессии.</translation>
+    </message>
+    <message>
+        <source>The verified project version could not be checked. Reopen the cloud project and retry.</source>
+        <translation>Не удалось проверить подтверждённую версию проекта. Откройте облачный проект заново и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>Saved Local Result</source>
+        <translation>Сохранённый локальный результат</translation>
+    </message>
+    <message>
+        <source>The processed files remain on this computer. You can inspect them, retry a pending upload, or import the audio as new content.</source>
+        <translation>Обработанные файлы остаются на этом компьютере. Их можно просмотреть, повторить ожидающую загрузку или импортировать аудио как новый материал.</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>Открыть папку</translation>
+    </message>
+    <message>
+        <source>Retry upload</source>
+        <translation>Повторить загрузку</translation>
+    </message>
+    <message>
+        <source>Import audio copy</source>
+        <translation>Импортировать копию аудио</translation>
+    </message>
+    <message>
+        <source>The initial project files are not yet saved for recovery. Retry the file transfer before opening the cloud copy.</source>
+        <translation>Исходные файлы проекта ещё не сохранены для восстановления. Повторите передачу файлов, прежде чем открывать облачную копию.</translation>
+    </message>
+    <message>
+        <source>The publication edits could not be applied to the verified copy. The complete local queue is retained for recovery.</source>
+        <translation>Не удалось применить изменения публикации к подтверждённой копии. Полная локальная очередь сохранена для восстановления.</translation>
+    </message>
+    <message>
+        <source>The project was published. Reopen it from Cloud Projects to resume the saved publication edits.</source>
+        <translation>Проект опубликован. Откройте его заново из облачных проектов, чтобы продолжить отправку сохранённых изменений.</translation>
+    </message>
+    <message>
+        <source>Applying saved publication edits… %1 remaining</source>
+        <translation>Применение сохранённых изменений публикации… Осталось: %1</translation>
+    </message>
+    <message>
+        <source>The publication edit could not be submitted. The complete queue remains saved locally.</source>
+        <translation>Не удалось отправить изменение публикации. Полная очередь сохранена на этом компьютере.</translation>
+    </message>
+    <message>
+        <source>Cloud project is ready. All edits made during publication are synchronized.</source>
+        <translation>Облачный проект готов. Все изменения, сделанные во время публикации, синхронизированы.</translation>
+    </message>
+    <message>
+        <source>Playback is controlled by the session leader, or the connection is not ready.</source>
+        <translation>Воспроизведением управляет ведущий сессии, либо соединение ещё не готово.</translation>
+    </message>
+    <message>
+        <source>Playback action could not be sent. Reconnect and retry.</source>
+        <translation>Не удалось отправить команду воспроизведения. Переподключитесь и повторите попытку.</translation>
+    </message>
+    <message>
+        <source>The assigned leader must enable shared playback so everyone receives their listening settings.</source>
+        <translation>Назначенный ведущий должен включить общее воспроизведение, чтобы его настройки прослушивания применились у всех.</translation>
+    </message>
+    <message>
+        <source>The session mode will change when recording finishes.</source>
+        <translation>Режим сессии изменится после завершения записи.</translation>
+    </message>
+    <message>
+        <source>Editing is unavailable until the session is ready</source>
+        <translation>Редактирование недоступно, пока сессия не готова</translation>
+    </message>
+    <message>
+        <source>Bounce rendered locally. Upload and publication progress is available in session details.</source>
+        <translation>Bounce выполнен на этом компьютере. Ход загрузки и публикации доступен в сведениях о сессии.</translation>
+    </message>
+    <message>
+        <source>Audio rendered locally. Upload and publication progress is available in session details.</source>
+        <translation>Аудио отрендерено на этом компьютере. Ход загрузки и публикации доступен в сведениях о сессии.</translation>
+    </message>
+    <message>
+        <source>Strip Silence prepared. Publication progress is available in session details.</source>
+        <translation>Удаление тишины подготовлено. Ход публикации доступен в сведениях о сессии.</translation>
     </message>
 </context>
 <context>
@@ -12817,6 +13117,230 @@ Legato связывает перекрывающиеся ноты. Диапаз�
     <message>
         <source>Cloud projects…</source>
         <translation>Облачные проекты…</translation>
+    </message>
+    <message>
+        <source>Audio upload</source>
+        <translation>Загрузка аудио на сервер</translation>
+    </message>
+    <message>
+        <source>Project save</source>
+        <translation>Сохранение проекта</translation>
+    </message>
+    <message>
+        <source>Audio download</source>
+        <translation>Скачивание аудио</translation>
+    </message>
+    <message>
+        <source>Project download</source>
+        <translation>Скачивание проекта</translation>
+    </message>
+    <message>
+        <source>Cancelling upload</source>
+        <translation>Отмена загрузки</translation>
+    </message>
+    <message>
+        <source>Downloading %1 of %2</source>
+        <translation>Скачивание: %1 из %2</translation>
+    </message>
+    <message>
+        <source>Transferring %1 of %2</source>
+        <translation>Передача: %1 из %2</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n file needs attention</source>
+        <translation>
+            <numerusform>%n файл требует внимания</numerusform>
+            <numerusform>%n файла требуют внимания</numerusform>
+            <numerusform>%n файлов требуют внимания</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n local result awaiting publication</source>
+        <translation>
+            <numerusform>%n локальный результат ожидает публикации</numerusform>
+            <numerusform>%n локальных результата ожидают публикации</numerusform>
+            <numerusform>%n локальных результатов ожидают публикации</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Session details</source>
+        <translation>Сведения о сессии</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Synchronization mode</source>
+        <translation>Режим синхронизации</translation>
+    </message>
+    <message>
+        <source>Independent listening</source>
+        <translation>Независимое прослушивание</translation>
+    </message>
+    <message>
+        <source>Follow conductor</source>
+        <translation>Следовать за ведущим</translation>
+    </message>
+    <message>
+        <source>Shared transport</source>
+        <translation>Общее воспроизведение</translation>
+    </message>
+    <message>
+        <source>Show other cursors</source>
+        <translation>Показывать курсоры участников</translation>
+    </message>
+    <message>
+        <source>Participant</source>
+        <translation>Участник</translation>
+    </message>
+    <message>
+        <source>Status</source>
+        <translation>Статус</translation>
+    </message>
+    <message>
+        <source>Participants and readiness</source>
+        <translation>Участники и готовность</translation>
+    </message>
+    <message>
+        <source>Participant actions</source>
+        <translation>Действия с участником</translation>
+    </message>
+    <message>
+        <source>Session settings…</source>
+        <translation>Настройки сессии…</translation>
+    </message>
+    <message>
+        <source>Activity</source>
+        <translation>Операция</translation>
+    </message>
+    <message>
+        <source>Transfers and problems</source>
+        <translation>Передача файлов и ошибки</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>Повторить</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отменить</translation>
+    </message>
+    <message>
+        <source>Make conductor</source>
+        <translation>Назначить ведущим</translation>
+    </message>
+    <message>
+        <source>Readmit to session</source>
+        <translation>Вернуть в сессию</translation>
+    </message>
+    <message>
+        <source>Remove from session</source>
+        <translation>Исключить из сессии</translation>
+    </message>
+    <message>
+        <source>Block from project</source>
+        <translation>Заблокировать в проекте</translation>
+    </message>
+    <message>
+        <source>Unblock</source>
+        <translation>Разблокировать</translation>
+    </message>
+    <message>
+        <source>Online</source>
+        <translation>В сети</translation>
+    </message>
+    <message>
+        <source>Offline</source>
+        <translation>Не в сети</translation>
+    </message>
+    <message>
+        <source>Host</source>
+        <translation>Ведущий</translation>
+    </message>
+    <message>
+        <source>%1 of %2</source>
+        <translation>%1 из %2</translation>
+    </message>
+    <message>
+        <source>In progress</source>
+        <translation>Выполняется</translation>
+    </message>
+    <message>
+        <source>Checking plugin state compatibility…</source>
+        <translation>Проверка совместимости состояния плагина…</translation>
+    </message>
+    <message>
+        <source>Plugin or required asset is unavailable. Install or rescan the matching plugin and retry.</source>
+        <translation>Плагин или нужный файл недоступен. Установите подходящий плагин или повторите сканирование, затем попробуйте снова.</translation>
+    </message>
+    <message>
+        <source>Plugin state validation failed. Rescan the plugin and retry.</source>
+        <translation>Не удалось проверить состояние плагина. Повторите сканирование плагина и попробуйте снова.</translation>
+    </message>
+    <message>
+        <source>External plugin</source>
+        <translation>Внешний плагин</translation>
+    </message>
+    <message>
+        <source>Local result awaiting publication</source>
+        <translation>Локальный результат ожидает публикации</translation>
+    </message>
+    <message>
+        <source>Open project</source>
+        <translation>Открытие проекта</translation>
+    </message>
+    <message>
+        <source>Create cloud project</source>
+        <translation>Создание облачного проекта</translation>
+    </message>
+    <message>
+        <source>Recover…</source>
+        <translation>Восстановить…</translation>
+    </message>
+    <message>
+        <source>Preview participants and transfers. Click to keep open; Escape closes.</source>
+        <translation>Участники и передача файлов. Нажмите, чтобы закрепить окно; Escape — закрыть.</translation>
+    </message>
+    <message>
+        <source>Local result</source>
+        <translation>Локальный результат</translation>
+    </message>
+    <message>
+        <source>Transfer failed</source>
+        <translation>Ошибка передачи</translation>
+    </message>
+    <message>
+        <source>Audio unavailable</source>
+        <translation>Аудио недоступно</translation>
+    </message>
+    <message>
+        <source>Retry all</source>
+        <translation>Повторить все</translation>
+    </message>
+    <message>
+        <source>Details…</source>
+        <translation>Подробнее…</translation>
+    </message>
+    <message>
+        <source>Dismiss</source>
+        <translation>Закрыть сообщение</translation>
+    </message>
+    <message>
+        <source>Cancel all uploads</source>
+        <translation>Отменить все загрузки</translation>
+    </message>
+    <message>
+        <source>Conductor: %1</source>
+        <translation>Ведущий: %1</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n problem</source>
+        <translation>
+            <numerusform>%n проблема</numerusform>
+            <numerusform>%n проблемы</numerusform>
+            <numerusform>%n проблем</numerusform>
+        </translation>
     </message>
 </context>
 <context>

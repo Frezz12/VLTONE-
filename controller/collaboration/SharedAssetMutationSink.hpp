@@ -11,6 +11,7 @@ namespace daw::collab {
 /// controller retains the action context under requestId; neither sourcePath
 /// nor this request can enter a command or canonical document.
 struct SharedAssetMutationRequest {
+    AssetKind kind = AssetKind::Audio;
     std::string requestId;
     std::string assetId;
     std::string sourcePath;

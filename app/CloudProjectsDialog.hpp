@@ -32,6 +32,7 @@ public:
         std::function<quint64()> list;
         std::function<quint64(const QString& projectId)> archive;
         std::function<bool(quint64)> cancel;
+        std::function<bool(const QString& projectId)> canResumePublication;
     };
 
     /// `openProjectId` is the cloud project this window already has open. It is
@@ -78,12 +79,17 @@ public:
 
     /// The project the user chose to open, valid after accept().
     QString chosenProjectId() const;
+    /// Completes a rename/manage request without closing the browser.
+    void completeManagement(const QString& safeError = {});
 
 signals:
+    void createEmptyRequested();
     void publishRequested();
     void inviteRequested(const QString& projectId);
     /// Asks the owner to run the join-by-code flow; the dialog does not own it.
     void joinByCodeRequested();
+    void renameRequested(const QString& projectId, const QString& title);
+    void manageRequested(const QString& projectId);
 
 public slots:
     void reject() override;

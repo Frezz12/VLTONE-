@@ -6,6 +6,7 @@
 #include <QLineF>
 #include <QRegularExpression>
 #include <QUuid>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -219,13 +220,21 @@ QString wireTypeName(WireType type) {
         case WireType::HashRequested: return enumName("hash.requested");
         case WireType::HashVerified: return enumName("hash.verified");
         case WireType::SnapshotHash: return enumName("snapshot.hash");
+        case WireType::SessionControl: return enumName("session.control");
+        case WireType::SessionControlChanged: return enumName("session.control_changed");
+        case WireType::SessionModeChanged: return enumName("session.mode_changed");
+        case WireType::SessionCatalogChanged: return enumName("session.catalog_changed");
+        case WireType::SessionRequirementsChanged: return enumName("session.requirements_changed");
+        case WireType::SessionParticipantModerated: return enumName("session.participant_moderated");
+        case WireType::ClockPing: return enumName("clock.ping");
+        case WireType::ClockPong: return enumName("clock.pong");
     }
     return enumName("unknown");
 }
 
 std::optional<WireType> wireTypeFromName(const QString& name) {
     for (int value = int(WireType::Hello);
-         value <= int(WireType::SnapshotHash); ++value) {
+         value <= int(WireType::ClockPong); ++value) {
         const auto type = WireType(value);
         if (wireTypeName(type) == name) return type;
     }
@@ -557,6 +566,7 @@ QString protocolNameForCommandSchema(int schemaVersion) {
         return QString::fromLatin1(kProtocolNameV2);
     if (schemaVersion == kProtocolVersionV3) return QString::fromLatin1(kProtocolNameV3);
     if (schemaVersion == kProtocolVersionV4) return QString::fromLatin1(kProtocolNameV4);
+    if (schemaVersion == kProtocolVersionV5) return QString::fromLatin1(kProtocolNameV5);
     if (schemaVersion == kProtocolVersion)
         return QString::fromLatin1(kProtocolName);
     return {};
@@ -564,7 +574,80 @@ QString protocolNameForCommandSchema(int schemaVersion) {
 
 bool isSupportedProtocolName(const QString& protocol) {
     return protocol == QLatin1String(kProtocolNameV2) || protocol == QLatin1String(kProtocolNameV3) || protocol == QLatin1String(kProtocolNameV4) ||
-           protocol == QLatin1String(kProtocolName);
+           protocol == QLatin1String(kProtocolNameV5) || protocol == QLatin1String(kProtocolName);
+}
+
+std::optional<SessionControlState> sessionControlFromJson(const QJsonObject& value) {
+    const auto exactKeys = [](const QJsonObject& object, std::initializer_list<const char*> keys) {
+        if (object.size() != qsizetype(keys.size())) return false;
+        return std::all_of(keys.begin(), keys.end(), [&object](const char* key) {
+            return object.contains(QString::fromLatin1(key));
+        });
+    };
+    if (!exactKeys(value, {"mode", "sessionVersion", "hostMemberId", "transport", "audition"}) ||
+        !value.value(QStringLiteral("transport")).isObject() ||
+        !value.value(QStringLiteral("audition")).isObject()) return std::nullopt;
+    SessionControlState state;
+    state.mode = value.value(QStringLiteral("mode")).toString();
+    if (state.mode != QLatin1String("independent") && state.mode != QLatin1String("follow_host") &&
+        state.mode != QLatin1String("synchronized")) return std::nullopt;
+    const auto sequence = [](const QJsonValue& v) -> std::optional<quint64> {
+        const double n = v.toDouble(-1);
+        if (!v.isDouble() || !std::isfinite(n) || n < 0 || n > 9007199254740991.0 || std::floor(n) != n)
+            return std::nullopt;
+        return quint64(n);
+    };
+    const auto uuid = [](const QJsonValue& v) {
+        if (!v.isString()) return false;
+        const QUuid id(v.toString());
+        return !id.isNull() && id.toString(QUuid::WithoutBraces).toLower() == v.toString();
+    };
+    const auto host = value.value(QStringLiteral("hostMemberId"));
+    if (!host.isNull() && !uuid(host)) return std::nullopt;
+    state.hostMemberId = host.toString();
+    const auto version = sequence(value.value(QStringLiteral("sessionVersion")));
+    const QJsonObject transport = value.value(QStringLiteral("transport")).toObject();
+    const QJsonObject audition = value.value(QStringLiteral("audition")).toObject();
+    if (!exactKeys(transport, {"revision", "playing", "positionSeconds", "rate", "serverTimeMs",
+                             "effectiveAtServerMs", "loopEnabled", "loopStartSeconds", "loopEndSeconds"}) ||
+        !exactKeys(audition, {"revision", "mutedTrackIds", "soloTrackIds"})) return std::nullopt;
+    const auto transportRevision = sequence(transport.value(QStringLiteral("revision")));
+    const auto auditionRevision = sequence(audition.value(QStringLiteral("revision")));
+    const auto serverTime = sequence(transport.value(QStringLiteral("serverTimeMs")));
+    const auto effectiveAt = sequence(transport.value(QStringLiteral("effectiveAtServerMs")));
+    if (!version || *version == 0 || !transportRevision || !auditionRevision || !serverTime || !effectiveAt ||
+        !transport.value(QStringLiteral("playing")).isBool() || !transport.value(QStringLiteral("loopEnabled")).isBool())
+        return std::nullopt;
+    const auto number = [&transport](const char* key, double low, double high, double& result) {
+        const auto v = transport.value(QString::fromLatin1(key));
+        if (!v.isDouble()) return false;
+        result = v.toDouble();
+        return std::isfinite(result) && result >= low && result <= high;
+    };
+    if (!number("positionSeconds", 0, 1e9, state.positionSeconds) || !number("rate", .25, 4, state.rate) ||
+        !number("loopStartSeconds", 0, 1e9, state.loopStartSeconds) || !number("loopEndSeconds", 0, 1e9, state.loopEndSeconds))
+        return std::nullopt;
+    state.sessionVersion = *version;
+    state.transportRevision = *transportRevision;
+    state.auditionRevision = *auditionRevision;
+    state.serverTimeMs = qint64(*serverTime);
+    state.effectiveAtServerMs = qint64(*effectiveAt);
+    state.playing = transport.value(QStringLiteral("playing")).toBool();
+    state.loopEnabled = transport.value(QStringLiteral("loopEnabled")).toBool();
+    if (state.loopEnabled && state.loopEndSeconds <= state.loopStartSeconds) return std::nullopt;
+    const auto ids = [&uuid](const QJsonValue& v, QStringList& result) {
+        if (!v.isArray() || v.toArray().size() > 8192) return false;
+        QSet<QString> seen;
+        for (const QJsonValue& item : v.toArray()) {
+            if (!uuid(item) || seen.contains(item.toString())) return false;
+            seen.insert(item.toString());
+            result.push_back(item.toString());
+        }
+        return true;
+    };
+    if (!ids(audition.value(QStringLiteral("mutedTrackIds")), state.mutedTrackIds) ||
+        !ids(audition.value(QStringLiteral("soloTrackIds")), state.soloTrackIds)) return std::nullopt;
+    return state;
 }
 
 bool checkCollaborationProtocolForTest(QString* error) {

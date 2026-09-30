@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QSet>
+#include <QSettings>
 
 #include <algorithm>
 #include <cmath>
@@ -51,11 +52,37 @@ void interpolateScalar(double& output, double from, double to, qreal progress) {
 } // namespace
 
 PresenceStore::PresenceStore(QObject* parent) : QObject(parent) {
+    m_remoteCursorsVisible = QSettings().value(
+        QStringLiteral("collaboration/showRemoteCursors"), true).toBool();
     m_expiryTimer.setInterval(250);
     m_expiryTimer.setTimerType(Qt::CoarseTimer);
     connect(&m_expiryTimer, &QTimer::timeout, this,
             &PresenceStore::expireStaleCursors);
     m_expiryTimer.start();
+}
+
+qreal cursorProgress(const PresencePacket& previous, const PresencePacket& current,
+                     qint64 previousReceived, qint64 received, qint64 now) {
+    const qint64 sentSpan = current.sentAtMs > 0 && previous.sentAtMs > 0
+        ? current.sentAtMs - previous.sentAtMs : 0;
+    const qint64 span = std::clamp(sentSpan > 0 ? sentSpan : received - previousReceived,
+                                  qint64(8), qint64(120));
+    return std::clamp(qreal(std::max<qint64>(0, now - received)) / qreal(span),
+                      qreal(0), qreal(1));
+}
+
+void interpolatePoint(SemanticPoint& point, const SemanticPoint& previous, qreal progress) {
+    if (hasNormalized(previous) && hasNormalized(point))
+        point.normalized = previous.normalized + (point.normalized - previous.normalized) * progress;
+    interpolateScalar(point.timeSeconds, previous.timeSeconds, point.timeSeconds, progress);
+    interpolateScalar(point.beat, previous.beat, point.beat, progress);
+    interpolateScalar(point.laneFraction, previous.laneFraction, point.laneFraction, progress);
+}
+
+void PresenceStore::setRemoteCursorsVisible(bool visible) {
+    if (m_remoteCursorsVisible == visible) return;
+    m_remoteCursorsVisible = visible;
+    emit remoteCursorsVisibleChanged(visible);
 }
 
 QString PresenceStore::participantKey(const ParticipantIdentity& participant) {
@@ -176,7 +203,14 @@ void PresenceStore::applyPresence(const PresenceUpdate& update) {
     if (cursorUpdate) {
         if (it->hasCursor && interpolationContextMatches(
                                  it->packet.point, update.packet.point)) {
-            it->previousPacket = it->packet;
+            PresencePacket presented = it->packet;
+            if (it->hasPreviousCursor)
+                interpolatePoint(presented.point, it->previousPacket.point,
+                    cursorProgress(it->previousPacket, it->packet,
+                        it->previousReceivedAtMs, it->receivedAtMs, receivedNow));
+            // Start from the displayed position when a packet interrupts a
+            // previous interpolation; jitter must not jump to the old target.
+            it->previousPacket = std::move(presented);
             it->previousReceivedAtMs = it->receivedAtMs;
             it->hasPreviousCursor = true;
         } else {
@@ -240,7 +274,7 @@ QVector<ParticipantIdentity> PresenceStore::participants() const {
 }
 
 QVector<PresenceCursorSnapshot> PresenceStore::cursorsForSurface(
-    const SurfaceAddress& surface, qint64 nowMs) const {
+    const SurfaceAddress& surface, qint64 nowMs, bool interpolate) const {
     if (nowMs <= 0) nowMs = wallClockMs();
     QVector<PresenceCursorSnapshot> result;
     for (const Entry& entry : m_entries) {
@@ -255,42 +289,12 @@ QVector<PresenceCursorSnapshot> PresenceStore::cursorsForSurface(
         }
         PresenceCursorSnapshot snapshot{
             entry.identity, entry.packet, entry.receivedAtMs, opacity, false};
-        if (entry.hasPreviousCursor &&
+        if (interpolate && entry.hasPreviousCursor &&
             interpolationContextMatches(entry.previousPacket.point,
                                         entry.packet.point)) {
-            // Walk from the previous sample to the newest one over the span the
-            // sender actually used, so the render stays exactly one packet
-            // behind and network jitter never becomes visible speed. The span
-            // is measured on the server clock stamped into both packets;
-            // arrival times are only the local start of the walk, because two
-            // coalesced packets can share one arrival instant.
-            constexpr qint64 kMinimumSpanMs = 8;
-            constexpr qint64 kMaximumSpanMs = 250;
-            const qint64 sentSpan =
-                entry.packet.sentAtMs > 0 && entry.previousPacket.sentAtMs > 0
-                    ? entry.packet.sentAtMs - entry.previousPacket.sentAtMs
-                    : 0;
-            const qint64 arrivalSpan =
-                entry.receivedAtMs - entry.previousReceivedAtMs;
-            const qint64 spanMs = std::clamp(
-                sentSpan > 0 ? sentSpan : arrivalSpan, kMinimumSpanMs,
-                kMaximumSpanMs);
-            const qint64 elapsed =
-                std::max<qint64>(0, nowMs - entry.receivedAtMs);
-            const qreal progress =
-                std::clamp(qreal(elapsed) / qreal(spanMs), qreal(0.0),
-                           qreal(1.0));
-            SemanticPoint& point = snapshot.packet.point;
-            const SemanticPoint& previous = entry.previousPacket.point;
-            if (hasNormalized(previous) && hasNormalized(point)) {
-                point.normalized = previous.normalized +
-                    (point.normalized - previous.normalized) * progress;
-            }
-            interpolateScalar(point.timeSeconds, previous.timeSeconds,
-                              point.timeSeconds, progress);
-            interpolateScalar(point.beat, previous.beat, point.beat, progress);
-            interpolateScalar(point.laneFraction, previous.laneFraction,
-                              point.laneFraction, progress);
+            const qreal progress = cursorProgress(entry.previousPacket, entry.packet,
+                entry.previousReceivedAtMs, entry.receivedAtMs, nowMs);
+            interpolatePoint(snapshot.packet.point, entry.previousPacket.point, progress);
             snapshot.interpolating = progress < 1.0;
         }
         result.push_back(std::move(snapshot));
@@ -420,6 +424,24 @@ bool PresenceStore::checkDeliveryForTest(QString* error) {
         return fail(QStringLiteral(
             "interpolation snapped past the sender's own span"));
     }
+    const qint64 sampleNow = wallClockMs();
+    auto& pacedEntry = paced.m_entries[peerId];
+    pacedEntry.receivedAtMs = sampleNow - 50;
+    pacedEntry.previousReceivedAtMs = sampleNow - 150;
+    const qreal displayed = paced.cursorsForSurface(surface, sampleNow)
+                                .front().packet.point.normalized.x();
+    paced.applyPresence(cursorAt(PresenceChannel::Cursor, 3, 10'150, 0.25));
+    const qreal redirected = paced.cursorsForSurface(surface)
+                                 .front().packet.point.normalized.x();
+    if (std::abs(displayed - redirected) > 0.06)
+        return fail(QStringLiteral("a reversing cursor jumped to an unfinished target"));
+    const auto reduced = paced.cursorsForSurface(surface, sampleNow, false);
+    if (reduced.front().interpolating ||
+        reduced.front().packet.point.normalized.x() != 0.25)
+        return fail(QStringLiteral("reduced motion did not show the latest cursor directly"));
+    paced.setRemoteCursorsVisible(false);
+    if (paced.remoteCursorsVisible() || paced.participantCount() != 1)
+        return fail(QStringLiteral("hiding remote cursors changed session membership"));
     return true;
 }
 

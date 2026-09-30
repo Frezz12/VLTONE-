@@ -2119,7 +2119,7 @@ void SamplerPanel::refresh() {
     if (m_offlineHistory && m_controller) {
         const auto* clip = m_controller->audioClip(m_channelId.toStdString(), m_slotId.toStdString());
         const bool hasHistory = clip && (!clip->offlineHistory.empty() || !clip->offlineProcess.empty());
-        m_offlineHistory->setEnabled(hasHistory && !m_controller->hasCloudProjectBinding() &&
+        m_offlineHistory->setEnabled(hasHistory && m_controller->sharedEditingAllowed() &&
                                      !m_controller->offlineRenderInProgress());
         QString caption = tr("History ▾");
         if (clip && !clip->offlineHistory.empty()) {

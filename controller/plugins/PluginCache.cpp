@@ -24,6 +24,11 @@ namespace {
 
 constexpr int kCacheVersion = 1;
 
+bool sameModulePath(const std::string& left, const std::string& right) {
+    return platform::pathFromUtf8(left).lexically_normal() ==
+           platform::pathFromUtf8(right).lexically_normal();
+}
+
 json descriptorToJson(const plugins::PluginDescriptor& descriptor) {
     // Round-trips through the scanner's own encoder, so the cache and the wire
     // can never describe a plugin differently.
@@ -97,7 +102,7 @@ void PluginCache::setSearchPaths(Format format, std::vector<std::string> paths) 
 
 void PluginCache::put(PluginCacheEntry entry) {
     for (PluginCacheEntry& existing : m_entries) {
-        if (existing.format == entry.format && existing.path == entry.path) {
+        if (existing.format == entry.format && sameModulePath(existing.path, entry.path)) {
             existing = std::move(entry);
             return;
         }
@@ -108,14 +113,14 @@ void PluginCache::put(PluginCacheEntry entry) {
 const PluginCacheEntry* PluginCache::find(Format format,
                                           const std::string& path) const {
     for (const PluginCacheEntry& entry : m_entries) {
-        if (entry.format == format && entry.path == path) return &entry;
+        if (entry.format == format && sameModulePath(entry.path, path)) return &entry;
     }
     return nullptr;
 }
 
 void PluginCache::remove(Format format, const std::string& path) {
     std::erase_if(m_entries, [&](const PluginCacheEntry& entry) {
-        return entry.format == format && entry.path == path;
+        return entry.format == format && sameModulePath(entry.path, path);
     });
 }
 

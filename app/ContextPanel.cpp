@@ -490,7 +490,7 @@ QWidget* ContextPanel::buildAudioClip() {
         connect(silence, &QAbstractButton::clicked, this, &ContextPanel::stripSilenceRequested);
         row->addWidget(silence);
         loaders.push_back([this, silence] {
-            silence->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording());
+            silence->setEnabled(m_controller->sharedEditingAllowed() && !m_controller->isRecording());
         });
     }
 
@@ -749,7 +749,7 @@ QWidget* ContextPanel::buildAudioClipMulti() {
     if (toolEnabled("clip.silence")) {
         auto* silence = islandButton(icons::Glyph::StripSilence, tr("Strip Silence…"), host);
         silence->setObjectName("ContextPanelStripSilence");
-        silence->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording());
+        silence->setEnabled(m_controller->sharedEditingAllowed() && !m_controller->isRecording());
         connect(silence, &QAbstractButton::clicked, this, &ContextPanel::stripSilenceRequested);
         row->addWidget(silence);
     }
@@ -758,7 +758,7 @@ QWidget* ContextPanel::buildAudioClipMulti() {
         auto* shared = islandButton(icons::Glyph::Plugin, tr("Shared Plugins…"), host);
         shared->setObjectName("ContextPanelSharedPlugins");
         ui::contextPriority(shared, 115);
-        shared->setEnabled(!m_controller->hasCloudProjectBinding() &&
+        shared->setEnabled(m_controller->sharedEditingAllowed() &&
             m_controller->validatePluginBatch(PluginBatchDialog::selectedTargets(*m_selection), 1).isOk());
         connect(shared, &QAbstractButton::clicked, this, &ContextPanel::sharedPluginsRequested);
         row->addWidget(shared);
@@ -1411,7 +1411,7 @@ QWidget* ContextPanel::buildTrackMulti() {
         auto* shared = islandButton(icons::Glyph::Plugin, tr("Shared Plugins…"), host);
         shared->setObjectName("ContextPanelSharedPlugins");
         ui::contextPriority(shared, 115);
-        shared->setEnabled(!m_controller->hasCloudProjectBinding());
+        shared->setEnabled(m_controller->sharedEditingAllowed());
         connect(shared, &QAbstractButton::clicked, this, &ContextPanel::sharedPluginsRequested);
         row->addWidget(shared);
     }
@@ -2007,7 +2007,7 @@ QWidget* ContextPanel::buildRecording() {
         row->addWidget(settings);
         loaders.push_back([this, automatic, settings] {
             automatic->setChecked(m_controller->recordingPrefs().autoSilence);
-            const bool available = !m_controller->hasCloudProjectBinding() &&
+            const bool available = m_controller->sharedEditingAllowed() &&
                 !m_controller->isRecording() && !m_controller->isCountingIn();
             automatic->setEnabled(available);
             settings->setEnabled(available);

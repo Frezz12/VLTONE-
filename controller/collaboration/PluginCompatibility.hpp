@@ -9,6 +9,7 @@
 namespace daw {
 class PluginManager;
 }
+namespace daw::plugins { struct PluginDescriptor; }
 
 namespace daw::collab {
 
@@ -29,6 +30,7 @@ struct PluginRequirement {
     int stateSchemaVersion = 0;
     bool instrument = false;
     PluginChannelMode channelMode = PluginChannelMode::Auto;
+    std::string parameterFingerprint;
 
     friend bool operator==(const PluginRequirement&,
                            const PluginRequirement&) = default;
@@ -50,6 +52,11 @@ struct PluginReadinessReport {
 
 std::vector<PluginRequirement> collectPluginRequirements(
     const ProjectModel& project);
+/// Cached external entries without a measured parameter schema are omitted;
+/// callers can offer a rescan instead of claiming an unverified common plugin.
+std::vector<PluginRequirement> collectPluginInventory(const PluginManager& manager);
+bool pluginSatisfiesRequirement(const plugins::PluginDescriptor& descriptor,
+                               const PluginRequirement& requirement);
 PluginReadinessReport evaluatePluginReadiness(
     const std::vector<PluginRequirement>& requirements,
     const PluginManager& manager, std::int64_t revision = 1);

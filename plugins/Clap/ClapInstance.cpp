@@ -232,6 +232,8 @@ bool ClapInstance::initialize() {
     readDescriptorPorts();
     m_pitchCapabilities = {};
     if (auto* ports = static_cast<const clap_plugin_note_ports_t*>(m_plugin->get_extension(m_plugin, CLAP_EXT_NOTE_PORTS))) {
+        m_descriptor.wantsMidi = ports->count(m_plugin, true) > 0;
+        m_descriptor.producesMidi = ports->count(m_plugin, false) > 0;
         clap_note_port_info_t port{};
         if (ports->count(m_plugin, true) && ports->get(m_plugin, 0, true, &port)) {
             m_pitchCapabilities.perNote = (port.supported_dialects & CLAP_NOTE_DIALECT_CLAP) != 0;
@@ -278,14 +280,23 @@ const void* ClapInstance::hostGetExtension(const clap_host_t*, const char* id) n
     static const clap_host_params_t kHostParams = {
         &ClapInstance::hostParamsRescan, &ClapInstance::hostParamsClear,
         &ClapInstance::hostParamsRequestFlush};
+    static const clap_host_state_t kHostState = {&ClapInstance::hostStateDirty};
 
     if (std::strcmp(id, CLAP_EXT_GUI) == 0) return &kHostGui;
     if (std::strcmp(id, CLAP_EXT_LATENCY) == 0) return &kHostLatency;
     if (std::strcmp(id, CLAP_EXT_TAIL) == 0) return &kHostTail;
     if (std::strcmp(id, CLAP_EXT_PARAMS) == 0) return &kHostParams;
+    if (std::strcmp(id, CLAP_EXT_STATE) == 0) return &kHostState;
     // Anything else: null is always a legal answer, and every plugin has to
     // cope with a host that does not offer an extension.
     return nullptr;
+}
+
+void ClapInstance::hostStateDirty(const clap_host_t* host) noexcept {
+    auto* self = static_cast<ClapInstance*>(host->host_data);
+    if (self)
+        if (auto* listener = self->m_listener.load(std::memory_order_acquire))
+            listener->onStateChanged();
 }
 
 void ClapInstance::hostRequestRestart(const clap_host_t* host) noexcept {

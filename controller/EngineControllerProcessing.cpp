@@ -13,6 +13,18 @@
 namespace fs = std::filesystem;
 
 namespace daw {
+struct EngineController::BounceJob {
+    std::string sourceTrackId;
+    std::vector<std::string> sourceTrackIds;
+    std::vector<std::string> sourceClipIds;
+    std::vector<EngineController::ClipAddress> affected;
+    std::string captureChannelId;
+    bool captureAtSource = false;
+    bool capturePreFader = false;
+    PlaybackInjection injection;
+    std::string file;
+    double renderedSeconds = 0.0;
+};
 namespace {
 
 bool layerEnabled(std::uint32_t mask, EngineController::BounceFxLayer layer) {
@@ -31,18 +43,7 @@ void removeFiles(const std::vector<std::string>& files) {
     }
 }
 
-struct BounceJob {
-    std::string sourceTrackId;
-    std::vector<std::string> sourceTrackIds;
-    std::vector<std::string> sourceClipIds;
-    std::vector<EngineController::ClipAddress> affected;
-    std::string captureChannelId;
-    bool captureAtSource = false;
-    bool capturePreFader = false;
-    PlaybackInjection injection;
-    std::string file;
-    double renderedSeconds = 0.0;
-};
+
 
 ClipAudioVersionSource renderedSource(const std::string& path, double seconds) {
     ClipAudioVersionSource source;
@@ -50,6 +51,19 @@ ClipAudioVersionSource renderedSource(const std::string& path, double seconds) {
     source.durationSeconds = seconds;
     source.channels = 2;
     return source;
+}
+
+ClipAudioVersionSource sharedAudioSource(ClipAudioVersionSource source) {
+    source.filePath.clear(); source.expanded = false;
+    for (auto& take : source.takes) take.filePath.clear();
+    return source;
+}
+
+collab::SetClipRenderState sharedRenderState(const EngineController::ClipAddress& address, const ClipModel& clip) {
+    collab::SetClipRenderState result{address.trackId, address.clipId, sharedAudioSource(captureClipAudioVersion(clip)),
+        clip.offlineHistory, clip.offlineVersionId, clip.playbackInjection};
+    for (auto& version : result.history) version.source = sharedAudioSource(std::move(version.source));
+    return result;
 }
 
 std::string effectNames(const std::vector<InsertModel>& chain) {
@@ -86,10 +100,9 @@ audio::Result EngineController::bounceInPlace(
     const std::function<bool(const rendering::Progress&)>& onProgress,
     BounceReport& out) {
     out = {};
-    if (cloudProjectBound()) {
-        return audio::Result::fail(audio::EngineError::InvalidArgument,
-                                   "Bounce in Place is local-only");
-    }
+    if (cloudProjectBound() && (!sharedEditingAllowed() || !m_sharedAssetMutationSink ||
+        m_sharedMutationSink->commandSchemaVersion() < 6))
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "Bounce requires an editable connected session");
     if (!(request.endSeconds > request.startSeconds)) {
         return audio::Result::fail(audio::EngineError::InvalidArgument,
                                    "the bounce range is empty");
@@ -270,6 +283,11 @@ audio::Result EngineController::bounceInPlace(
     }
     const auto sourceRevision = projectRevision();
     std::vector<std::string> stagedFiles;
+    const bool sharedRender = cloudProjectBound();
+    const auto discard = [&] {
+        if (sharedRender) retainSharedDerivedResult(stagedFiles, sourceRevision, "Bounce in Place", "interrupted");
+        else removeFiles(stagedFiles);
+    };
     for (std::size_t index = 0; index < jobs.size(); ++index) {
         BounceJob& job = jobs[index];
         rendering::Spec spec;
@@ -300,9 +318,10 @@ audio::Result EngineController::bounceInPlace(
         spec.bypassSends = !printSends;
         spec.bypassMasterChain = !printMaster;
 
+        spec.ignoreMuteSolo = cloudProjectBound();
         rendering::Report rendered;
         const auto progress = [&](const rendering::Progress& one) {
-            if (!onProgress) return true;
+            if (!onProgress) return projectRevision() == sourceRevision;
             rendering::Progress total = one;
             total.fraction =
                 (double(index) + one.fraction) / double(jobs.size());
@@ -314,7 +333,8 @@ audio::Result EngineController::bounceInPlace(
         };
         audio::Result result = renderProject(spec, progress, rendered);
         if (!result || rendered.cancelled || rendered.files.size() != 1) {
-            removeFiles(stagedFiles);
+            stagedFiles.insert(stagedFiles.end(), rendered.files.begin(), rendered.files.end());
+            discard();
             out.cancelled = rendered.cancelled;
             if (rendered.cancelled) return audio::Result::ok();
             if (!result) return result;
@@ -326,6 +346,37 @@ audio::Result EngineController::bounceInPlace(
         stagedFiles.push_back(job.file);
     }
 
+    if (projectRevision() != sourceRevision) {
+        discard(); out.cancelled = true; return audio::Result::ok();
+    }
+    if (cloudProjectBound()) {
+        EngineController draft;
+        if (auto ready = draft.initialize(m_sampleRate, m_bufferSize, false); !ready) { discard(); return ready; }
+        draft.m_pluginManager.copyCatalogFrom(m_pluginManager);
+        draft.m_recordDir = m_recordDir;
+        if (auto ready = draft.materializeCollaborationProject(m_project, true); !ready) { discard(); return ready; }
+        const auto before = m_project;
+        if (auto applied = draft.commitBounceOutputs(request, jobs, out, true); !applied) { discard(); return applied; }
+        auto after = draft.m_project;
+        const bool queued = submitSharedDerivedMutation(stagedFiles, AssetKind::Audio,
+            [this, before, after = std::move(after), paths = stagedFiles](const auto& assets) mutable -> collab::CommandBody {
+                for (auto& track : after.tracks) for (auto& clip : track.clips) {
+                    const auto found = std::find(paths.begin(), paths.end(), clip.filePath);
+                    if (found != paths.end()) clip.asset = assets[std::size_t(found - paths.begin())];
+                }
+                return derivedProjectCommands(before, after);
+            }, sourceRevision, request.undoLabel.empty() ? "Bounce in Place" : request.undoLabel);
+        return queued ? audio::Result::ok() : audio::Result::fail(audio::EngineError::InvalidArgument,
+            "The project changed or bounce upload could not start");
+    }
+    return commitBounceOutputs(request, jobs, out);
+}
+
+audio::Result EngineController::commitBounceOutputs(const BounceRequest& request, std::vector<BounceJob>& jobs, BounceReport& out, bool keepFilesOnFailure) {
+    const bool printSends = layerEnabled(request.fxLayers, BounceFxLayer::Sends);
+    const bool printTrack = layerEnabled(request.fxLayers, BounceFxLayer::Track);
+    std::vector<std::string> stagedFiles;
+    for (const auto& job : jobs) stagedFiles.push_back(job.file);
     const ProjectModel before = m_project;
     bool committed = true;
     {
@@ -491,7 +542,7 @@ audio::Result EngineController::bounceInPlace(
         updateTimelineDuration();
     }
     if (!committed) {
-        removeFiles(stagedFiles);
+        if (!keepFilesOnFailure) removeFiles(stagedFiles);
         return audio::Result::fail(audio::EngineError::FileWriteError,
                                    "could not insert bounced audio");
     }
@@ -507,7 +558,8 @@ audio::Result EngineController::renderClipsOffline(
     const std::function<bool(const rendering::Progress&)>& onProgress,
     OfflineRenderReport& out) {
     out = {};
-    if (cloudProjectBound() || m_exportInProgress) {
+    if (m_exportInProgress || (cloudProjectBound() && (!sharedEditingAllowed() || !m_sharedAssetMutationSink ||
+        m_sharedMutationSink->commandSchemaVersion() < 6))) {
         return audio::Result::fail(audio::EngineError::InvalidArgument,
                                    "Offline Render is unavailable in this project state");
     }
@@ -519,7 +571,8 @@ audio::Result EngineController::renderClipsOffline(
     if (enabledChain.inserts.empty())
         return audio::Result::fail(audio::EngineError::InvalidArgument, "add or enable an offline effect");
     for (const auto& slot : enabledChain.inserts) {
-        if (!m_pluginManager.find(toHostFormat(slot.model.format), slot.model.uid))
+        const auto descriptor = m_pluginManager.find(toHostFormat(slot.model.format), slot.model.uid);
+        if (!descriptor || (cloudProjectBound() && !sharedPluginAllowed(*descriptor)))
             return audio::Result::fail(audio::EngineError::FileNotFound,
                                        "plugin is not available: " + slot.model.name);
     }
@@ -527,8 +580,15 @@ audio::Result EngineController::renderClipsOffline(
     struct StagedFiles {
         std::vector<std::string> files;
         bool committed = false;
-        ~StagedFiles() { if (!committed) removeFiles(files); }
+        std::function<void(const std::vector<std::string>&)> retain;
+        ~StagedFiles() { if (!committed) { if (retain) retain(files); else removeFiles(files); } }
     } staged;
+    if (cloudProjectBound()) {
+        const auto revision = projectRevision();
+        staged.retain = [this, revision](const auto& files) {
+            retainSharedDerivedResult(files, revision, "Render Offline", "interrupted");
+        };
+    }
     struct BusyScope {
         bool& flag;
         explicit BusyScope(bool& value) : flag(value) { flag = true; }
@@ -551,6 +611,8 @@ audio::Result EngineController::renderClipsOffline(
             if (!seen.insert(address.trackId + "/" + address.clipId).second) continue;
             ClipModel copy = *source;
             ensureOfflineHistory(copy, offlineProcessCacheValid(address));
+            if (cloudProjectBound() && copy.offlineHistory.size() >= 64)
+                return audio::Result::fail(audio::EngineError::InvalidArgument, "Offline history has reached 64 versions");
             const double duration = effectiveClipLength(copy);
             if (!std::isfinite(duration) || duration <= 0.0)
                 return audio::Result::fail(audio::EngineError::InvalidArgument, "audio clip has no duration");
@@ -657,6 +719,31 @@ audio::Result EngineController::renderClipsOffline(
         std::vector<InsertModel> models;
         for (const auto& slot : enabledChain.inserts) models.push_back(slot.model);
         const auto label = effectNames(models);
+        if (cloudProjectBound()) {
+            auto commands = std::make_shared<collab::BatchCommand>();
+            for (std::size_t index = 0; index < clips.size(); ++index) {
+                auto after = sources[index];
+                auto source = renderedSource({}, durations[index]);
+                after.offlineHistory.push_back({newUuid(), after.offlineVersionId, label, source});
+                after.offlineVersionId = after.offlineHistory.back().id;
+                applyClipAudioVersion(after, source);
+                collab::ProjectCommand item; item.body = sharedRenderState(clips[index], after);
+                commands->commands.push_back(std::move(item));
+            }
+            staged.committed = true;
+            const bool queued = submitSharedDerivedMutation(staged.files, AssetKind::Audio,
+                [commands](const auto& assets) -> collab::CommandBody {
+                    for (std::size_t i = 0; i < assets.size(); ++i) {
+                        auto& body = std::get<collab::SetClipRenderState>(commands->commands[i].body);
+                        body.source.asset = assets[i]; body.source.channels = int(assets[i].channels);
+                        body.history.back().source = body.source;
+                    }
+                    return commands;
+                }, sourceRevision, "Render Offline");
+            out.files = staged.files;
+            return queued ? audio::Result::ok() : audio::Result::fail(audio::EngineError::InvalidArgument,
+                "The project changed or rendered audio upload could not start");
+        }
         committing = true;
         for (std::size_t index = 0; index < clips.size(); ++index) {
             auto* clip = findClip(clips[index].trackId, clips[index].clipId);
@@ -702,7 +789,7 @@ audio::Result EngineController::renderClipsOffline(
 
 audio::Result EngineController::selectOfflineRenderVersion(
     const ClipAddress& address, const std::string& versionId) {
-    if (cloudProjectBound() || m_exportInProgress)
+    if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument, "offline history is unavailable");
     auto* clip = findClip(address.trackId, address.clipId);
     if (!clip || clip->kind != ClipKind::Audio)
@@ -711,6 +798,12 @@ audio::Result EngineController::selectOfflineRenderVersion(
         [&](const auto& version) { return version.id == versionId; });
     if (found == clip->offlineHistory.end())
         return audio::Result::fail(audio::EngineError::InvalidArgument, "offline version not found");
+    if (cloudProjectBound()) {
+        auto after = *clip; applyClipAudioVersion(after, found->source); after.offlineVersionId = versionId;
+        return submitSharedMutation(sharedRenderState(address, after), "Change Offline Render Version") ==
+            collab::SharedMutationResult::Submitted ? audio::Result::ok() :
+            audio::Result::fail(audio::EngineError::InvalidArgument, "Offline history change was rejected");
+    }
     // Missing history media must never replace a playable version with silence.
     const auto available = [this](const std::string& path) {
         std::error_code error;
@@ -744,7 +837,7 @@ audio::Result EngineController::selectOfflineRenderVersion(
 }
 
 audio::Result EngineController::restoreOfflineRenderOriginal(const ClipAddress& address) {
-    if (cloudProjectBound() || m_exportInProgress)
+    if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument, "offline history is unavailable");
     auto* clip = findClip(address.trackId, address.clipId);
     if (!clip || clip->kind != ClipKind::Audio)

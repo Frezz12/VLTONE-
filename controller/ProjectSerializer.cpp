@@ -803,6 +803,7 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         track["freeze"] = json{{"file", mediaReference(t.freeze.filePath, media)},
             {"durationSeconds", t.freeze.durationSeconds},
             {"sampleRate", t.freeze.sampleRate}};
+        if (!t.freeze.asset.empty()) track["freeze"]["asset"] = assetRefToJson(t.freeze.asset);
     }
     return track;
 }
@@ -883,6 +884,7 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
             platform::pathFromUtf8(mediaDir) / platform::pathFromUtf8(file));
         t.freeze.durationSeconds = frozen.value("durationSeconds", 0.0);
         t.freeze.sampleRate = frozen.value("sampleRate", 0.0);
+        if (frozen.contains("asset")) t.freeze.asset = assetRefFromJson(frozen.at("asset"));
     }
     return t;
 }

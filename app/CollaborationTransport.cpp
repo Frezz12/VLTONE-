@@ -36,6 +36,12 @@ constexpr int kStableConnectionMs = 10'000;
 constexpr int kReconnectBaseMs = 500;
 constexpr int kReconnectCapMs = 30'000;
 
+QString exclusionAction(const QString& reason) {
+    if (reason == QLatin1String("session_excluded")) return QStringLiteral("kick");
+    if (reason == QLatin1String("project_banned")) return QStringLiteral("ban");
+    return {};
+}
+
 #ifdef DAW_ENABLE_COLLABORATION
 bool isPermanentCloseCode(QWebSocketProtocol::CloseCode code) {
     return code == QWebSocketProtocol::CloseCodeProtocolError ||
@@ -167,6 +173,8 @@ CollaborationTransport::CollaborationTransport(account::Service* account,
             [this](const QString&) { stopTransport(true); });
     connect(m_service, &CollaborationService::commandSchemaVersionChanged,
             this, [this](int) { stopTransport(true); });
+    connect(m_service, &CollaborationService::localSessionExcluded,
+            this, [this](const QString&) { stopTransport(false); });
     connect(m_account, &account::Service::authenticatedChanged, this,
             [this](bool) { accountStateChanged(); });
     connect(m_account, &account::Service::snapshotChanged, this,
@@ -322,9 +330,16 @@ void CollaborationTransport::startConnection() {
             });
     connect(socket, &QWebSocket::disconnected, this,
             [this, socket, generation] {
+                if (!isCurrent(socket, generation)) return;
+                const QString reason = socket->closeReason().trimmed();
+                const QString excluded = exclusionAction(reason);
+                if (!excluded.isEmpty()) {
+                    stopTransport(false);
+                    m_service->trustedSessionExcluded(excluded);
+                    return;
+                }
                 if (isCurrent(socket, generation) &&
                     isPermanentCloseCode(socket->closeCode())) {
-                    const QString reason = socket->closeReason().trimmed();
                     permanentFailure(
                         reason.isEmpty()
                             ? QStringLiteral("Collaboration connection was rejected")
@@ -562,6 +577,11 @@ bool checkCollaborationTransportForTest(QString* error) {
         canQueueMessage(0, kMaxQueuedBytes, 1) ||
         canQueueMessage(0, 0, kMaxMessageBytes + 1)) {
         return fail(QStringLiteral("outbound queue limits were not enforced"));
+    }
+    if (exclusionAction(QStringLiteral("session_excluded")) != QLatin1String("kick") ||
+        exclusionAction(QStringLiteral("project_banned")) != QLatin1String("ban") ||
+        !exclusionAction(QStringLiteral("readiness_changed")).isEmpty()) {
+        return fail(QStringLiteral("moderation close reason would reconnect an excluded participant"));
     }
 #ifdef DAW_ENABLE_COLLABORATION
     const QNetworkRequest request = handshakeRequest(

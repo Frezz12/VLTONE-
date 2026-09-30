@@ -104,8 +104,6 @@ struct CloudPublicationCapture::Impl {
 
 CloudPublicationCapture::CloudPublicationCapture(ProjectModel source)
     : document(std::move(source)), m_impl(std::make_unique<Impl>()) {
-    // Freeze is a disposable local cache; publish the original editable source.
-    for (auto& track : document.tracks) track.freeze = {};
 }
 
 CloudPublicationCapture::CloudPublicationCapture(
@@ -365,18 +363,19 @@ bool CloudPublicationCapture::stagePluginState(
 }
 
 std::vector<PublicationCaptureIssue> inspectCaptureCompatibilityV1(
-    const ProjectModel& project) {
+    const ProjectModel& project, bool allowExternal) {
     std::vector<PublicationCaptureIssue> issues;
     visitInserts(project, [&](const InsertModel& insert,
                               const std::string& location) {
         if (!insert.isLoaded()) return;
-        if (insert.format != PluginFormat::Internal) {
+        if (insert.format != PluginFormat::Internal &&
+            !allowExternal) {
             issues.push_back(compatibilityIssue(
                 PublicationCaptureIssueKind::ThirdPartyPlugin, insert,
                 location,
-                "V1 cloud projects accept built-in plugins only; remove or "
-                "manually bounce this slot"));
-        } else if (!isSupportedBuiltinV1(insert)) {
+                allowExternal ? "External plugins require a scanned exact version and parameter contract" :
+                "This project uses built-in plugins only; choose the checked external plugin profile"));
+        } else if (insert.format == PluginFormat::Internal && !isSupportedBuiltinV1(insert)) {
             issues.push_back(compatibilityIssue(
                 PublicationCaptureIssueKind::UnknownInternalPlugin, insert,
                 location,

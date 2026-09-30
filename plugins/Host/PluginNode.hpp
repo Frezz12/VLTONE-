@@ -163,6 +163,9 @@ public:
     bool takeReloadRequested() noexcept {
         return m_reloadRequested.exchange(false, std::memory_order_acq_rel);
     }
+    bool takeStateChanged() noexcept {
+        return m_stateChanged.exchange(false, std::memory_order_acq_rel);
+    }
     /// Start one controller-side drain. Clearing before the drain means a
     /// notification racing with it publishes a fresh global generation and is
     /// guaranteed another turn; a burst before it is coalesced into this one.
@@ -176,6 +179,7 @@ public:
     void onLatencyChanged() noexcept override;
     void onRestartRequested() noexcept override;
     void onReloadRequested() noexcept override;
+    void onStateChanged() noexcept override;
 
 private:
     using AutomationOverrides = std::vector<std::pair<std::uint32_t, std::uint64_t>>;
@@ -274,6 +278,7 @@ private:
     std::atomic<bool> m_latencyChanged{false};
     std::atomic<bool> m_restartRequested{false};
     std::atomic<bool> m_reloadRequested{false};
+    std::atomic<bool> m_stateChanged{false};
     std::atomic<bool> m_mainThreadWorkPending{false};
     std::atomic<bool> m_ready{false};
     std::atomic<bool> m_processFailed{false};

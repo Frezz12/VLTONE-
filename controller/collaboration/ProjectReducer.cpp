@@ -750,7 +750,9 @@ bool validSharedInsert(const InsertModel& insert,
         std::isfinite(insert.slideBendRange) && insert.slideBendRange >= 1 && insert.slideBendRange <= 96 &&
         std::isfinite(insert.slideReleaseReserve) && insert.slideReleaseReserve >= 0 && insert.slideReleaseReserve <= 20 &&
         (schemaVersion >= 5 || (insert.slideDelivery == 0 && insert.slideBendRange == 2 && insert.slideReleaseReserve == 2));
-    return allowed && slideSettings && !insert.id.empty() && !insert.uid.empty() &&
+    const bool fingerprint = insert.parameterFingerprint.empty() ||
+        (schemaVersion >= 6 && lowercaseSha256(insert.parameterFingerprint));
+    return allowed && fingerprint && slideSettings && !insert.id.empty() && !insert.uid.empty() &&
            insert.name.size() <= 4096 && insert.vendor.size() <= 4096 &&
            insert.path.empty() && insert.stateFile.empty() &&
            insert.rightStateFile.empty() && insert.pluginVersion.size() > 0 &&
@@ -782,6 +784,7 @@ bool sharedInsertEqual(const InsertModel& a, const InsertModel& b) {
     return a.id == b.id && a.name == b.name && a.bypassed == b.bypassed &&
            a.format == b.format && a.uid == b.uid && a.vendor == b.vendor &&
            a.pluginVersion == b.pluginVersion &&
+           a.parameterFingerprint == b.parameterFingerprint &&
            a.stateSchemaVersion == b.stateSchemaVersion && a.mix == b.mix &&
            a.channelMode == b.channelMode &&
            a.sidechainTrackIds == b.sidechainTrackIds &&
@@ -897,6 +900,86 @@ bool checkConditions(const SharedProjectDocument& state,
     return true;
 }
 
+bool validRenderSource(const ClipAudioVersionSource& source) {
+    const auto range = [](double v, double lo, double hi) { return std::isfinite(v) && v >= lo && v <= hi; };
+    if (!source.filePath.empty() || source.expanded || !range(source.durationSeconds, 0, 1e9) ||
+        !range(source.offsetSeconds, 0, 1e9) || !range(source.fadeInSeconds, 0, source.durationSeconds) ||
+        !range(source.fadeOutSeconds, 0, source.durationSeconds) || !range(source.fadeInCurve, -1, 1) ||
+        !range(source.fadeOutCurve, -1, 1) || !range(source.gain, 0, 4) || !range(source.pan, -1, 1) ||
+        !range(source.compCrossfadeMs, 0, 20) || source.channels < 0 || source.channels > 1024 ||
+        !completeAsset(source.asset, AssetKind::Audio, true) ||
+        (!source.asset.empty() && !isUuid(source.asset.assetId)) ||
+        !validSampleEdit(source.sampleEdit) || !validMusicalAnalysis(source.musicalAnalysis) || !validWarp(source.warp) ||
+        source.takes.size() > 1024 || source.comp.size() > 8192) return false;
+    std::set<std::string> takes, segments;
+    for (const auto& take : source.takes)
+        if (!isUuid(take.id) || !takes.insert(take.id).second || !completeAudioTake(take) ||
+            !isUuid(take.asset.assetId) || !take.slideNotes.empty() || !take.lanes.empty()) return false;
+    double end = 0;
+    for (const auto& segment : source.comp) {
+        if (!isUuid(segment.id) || !segments.insert(segment.id).second || !takes.contains(segment.takeId) ||
+            !range(segment.startSeconds, end, source.durationSeconds) ||
+            !range(segment.endSeconds, segment.startSeconds + 0.001, source.durationSeconds)) return false;
+        end = segment.endSeconds;
+    }
+    return std::all_of(source.warp.markers.begin(), source.warp.markers.end(),
+        [](const auto& marker) { return isUuid(marker.id); });
+}
+
+ApplyResult applySetClipRenderState(SharedProjectDocument& state, const ProjectCommand& command,
+    const SetClipRenderState& body) {
+    if (command.meta.schemaVersion < 6 || !validRenderSource(body.source) || body.history.size() > 64)
+        return reject(ApplyCode::InvalidCommand, "invalid rendered audio source");
+    if (clipScopeIsDeleted(state, body.trackId, body.clipId)) return reject(ApplyCode::DeletedEntity, "clip was deleted");
+    auto location = findClip(state.project, body.clipId);
+    if (!location.clip || location.track->id != body.trackId || location.clip->kind != ClipKind::Audio)
+        return reject(ApplyCode::MissingEntity, "audio clip does not exist");
+    std::set<std::string> versions;
+    for (const auto& version : body.history) {
+        if (!isUuid(version.id) || !versions.insert(version.id).second || version.label.size() > 4096 ||
+            (!version.parentId.empty() && (!versions.contains(version.parentId) || version.parentId == version.id)) ||
+            !validRenderSource(version.source)) return reject(ApplyCode::InvalidCommand, "invalid offline history");
+    }
+    if ((!body.versionId.empty() && !versions.contains(body.versionId)) ||
+        (!body.history.empty() && body.versionId.empty()) || int(body.injection.stage) > int(PlaybackInjectionStage::BeforeMasterFader) ||
+        (!body.injection.anchorChannelId.empty() && body.injection.anchorChannelId != "master" &&
+         !state.project.findTrack(body.injection.anchorChannelId))) return reject(ApplyCode::InvalidCommand, "invalid render routing or version");
+    auto& clip = *location.clip;
+    SetClipRenderState before{body.trackId, body.clipId, captureClipAudioVersion(clip), clip.offlineHistory,
+        clip.offlineVersionId, clip.playbackInjection};
+    applyClipAudioVersion(clip, body.source);
+    clip.offlineHistory = body.history; clip.offlineVersionId = body.versionId;
+    clip.playbackInjection = body.injection; clip.offlineProcess = {};
+    ApplyResult result; result.code = ApplyCode::Applied;
+    result.impact.documentChanged = result.impact.graphRebuild = result.impact.timelineChanged = true;
+    result.impact.trackIds.insert(body.trackId); result.impact.clipIds.insert(body.clipId);
+    auto inverse = inverseShell(command, std::move(before));
+    inverse.conditions.push_back({"project:renderGeneration", command.meta.operationId});
+    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    return result;
+}
+
+ApplyResult applySetTrackFreeze(SharedProjectDocument& state, const ProjectCommand& command,
+    const SetTrackFreeze& body) {
+    if (command.meta.schemaVersion < 6 || !completeAsset(body.asset, AssetKind::Audio, true) ||
+        !std::isfinite(body.durationSeconds) || !std::isfinite(body.sampleRate) ||
+        (body.asset.empty() ? (body.durationSeconds != 0 || body.sampleRate != 0) :
+            (!isUuid(body.asset.assetId) || body.durationSeconds <= 0 || body.durationSeconds > 1e9 ||
+             body.sampleRate < 8000 || body.sampleRate > 768000)))
+        return reject(ApplyCode::InvalidCommand, "invalid freeze asset");
+    auto* track = state.project.findTrack(body.trackId);
+    if (!track) return reject(ApplyCode::MissingEntity, "track does not exist");
+    const auto before = track->freeze;
+    track->freeze = {}; track->freeze.asset = body.asset;
+    track->freeze.durationSeconds = body.durationSeconds; track->freeze.sampleRate = body.sampleRate;
+    ApplyResult result; result.code = ApplyCode::Applied;
+    result.impact.documentChanged = result.impact.graphRebuild = true; result.impact.trackIds.insert(body.trackId);
+    auto inverse = inverseShell(command, SetTrackFreeze{body.trackId, before.asset, before.durationSeconds, before.sampleRate});
+    inverse.conditions.push_back({"project:renderGeneration", command.meta.operationId});
+    result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+    return result;
+}
+
 ApplyResult applyImpl(SharedProjectDocument& state,
                       const ProjectCommand& command, bool allowBatch,
                       bool recordOperation);
@@ -908,6 +991,15 @@ ApplyResult applyScalar(SharedProjectDocument& state,
     ScalarValue before;
     bool same = false;
     switch (body.field) {
+        case ProjectScalar::NotebookHtml: {
+            const auto* value = std::get_if<std::string>(&body.value);
+            if (command.meta.schemaVersion < 6 || !value || value->size() > 524288)
+                return reject(ApplyCode::InvalidCommand, "invalid shared notebook");
+            before = state.project.notebookHtml;
+            same = state.project.notebookHtml == *value;
+            state.project.notebookHtml = *value;
+            break;
+        }
         case ProjectScalar::Name:
         case ProjectScalar::AiInstructions: {
             const auto* value = std::get_if<std::string>(&body.value);
@@ -4523,6 +4615,35 @@ ApplyResult applyImpl(SharedProjectDocument& state,
             return applyScalar(state, command, body);
         else if constexpr (std::is_same_v<T, SetTimeSignature>)
             return applyTimeSignature(state, command, body);
+        else if constexpr (std::is_same_v<T, SetTrackFreeze>)
+            return applySetTrackFreeze(state, command, body);
+        else if constexpr (std::is_same_v<T, SetClipRenderState>)
+            return applySetClipRenderState(state, command, body);
+        else if constexpr (std::is_same_v<T, SetNotebookCues>) {
+            if (command.meta.schemaVersion < 6 || body.cues.size() > 2000)
+                return reject(ApplyCode::InvalidCommand, "invalid notebook cues");
+            std::size_t bytes = 0;
+            for (const auto& cue : body.cues) {
+                bytes += cue.text.size();
+                if (!std::isfinite(cue.seconds) || cue.seconds < 0 || cue.seconds > 1e9 ||
+                    cue.text.size() > 4096 || bytes > 262144)
+                    return reject(ApplyCode::InvalidCommand, "invalid notebook cue");
+            }
+            const auto before = state.project.notebookCues;
+            const bool same = before == body.cues;
+            state.project.notebookCues = body.cues;
+            ApplyResult result;
+            result.code = same ? ApplyCode::NoChange : ApplyCode::Applied;
+            result.impact.documentChanged = !same;
+            const std::string key = "project:notebookCues";
+            markWriter(state, key, command.meta.operationId, result.impact);
+            if (!same) {
+                auto inverse = inverseShell(command, SetNotebookCues{before});
+                inverse.conditions.push_back(FieldWriterIs{key, command.meta.operationId});
+                result.inverse = std::make_shared<ProjectCommand>(std::move(inverse));
+            }
+            return result;
+        }
         else if constexpr (std::is_same_v<T, SetProjectKey>)
             return applyProjectKey(state, command, body);
         else if constexpr (std::is_same_v<T, AddTrack>)
@@ -4662,6 +4783,18 @@ ApplyResult applyImpl(SharedProjectDocument& state,
     // Keep reducer field-writer state exactly aligned with the public touched
     // field contract. Individual handlers mark the keys used by their inverse;
     // this final pass also covers coarse ordering/generation heads.
+    if (result.changed() && command.meta.schemaVersion >= 6 &&
+        !std::holds_alternative<std::shared_ptr<BatchCommand>>(command.body) &&
+        !std::holds_alternative<RecordingCommit>(command.body) &&
+        !std::holds_alternative<SetTrackFreeze>(command.body) &&
+        !std::holds_alternative<SetNotebookCues>(command.body)) {
+        const auto* scalar = std::get_if<SetProjectScalar>(&command.body);
+        const bool textOnly = scalar && (scalar->field == ProjectScalar::NotebookHtml ||
+            scalar->field == ProjectScalar::Name || scalar->field == ProjectScalar::AiInstructions);
+        if (!textOnly) for (auto& track : state.project.tracks) if (track.freeze.active()) {
+            track.freeze = {}; result.impact.graphRebuild = true; result.impact.trackIds.insert(track.id);
+        }
+    }
     if (result.accepted())
         markCommandWriters(state, command, result.impact);
     if (recordOperation && result.accepted())

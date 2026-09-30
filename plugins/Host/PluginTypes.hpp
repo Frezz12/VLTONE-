@@ -73,6 +73,11 @@ struct PluginDescriptor {
     /// Version of the plugin's opaque save/load state contract when known.
     /// External formats normally leave this at zero; built-ins publish it.
     int stateSchemaVersion = 0;
+    /// Canonical parameter/bus schema measured in the disposable scanner.
+    std::string parameterSchema;
+    /// Application-supplied SHA-256 of parameterSchema; never a binary hash.
+    std::string parameterFingerprint;
+    bool producesMidi = false;
 };
 
 struct ParameterInfo {

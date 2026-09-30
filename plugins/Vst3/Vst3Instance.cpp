@@ -436,6 +436,7 @@ void Vst3Instance::readBuses() {
     if (!m_component) return;
     m_descriptor.wantsMidi =
         m_descriptor.isInstrument || m_component->getBusCount(kEvent, kInput) > 0;
+    m_descriptor.producesMidi = m_component->getBusCount(kEvent, kOutput) > 0;
     const int32 inputs = m_component->getBusCount(kAudio, kInput);
     const int32 outputs = m_component->getBusCount(kAudio, kOutput);
 

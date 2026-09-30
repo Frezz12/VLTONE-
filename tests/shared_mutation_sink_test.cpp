@@ -8,6 +8,7 @@
 #include "Recording/RecordingEngine.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "collaboration/ProjectReducer.hpp"
+#include "recovery/CloudRecordingRecovery.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -16,6 +17,8 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -166,7 +169,7 @@ daw::AssetRef verifiedAsset(
     daw::AssetRef asset;
     asset.assetId = request.assetId;
     asset.sha256 = std::string(64, 'a');
-    asset.kind = daw::AssetKind::Audio;
+    asset.kind = request.kind;
     std::error_code error;
     asset.byteSize = std::filesystem::file_size(request.sourcePath, error);
     asset.originalName = request.displayName;
@@ -716,10 +719,11 @@ void verifyVerifiedAssetActions() {
                           .takes.size() == takesBefore &&
                   renderedBeforeVerify &&
                   finishLatest(controller, assets, commands, 0) &&
-                  !std::filesystem::exists(rendered) &&
+                  std::filesystem::exists(rendered) &&
                   std::holds_alternative<std::shared_ptr<
                       daw::collab::BatchCommand>>(commands.genericBodies.back()),
-              "flatten render is uploaded, submitted once, then cleaned");
+              "flatten render is uploaded and submitted once while its recoverable output is retained");
+        controller.discardSharedResultRecovery(rendered + ".vlt-pending.json");
         controller.detachSharedAssetMutationSink(assets);
         controller.detachSharedMutationSink(commands);
     }
@@ -999,6 +1003,7 @@ void verifyCompExitGates(daw::collab::SharedMutationResult result) {
     used.id = daw::newUuid();
     used.name = "Used";
     used.lengthSeconds = 1.0;
+    used.asset = sharedAudioAsset();
     daw::TakeModel unused = used;
     unused.id = daw::newUuid();
     unused.name = "Unused";
@@ -1039,18 +1044,18 @@ void verifyCompExitGates(daw::collab::SharedMutationResult result) {
     const std::size_t cropped = controller.cropToComp(trackId, clipId);
     const std::size_t removed = controller.deleteUnusedTakes(true);
 
-    const auto* batch = sink.genericBodies.size() == 3
+    const auto* batch = sink.genericBodies.size() == 4
                             ? std::get_if<std::shared_ptr<
                                   daw::collab::BatchCommand>>(
                                   &sink.genericBodies.back())
                             : nullptr;
     const auto* unchanged = controller.project().findTrack(trackId);
-    const bool routed = unchangedDuringGesture && sink.genericCalls == 3 &&
+    const bool routed = unchangedDuringGesture && sink.genericCalls == 4 &&
                         allBatches(sink, 0) && batch && *batch &&
                         (*batch)->commands.size() == 1 && cropped == 0 &&
                         removed == (submitted ? 1u : 0u);
     check(routed,
-          "comp draft/select/delete submit batches while commit/crop stay blocked");
+          "comp draft/select/commit/delete submit typed batches while a crop without source bytes does nothing");
     check(unchanged && unchanged->clips.front().takes.size() == 2 &&
               unchanged->clips.front().comp.size() == 1 &&
               controller.undoDepth() == undoDepth,
@@ -1280,25 +1285,36 @@ void verifySharedChannelBatchMutators(
     FakeSharedMutationSink sink;
     sink.result = result;
     controller.attachSharedMutationSink(sink);
-    const bool pasted = controller.pasteChannelInserts(targetId, plugins);
     std::vector<std::vector<std::string>> batchIds;
     check(!controller.appendPluginBatch({{targetId, {}}}, plugins, batchIds) && batchIds.empty(),
-          "opaque configured plugin batches remain blocked in cloud projects");
+          "opaque configured plugin batches require a verified asset sink");
+    FakeSharedAssetMutationSink assets;
+    controller.attachSharedAssetMutationSink(assets);
+    std::size_t completedAssets = 0;
+    const auto completeAssets = [&] {
+        while (completedAssets < assets.requests.size()) {
+            const auto request = assets.requests[completedAssets++];
+            controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request));
+            controller.discardSharedResultRecovery(request.sourcePath + ".vlt-pending.json");
+        }
+    };
+    const bool pasted = controller.pasteChannelInserts(targetId, plugins);
+    completeAssets();
     const bool stripPasted = controller.pasteChannelStrip(targetId, strip);
+    completeAssets();
     const bool presetPasted =
         controller.pasteChannelStripPreset(targetId, strip);
+    completeAssets();
     const bool filePresetApplied =
         controller.applyChannelStripPreset(targetId, presetPath.string()).isOk();
     const bool moved = controller.moveInsertBetweenChannels(
         sourceId, insertId, targetId, 0, false);
+    completeAssets();
 
     check(sink.genericCalls == 5 && allBatches(sink, 0),
           "channel paste/move gestures each submit one outer batch");
-    check(pasted == submitted && stripPasted == submitted &&
-              presetPasted == submitted && filePresetApplied == submitted &&
-              moved == submitted,
-          submitted ? "submitted channel batch results reach callers"
-                    : "blocked channel batch results reach callers");
+    check(pasted && stripPasted && presetPasted && moved && filePresetApplied == submitted,
+          "opaque channel batches report queued asset work and parameter-only batches report command acceptance");
     const auto* unchangedSource = controller.project().findTrack(sourceId);
     const auto* unchangedTarget = controller.project().findTrack(targetId);
     check(unchangedSource && unchangedSource->inserts.size() == 1 &&
@@ -1310,6 +1326,7 @@ void verifySharedChannelBatchMutators(
               : "blocked channel batches avoid local mutation and legacy undo");
     check(controller.detachSharedMutationSink(sink),
           "shared channel batch sink detaches");
+    controller.detachSharedAssetMutationSink(assets);
     std::error_code ignored;
     std::filesystem::remove(presetPath, ignored);
 }
@@ -1328,10 +1345,8 @@ void verifyFreezeAndDiagnosticsStayLocal() {
     const auto undoDepth = controller.undoDepth();
     daw::rendering::Report report;
     check(!controller.freezeTrack(track, {}, report) &&
-              controller.freezeUnavailableReason(track) ==
-                  "Freeze is available in local projects" &&
               !controller.isTrackFrozen(track) && report.files.empty(),
-          "cloud binding still rejects freeze without publishing audio");
+          "freeze requires a verified-asset upload sink before rendering");
     check(!controller.unfreezeTrack(track),
           "thawing an unfrozen cloud source leaves it unchanged");
     (void)controller.callbackMetrics();
@@ -1350,6 +1365,7 @@ void verifyCapabilityLedger() {
     using daw::collab::MutationCapability;
     std::unordered_set<std::string_view> names;
     bool shared = false;
+    bool session = false;
     bool local = false;
     bool blocked = false;
     bool classified = true;
@@ -1357,11 +1373,12 @@ void verifyCapabilityLedger() {
         classified &= !entry.method.empty() &&
                       entry.capability != MutationCapability::Unclassified;
         shared |= entry.capability == MutationCapability::SharedCommand;
+        session |= entry.capability == MutationCapability::SessionAction;
         local |= entry.capability == MutationCapability::LocalOnly;
         blocked |= entry.capability == MutationCapability::BlockedV1;
         classified &= names.insert(entry.method).second;
     }
-    check(classified && shared && local && blocked && names.size() >= 100,
+    check(classified && shared && session && local && blocked && names.size() >= 100,
           "cloud mutation ledger is complete, unique and fully classified");
     const auto capabilityOf = [](std::string_view method) {
         for (const auto& entry : daw::collab::kMutationCapabilityLedger) {
@@ -1369,14 +1386,14 @@ void verifyCapabilityLedger() {
         }
         return MutationCapability::Unclassified;
     };
-    check(capabilityOf("appendPluginBatch") == MutationCapability::BlockedV1 &&
-              capabilityOf("selectOfflineRenderVersion") == MutationCapability::BlockedV1 &&
-              capabilityOf("restoreOfflineRenderOriginal") == MutationCapability::BlockedV1 &&
+    check(capabilityOf("appendPluginBatch") == MutationCapability::SharedCommand &&
+              capabilityOf("selectOfflineRenderVersion") == MutationCapability::SharedCommand &&
+              capabilityOf("restoreOfflineRenderOriginal") == MutationCapability::SharedCommand &&
               capabilityOf("capturePluginBatchChain") == MutationCapability::LocalOnly &&
               capabilityOf("createPluginBatchDraft") == MutationCapability::LocalOnly &&
               capabilityOf("startPluginAudition") == MutationCapability::LocalOnly &&
               capabilityOf("stopPluginAudition") == MutationCapability::LocalOnly,
-          "offline history and batch edits are gated separately from local audition");
+          "offline history and configured batches share commands while audition stays local");
     check(capabilityOf("addPatternInstrument") ==
                   MutationCapability::SharedCommand &&
               capabilityOf("clearSamplerSample") ==
@@ -1413,8 +1430,8 @@ void verifyCapabilityLedger() {
                   MutationCapability::LocalOnly &&
               capabilityOf("armCountIn") ==
                   MutationCapability::LocalOnly &&
-              capabilityOf("commitComp") == MutationCapability::BlockedV1 &&
-              capabilityOf("cropToComp") == MutationCapability::BlockedV1 &&
+              capabilityOf("commitComp") == MutationCapability::SharedCommand &&
+              capabilityOf("cropToComp") == MutationCapability::SharedCommand &&
               capabilityOf("undo") == MutationCapability::BlockedV1 &&
               capabilityOf("redo") == MutationCapability::BlockedV1,
           "Sampler, project, template, take and legacy-history gates are classified");
@@ -1886,9 +1903,236 @@ void verifyPitchSettingsBatch(daw::collab::SharedMutationResult result) {
           "shared send-to-all is atomic and a blocked edit leaves destinations unchanged");
     controller.detachSharedMutationSink(sink);
 }
+void verifySharedMidiComp() {
+    daw::ProjectModel project; project.tempo = 120;
+    daw::TrackModel track; track.id = daw::newUuid(); track.kind = daw::TrackKind::Midi;
+    daw::ClipModel clip; clip.id = daw::newUuid(); clip.kind = daw::ClipKind::Midi; clip.durationSeconds = 1;
+    for (int pitch : {60, 67}) {
+        daw::TakeModel take; take.id = daw::newUuid(); take.lengthSeconds = 1;
+        daw::NoteModel note; note.id = daw::newUuid(); note.pitch = pitch; note.lengthBeats = 2;
+        take.notes.push_back(note); clip.takes.push_back(take);
+    }
+    for (std::size_t i = 0; i < 2; ++i) {
+        daw::CompSegment segment; segment.id = daw::newUuid(); segment.takeId = clip.takes[i].id;
+        segment.startSeconds = double(i) / 2; segment.endSeconds = double(i + 1) / 2; clip.comp.push_back(segment);
+    }
+    track.clips.push_back(clip); project.tracks.push_back(track);
+    daw::EngineController controller; controller.initialize(48000, 128, false);
+    controller.materializeCollaborationProject(project, true);
+    FakeSharedMutationSink sink; controller.attachSharedMutationSink(sink);
+    const auto flattened = controller.flattenComp(track.id, clip.id);
+    const auto* batch = sink.genericBodies.empty() ? nullptr : std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(&sink.genericBodies.back());
+    const auto* take = batch && *batch && !(*batch)->commands.empty() ? std::get_if<daw::collab::AddTake>(&(*batch)->commands.front().body) : nullptr;
+    check(!flattened.empty() && take && take->take.notes.size() == 2 &&
+              take->take.notes[0].pitch == 60 && take->take.notes[0].startBeats == 0 && take->take.notes[0].lengthBeats == 1 &&
+              take->take.notes[1].pitch == 67 && take->take.notes[1].startBeats == 1 && take->take.notes[1].lengthBeats == 1 &&
+              take->take.notes[0].id != clip.takes[0].notes[0].id && controller.project().tracks[0].clips[0].takes.size() == 2,
+          "shared MIDI comp merges audible fragments into a typed take without mutating the local document");
+    controller.commitComp(track.id, clip.id);
+    check(sink.genericCalls == 2 && controller.project().tracks[0].clips[0].takes.size() == 2,
+          "a multi-take MIDI commit publishes its complete flattened clip through the shared transaction");
+    controller.detachSharedMutationSink(sink);
+}
+
+void verifyDerivedRenderAssets() {
+    const auto tone = writeSharedAssetTone();
+    daw::EngineController controller;
+    if (!check(bool(controller.initialize(48000, 128, false)), "derived render fixture initializes")) return;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Render");
+    const auto clip = controller.importAudio(tone.string(), track, 0);
+    FakeSharedMutationSink sink; FakeSharedAssetMutationSink assets;
+    controller.attachSharedMutationSink(sink); controller.attachSharedAssetMutationSink(assets);
+    daw::rendering::Report frozen;
+    const auto freeze = controller.freezeTrack(track, {}, frozen);
+    if (check(bool(freeze) && assets.requests.size() == 1 && !controller.isTrackFrozen(track),
+              "shared freeze renders to staging and waits for verified audio without changing the project")) {
+        const auto request = assets.requests.back();
+        check(controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request)) == daw::collab::SharedMutationResult::Submitted &&
+                  sink.genericCalls == 1 && std::holds_alternative<daw::collab::SetTrackFreeze>(sink.genericBodies.back()) &&
+                  std::filesystem::exists(request.sourcePath) &&
+                  std::filesystem::exists(request.sourcePath + ".vlt-pending.json"),
+              "verified freeze keeps a recoverable result until its server acknowledgement");
+        check(controller.discardSharedResultRecovery(request.sourcePath + ".vlt-pending.json") &&
+                  !std::filesystem::exists(request.sourcePath), "acknowledged generated output can be explicitly discarded");
+    }
+    daw::rendering::Report cancelledFreeze;
+    const auto pendingCount = assets.requests.size();
+    if (controller.freezeTrack(track, {}, cancelledFreeze) && assets.requests.size() == pendingCount + 1) {
+        const auto request = assets.requests.back();
+        controller.cancelSharedAssetMutation(request.requestId);
+        const auto manifestPath = request.sourcePath + ".vlt-pending.json";
+        std::ifstream input(manifestPath); const auto original = nlohmann::json::parse(input); input.close();
+        check(std::filesystem::exists(request.sourcePath) && original["status"] == "cancelled",
+              "cancelled upload retains a discoverable completed render and its recovery metadata");
+        auto tampered = original; tampered["requests"][0]["sourcePath"] = tone.string();
+        { std::ofstream output(manifestPath); output << tampered; }
+        check(!controller.discardSharedResultRecovery(manifestPath) && std::filesystem::exists(tone),
+              "a modified recovery manifest cannot delete an imported source file");
+        { std::ofstream output(manifestPath); output << original; }
+        controller.discardSharedResultRecovery(manifestPath);
+    }
+    daw::EngineController::BounceRequest bounce;
+    bounce.tracks = {track}; bounce.startSeconds = 0; bounce.endSeconds = .01;
+    bounce.tail = daw::rendering::Tail::None;
+    daw::EngineController::BounceReport report;
+    const auto count = assets.requests.size();
+    const auto result = controller.bounceInPlace(bounce, {}, report);
+    if (check(bool(result) && assets.requests.size() == count + 1 && !report.outputs.empty(),
+              "shared bounce stages a replacement without editing the active document")) {
+        const auto request = assets.requests.back();
+        const auto calls = sink.genericCalls;
+        daw::collab::ChangeImpact impact; impact.documentChanged = true;
+        controller.projectCollaborationChange(controller.project(), impact);
+        check(controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request)) == daw::collab::SharedMutationResult::Blocked &&
+                  sink.genericCalls == calls && std::filesystem::exists(request.sourcePath) &&
+                  std::filesystem::exists(request.sourcePath + ".vlt-pending.json"),
+              "a remote projection rejects a stale bounce while retaining its rendered result for recovery");
+        controller.discardSharedResultRecovery(request.sourcePath + ".vlt-pending.json");
+    }
+    controller.detachSharedAssetMutationSink(assets); controller.detachSharedMutationSink(sink);
+    std::error_code ignored; std::filesystem::remove(tone, ignored);
+}
+
+void verifySharedShelfAndRecordingSilence() {
+    const auto tone = writeSharedAssetTone();
+    daw::EngineController controller; controller.initialize(48000, 128, false);
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Shelf");
+    const auto clip = controller.importAudio(tone.string(), track, 0);
+    std::string entry;
+    check(bool(controller.saveClipToLibrary({track, clip}, entry)), "saved clip fixture captures a local shelf entry");
+    FakeSharedMutationSink sink; FakeSharedAssetMutationSink assets;
+    controller.attachSharedMutationSink(sink); controller.attachSharedAssetMutationSink(assets);
+    daw::EngineController::ClipAddress restored;
+    const auto restore = controller.restoreLibraryClip(entry, track, 2, restored);
+    if (check(bool(restore) && !restored.clipId.empty() && assets.requests.size() == 1 && sink.genericCalls == 0 &&
+                  controller.project().findTrack(track)->clips.size() == 1,
+              "shared shelf insertion stages verified audio before one typed transaction")) {
+        const auto request = assets.requests.front();
+        check(controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request)) == daw::collab::SharedMutationResult::Submitted &&
+                  sink.genericCalls == 1 && !commandContainsString(sink.genericBodies.back(), tone.string()),
+              "verified shelf insertion publishes portable content without private paths");
+        controller.discardSharedResultRecovery(request.sourcePath + ".vlt-pending.json");
+    } else std::printf("shelf error: %s\n", restore.message().c_str());
+    controller.detachSharedAssetMutationSink(assets); controller.detachSharedMutationSink(sink);
+
+    daw::collab::SharedProjectDocument base; base.project = controller.project();
+    base.project.tracks.front().clips.clear(); base.project.clipLibrary.clear();
+    daw::AssetRef asset; asset.assetId = daw::newUuid(); asset.kind = daw::AssetKind::Audio;
+    asset.sha256 = std::string(64, 'a'); asset.byteSize = std::filesystem::file_size(tone);
+    asset.mimeType = "audio/wav"; asset.codec = "wav"; asset.sampleRate = 48000; asset.channels = 2; asset.frames = 480;
+    const auto recordedClip = daw::newUuid();
+    daw::collab::RecordingCommit body; body.batch = std::make_shared<daw::collab::BatchCommand>();
+    daw::collab::ProjectCommand child;
+    child.body = daw::collab::AddClip{track, recordedClip, daw::ClipKind::Audio, "Recorded", 0, .01, 0, {}}; body.batch->commands.push_back(child);
+    child.body = daw::collab::SetClipAsset{track, recordedClip, asset}; body.batch->commands.push_back(child);
+    daw::collab::ProjectCommand command; command.meta.operationId = daw::newUuid(); command.body = body;
+    daw::recovery::CloudRecordingRecoveryRun run; run.opId = command.meta.operationId;
+    daw::recovery::CloudRecordingCapture capture; capture.captureId = daw::newUuid(); capture.trackId = track;
+    capture.assetId = asset.assetId; capture.localWavPath = tone.string(); capture.sampleRate = 48000;
+    capture.semantics.autoSilence = true; capture.semantics.stripSilence.thresholdDb = 0;
+    capture.semantics.stripSilence.minimumSoundMs = 0; capture.semantics.stripSilence.minimumSilenceMs = 0;
+    capture.semantics.stripSilence.gridBeats = 0; capture.semantics.stripSilence.preRollMs = 0; capture.semantics.stripSilence.postRollMs = 0;
+    run.captures.push_back(capture);
+    auto repeated = command;
+    auto background = std::async(std::launch::async, [base, run, command]() mutable {
+        daw::EngineController worker;
+        const auto result = worker.prepareAutomaticRecordingSilence(base, run, command);
+        return std::pair{bool(result), daw::collab::projectCommandToJson(command)};
+    });
+    const auto prepared = controller.prepareAutomaticRecordingSilence(base, run, command);
+    controller.prepareAutomaticRecordingSilence(base, run, repeated);
+    const auto workerResult = background.get();
+    auto projected = base;
+    check(bool(prepared) && daw::collab::ProjectReducer::apply(projected, command).accepted() && projected.project.tracks.front().clips.empty() &&
+              daw::collab::projectCommandToJson(command) == daw::collab::projectCommandToJson(repeated),
+          "automatic cloud silence is atomic, deterministic, and can remove an all-silent recording without losing its source WAV");
+    check(workerResult.first && workerResult.second == daw::collab::projectCommandToJson(command),
+          "recording silence produces the same transaction on an isolated worker without live-controller access");
+    if (!prepared) std::printf("automatic silence error: %s\n", prepared.message().c_str());
+    std::error_code ignored; std::filesystem::remove(tone, ignored);
+}
+
+void verifySessionControlsAndStateUpload() {
+    daw::EngineController controller;
+    check(bool(controller.initialize(48000, 128, false)), "session state fixture initializes");
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Session");
+    const auto insert = controller.addInsert(track, daw::plugins::pitch::PitchCorrectorInstance::staticDescriptor());
+    FakeSharedMutationSink sink;
+    FakeSharedAssetMutationSink assets;
+    controller.attachSharedMutationSink(sink);
+    controller.attachSharedAssetMutationSink(assets);
+    int auditionChanges = 0;
+    controller.setSessionAuditionPolicy(true, true, [&](const auto&) { ++auditionChanges; });
+    controller.setTrackMuted(track, true);
+    controller.setTrackSoloed(track, true);
+    check(controller.project().findTrack(track)->muted && controller.project().findTrack(track)->soloed &&
+              sink.trackMutedCalls == 0 && auditionChanges == 2,
+          "session audition changes local playback without durable mute commands");
+    controller.setSessionAuditionPolicy(true, false);
+    controller.setTrackMuted(track, false);
+    controller.setTrackSoloed(track, false);
+    check(controller.project().findTrack(track)->muted && controller.project().findTrack(track)->soloed,
+          "a follower cannot change audition before the engine mutation");
+    controller.applySessionAuditionState({{track, false, false}});
+    check(!controller.project().findTrack(track)->muted && !controller.project().findTrack(track)->soloed,
+          "authoritative audition applies silently to a follower");
+    std::vector<std::string> transport;
+    controller.setSessionTransportHandler([&](std::string_view kind, double, double, bool) { transport.emplace_back(kind); });
+    controller.play(); controller.pause(); controller.stop(); controller.seekSeconds(10);
+    controller.setLoopEnabled(true); controller.setLoopRangeSeconds(1, 2);
+    check(transport == std::vector<std::string>({"play", "pause", "stop", "seek", "loop", "loop"}) &&
+              controller.positionSeconds() == 0,
+          "all timeline transport entry points are consumed before local playback changes");
+    controller.setSessionTransportHandler({});
+    controller.setSharedEditingAllowed(false);
+    const auto before = controller.project().findTrack(track)->volume;
+    controller.setTrackVolumeGestureSample(track, 0.25f);
+    check(controller.project().findTrack(track)->volume == before,
+          "read-only permission blocks live mixer gestures before mutation");
+    controller.setSharedEditingAllowed(true);
+    bool leaseGranted = false;
+    controller.setSharedGestureLeaseCheck([&](std::string_view) { return leaseGranted; });
+    controller.setTrackVolumeGestureSample(track, .3f);
+    controller.setMasterVolumeLive(.4f);
+    check(controller.project().findTrack(track)->volume == before && controller.project().masterVolume == 1,
+          "pending mixer leases block track and master preview before the model or DSP changes");
+    leaseGranted = true;
+    controller.setTrackVolumeGestureSample(track, .3f);
+    controller.setMasterVolumeLive(.4f);
+    leaseGranted = false;
+    controller.commitTrackVolumeEdit({{track, before}});
+    controller.commitMasterVolumeEdit(1);
+    check(controller.project().findTrack(track)->volume == before && controller.project().masterVolume == 1 && sink.genericCalls == 0,
+          "expired mixer leases restore preview values without publishing an unauthorized edit");
+    controller.setSharedGestureLeaseCheck({});
+    controller.queuePluginStateSync(track, insert);
+    controller.pumpPluginStateSync();
+    if (check(assets.requests.size() == 1, "opaque plugin state is staged through the verified asset pipeline")) {
+        const auto request = assets.requests.back();
+        check(request.kind == daw::AssetKind::PluginState && request.contentType == "application/vnd.vlt.plugin-state" &&
+                  sink.genericCalls == 0 && std::filesystem::exists(request.sourcePath),
+              "no plugin command escapes before opaque bytes are uploaded and verified");
+        check(controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request)) ==
+                  daw::collab::SharedMutationResult::Submitted && sink.genericCalls == 1 &&
+                  std::holds_alternative<daw::collab::SetPluginState>(sink.genericBodies.back()) &&
+                  std::filesystem::exists(request.sourcePath) &&
+                  std::filesystem::exists(request.sourcePath + ".vlt-pending.json"),
+              "verified opaque state retains staging bytes until its command is acknowledged");
+        controller.discardSharedResultRecovery(request.sourcePath + ".vlt-pending.json");
+        controller.queuePluginStateSync(track, insert);
+        controller.pumpPluginStateSync();
+        check(assets.requests.size() == 1, "unchanged opaque bytes are not uploaded again");
+    }
+    controller.detachSharedAssetMutationSink(assets);
+    controller.detachSharedMutationSink(sink);
+}
 } // namespace
 
 int main() {
+    verifySharedShelfAndRecordingSilence();
+    verifySharedMidiComp();
+    verifyDerivedRenderAssets();
+    verifySessionControlsAndStateUpload();
     verifyPitchSettingsBatch(daw::collab::SharedMutationResult::Submitted);
     verifyPitchSettingsBatch(daw::collab::SharedMutationResult::Blocked);
     verifyCapabilityLedger();

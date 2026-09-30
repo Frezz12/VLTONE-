@@ -214,6 +214,14 @@ func (s *Server) Router() http.Handler {
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/heartbeat", s.heartbeatProjectSession)
 			r.Put(projectsPath+"/{projectID}/sessions/{sessionID}/readiness", s.updateProjectSessionReadiness)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/activate", s.activateProjectSession)
+			r.Patch(projectsPath+"/{projectID}/sessions/{sessionID}/mode", s.changeProjectSessionMode)
+			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/control", s.projectSessionControl)
+			r.Get(projectsPath+"/{projectID}/sessions/{sessionID}/plugins/catalog", s.projectSessionCatalog)
+			r.Put(projectsPath+"/{projectID}/sessions/{sessionID}/plugins/catalog", s.projectSessionCatalog)
+			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/moderation", s.moderateProjectSession)
+			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/edit-leases", s.projectEditLease)
+			r.Patch(projectsPath+"/{projectID}/sessions/{sessionID}/edit-leases/{leaseID}", s.projectEditLease)
+			r.Delete(projectsPath+"/{projectID}/sessions/{sessionID}/edit-leases/{leaseID}", s.projectEditLease)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/host", s.handoffProjectSessionHost)
 			r.Delete(projectsPath+"/{projectID}/sessions/{sessionID}", s.endProjectSession)
 			r.Post(projectsPath+"/{projectID}/sessions/{sessionID}/leases", s.acquireTrackLease)
@@ -360,13 +368,13 @@ func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
 		"offline_hours":        72, "access_token_minutes": 15,
 		"public_key": s.Signer.PublicKeyBase64(),
 		"collaboration": map[string]any{
-			"enabled": s.Config.CollaborationEnabled, "protocol": collab.CollaborationProtocolV5,
+			"enabled": s.Config.CollaborationEnabled, "protocol": collab.CollaborationProtocolV6,
 			"protocols": []string{collab.CollaborationProtocolV2,
-				collab.CollaborationProtocolV3, collab.CollaborationProtocolV4, collab.CollaborationProtocolV5},
+				collab.CollaborationProtocolV3, collab.CollaborationProtocolV4, collab.CollaborationProtocolV5, collab.CollaborationProtocolV6},
 			"project_format": collab.CollaborationProjectFormatVersion,
-			"command_schema": collab.CollaborationCommandSchemaV5,
+			"command_schema": collab.CollaborationCommandSchemaV6,
 			"command_schemas": []int{collab.CollaborationCommandSchemaVersion,
-				collab.CollaborationCommandSchemaV3, collab.CollaborationCommandSchemaV4, collab.CollaborationCommandSchemaV5},
+				collab.CollaborationCommandSchemaV3, collab.CollaborationCommandSchemaV4, collab.CollaborationCommandSchemaV5, collab.CollaborationCommandSchemaV6},
 			"max_participants": s.Config.CollabMaxParticipants,
 			"recording":        s.Config.CollabRecordingEnabled,
 		},

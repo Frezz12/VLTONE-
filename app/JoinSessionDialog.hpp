@@ -62,6 +62,8 @@ public:
         std::function<daw::collab::PluginReadinessReport(
             const std::vector<daw::collab::PluginRequirement>&, qint64)>
             inspectPlugins;
+        std::function<void(const std::vector<daw::collab::PluginRequirement>&, qint64,
+            std::function<void(daw::collab::PluginReadinessReport)>)> inspectPluginsAsync;
         std::function<bool(int commandSchemaVersion)> selectProtocol;
         std::function<bool(quint64)> cancel;
     };
@@ -102,6 +104,7 @@ public:
     void onHydrationProgress(qsizetype done, qsizetype total);
     void onHydrationSettled(bool degraded);
     void onActiveSession(const CloudSessionState& state);
+    void onActiveSessionUnavailable(const QString& projectId, const QString& safeMessage);
     void onSessionState(quint64 requestId, const CloudSessionState& state);
     void onFailed(quint64 requestId, const CloudClientError& error);
     /// The server says this session is protected. The dialog reveals the
@@ -132,6 +135,8 @@ public:
     /// It never submits. A page in a browser must not be able to walk a user
     /// into someone else's room without them pressing anything.
     void presetCode(const QString& code);
+    /// Used only after an explicit invitation-link activation.
+    void joinFromLink(const QString& code);
 
     QString joinedProjectId() const;
 

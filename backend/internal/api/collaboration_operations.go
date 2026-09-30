@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"github.com/google/uuid"
@@ -82,6 +83,12 @@ func (s *Server) appendCollaborationOperation(ctx context.Context,
 		s.Rooms.Publish(input.ProjectID, uuid.Nil, collab.RoomMessage{
 			Data: collaborationCommittedEnvelope(operation),
 		})
+		if input.SchemaVersion >= collab.CollaborationCommandSchemaV6 && collab.CommandUsesExternalPlugins(input.Kind, input.Payload) {
+			if state, stateErr := s.Collab.GetActiveSession(ctx, input.ProjectID, input.ActorUserID); stateErr == nil {
+				payload, _ := json.Marshal(map[string]any{"pluginRequirementsRevision": state.Session.PluginRequirementsRevision, "pluginRequirements": state.Session.PluginRequirements, "control": collab.ControlSnapshot(state.Session)})
+				s.Rooms.Publish(input.ProjectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(collab.CollaborationProtocolV6, "session.requirements_changed", payload, uuid.Nil, nil, 0)})
+			}
+		}
 	}
 	return operation, duplicate, nil
 }

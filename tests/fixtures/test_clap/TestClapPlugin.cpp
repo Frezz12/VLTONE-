@@ -391,9 +391,14 @@ clap_process_status pluginProcess(const clap_plugin_t* plugin,
     return CLAP_PROCESS_CONTINUE;
 }
 
-std::uint32_t notePortCount(const clap_plugin_t*, bool) { return 1; }
-bool notePortGet(const clap_plugin_t*, std::uint32_t index, bool, clap_note_port_info_t* info) {
-    if(index!=0)return false;*info={};info->id=0;info->supported_dialects=CLAP_NOTE_DIALECT_CLAP|CLAP_NOTE_DIALECT_MIDI|CLAP_NOTE_DIALECT_MIDI_MPE;
+std::uint32_t notePortCount(const clap_plugin_t* plugin, bool) {
+    // The gain effect handles audio and parameters; only the synth consumes
+    // and emits notes. Its declared ports must match pluginProcess.
+    return TestPlugin::of(plugin)->isInstrument ? 1 : 0;
+}
+bool notePortGet(const clap_plugin_t* plugin, std::uint32_t index, bool, clap_note_port_info_t* info) {
+    if (!notePortCount(plugin, true) || index != 0) return false;
+    *info={};info->id=0;info->supported_dialects=CLAP_NOTE_DIALECT_CLAP|CLAP_NOTE_DIALECT_MIDI|CLAP_NOTE_DIALECT_MIDI_MPE;
     info->preferred_dialect=CLAP_NOTE_DIALECT_CLAP;std::strcpy(info->name,"Notes");return true;
 }
 const clap_plugin_note_ports_t kNotePorts{notePortCount,notePortGet};

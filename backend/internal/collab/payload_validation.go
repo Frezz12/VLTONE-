@@ -51,15 +51,25 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 	}
 
 	switch kind {
+	case "track.setFreeze", "clip.setRenderState":
+		if schemaVersion < CollaborationCommandSchemaV6 {
+			return invalidf("render state requires protocol 6")
+		}
+		return validateRenderCommand(kind, body)
 	case "project.setScalar":
 		if err := exactPayloadKeys(body, []string{"field", "value"}, nil); err != nil {
 			return err
 		}
-		field, err := payloadEnum(body, "field", "name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan")
+		field, err := payloadEnum(body, "field", "name", "tempo", "aiInstructions", "renderSampleRate", "masterVolume", "masterPan", "notebookHtml")
 		if err != nil {
 			return err
 		}
 		switch field {
+		case "notebookHtml":
+			if schemaVersion < CollaborationCommandSchemaV6 {
+				return invalidf("notebook requires protocol 6")
+			}
+			_, err = payloadString(body, "value", 524288, true)
 		case "name", "aiInstructions":
 			_, err = payloadString(body, "value", 65536, true)
 		case "tempo":
@@ -72,6 +82,39 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 			_, err = payloadNumber(body, "value", -1, 1, false)
 		}
 		return err
+	case "project.setNotebookCues":
+		if schemaVersion < CollaborationCommandSchemaV6 {
+			return invalidf("notebook cues require protocol 6")
+		}
+		if err := exactPayloadKeys(body, []string{"cues"}, nil); err != nil {
+			return err
+		}
+		var cues []json.RawMessage
+		if err := json.Unmarshal(body["cues"], &cues); err != nil || string(body["cues"]) == "null" || len(cues) > 2000 {
+			return invalidf("invalid notebook cues")
+		}
+		total := 0
+		for _, raw := range cues {
+			cue, err := commandPayloadObject(raw)
+			if err != nil {
+				return err
+			}
+			if err := exactPayloadKeys(cue, []string{"seconds", "text"}, nil); err != nil {
+				return err
+			}
+			if _, err := payloadNumber(cue, "seconds", 0, 1e9, false); err != nil {
+				return err
+			}
+			text, err := payloadString(cue, "text", 4096, true)
+			if err != nil {
+				return err
+			}
+			total += len(text)
+			if total > 262144 {
+				return invalidf("notebook cue text is too large")
+			}
+		}
+		return nil
 	case "project.setTimeSignature":
 		if err := exactPayloadKeys(body, []string{"numerator", "denominator"}, nil); err != nil {
 			return err
@@ -152,6 +195,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		property, err := payloadEnum(body, "property", "name", "color", "volume", "pan", "muted", "mono", "summing", "iconId")
 		if err != nil {
 			return err
+		}
+		if schemaVersion >= CollaborationCommandSchemaV6 && property == "muted" {
+			return invalidf("track mute uses session audition controls in v6")
 		}
 		return validateTrackPropertyValue(body, property)
 	case "track.setParent":
@@ -1253,8 +1299,14 @@ func validateSharedInsert(raw json.RawMessage,
 		return "", "", "", invalidf("command payload insert must be an object")
 	}
 	required := []string{"id", "name", "bypassed", "format", "uid", "vendor", "pluginVersion", "stateSchemaVersion", "mix", "channelMode", "sidechainTrackId", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"}
-	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds", "slideDelivery", "slideBendRange", "slideReleaseReserve"}); err != nil {
+	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds", "slideDelivery", "slideBendRange", "slideReleaseReserve", "parameterFingerprint"}); err != nil {
 		return "", "", "", err
+	}
+	if _, exists := body["parameterFingerprint"]; exists {
+		fingerprint, err := payloadString(body, "parameterFingerprint", 64, false)
+		if err != nil || schemaVersion < CollaborationCommandSchemaV6 || !validLowerHex(fingerprint, 64) {
+			return "", "", "", invalidf("invalid parameter fingerprint")
+		}
 	}
 	insertID, err := requiredPayloadUUID(body, "id")
 	if err != nil {
@@ -1277,6 +1329,9 @@ func validateSharedInsert(raw json.RawMessage,
 	uid, err := payloadString(body, "uid", 400, false)
 	if err != nil || !safePluginContractText(uid, 400) {
 		return "", "", "", invalidf("command payload plugin uid is invalid")
+	}
+	if format == "internal" && uid == "daw.modulation" && schemaVersion < CollaborationCommandSchemaV6 {
+		return "", "", "", invalidf("modulation plugin requires protocol 6")
 	}
 	if format == "internal" && uid != "daw.delay" && uid != "daw.sampler" && uid != "daw.equalizer" &&
 		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" &&
@@ -1747,7 +1802,7 @@ func validateRecordingCommitPayload(body map[string]json.RawMessage,
 	newClips := make(map[clipTarget]struct{})
 	for _, child := range commands {
 		kind, _ := payloadString(child, "kind", 100, false)
-		if !recordingCommitChildKindAllowed(kind) && !(schemaVersion >= CollaborationCommandSchemaV4 && (kind == "recording.applyMidi" || kind == "clip.delete" || kind == "clip.setPatternOwner")) {
+		if !recordingCommitChildKindAllowed(kind) && !(schemaVersion >= CollaborationCommandSchemaV4 && (kind == "recording.applyMidi" || kind == "clip.delete" || kind == "clip.setPatternOwner")) && !(schemaVersion >= CollaborationCommandSchemaV6 && kind == "clip.setFade") {
 			return invalidf("recording commit child kind %s is unsupported", kind)
 		}
 		trackID, found, err := commandTargetTrackID(kind, child["payload"])

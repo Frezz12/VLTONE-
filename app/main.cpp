@@ -36,6 +36,7 @@
 #include "CloudProjectsDialog.hpp"
 #include "JoinSessionDialog.hpp"
 #include "SessionStatusStrip.hpp"
+#include "SessionJoinLink.hpp"
 #include "UiConstants.hpp"
 #include "PresenceInputRouter.hpp"
 #include "PresenceStore.hpp"
@@ -90,6 +91,10 @@
 #include <QDateTime>
 #include <QHash>
 #include <QTemporaryDir>
+#include <QCryptographicHash>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QStandardPaths>
 #include <QWidget>
 #include <QMouseEvent>
 #include <QDebug>
@@ -146,6 +151,73 @@ class ProjectOpenFilter : public QObject {
 public:
     using Handler = std::function<void(const QString&)>;
 
+    // Only session URLs are forwarded. Opening ordinary local projects keeps
+    // the existing ability to use several application windows/processes.
+    bool startSessionLinkReceiver(const QString& launchArgument) {
+        const QByteArray userRoot = QStandardPaths::writableLocation(
+            QStandardPaths::AppLocalDataLocation).toUtf8();
+        const QString name = QStringLiteral("vltone-join-") + QString::fromLatin1(
+            QCryptographicHash::hash(userRoot, QCryptographicHash::Sha256).toHex().left(24));
+        const QString code = collab::sessionJoinCodeFromLink(launchArgument);
+        if (!code.isEmpty()) {
+            QLocalSocket existing;
+            existing.connectToServer(name, QIODevice::WriteOnly);
+            if (existing.waitForConnected(300)) {
+                const QByteArray message = collab::canonicalSessionJoinLink(code).toUtf8() + '\n';
+                if (existing.write(message) == message.size() &&
+                    (existing.bytesToWrite() == 0 || existing.waitForBytesWritten(1000))) {
+                    // The listening app may still be starting. Its pipe retains
+                    // this bounded message until it can dispatch queued opens.
+                    existing.disconnectFromServer();
+                    return true;
+                }
+            }
+        }
+        m_joinServer = new QLocalServer(this);
+        m_joinServer->setSocketOptions(QLocalServer::UserAccessOption);
+        connect(m_joinServer, &QLocalServer::newConnection, this, [this] {
+            while (QLocalSocket* socket = m_joinServer->nextPendingConnection()) {
+                socket->setReadBufferSize(258);
+                auto buffer = std::make_shared<QByteArray>();
+                auto consumed = std::make_shared<bool>(false);
+                const auto receive = [this, socket, buffer, consumed] {
+                    if (*consumed) return;
+                    buffer->append(socket->readAll());
+                    if (buffer->size() > 257) { *consumed = true; socket->abort(); return; }
+                    const qsizetype newline = buffer->indexOf('\n');
+                    if (newline < 0) return;
+                    *consumed = true;
+                    const QString code = collab::sessionJoinCodeFromLink(
+                        QString::fromUtf8(buffer->first(newline)));
+                    if (!code.isEmpty()) deliver(collab::canonicalSessionJoinLink(code));
+                    socket->disconnectFromServer();
+                    socket->deleteLater();
+                };
+                connect(socket, &QLocalSocket::readyRead, socket, receive);
+                connect(socket, &QLocalSocket::disconnected, socket, [socket, receive] {
+                    receive();
+                    socket->deleteLater();
+                });
+                QTimer::singleShot(2000, socket, [socket] { socket->abort(); socket->deleteLater(); });
+                receive();
+            }
+        });
+        if (!m_joinServer->listen(name)) {
+#ifndef Q_OS_WIN
+            // A crashed Unix process can leave a filesystem socket. Remove it
+            // only after a connection proves there is no living listener.
+            QLocalSocket probe;
+            probe.connectToServer(name);
+            if (!probe.waitForConnected(100) &&
+                probe.error() == QLocalSocket::ConnectionRefusedError) {
+                QLocalServer::removeServer(name);
+                m_joinServer->listen(name);
+            }
+#endif
+        }
+        return false;
+    }
+
     bool setHandler(Handler handler,
                     const QStringList& commandLinePaths = {}) {
         m_handler = std::move(handler);
@@ -163,6 +235,10 @@ public:
         QString path = open->file();
         if (path.isEmpty() && open->url().isLocalFile())
             path = open->url().toLocalFile();
+        if (path.isEmpty()) {
+            const QString code = collab::sessionJoinCodeFromLink(open->url().toString(QUrl::FullyEncoded));
+            if (!code.isEmpty()) path = collab::canonicalSessionJoinLink(code);
+        }
         if (!path.isEmpty()) deliver(path);
         return true;
     }
@@ -177,11 +253,22 @@ public:
             {path, QDir::cleanPath(path)});
         QFileOpenEvent duplicate(path);
         filter.eventFilter(nullptr, &duplicate);
-        return deliveredLaunchRequest && deliveries == 1;
+        if (!deliveredLaunchRequest || deliveries != 1 || !collab::checkSessionJoinLinkForTest()) return false;
+        ProjectOpenFilter links;
+        QFileOpenEvent queued(QUrl(QStringLiteral("vlt://join/123456789012")));
+        links.eventFilter(nullptr, &queued);
+        QString last;
+        if (!links.setHandler([&](const QString& value) { last = value; ++deliveries; },
+                {QStringLiteral("https://vltstudio.ru/en/join#123456789012")})) return false;
+        QFileOpenEvent foreign(QUrl(QStringLiteral("https://attacker.invalid/join#123456789012")));
+        links.eventFilter(nullptr, &foreign);
+        return deliveries == 2 && last == QStringLiteral("vlt://join/123456789012");
     }
 
 private:
     static QString identity(const QString& path) {
+        const QString code = collab::sessionJoinCodeFromLink(path);
+        if (!code.isEmpty()) return collab::canonicalSessionJoinLink(code);
         const QFileInfo info(path);
         QString key = info.canonicalFilePath();
         if (key.isEmpty()) key = QDir::cleanPath(info.absoluteFilePath());
@@ -201,12 +288,14 @@ private:
         const auto previous = m_recent.constFind(key);
         if (previous != m_recent.cend() && now - previous.value() < 1500) return;
         m_recent.insert(key, now);
-        m_handler(path);
+        const QString code = collab::sessionJoinCodeFromLink(path);
+        m_handler(code.isEmpty() ? path : collab::canonicalSessionJoinLink(code));
     }
 
     Handler m_handler;
     QStringList m_pending;
     QHash<QString, qint64> m_recent;
+    QLocalServer* m_joinServer{nullptr};
 };
 
 namespace {
@@ -480,6 +569,7 @@ int main(int argc, char** argv) {
     QApplication::setApplicationName(QStringLiteral("VLT Studio Pro"));
     QApplication::setApplicationDisplayName(QStringLiteral(VLTONE_NAME));
     QApplication::setOrganizationName(QStringLiteral("VLT Studio"));
+    if (!headless && projectOpenFilter.startSessionLinkReceiver(projectArgument)) return 0;
     // Recorded in every recovery session, so a leftover file says which build
     // wrote it — the first thing worth knowing about a crash report.
     // Account/session compatibility consumes this metadata as SemVer. Build
@@ -725,6 +815,11 @@ int main(int argc, char** argv) {
     }
     if (selftest || collaborationSelftest) {
         QString collaborationError;
+        if (!collab::checkJoinSessionDialogForTest(&collaborationError) ||
+            !collab::checkSessionStatusStripForTest(&collaborationError)) {
+            std::fprintf(stderr, "collaboration workflow check failed: %s\n", collaborationError.toUtf8().constData());
+            return 59;
+        }
         if (!collab::checkCollaborationProtocolForTest(&collaborationError)) {
             std::fprintf(stderr, "collaboration protocol check failed: %s\n",
                          collaborationError.toUtf8().constData());
@@ -1026,6 +1121,7 @@ int main(int argc, char** argv) {
                                        &cloudRecordingAssets);
     collab::EngineProjectProjectionAdapter collaborationProjection(
         window.collaborationEngineController(), &collaborationAssetCache);
+    window.setCloudProjectionAdapter(&collaborationProjection);
     QObject::connect(
         &collaborationProjection,
         &collab::EngineProjectProjectionAdapter::missingAssetRefsChanged,

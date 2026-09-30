@@ -3,9 +3,16 @@
 #include "CollaborationDialogStyle.hpp"
 #include "Controls.hpp"
 #include "Icons.hpp"
+#include "RecoverySupport.hpp"
 #include "Theme.hpp"
 
 #include <QApplication>
+#include <QComboBox>
+#include <QDir>
+#include <QFileInfo>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QSignalBlocker>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
@@ -52,6 +59,17 @@ QString statusText(CloudProjectStatus status) {
             return CloudProjectListState::tr("Archived");
     }
     return {};
+}
+
+bool matchesProjectFilter(const CloudProjectView& view, const QString& query,
+                          int filter) {
+    if (!query.trimmed().isEmpty() &&
+        !view.project.title.contains(query.trimmed(), Qt::CaseInsensitive)) return false;
+    if (filter == 3) return view.project.status == CloudProjectStatus::Archived;
+    if (view.project.status == CloudProjectStatus::Archived) return false;
+    if (filter == 1) return view.role == CloudProjectRole::Owner;
+    if (filter == 2) return view.role != CloudProjectRole::Owner;
+    return true;
 }
 
 /// Status is a shape and a word, not only a colour: the pill carries text so it
@@ -245,7 +263,10 @@ bool CloudProjectListState::allows(Action action) const {
         case Action::Open:
             return view != nullptr &&
                    view->project.status != CloudProjectStatus::Archived &&
-                   view->project.status != CloudProjectStatus::Uploading;
+                   (view->project.status != CloudProjectStatus::Uploading ||
+                    (view->role == CloudProjectRole::Owner &&
+                     m_impl->ports.canResumePublication &&
+                     m_impl->ports.canResumePublication(view->project.id)));
         case Action::Invite:
             // Inviting needs the right to manage members.
             return view != nullptr &&
@@ -372,15 +393,24 @@ struct CloudProjectsDialog::Impl {
     QLabel* status = nullptr;
     QPushButton* open = nullptr;
     QPushButton* publish = nullptr;
+    QPushButton* createEmpty = nullptr;
     QPushButton* invite = nullptr;
     QPushButton* archive = nullptr;
     QPushButton* join = nullptr;
     QPushButton* refresh = nullptr;
+    QPushButton* rename = nullptr;
+    QPushButton* manage = nullptr;
+    QLineEdit* search = nullptr;
+    QComboBox* filter = nullptr;
+    bool managementPending = false;
+    QString managementError;
 
     void rebuild() {
         const QString keep = state->selectedProjectId();
+        const QSignalBlocker blocker(list);
         list->clear();
         for (const CloudProjectView& view : state->projects()) {
+            if (!matchesProjectFilter(view, search->text(), filter->currentIndex())) continue;
             auto* item = new QListWidgetItem(list);
             item->setData(kProjectIdRole, view.project.id);
             item->setData(kTitleRole, view.project.title);
@@ -388,25 +418,39 @@ struct CloudProjectsDialog::Impl {
             item->setData(kRoleRole, int(view.role));
             item->setData(kUpdatedRole, view.project.updatedAt);
             item->setData(kIsOpenRole, view.project.id == openProjectId);
+            item->setData(Qt::AccessibleTextRole, view.project.title + QStringLiteral(", ") +
+                roleText(view.role) + QStringLiteral(", ") + statusText(view.project.status));
             if (view.project.id == keep) list->setCurrentItem(item);
         }
-        refreshActions();
+        syncSelection();
     }
 
     void refreshActions() {
         using Action = CloudProjectListState::Action;
         open->setEnabled(state->allows(Action::Open));
         publish->setEnabled(state->allows(Action::Publish));
+        createEmpty->setEnabled(state->allows(Action::Publish));
         invite->setEnabled(state->allows(Action::Invite));
         archive->setEnabled(state->allows(Action::Archive));
         join->setEnabled(state->allows(Action::Join));
         refresh->setEnabled(state->allows(Action::Refresh));
+        const auto* view = state->selected();
+        open->setText(view && view->project.status == CloudProjectStatus::Uploading
+            ? CloudProjectListState::tr("Resume publication") : CloudProjectListState::tr("Open"));
+        rename->setEnabled(!managementPending && view &&
+            view->role == CloudProjectRole::Owner &&
+            view->project.status != CloudProjectStatus::Archived);
+        manage->setEnabled(!managementPending && view &&
+            view->project.status != CloudProjectStatus::Archived);
 
-        status->setText(state->safeMessage());
-        status->setObjectName(state->messageIsError()
+        status->setText(managementError.isEmpty() ? state->safeMessage() : managementError);
+        if (status->text().isEmpty() && list->count() == 0 &&
+            state->phase() == CloudProjectListState::Phase::Ready)
+            status->setText(CloudProjectListState::tr("No projects match your search."));
+        status->setObjectName(state->messageIsError() || !managementError.isEmpty()
                                   ? QStringLiteral("CollabError")
                                   : QStringLiteral("CollabSecondary"));
-        status->setVisible(!state->safeMessage().isEmpty());
+        status->setVisible(!status->text().isEmpty());
         status->style()->unpolish(status);
         status->style()->polish(status);
     }
@@ -435,6 +479,14 @@ CloudProjectsDialog::CloudProjectsDialog(CloudProjectClient* projects,
     ports.cancel = [guard](quint64 requestId) {
         return guard && guard->cancel(requestId);
     };
+    ports.canResumePublication = [](const QString& projectId) {
+        const auto id = dialog::canonicalUuid(projectId);
+        if (id.isEmpty()) return false;
+        const QDir journal(QDir(ui::recovery::rootDir()).filePath(
+            QStringLiteral("PublicationPending/") + id));
+        return QFileInfo(journal.filePath(QStringLiteral("base.json"))).isFile() &&
+               QFileInfo(journal.filePath(QStringLiteral("publication-metadata.json"))).isFile();
+    };
     m_impl->state = std::make_unique<CloudProjectListState>(
         m_impl->openProjectId, std::move(ports));
 
@@ -452,6 +504,7 @@ CloudProjectsDialog::CloudProjectsDialog(CloudProjectClient* projects,
     description->setWordWrap(true);
 
     m_impl->list = new QListWidget(this);
+    m_impl->list->setAccessibleName(CloudProjectListState::tr("Cloud projects"));
     m_impl->list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_impl->list->setItemDelegate(new ProjectCardDelegate(m_impl->list));
     m_impl->list->setUniformItemSizes(true);
@@ -463,20 +516,28 @@ CloudProjectsDialog::CloudProjectsDialog(CloudProjectClient* projects,
 
     m_impl->open = new QPushButton(CloudProjectListState::tr("Open"), this);
     m_impl->open->setDefault(true);
-    m_impl->publish = new QPushButton(CloudProjectListState::tr("Publish…"), this);
+    m_impl->publish = new QPushButton(CloudProjectListState::tr("Publish current…"), this);
+    m_impl->createEmpty = new QPushButton(CloudProjectListState::tr("New cloud project…"), this);
     m_impl->invite = new QPushButton(CloudProjectListState::tr("Invite…"), this);
     m_impl->archive = new QPushButton(CloudProjectListState::tr("Archive"), this);
     m_impl->join = new QPushButton(CloudProjectListState::tr("Join by Code…"), this);
     m_impl->refresh = new QPushButton(CloudProjectListState::tr("Refresh"), this);
+    m_impl->rename = new QPushButton(CloudProjectListState::tr("Rename…"), this);
+    m_impl->manage = new QPushButton(CloudProjectListState::tr("Manage…"), this);
+    m_impl->search = new QLineEdit(this);
+    m_impl->search->setPlaceholderText(CloudProjectListState::tr("Search projects"));
+    m_impl->search->setAccessibleName(CloudProjectListState::tr("Search projects"));
+    m_impl->search->setClearButtonEnabled(true);
+    m_impl->filter = new QComboBox(this);
+    m_impl->filter->setAccessibleName(CloudProjectListState::tr("Project filter"));
+    m_impl->filter->addItems({CloudProjectListState::tr("All projects"),
+        CloudProjectListState::tr("My projects"), CloudProjectListState::tr("Shared with me"),
+        CloudProjectListState::tr("Archived")});
     auto* close = new QPushButton(CloudProjectListState::tr("Close"), this);
 
     // Secondary actions on the left, the primary pair on the right, so the
     // destructive one is nowhere near the button people press by reflex.
     auto* buttons = new QHBoxLayout;
-    buttons->addWidget(m_impl->join);
-    buttons->addWidget(m_impl->publish);
-    buttons->addWidget(m_impl->invite);
-    buttons->addWidget(m_impl->archive);
     buttons->addStretch(1);
     buttons->addWidget(m_impl->refresh);
     buttons->addWidget(close);
@@ -487,12 +548,54 @@ CloudProjectsDialog::CloudProjectsDialog(CloudProjectClient* projects,
     column->setSpacing(collab::dialog::kSpacing);
     column->addWidget(title);
     column->addWidget(description);
+    auto* creation = new QHBoxLayout;
+    creation->addWidget(m_impl->createEmpty);
+    creation->addWidget(m_impl->publish);
+    creation->addStretch(1);
+    creation->addWidget(m_impl->join);
+    column->addLayout(creation);
+    auto* searchRow = new QHBoxLayout;
+    searchRow->addWidget(m_impl->search, 1);
+    searchRow->addWidget(m_impl->filter);
+    column->addLayout(searchRow);
     column->addWidget(m_impl->list, 1);
+    auto* management = new QHBoxLayout;
+    management->addWidget(m_impl->rename);
+    management->addWidget(m_impl->manage);
+    management->addWidget(m_impl->invite);
+    management->addStretch();
+    management->addWidget(m_impl->archive);
+    column->addLayout(management);
     column->addWidget(m_impl->status);
     column->addLayout(buttons);
 
     connect(m_impl->list, &QListWidget::itemSelectionChanged, this,
             [this] { m_impl->syncSelection(); });
+    connect(m_impl->search, &QLineEdit::textChanged, this, [this] { m_impl->rebuild(); });
+    connect(m_impl->filter, &QComboBox::currentIndexChanged, this, [this] { m_impl->rebuild(); });
+    connect(m_impl->rename, &QPushButton::clicked, this, [this] {
+        const auto* view = m_impl->state->selected();
+        if (!view || view->role != CloudProjectRole::Owner || m_impl->managementPending) return;
+        const QString id = view->project.id;
+        const QString before = view->project.title;
+        bool accepted = false;
+        const QString title = QInputDialog::getText(this,
+            CloudProjectListState::tr("Rename project"), CloudProjectListState::tr("Project name"),
+            QLineEdit::Normal, before, &accepted).trimmed();
+        if (!accepted || title == before) return;
+        if (title.isEmpty() || title.size() > 160) {
+            completeManagement(CloudProjectListState::tr("Use a project name from 1 to 160 characters."));
+            return;
+        }
+        m_impl->managementPending = true;
+        m_impl->managementError.clear();
+        m_impl->refreshActions();
+        emit renameRequested(id, title);
+    });
+    connect(m_impl->manage, &QPushButton::clicked, this, [this] {
+        const QString id = m_impl->state->selectedProjectId();
+        if (!id.isEmpty()) emit manageRequested(id);
+    });
     connect(m_impl->list, &QListWidget::itemDoubleClicked, this,
             [this](QListWidgetItem*) {
                 if (m_impl->state->allows(CloudProjectListState::Action::Open))
@@ -503,6 +606,10 @@ CloudProjectsDialog::CloudProjectsDialog(CloudProjectClient* projects,
     connect(m_impl->refresh, &QPushButton::clicked, this, [this] {
         m_impl->state->refresh();
         m_impl->refreshActions();
+    });
+    connect(m_impl->createEmpty, &QPushButton::clicked, this, [this] {
+        emit createEmptyRequested();
+        reject();
     });
     connect(m_impl->publish, &QPushButton::clicked, this, [this] {
         emit publishRequested();
@@ -565,6 +672,14 @@ QString CloudProjectsDialog::chosenProjectId() const {
     return m_impl->state->selectedProjectId();
 }
 
+void CloudProjectsDialog::completeManagement(const QString& safeError) {
+    m_impl->managementPending = false;
+    m_impl->managementError = safeError.isEmpty() ? QString()
+        : dialog::boundedSafeMessage(safeError, CloudProjectListState::tr("The project could not be updated."));
+    if (safeError.isEmpty()) m_impl->state->refresh();
+    m_impl->refreshActions();
+}
+
 void CloudProjectsDialog::reject() {
     m_impl->state->shutdown();
     QDialog::reject();
@@ -601,6 +716,14 @@ bool checkCloudProjectsDialogForTest(QString* error) {
         make(viewerId, CloudProjectRole::Viewer, CloudProjectStatus::Active),
         make(archivedId, CloudProjectRole::Owner, CloudProjectStatus::Archived),
     };
+    if (!matchesProjectFilter(listing[0], QStringLiteral("  pROJ  "), 1) ||
+        matchesProjectFilter(listing[0], QStringLiteral("missing"), 0) ||
+        matchesProjectFilter(listing[0], {}, 2) ||
+        !matchesProjectFilter(listing[2], {}, 2) ||
+        matchesProjectFilter(listing[3], {}, 0) ||
+        !matchesProjectFilter(listing[3], {}, 3)) {
+        return fail(QStringLiteral("project search/ownership/archive filters disagree"));
+    }
 
     struct Recorder {
         quint64 next = 0;
@@ -627,6 +750,23 @@ bool checkCloudProjectsDialogForTest(QString* error) {
         return value;
     };
 
+    {
+        Recorder log;
+        auto recoveryPorts = ports(log);
+        recoveryPorts.canResumePublication = [otherId](const QString& id) { return id == otherId; };
+        CloudProjectListState state({}, std::move(recoveryPorts));
+        state.refresh();
+        state.onListed(log.next, {
+            make(otherId, CloudProjectRole::Owner, CloudProjectStatus::Uploading),
+            make(openId, CloudProjectRole::Owner, CloudProjectStatus::Uploading),
+            make(viewerId, CloudProjectRole::Viewer, CloudProjectStatus::Uploading)});
+        state.select(otherId);
+        if (!state.allows(Action::Open)) return fail(QStringLiteral("recoverable owned draft cannot resume"));
+        state.select(openId);
+        if (state.allows(Action::Open)) return fail(QStringLiteral("draft without local journal can open"));
+        state.select(viewerId);
+        if (state.allows(Action::Open)) return fail(QStringLiteral("viewer can resume another owner's draft"));
+    }
     {
         Recorder log;
         CloudProjectListState state(openId, ports(log));

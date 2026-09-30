@@ -4,6 +4,7 @@
 #include "WarpTools.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "cloud/PublishPreflight.hpp"
+#include "cloud/CloudDocumentProjection.hpp"
 #include "DSP/WarpPlayback.hpp"
 #include "Recording/RecordingEngine.hpp"
 #include "platform/AudioFileDecoder.hpp"
@@ -178,7 +179,10 @@ int main() {
     std::string encoded; ProjectModel decoded;
     check(ProjectSerializer::serializeDocument(controller.project(), encoded).isOk() &&
           ProjectSerializer::deserializeDocument(decoded, encoded).isOk() && decoded.tracks[0].clips[0].warp == map, "Warp project serialization round-trip");
-    check(!cloud::inspectForPublishV1(controller.project()).canPublish(), "cloud publication refuses local Warp data");
+    check(cloud::inspectForPublishV1(controller.project()).canPublish(),
+          "cloud publication accepts supported Warp data");
+    check(cloud::projectForCloudSnapshotV1(controller.project()).document.tracks[0].clips[0].warp == map,
+          "cloud snapshot preserves the nonlinear Warp map");
     const auto copied = controller.duplicateClip(track.id, clip.id);
     auto other = map; other.markers[1].targetBeats = 1.2; controller.setClipWarp(track.id, copied, other);
     check(controller.audioClip(track.id, clip.id)->warp == map, "duplicate clips have independent maps");
@@ -233,7 +237,10 @@ int main() {
     const auto* baked = controller.audioClip(track.id, clip.id);
     check(baked->warp.empty() && baked->offlineHistory.front().source.warp == map,
           "baked Warp is not applied twice and the original map remains in version history");
-    check(!cloud::inspectForPublishV1(controller.project()).canPublish(), "cloud publication also protects maps in audio history");
+    check(cloud::inspectForPublishV1(controller.project()).canPublish(),
+          "cloud publication accepts Warp maps in processed audio history");
+    check(cloud::projectForCloudSnapshotV1(controller.project()).document.tracks[0].clips[0].offlineHistory.front().source.warp == map,
+          "cloud snapshot preserves the original Warp map in processed audio history");
     check(controller.restoreOfflineRenderOriginal(address).isOk() && controller.audioClip(track.id, clip.id)->warp == map,
           "restoring original audio restores the nonlinear map");
     auto missingProject = project;

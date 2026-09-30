@@ -15,6 +15,7 @@ namespace collab {
 /// the caller and remain stable across cache import, resumable retries and
 /// recovery. sourcePath is local-only and is never copied into AssetRef.
 struct ClosedRecordingAsset {
+    daw::AssetKind kind = daw::AssetKind::Audio;
     QString projectId;
     QString uploadId;
     QString assetId;

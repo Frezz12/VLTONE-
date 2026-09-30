@@ -22,12 +22,14 @@ const (
 	CollaborationProtocolV3           = "vlt-collab-v3"
 	CollaborationProtocolV4           = "vlt-collab-v4"
 	CollaborationProtocolV5           = "vlt-collab-v5"
+	CollaborationProtocolV6           = "vlt-collab-v6"
 	CollaborationProtocol             = CollaborationProtocolV2
 	CollaborationProjectFormatVersion = 7
 	CollaborationCommandSchemaVersion = 2
 	CollaborationCommandSchemaV3      = 3
 	CollaborationCommandSchemaV4      = 4
 	CollaborationCommandSchemaV5      = 5
+	CollaborationCommandSchemaV6      = 6
 	MaxOperationPayloadBytes          = 1 << 20
 	MaxOperationPreconditions         = 1024
 	MaxOperationTouchedFields         = 8192
@@ -55,6 +57,7 @@ var (
 	ErrSessionEnded           = errors.New("collaboration session has ended")
 	ErrSessionFull            = errors.New("collaboration session is full")
 	ErrLeaseHeld              = errors.New("track lease is held by another participant")
+	ErrRecordingActive        = errors.New("finish the active recording before changing session mode")
 	ErrLeaseRequired          = errors.New("an active track lease held by this participant is required")
 	ErrLeaseExpired           = errors.New("track lease has expired")
 	ErrInviteExpired          = errors.New("project invitation has expired")
@@ -69,11 +72,14 @@ var (
 	ErrSessionPasswordInvalid  = errors.New("collaboration session password is invalid")
 	ErrSessionStarting         = errors.New("collaboration session has not been activated")
 	ErrPluginNotReady          = errors.New("plugin compatibility is not ready")
+	ErrSessionVersion          = errors.New("session policy changed; refresh before retrying")
+	ErrSessionExcluded         = errors.New("removed from this session; ask the owner to readmit you")
+	ErrProjectBanned           = errors.New("access to this project is blocked")
 )
 
 func SupportedCommandSchemaVersion(version int) bool {
 	return version == CollaborationCommandSchemaVersion ||
-		version == CollaborationCommandSchemaV3 || version == CollaborationCommandSchemaV4 || version == CollaborationCommandSchemaV5
+		version == CollaborationCommandSchemaV3 || version == CollaborationCommandSchemaV4 || version == CollaborationCommandSchemaV5 || version == CollaborationCommandSchemaV6
 }
 
 func CollaborationProtocolForSchema(version int) (string, bool) {
@@ -86,6 +92,8 @@ func CollaborationProtocolForSchema(version int) (string, bool) {
 		return CollaborationProtocolV4, true
 	case CollaborationCommandSchemaV5:
 		return CollaborationProtocolV5, true
+	case CollaborationCommandSchemaV6:
+		return CollaborationProtocolV6, true
 	default:
 		return "", false
 	}
@@ -100,7 +108,12 @@ func invalidf(format string, values ...any) error {
 	return &ValidationError{Message: fmt.Sprintf(format, values...)}
 }
 
-type CompatibilityError struct{ Message string }
+type CompatibilityError struct {
+	Message               string
+	RequiredAppVersion    string
+	RequiredEngineVersion string
+	MinimumAppVersion     string
+}
 
 func (e *CompatibilityError) Error() string { return e.Message }
 func (e *CompatibilityError) Unwrap() error { return ErrVersionMismatch }
@@ -151,6 +164,7 @@ type AppendOperationInput struct {
 	TransactionID  *uuid.UUID
 	Kind           string
 	SchemaVersion  int
+	SessionVersion int64
 	BaseSeq        int64
 	Payload        json.RawMessage
 	Preconditions  []FieldPrecondition

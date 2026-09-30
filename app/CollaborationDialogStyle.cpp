@@ -54,6 +54,8 @@ QListWidget, QTreeWidget { background: %WELL%; border: 1px solid %SEP%;
 QListWidget::item, QTreeWidget::item { padding: 3px 6px; border: none; }
 QListWidget::item:selected, QTreeWidget::item:selected { background: %ACCENT%;
                                                          color: %ACCENT_TEXT%; }
+QHeaderView::section { background: %ALT%; color: %TEXT2%; padding: 4px 6px;
+                       border: none; border-bottom: 1px solid %SEP%; }
 QScrollArea { background: transparent; border: none; }
 QProgressBar { background: %WELL%; border: none; border-radius: 3px;
                text-align: center; color: %TEXT2%; font-size: 10px; }

@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <cmath>
 #include <unordered_map>
 
 #if defined(__APPLE__)
@@ -644,6 +645,10 @@ std::vector<PluginDescriptor> PluginManager::plugins() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::vector<PluginDescriptor> scanned = m_cache.allPlugins();
     found.insert(found.end(), scanned.begin(), scanned.end());
+    if (m_parameterFingerprint)
+        for (auto& descriptor : found)
+            if (!descriptor.parameterSchema.empty())
+                descriptor.parameterFingerprint = m_parameterFingerprint(descriptor.parameterSchema);
     return found;
 }
 
@@ -671,10 +676,48 @@ std::optional<PluginDescriptor> PluginManager::find(Format format,
     for (const PluginCacheEntry& entry : m_cache.entries()) {
         if (!entry.ok || entry.blacklisted) continue;
         for (const PluginDescriptor& descriptor : entry.plugins) {
-            if (descriptor.format == format && descriptor.uid == uid) return descriptor;
+            if (descriptor.format == format && descriptor.uid == uid) {
+                auto result = descriptor;
+                if (m_parameterFingerprint && !result.parameterSchema.empty())
+                    result.parameterFingerprint = m_parameterFingerprint(result.parameterSchema);
+                return result;
+            }
         }
     }
     return std::nullopt;
+}
+
+std::string PluginManager::probeSharedState(const PluginDescriptor& descriptor,
+    const std::string& absoluteStatePath, double sampleRate) const {
+    return sharedStateProbe(descriptor, absoluteStatePath, sampleRate)();
+}
+
+std::function<std::string()> PluginManager::sharedStateProbe(PluginDescriptor descriptor,
+    std::string absoluteStatePath, double sampleRate) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return [descriptor = std::move(descriptor), absoluteStatePath = std::move(absoluteStatePath),
+            sampleRate, scannerPath = m_scannerPath, timeout = m_timeout]() -> std::string {
+    if (descriptor.format == Format::Internal) return {};
+    if (descriptor.uid.empty() || descriptor.path.empty() || !std::isfinite(sampleRate) || sampleRate < 8000 || sampleRate > 768000)
+        return "Invalid plugin probe configuration";
+    if (!absoluteStatePath.empty() && !platform::pathFromUtf8(absoluteStatePath).is_absolute())
+        return "Plugin state cache path must be absolute";
+    const auto probe = ScanProcess::run(scannerPath,
+        {"--validate", "--format=" + std::string(plugins::toString(descriptor.format)),
+         "--path=" + descriptor.path, "--uid=" + descriptor.uid,
+         "--state=" + absoluteStatePath, "--sample-rate=" + std::to_string(sampleRate), "--shared-state"}, timeout);
+    if (!probe.succeeded()) return probe.failureReason.empty() ? "Plugin state probe failed" : probe.failureReason;
+    std::vector<PluginDescriptor> verified;
+    if (!plugins::scan::decodeResult(probe.output, verified) || verified.size() != 1)
+        return "Invalid plugin state probe response";
+    const auto& actual = verified.front();
+    if (actual.format != descriptor.format || actual.uid != descriptor.uid ||
+        actual.vendor != descriptor.vendor || actual.version != descriptor.version ||
+        actual.stateSchemaVersion != descriptor.stateSchemaVersion ||
+        actual.parameterSchema.empty() || actual.parameterSchema != descriptor.parameterSchema)
+        return "Plugin installation or parameter schema changed; rescan before joining";
+    return {};
+    };
 }
 
 std::vector<PluginManager::BlacklistEntry> PluginManager::blacklist() const {

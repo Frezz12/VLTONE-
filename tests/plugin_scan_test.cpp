@@ -153,6 +153,28 @@ int main(int argc, char** argv) {
         }
         check(found.size() == 2 && sawGain,
               "both descriptors survive the round trip through the pipe");
+        const auto validated = ScanProcess::run(scanner,
+            {"--validate", "--format=clap", "--path=" + pluginPath,
+             "--uid=com.daw.test.gain", "--shared-state"}, std::chrono::milliseconds(20000));
+        std::vector<plugins::PluginDescriptor> contracts;
+        check(validated.succeeded() && plugins::scan::decodeResult(validated.output, contracts) &&
+                  contracts.size() == 1 && !contracts.front().parameterSchema.empty(),
+              "isolated shared-state probe preserves parameters and reports its canonical contract");
+        if (contracts.size() == 1) {
+            const auto statePath = sandbox / "gain.state";
+            const double state[4] = {0.5, 0, 0, 0};
+            { std::ofstream output(statePath, std::ios::binary); output.write(reinterpret_cast<const char*>(state), sizeof(state)); }
+            PluginManager manager((sandbox / "probe-cache.json").string());
+            manager.setScannerPath(scanner);
+            check(manager.probeSharedState(contracts.front(), statePath.string()).empty(),
+                  "current asset bytes restore through a separate plugin process");
+            auto drifted = contracts.front(); drifted.parameterSchema += " ";
+            check(!manager.probeSharedState(drifted, statePath.string()).empty(),
+                  "runtime contract drift rejects editor readiness even with the same plugin version");
+            { std::ofstream output(statePath, std::ios::binary); output << "broken"; }
+            check(!manager.probeSharedState(contracts.front(), statePath.string()).empty(),
+                  "a corrupt opaque state cannot pass metadata-only readiness");
+        }
     }
 
 #if defined(_WIN32)

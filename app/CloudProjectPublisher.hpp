@@ -27,6 +27,9 @@ struct CloudProjectPublicationInput {
     daw::ProjectModel project;
     CreateCloudProjectInput metadata;
     QVector<CloudPublicationAssetSource> assetSources;
+    /// Local recovery journal directory. Its small identity records let an
+    /// explicit restart reuse uploads whose final response may have been lost.
+    QString recoveryDirectory;
 };
 
 enum class CloudPublicationPhase : quint8 {
@@ -69,6 +72,9 @@ public:
 
     /// Replaces any active publication and returns its non-zero generation.
     quint64 publish(const CloudProjectPublicationInput& input);
+    /// Resume a retryable failure without replacing the project or upload IDs.
+    bool retry();
+    bool canRetry() const noexcept;
     void cancel();
 
     CloudPublicationPhase phase() const noexcept;
@@ -97,6 +103,8 @@ signals:
     void publicationCompleted(
         quint64 generation,
         const collab::CloudProjectPublicationResult& result);
+    void publicationAlreadyActive(quint64 generation,
+                                  const collab::CloudProjectView& project);
 
 private:
     struct Impl;

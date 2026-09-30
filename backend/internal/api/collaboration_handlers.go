@@ -19,13 +19,17 @@ import (
 )
 
 type createCloudProjectRequest struct {
-	Title             string `json:"title"`
-	FormatVersion     int    `json:"format_version"`
-	EngineVersion     string `json:"engine_version"`
-	MinimumAppVersion string `json:"minimum_app_version"`
+	PluginPolicy      string    `json:"pluginPolicy"`
+	ProjectID         uuid.UUID `json:"projectId,omitempty"`
+	Title             string    `json:"title"`
+	FormatVersion     int       `json:"format_version"`
+	EngineVersion     string    `json:"engine_version"`
+	MinimumAppVersion string    `json:"minimum_app_version"`
 }
 
 type updateCloudProjectRequest struct {
+	ExpectedHeadSeq   *int64  `json:"expected_head_seq"`
+	PluginPolicy      *string `json:"pluginPolicy"`
 	Title             *string `json:"title"`
 	EngineVersion     *string `json:"engine_version"`
 	MinimumAppVersion *string `json:"minimum_app_version"`
@@ -55,14 +59,16 @@ type acceptProjectInviteRequest struct {
 }
 
 type appendProjectOperationRequest struct {
-	OpID          string                     `json:"opId"`
-	TransactionID string                     `json:"transactionId"`
-	Kind          string                     `json:"kind"`
-	SchemaVersion int                        `json:"schemaVersion"`
-	BaseSeq       int64                      `json:"baseServerSeq"`
-	Payload       json.RawMessage            `json:"payload"`
-	Preconditions []fieldPreconditionRequest `json:"preconditions"`
-	TouchedFields []string                   `json:"touchedFields"`
+	Command        json.RawMessage            `json:"command,omitempty"`
+	OpID           string                     `json:"opId"`
+	TransactionID  string                     `json:"transactionId"`
+	Kind           string                     `json:"kind"`
+	SchemaVersion  int                        `json:"schemaVersion"`
+	SessionVersion int64                      `json:"sessionVersion"`
+	BaseSeq        int64                      `json:"baseServerSeq"`
+	Payload        json.RawMessage            `json:"payload"`
+	Preconditions  []fieldPreconditionRequest `json:"preconditions"`
+	TouchedFields  []string                   `json:"touchedFields"`
 }
 
 type fieldPreconditionRequest struct {
@@ -72,10 +78,12 @@ type fieldPreconditionRequest struct {
 }
 
 type sessionCompatibilityRequest struct {
-	AppVersion           string `json:"appVersion"`
-	EngineVersion        string `json:"engineVersion"`
-	CommandSchemaVersion int    `json:"commandSchemaVersion"`
-	ProjectFormatVersion int    `json:"projectFormatVersion"`
+	AppVersion           string                     `json:"appVersion"`
+	EngineVersion        string                     `json:"engineVersion"`
+	CommandSchemaVersion int                        `json:"commandSchemaVersion"`
+	ProjectFormatVersion int                        `json:"projectFormatVersion"`
+	PluginPolicy         string                     `json:"pluginPolicy,omitempty"`
+	PluginInventory      []collab.PluginRequirement `json:"pluginInventory,omitempty"`
 }
 
 func (input sessionCompatibilityRequest) compatibility() collab.ClientCompatibility {
@@ -83,6 +91,7 @@ func (input sessionCompatibilityRequest) compatibility() collab.ClientCompatibil
 		AppVersion: input.AppVersion, EngineVersion: input.EngineVersion,
 		CommandSchemaVersion: input.CommandSchemaVersion,
 		ProjectFormatVersion: input.ProjectFormatVersion,
+		PluginPolicy:         input.PluginPolicy, PluginInventory: input.PluginInventory,
 	}
 }
 
@@ -130,7 +139,9 @@ func (s *Server) createCloudProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project, err := s.Collab.CreateProject(r.Context(), collab.CreateProjectInput{
-		OwnerUserID: userFrom(r).ID, Title: input.Title, FormatVersion: input.FormatVersion,
+		PluginPolicy: input.PluginPolicy,
+		ProjectID:    input.ProjectID,
+		OwnerUserID:  userFrom(r).ID, Title: input.Title, FormatVersion: input.FormatVersion,
 		EngineVersion: input.EngineVersion, MinimumAppVersion: input.MinimumAppVersion,
 	})
 	if err != nil {
@@ -163,7 +174,8 @@ func (s *Server) updateCloudProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project, err := s.Collab.UpdateProject(r.Context(), projectID, userFrom(r).ID, collab.UpdateProjectInput{
-		Title: input.Title, EngineVersion: input.EngineVersion, MinimumAppVersion: input.MinimumAppVersion,
+		PluginPolicy: input.PluginPolicy,
+		Title:        input.Title, EngineVersion: input.EngineVersion, MinimumAppVersion: input.MinimumAppVersion, ExpectedHeadSeq: input.ExpectedHeadSeq,
 	})
 	if err != nil {
 		s.writeCollaborationError(w, r, err)
@@ -425,6 +437,19 @@ func (s *Server) appendProjectOperation(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if len(input.Command) != 0 {
+		if input.OpID != "" || input.Kind != "" || input.SchemaVersion != 0 || len(input.Payload) != 0 || len(input.Preconditions) != 0 || len(input.TouchedFields) != 0 || input.BaseSeq != 0 || input.TransactionID != "" {
+			s.writeCollaborationError(w, r, collab.ErrValidation)
+			return
+		}
+		var nested appendProjectOperationRequest
+		if err := decodeCollaborationJSON(input.Command, &nested); err != nil || nested.SchemaVersion < collab.CollaborationCommandSchemaV6 || len(nested.Command) != 0 || nested.SessionVersion != 0 {
+			s.writeCollaborationError(w, r, collab.ErrValidation)
+			return
+		}
+		nested.SessionVersion = input.SessionVersion
+		input = nested
+	}
 	opID, err := collab.ParseOperationUUID(input.OpID, false)
 	if err != nil {
 		s.writeCollaborationError(w, r, err)
@@ -451,7 +476,8 @@ func (s *Server) appendProjectOperation(w http.ResponseWriter, r *http.Request) 
 		ActorSessionID: collaborationActorSessionID(r),
 		OpID:           *opID, TransactionID: transactionID, Kind: input.Kind,
 		SchemaVersion: input.SchemaVersion, BaseSeq: input.BaseSeq, Payload: input.Payload,
-		Preconditions: preconditions, TouchedFields: input.TouchedFields,
+		SessionVersion: input.SessionVersion,
+		Preconditions:  preconditions, TouchedFields: input.TouchedFields,
 	})
 	if err != nil {
 		s.writeCollaborationError(w, r, err)
@@ -507,6 +533,7 @@ func sessionStatePayload(state collab.SessionState) map[string]any {
 		"session":          state.Session,
 		"members":          state.Members,
 		"passwordRequired": state.Session.PasswordRequired(),
+		"control":          collab.ControlSnapshot(state.Session),
 	}
 }
 
@@ -590,6 +617,8 @@ func (s *Server) sessionMemberAction(w http.ResponseWriter, r *http.Request, act
 			s.writeCollaborationError(w, r, err)
 			return
 		}
+		s.publishSessionCatalog(r.Context(), projectID, userID, state)
+		s.publishSessionControl(projectID, "session.host_changed", state)
 		writeJSON(w, http.StatusOK, sessionStatePayload(state))
 	case "leave":
 		state, err := s.Collab.LeaveSession(r.Context(), projectID, sessionID,
@@ -598,16 +627,20 @@ func (s *Server) sessionMemberAction(w http.ResponseWriter, r *http.Request, act
 			s.writeCollaborationError(w, r, err)
 			return
 		}
+		s.publishSessionCatalog(r.Context(), projectID, userID, state)
 		if s.Rooms != nil {
 			s.Rooms.DisconnectProjectDevice(projectID, deviceID, collab.RoomClose{
 				Code: "member_left", Reason: "participant left the session",
 			})
-			hostPayload, _ := json.Marshal(map[string]any{
-				"hostParticipantId": state.Session.HostMemberID,
-				"reason":            "left",
-			})
-			s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelope("session.host_changed", hostPayload,
-				uuid.Nil, nil, 0)})
+			s.publishSessionControl(projectID, "session.host_changed", state)
+			if state.Session.CommandSchemaVersion < collab.CollaborationCommandSchemaV6 {
+				hostPayload, _ := json.Marshal(map[string]any{
+					"hostParticipantId": state.Session.HostMemberID,
+					"reason":            "left",
+				})
+				s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelope("session.host_changed", hostPayload,
+					uuid.Nil, nil, 0)})
+			}
 		}
 		if round, roundErr := s.prepareHashRound(r.Context(), projectID, state); roundErr == nil {
 			s.publishHashRound(projectID, round)
@@ -641,6 +674,8 @@ func (s *Server) updateProjectSessionReadiness(w http.ResponseWriter,
 		s.writeCollaborationError(w, r, err)
 		return
 	}
+	s.publishSessionControl(projectID, "session.host_changed", state)
+	s.publishSessionCatalog(r.Context(), projectID, userFrom(r).ID, state)
 	if s.Rooms != nil {
 		for _, member := range state.Members {
 			if member.UserID == userFrom(r).ID && member.DeviceID == deviceFrom(r).ID {
@@ -713,13 +748,15 @@ func (s *Server) handoffProjectSessionHost(w http.ResponseWriter, r *http.Reques
 	if state.Session.HostMemberID != nil && s.Rooms != nil {
 		payload, _ := json.Marshal(map[string]any{
 			"hostParticipantId": *state.Session.HostMemberID, "reason": "manual",
+			"control": collab.ControlSnapshot(state.Session),
 		})
-		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelope("session.host_changed", payload, uuid.Nil, nil, 0)})
+		protocol, _ := collab.CollaborationProtocolForSchema(state.Session.CommandSchemaVersion)
+		s.Rooms.Publish(projectID, uuid.Nil, collab.RoomMessage{Data: collaborationEnvelopeFor(protocol, "session.host_changed", payload, uuid.Nil, nil, 0)})
 	}
 	if round, roundErr := s.prepareHashRound(r.Context(), projectID, state); roundErr == nil {
 		s.publishHashRound(projectID, round)
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, sessionStatePayload(state))
 }
 
 func (s *Server) endProjectSession(w http.ResponseWriter, r *http.Request) {
@@ -887,6 +924,26 @@ func parseNonNegativeQuery(w http.ResponseWriter, r *http.Request, name string, 
 }
 
 func (s *Server) writeCollaborationError(w http.ResponseWriter, r *http.Request, err error) {
+	var compatibility *collab.CompatibilityError
+	if errors.As(err, &compatibility) {
+		response := map[string]any{"code": "version_mismatch", "message": compatibility.Message, "request_id": middleware.GetReqID(r.Context())}
+		if compatibility.RequiredAppVersion != "" {
+			response["required_app_version"] = compatibility.RequiredAppVersion
+		}
+		if compatibility.RequiredEngineVersion != "" {
+			response["required_engine_version"] = compatibility.RequiredEngineVersion
+		}
+		if compatibility.MinimumAppVersion != "" {
+			response["minimum_app_version"] = compatibility.MinimumAppVersion
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, response)
+		return
+	}
+	var editHeld *collab.EditLeaseHeldError
+	if errors.As(err, &editHeld) {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "edit_lease_held", "message": editHeld.Error(), "holder_member_id": editHeld.HolderMemberID, "expires_at": editHeld.ExpiresAt})
+		return
+	}
 	var precondition *collab.PreconditionError
 	if errors.As(err, &precondition) {
 		writeJSON(w, http.StatusConflict, map[string]any{
@@ -905,6 +962,14 @@ func (s *Server) writeCollaborationError(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	switch {
+	case errors.Is(err, collab.ErrRecordingActive):
+		writeError(w, r, http.StatusConflict, "recording_active", err.Error(), nil)
+	case errors.Is(err, collab.ErrSessionVersion):
+		writeError(w, r, http.StatusConflict, "session_version_changed", err.Error(), nil)
+	case errors.Is(err, collab.ErrSessionExcluded):
+		writeError(w, r, http.StatusForbidden, "session_excluded", err.Error(), nil)
+	case errors.Is(err, collab.ErrProjectBanned):
+		writeError(w, r, http.StatusForbidden, "project_banned", err.Error(), nil)
 	case errors.Is(err, collab.ErrHashConsensusBlocked):
 		writeError(w, r, http.StatusConflict, "hash_consensus_required",
 			"Complete the current state hash round before editing.", nil)

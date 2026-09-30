@@ -14,6 +14,7 @@ namespace collab {
 /// its caller is allowed to build or submit a shared command. The two UUIDs
 /// are caller-created and stay stable across retries. sourcePath is local-only.
 struct CloudSharedAssetMutationInput {
+    daw::AssetKind kind = daw::AssetKind::Audio;
     QString projectId;
     QString uploadId;
     QString assetId;

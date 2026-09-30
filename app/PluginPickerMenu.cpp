@@ -334,10 +334,12 @@ std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
         controller->pluginManager().instanceId();
     const std::uint64_t revision =
         controller->pluginManager().catalogueRevision();
+    const std::uint64_t sharedRevision = controller->sharedPluginCatalogRevision();
     const daw::plugins::Format preferredFormat = ui::preferredPluginFormat();
     struct CacheEntry {
         std::uint64_t managerId = 0;
         std::uint64_t revision = 0;
+        std::uint64_t sharedRevision = 0;
         daw::plugins::Format preferredFormat = daw::plugins::Format::Unknown;
         bool instruments = false;
         std::shared_ptr<const PreparedPluginCatalogue> catalogue;
@@ -345,6 +347,7 @@ std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
     static std::vector<CacheEntry> cache;
     for (const auto& entry : cache) {
         if (entry.managerId == managerId && entry.revision == revision &&
+            entry.sharedRevision == sharedRevision &&
             entry.preferredFormat == preferredFormat &&
             entry.instruments == instruments) {
             return entry.catalogue;
@@ -354,6 +357,9 @@ std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
     std::vector<daw::plugins::PluginDescriptor> catalogue =
         instruments ? controller->pluginManager().instruments()
                     : controller->pluginManager().effects();
+    std::erase_if(catalogue, [controller](const auto& descriptor) {
+        return !controller->sharedPluginAllowed(descriptor);
+    });
     auto prepared = std::make_shared<PreparedPluginCatalogue>();
     prepared->managerId = managerId;
     prepared->revision = revision;
@@ -395,7 +401,7 @@ std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
                                           Qt::CaseInsensitive) < 0;
               });
     cache.push_back(
-        {managerId, revision, preferredFormat, instruments, prepared});
+        {managerId, revision, sharedRevision, preferredFormat, instruments, prepared});
     // A rescan or preferred-format change leaves one old immutable snapshot.
     // Bound those generations; open menus retain their own shared copy safely.
     if (cache.size() > 8) cache.erase(cache.begin());

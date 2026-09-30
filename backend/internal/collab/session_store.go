@@ -33,6 +33,7 @@ type ReapedSessionMembers struct {
 	MemberIDs            []uuid.UUID
 	PreviousHostMemberID *uuid.UUID
 	HostMemberID         *uuid.UUID
+	Control              *SessionControl
 }
 
 const (
@@ -96,6 +97,7 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 	}
 	if compatibility != nil &&
 		compatibility.CommandSchemaVersion >= CollaborationCommandSchemaV3 &&
+		compatibility.CommandSchemaVersion < CollaborationCommandSchemaV6 &&
 		mode != model.SessionModeIndependent {
 		return SessionState{}, invalidf("v3 sessions require independent transport")
 	}
@@ -134,9 +136,27 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 		if compatibility != nil {
 			commandSchemaVersion = compatibility.CommandSchemaVersion
 		}
+		inventoryJSON := json.RawMessage("[]")
+		pluginPolicy, appVersion := "external_checked", ""
+		if commandSchemaVersion >= CollaborationCommandSchemaV6 {
+			if compatibility.PluginPolicy == "" {
+				compatibility.PluginPolicy = view.Project.PluginPolicy
+			}
+			if compatibility.PluginPolicy != view.Project.PluginPolicy {
+				return invalidf("session plugin policy must match the project profile")
+			}
+			if err := validateV6Inventory(*compatibility, requirements); err != nil {
+				return err
+			}
+			inventoryJSON, err = marshalPluginRequirements(compatibility.PluginInventory)
+			if err != nil {
+				return err
+			}
+			pluginPolicy, appVersion = compatibility.PluginPolicy, compatibility.AppVersion
+		}
 		// Once a project contains v4 content an older client cannot start a
 		// room whose reducer would discard the new MIDI properties.
-		if commandSchemaVersion < CollaborationCommandSchemaV5 {
+		if commandSchemaVersion < CollaborationCommandSchemaV6 {
 			var newer int64
 			if err := tx.Model(&model.ProjectOperation{}).Where("project_id = ? AND schema_version > ?", projectID, commandSchemaVersion).Count(&newer).Error; err != nil {
 				return err
@@ -177,6 +197,7 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 		session := model.ProjectSession{
 			ID: uuid.New(), ProjectID: projectID, CreatedBy: &creator, Mode: mode,
 			Status: model.ProjectSessionStarting, Version: 1,
+			AppVersion: appVersion, PluginPolicy: pluginPolicy, CatalogRevision: 1,
 			CommandSchemaVersion:       commandSchemaVersion,
 			PluginRequirementsRevision: manifestRevision,
 			PluginRequirements:         datatypes.JSON(manifestJSON), CreatedAt: now, UpdatedAt: now,
@@ -198,6 +219,7 @@ func (s *Store) startSession(ctx context.Context, projectID, actorUserID,
 			DesktopSessionID: &actorSessionID, EffectiveRole: effectiveRole,
 			ReadinessStatus: readinessStatus, ReadinessRevision: readinessRevision,
 			PluginReadiness: datatypes.JSON(readinessJSON), JoinedAt: now, LastSeenAt: now,
+			PluginInventory: datatypes.JSON(inventoryJSON),
 		}
 		if err := tx.Create(&member).Error; err != nil {
 			return err
@@ -293,17 +315,24 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 		if err != nil {
 			return err
 		}
-		if compatibility != nil {
-			if err := ValidateClientCompatibility(view.Project, *compatibility); err != nil {
-				return err
-			}
-		}
 		if !RoleAllows(view.Role, PermissionJoinSession) {
 			return ErrForbidden
 		}
 		session, err := s.openSessionTx(tx, projectID, sessionID, true)
 		if err != nil {
 			return err
+		}
+		if err := requireNotExcludedTx(tx, sessionID, actorUserID); err != nil {
+			return err
+		}
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 &&
+			(compatibility == nil || compatibility.AppVersion != session.AppVersion) {
+			return &CompatibilityError{Message: "This session requires application version " + session.AppVersion + ".", RequiredAppVersion: session.AppVersion, RequiredEngineVersion: view.Project.EngineVersion}
+		}
+		if compatibility != nil {
+			if err := ValidateClientCompatibility(view.Project, *compatibility); err != nil {
+				return err
+			}
 		}
 		if compatibility != nil &&
 			compatibility.CommandSchemaVersion != session.CommandSchemaVersion {
@@ -381,16 +410,41 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 					readinessRevision = normalized.Revision
 					readinessJSON, _ = json.Marshal(normalized.Plugins)
 				}
+				inventoryJSON := json.RawMessage("[]")
+				if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+					inventoryJSON, err = marshalPluginRequirements(compatibility.PluginInventory)
+					if err != nil {
+						return err
+					}
+					if readinessStatus == model.SessionReadinessReady && RoleAllows(effectiveRole, PermissionEdit) {
+						required, err := unmarshalPluginRequirements(json.RawMessage(session.PluginRequirements))
+						if err != nil {
+							return err
+						}
+						client := *compatibility
+						client.PluginPolicy = session.PluginPolicy
+						if err := validateV6Inventory(client, required); err != nil {
+							return err
+						}
+					}
+				}
 				member = model.ProjectSessionMember{
 					ID: uuid.New(), SessionID: session.ID, UserID: actorUserID,
 					DeviceID: actorDeviceID, DesktopSessionID: &actorSessionID,
 					EffectiveRole: effectiveRole, ReadinessStatus: readinessStatus,
 					ReadinessRevision: readinessRevision,
 					PluginReadiness:   datatypes.JSON(readinessJSON),
+					PluginInventory:   datatypes.JSON(inventoryJSON),
 					JoinedAt:          now, LastSeenAt: now,
 				}
 				if err := tx.Create(&member).Error; err != nil {
 					return err
+				}
+				if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+					if err := tx.Model(&session).Update("catalog_revision", gorm.Expr("catalog_revision + 1")).Error; err != nil {
+						return err
+					}
+					session.CatalogRevision++
 				}
 			} else {
 				return err
@@ -398,7 +452,10 @@ func (s *Store) joinSession(ctx context.Context, projectID, sessionID,
 		} else {
 			return err
 		}
-		if session.HostMemberID == nil {
+		if err := s.restorePresenterAssignmentTx(tx, &session, member, now); err != nil {
+			return err
+		}
+		if session.HostMemberID == nil && session.CommandSchemaVersion < CollaborationCommandSchemaV6 {
 			candidate, found, err := s.hostCandidateTx(tx, view.Project, session, uuid.Nil)
 			if err != nil {
 				return err
@@ -513,6 +570,21 @@ func (s *Store) UpdatePluginReadiness(ctx context.Context, projectID, sessionID,
 		member.ReadinessRevision = normalized.Revision
 		member.PluginReadiness = datatypes.JSON(readinessJSON)
 		member.LastSeenAt = now
+		if err := s.restorePresenterAssignmentTx(tx, &session, member, now); err != nil {
+			return err
+		}
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+			if err := tx.Model(&session).Update("catalog_revision", gorm.Expr("catalog_revision + 1")).Error; err != nil {
+				return err
+			}
+			session.CatalogRevision++
+		}
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 && session.HostMemberID != nil && *session.HostMemberID == member.ID &&
+			(status != model.SessionReadinessReady || !RoleAllows(role, PermissionEdit)) {
+			if err := s.pausePresenterTx(tx, &session, now); err != nil {
+				return err
+			}
+		}
 		members, err := s.liveMembersTx(tx, session.ID)
 		if err != nil {
 			return err
@@ -652,6 +724,9 @@ func (s *Store) HandoffHost(ctx context.Context, projectID, sessionID,
 		if err != nil {
 			return err
 		}
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 && view.Role != model.ProjectRoleOwner {
+			return ErrForbidden
+		}
 		var target model.ProjectSessionMember
 		if err := tx.Where("id = ? AND session_id = ? AND left_at IS NULL", targetMemberID, sessionID).First(&target).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -662,6 +737,10 @@ func (s *Store) HandoffHost(ctx context.Context, projectID, sessionID,
 		targetRole, err := s.roleForProjectTx(tx, view.Project, target.UserID)
 		if err != nil || !RoleAllows(targetRole, PermissionHostSession) {
 			return ErrForbidden
+		}
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV3 &&
+			(target.ReadinessStatus != model.SessionReadinessReady || target.ReadinessRevision != session.PluginRequirementsRevision || !RoleAllows(target.EffectiveRole, PermissionHostSession)) {
+			return ErrPluginNotReady
 		}
 		actorIsHost := false
 		if session.HostMemberID != nil {
@@ -683,6 +762,11 @@ func (s *Store) HandoffHost(ctx context.Context, projectID, sessionID,
 		session.HostMemberID = &target.ID
 		session.UpdatedAt = now
 		session.Version++
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 && session.Mode == model.SessionModeFollowHost {
+			if err := tx.Where("session_id = ? AND holder_member_id <> ?", sessionID, target.ID).Delete(&model.ProjectTrackLease{}).Error; err != nil {
+				return err
+			}
+		}
 		members, err := s.liveMembersTx(tx, sessionID)
 		if err != nil {
 			return err
@@ -726,12 +810,16 @@ func (s *Store) AcquireTrackLease(ctx context.Context, projectID, sessionID,
 		if view.Project.Status != model.ProjectActive {
 			return ErrProjectInactive
 		}
-		if _, err := s.liveSessionTx(tx, projectID, sessionID, true); err != nil {
+		session, err := s.liveSessionTx(tx, projectID, sessionID, true)
+		if err != nil {
 			return err
 		}
 		member, err := s.activeSessionMemberTx(tx, sessionID, actorUserID,
 			actorDeviceID, actorSessionID, true)
 		if err != nil {
+			return err
+		}
+		if err := SessionAllowsEdit(session, member); err != nil {
 			return err
 		}
 		now := s.now()
@@ -815,7 +903,8 @@ func (s *Store) renewTrackLease(ctx context.Context, projectID, sessionID,
 		if view.Project.Status != model.ProjectActive {
 			return ErrProjectInactive
 		}
-		if _, err := s.liveSessionTx(tx, projectID, sessionID, true); err != nil {
+		session, err := s.liveSessionTx(tx, projectID, sessionID, true)
+		if err != nil {
 			return err
 		}
 		member, err := s.activeSessionMemberTx(tx, sessionID, actorUserID,
@@ -831,6 +920,9 @@ func (s *Store) renewTrackLease(ctx context.Context, projectID, sessionID,
 			return err
 		}
 		if err := validateExpectedLeaseTrack(lease.TrackID, expectedTrackID); err != nil {
+			return err
+		}
+		if err := SessionAllowsEdit(session, member); err != nil {
 			return err
 		}
 		if lease.HolderMemberID != member.ID {
@@ -1053,7 +1145,36 @@ func (s *Store) liveMembersTx(tx *gorm.DB, sessionID uuid.UUID) ([]model.Project
 	return members, err
 }
 
+// A timed-out membership can be replaced on reconnect, but its assigned role
+// belongs to the returning user until the owner explicitly appoints a replacement.
+// Revocation and explicit leave clear the assignment instead of entering this path.
+func (s *Store) restorePresenterAssignmentTx(tx *gorm.DB, session *model.ProjectSession, member model.ProjectSessionMember, now time.Time) error {
+	if session.CommandSchemaVersion < CollaborationCommandSchemaV6 || session.HostMemberID == nil ||
+		*session.HostMemberID == member.ID || member.ReadinessStatus != model.SessionReadinessReady ||
+		member.ReadinessRevision != session.PluginRequirementsRevision || !RoleAllows(member.EffectiveRole, PermissionHostSession) {
+		return nil
+	}
+	var previous model.ProjectSessionMember
+	if err := tx.Where("id = ? AND session_id = ?", *session.HostMemberID, session.ID).First(&previous).Error; err != nil {
+		return err
+	}
+	if previous.LeftAt == nil || previous.UserID != member.UserID {
+		return nil
+	}
+	if err := tx.Model(session).Updates(map[string]any{"host_member_id": member.ID, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+		return err
+	}
+	session.HostMemberID = &member.ID
+	session.Version++
+	session.UpdatedAt = now
+	return nil
+}
+
 func (s *Store) leaveMemberTx(tx *gorm.DB, project model.CloudProject, session *model.ProjectSession, member model.ProjectSessionMember, now time.Time) error {
+	return s.leaveMemberWithAssignmentTx(tx, project, session, member, now, false)
+}
+
+func (s *Store) leaveMemberWithAssignmentTx(tx *gorm.DB, project model.CloudProject, session *model.ProjectSession, member model.ProjectSessionMember, now time.Time, retainAssignment bool) error {
 	if err := tx.Model(&model.ProjectSessionMember{}).Where("id = ? AND left_at IS NULL", member.ID).
 		Update("left_at", now).Error; err != nil {
 		return err
@@ -1061,7 +1182,19 @@ func (s *Store) leaveMemberTx(tx *gorm.DB, project model.CloudProject, session *
 	if err := tx.Where("holder_member_id = ?", member.ID).Delete(&model.ProjectTrackLease{}).Error; err != nil {
 		return err
 	}
+	if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+		if err := tx.Where("holder_member_id = ?", member.ID).Delete(&editLeaseRow{}).Error; err != nil {
+			return err
+		}
+	}
 	if session.HostMemberID == nil || *session.HostMemberID != member.ID {
+		if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+			if err := tx.Model(session).Updates(map[string]any{"updated_at": now, "catalog_revision": gorm.Expr("catalog_revision + 1")}).Error; err != nil {
+				return err
+			}
+			session.CatalogRevision++
+			return nil
+		}
 		if err := tx.Model(&model.ProjectSession{}).Where("id = ?", session.ID).
 			Updates(map[string]any{
 				"updated_at": now, "version": gorm.Expr("version + 1"),
@@ -1070,6 +1203,29 @@ func (s *Store) leaveMemberTx(tx *gorm.DB, project model.CloudProject, session *
 		}
 		session.UpdatedAt = now
 		session.Version++
+		return nil
+	}
+	if session.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+		if err := tx.Model(session).Update("catalog_revision", gorm.Expr("catalog_revision + 1")).Error; err != nil {
+			return err
+		}
+		session.CatalogRevision++
+		if session.Mode == model.SessionModeFollowHost {
+			return s.pausePresenterWithAssignmentTx(tx, session, now, retainAssignment)
+		}
+		// Only the owner appoints a presenter in v6. A disconnect must never
+		// silently hand that role to an unrelated participant.
+		updates := map[string]any{"updated_at": now, "version": gorm.Expr("version + 1")}
+		if !retainAssignment {
+			updates["host_member_id"] = nil
+		}
+		if err := tx.Model(session).Updates(updates).Error; err != nil {
+			return err
+		}
+		if !retainAssignment {
+			session.HostMemberID = nil
+		}
+		session.UpdatedAt, session.Version = now, session.Version+1
 		return nil
 	}
 	candidate, found, err := s.hostCandidateTx(tx, project, *session, member.ID)
@@ -1259,7 +1415,7 @@ func (s *Store) ReapStaleSessionMembers(ctx context.Context,
 			now := s.now()
 			memberIDs := make([]uuid.UUID, 0, len(staleMembers))
 			for _, member := range staleMembers {
-				if err := s.leaveMemberTx(tx, project, &session, member, now); err != nil {
+				if err := s.leaveMemberWithAssignmentTx(tx, project, &session, member, now, true); err != nil {
 					return err
 				}
 				memberIDs = append(memberIDs, member.ID)
@@ -1268,6 +1424,13 @@ func (s *Store) ReapStaleSessionMembers(ctx context.Context,
 				ProjectID: group.ProjectID, SessionID: group.SessionID,
 				MemberIDs: memberIDs, PreviousHostMemberID: previousHost,
 				HostMemberID: copyOptionalUUID(session.HostMemberID),
+				Control: func() *SessionControl {
+					if session.CommandSchemaVersion < CollaborationCommandSchemaV6 {
+						return nil
+					}
+					value := ControlSnapshot(session)
+					return &value
+				}(),
 			})
 		}
 		return nil
@@ -1382,6 +1545,12 @@ func (s *Store) reconcileProjectHostsTx(tx *gorm.DB, project model.CloudProject,
 		}
 		var host model.ProjectSessionMember
 		if err := tx.First(&host, "id = ?", *sessions[index].HostMemberID).Error; err != nil || host.UserID != userID {
+			continue
+		}
+		if sessions[index].CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+			if err := s.pausePresenterTx(tx, &sessions[index], now); err != nil {
+				return err
+			}
 			continue
 		}
 		candidate, found, err := s.hostCandidateTx(tx, project, sessions[index], host.ID)

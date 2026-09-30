@@ -1,10 +1,14 @@
 #include "CloudProjectPublisher.hpp"
 
 #include "CloudSnapshotAssetManifest.hpp"
+#include "CloudProjectTitleCoordinator.hpp"
+#include "CloudProjectVersionCoordinator.hpp"
+#include "PublicationStaging.hpp"
 #include "ProjectSerializer.hpp"
 #include "cloud/CloudDocumentProjection.hpp"
 #include "cloud/PublishPreflight.hpp"
 #include "collaboration/ProjectCommand.hpp"
+#include "collaboration/PluginCompatibility.hpp"
 #include "collaboration/SharedProjectSnapshot.hpp"
 
 #include <QCryptographicHash>
@@ -12,6 +16,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
 #include <QQueue>
 #include <QSaveFile>
@@ -40,6 +46,18 @@ constexpr quint64 kMaximumBlobBytes = 64ULL * 1024ULL * 1024ULL * 1024ULL;
 constexpr int kMaximumTransferAttempts = 3;
 constexpr char kPartialHashPlaceholder[] =
     "0000000000000000000000000000000000000000000000000000000000000000";
+
+bool savePublicationRecord(const QString& path, const QJsonObject& record) {
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
+    const auto bytes=QJsonDocument(record).toJson(QJsonDocument::Compact);
+    QSaveFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(bytes)==bytes.size() && file.commit();
+}
+QJsonObject readPublicationRecord(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size()>4096) return {};
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
 
 QString canonicalUuid(const QString& value) {
     const QUuid parsed(value);
@@ -83,6 +101,8 @@ bool validProjectMetadata(const CreateCloudProjectInput& input) {
     const QString engine = input.engineVersion.trimmed();
     const QString minimum = input.minimumAppVersion.trimmed();
     return input.formatVersion == daw::collab::kSharedProjectFormatVersion &&
+           canonicalUuid(input.projectId) == input.projectId && !input.projectId.isEmpty() &&
+           (input.pluginPolicy == QLatin1String("builtin_only") || input.pluginPolicy == QLatin1String("external_checked")) &&
            !title.isEmpty() && title.size() <= 160 && !engine.isEmpty() &&
            engine.size() <= 64 && !minimum.isEmpty() && minimum.size() <= 64;
 }
@@ -146,6 +166,7 @@ void visitProjectAssets(
         visitInsertListAssets(track.samplerFx.inserts, visitor,
                               trackLocation + QStringLiteral("/sampler-fx"));
         visitInsertListAssets(track.inserts, visitor, trackLocation);
+        visitor(track.freeze.asset, trackLocation + QStringLiteral("/freeze"));
         for (std::size_t clipIndex = 0; clipIndex < track.clips.size();
              ++clipIndex) {
             daw::ClipModel& clip = track.clips[clipIndex];
@@ -154,6 +175,12 @@ void visitProjectAssets(
                 trackLocation + QStringLiteral("/clip:") +
                 (clipId.isEmpty() ? QString::number(clipIndex) : clipId);
             visitor(clip.asset, clipLocation + QStringLiteral("/audio"));
+            for (auto& version : clip.offlineHistory) {
+                const auto location = clipLocation + QStringLiteral("/history:") + QString::fromStdString(version.id);
+                visitor(version.source.asset, location);
+                for (auto& take : version.source.takes)
+                    visitor(take.asset, location + QStringLiteral("/take:") + QString::fromStdString(take.id));
+            }
             visitInsertListAssets(clip.inserts, visitor, clipLocation);
             for (std::size_t takeIndex = 0; takeIndex < clip.takes.size();
                  ++takeIndex) {
@@ -195,6 +222,14 @@ PreflightOutcome performPreflight(CloudProjectPublicationInput input) {
     if (!validProjectMetadata(input.metadata) ||
         input.assetSources.size() > kMaximumPublicationAssets) {
         return reject(QStringLiteral("Cloud project metadata is invalid"));
+    }
+    if (input.metadata.pluginPolicy == QLatin1String("builtin_only")) {
+        const auto requirements = daw::collab::collectPluginRequirements(input.project);
+        if (std::any_of(requirements.begin(), requirements.end(), [](const auto& item) {
+                return item.format != daw::PluginFormat::Internal;
+            })) {
+            return reject(QStringLiteral("This project uses external plugins. Choose the external plugins profile before publishing."));
+        }
     }
 
     struct Group {
@@ -498,12 +533,15 @@ struct CloudProjectPublisher::Impl {
     QPointer<CloudProjectClient> projects;
     QPointer<CloudAssetTransferManager> transfers;
     CloudPublicationPhase phase = CloudPublicationPhase::Idle;
+    CloudPublicationPhase resumePhase = CloudPublicationPhase::Idle;
+    bool retryAllowed = false;
     quint64 generation = 0;
     quint64 generationCounter = 0;
     int maximumConcurrent = kDefaultMaximumConcurrentUploads;
     int completedUnits = 0;
     int totalUnits = 0;
     QString projectId;
+    QString recoveryDirectory;
     std::shared_ptr<PreparedPublication> prepared;
     QQueue<int> queuedAssets;
     QHash<quint64, ActiveAsset> activeAssets;
@@ -553,7 +591,7 @@ struct CloudProjectPublisher::Impl {
             if (snapshotTransferId)
                 ports.cancelTransfer(snapshotTransferId);
         }
-        if (ports.abortUpload && !projectId.isEmpty()) {
+        if (ports.abortUpload && !projectId.isEmpty() && recoveryDirectory.isEmpty()) {
             for (auto iterator = activeAssets.cbegin();
                  iterator != activeAssets.cend(); ++iterator) {
                 if (!iterator->uploadId.isEmpty())
@@ -570,6 +608,8 @@ struct CloudProjectPublisher::Impl {
     }
 
     void clearPublicationData() {
+        retryAllowed = false;
+        resumePhase = CloudPublicationPhase::Idle;
         prepared.reset();
         snapshotUploadId.clear();
         snapshotSha256.clear();
@@ -578,10 +618,54 @@ struct CloudProjectPublisher::Impl {
         snapshotAttempts = 0;
         snapshotResult = {};
         canonicalDocument = {};
+        recoveryDirectory.clear();
+    }
+
+    QString durableUploadId(const QString& key) {
+        if (recoveryDirectory.isEmpty()) return ports.makeUuid ? ports.makeUuid() : QString();
+        const auto path=QDir(recoveryDirectory).filePath(QStringLiteral("publication-uploads/")+key+QStringLiteral(".json"));
+        if (QFileInfo::exists(path)) {
+            const auto record=readPublicationRecord(path);
+            const auto id=record.value(QStringLiteral("uploadId")).toString();
+            if(record.value(QStringLiteral("version")).toInt()!=1 || record.value(QStringLiteral("projectId")).toString()!=projectId ||
+               record.value(QStringLiteral("key")).toString()!=key || canonicalUuid(id).isEmpty()) return {};
+            return id;
+        }
+        const auto id=ports.makeUuid?ports.makeUuid():QString();
+        if(canonicalUuid(id).isEmpty() || !savePublicationRecord(path,{{"version",1},{"projectId",projectId},{"key",key},{"uploadId",id}})) return {};
+        return id;
+    }
+
+    bool pinSnapshotHash(const QString& hash) {
+        if(recoveryDirectory.isEmpty())return true;
+        const auto path=QDir(recoveryDirectory).filePath(QStringLiteral("publication-uploads/snapshot.json"));
+        auto record=readPublicationRecord(path);
+        if(record.value(QStringLiteral("uploadId")).toString()!=snapshotUploadId)return false;
+        const auto previous=record.value(QStringLiteral("sha256")).toString();
+        if(!previous.isEmpty() && previous!=hash)return false;
+        record.insert(QStringLiteral("sha256"),hash);
+        return savePublicationRecord(path,record);
+    }
+
+    QString replaceExpiredUpload(const QString& key, const QString& previous,
+                                 const CloudTransferError& error) {
+        // Only a validated server 410 proves this identity did not complete.
+        // Timeouts, local clocks, missing responses and state conflicts do not.
+        if(error.code!=CloudTransferErrorCode::UploadExpired || error.httpStatus!=410 ||
+           error.apiCode!=QLatin1String("upload_expired"))return {};
+        const auto replacement=ports.makeUuid?ports.makeUuid():QString();
+        if(canonicalUuid(replacement).isEmpty())return {};
+        if(recoveryDirectory.isEmpty())return replacement;
+        const auto path=QDir(recoveryDirectory).filePath(QStringLiteral("publication-uploads/")+key+QStringLiteral(".json"));
+        auto record=readPublicationRecord(path);
+        if(record.value(QStringLiteral("projectId")).toString()!=projectId ||
+           record.value(QStringLiteral("uploadId")).toString()!=previous)return {};
+        record.insert(QStringLiteral("uploadId"),replacement);
+        return savePublicationRecord(path,record)?replacement:QString();
     }
 
     void cancelCurrent(bool notify) {
-        if (!isActivePhase(phase)) {
+        if (!isActivePhase(phase) && !retryAllowed) {
             cancelOperations();
             clearPublicationData();
             return;
@@ -598,15 +682,20 @@ struct CloudProjectPublisher::Impl {
 
     void fail(CloudPublicationPhase failedPhase, const QString& message,
               bool retryable) {
-        if (!isActivePhase(phase) || failedPhase != phase) return;
+        if ((!isActivePhase(phase) || failedPhase != phase) &&
+            !(phase == CloudPublicationPhase::Failed && resumePhase == failedPhase))
+            return;
         const QString retainedProjectId = projectId;
-        cancelOperations();
+        resumePhase = failedPhase;
+        retryAllowed = retryable && prepared &&
+                       failedPhase != CloudPublicationPhase::PreparingSnapshot;
+        if (!retryAllowed) cancelOperations();
         setPhase(CloudPublicationPhase::Failed);
         emit q->publicationFailed(
             generation, failedPhase, retainedProjectId,
             message.isEmpty() ? QStringLiteral("Cloud publication failed")
                               : message,
-            retryable);
+            retryAllowed);
     }
 
     void dispatchPreflight(CloudProjectPublicationInput input) {
@@ -659,7 +748,9 @@ struct CloudProjectPublisher::Impl {
 
     bool validCreatedProject(const CloudProjectView& view) const {
         return prepared && canonicalUuid(view.project.id) == view.project.id &&
-               view.project.status == CloudProjectStatus::Uploading &&
+               view.project.id == prepared->metadata.projectId &&
+               view.project.pluginPolicy == prepared->metadata.pluginPolicy &&
+               (view.project.status == CloudProjectStatus::Uploading || view.project.status == CloudProjectStatus::Active) &&
                view.role == CloudProjectRole::Owner &&
                view.project.title == prepared->metadata.title &&
                view.project.engineVersion == prepared->metadata.engineVersion &&
@@ -684,6 +775,11 @@ struct CloudProjectPublisher::Impl {
                 return;
             }
             projectId = view.project.id;
+            if(view.project.status == CloudProjectStatus::Active) {
+                setPhase(CloudPublicationPhase::Completed);
+                emit q->publicationAlreadyActive(generation,view);
+                return;
+            }
             ++completedUnits;
             emitProgress();
             queuedAssets.clear();
@@ -753,8 +849,9 @@ struct CloudProjectPublisher::Impl {
                 return;
             }
             const PreparedAsset& item = prepared->assets[index];
-            const QString uploadId = ports.makeUuid ? ports.makeUuid() : QString();
+            const QString uploadId = durableUploadId(QStringLiteral("asset-")+QString::fromStdString(item.expected.assetId));
             if (canonicalUuid(uploadId).isEmpty() || !ports.uploadAsset) {
+                queuedAssets.prepend(index);
                 fail(CloudPublicationPhase::UploadingAssets,
                      QStringLiteral("Asset upload could not be initialized"),
                      true);
@@ -772,6 +869,7 @@ struct CloudProjectPublisher::Impl {
             input.displayName = item.displayName;
             const quint64 transferId = ports.uploadAsset(input);
             if (!transferId) {
+                queuedAssets.prepend(index);
                 fail(CloudPublicationPhase::UploadingAssets,
                      QStringLiteral("Asset upload could not start"), true);
                 return;
@@ -786,7 +884,9 @@ struct CloudProjectPublisher::Impl {
 
     void assetCompleted(quint64 transferId,
                         const CloudAssetUploadResult& result) {
-        if (phase != CloudPublicationPhase::UploadingAssets || !prepared)
+        if ((phase != CloudPublicationPhase::UploadingAssets &&
+             !(phase == CloudPublicationPhase::Failed && retryAllowed &&
+               resumePhase == CloudPublicationPhase::UploadingAssets)) || !prepared)
             return;
         const auto iterator = activeAssets.find(transferId);
         if (iterator == activeAssets.end() ||
@@ -824,11 +924,26 @@ struct CloudProjectPublisher::Impl {
     void transferFailed(quint64 transferId, CloudTransferKind kind,
                         const CloudTransferError& error) {
         if (kind == CloudTransferKind::AssetUpload &&
-            phase == CloudPublicationPhase::UploadingAssets) {
+            (phase == CloudPublicationPhase::UploadingAssets ||
+             (phase == CloudPublicationPhase::Failed && retryAllowed &&
+              resumePhase == CloudPublicationPhase::UploadingAssets))) {
             auto iterator = activeAssets.find(transferId);
             if (iterator == activeAssets.end() ||
                 iterator->generation != generation)
                 return;
+            const auto assetKey=QStringLiteral("asset-")+QString::fromStdString(prepared->assets[iterator->preparedIndex].expected.assetId);
+            if(!replaceExpiredUpload(assetKey,iterator->uploadId,error).isEmpty()) {
+                queuedAssets.prepend(iterator->preparedIndex);
+                activeAssets.erase(iterator);
+                fail(CloudPublicationPhase::UploadingAssets,QStringLiteral("The unfinished upload expired. Retry will prepare a new upload."),true);
+                return;
+            }
+            if (phase == CloudPublicationPhase::Failed) {
+                iterator->waitingRetry = true;
+                if (!error.retryable)
+                    fail(CloudPublicationPhase::UploadingAssets, error.safeMessage, false);
+                return;
+            }
             if (error.retryable &&
                 iterator->attempts < kMaximumTransferAttempts &&
                 !iterator->waitingRetry && ports.retryTransfer) {
@@ -844,6 +959,7 @@ struct CloudProjectPublisher::Impl {
                     });
                 return;
             }
+            iterator->waitingRetry = true;
             fail(CloudPublicationPhase::UploadingAssets, error.safeMessage,
                  error.retryable);
             return;
@@ -851,6 +967,12 @@ struct CloudProjectPublisher::Impl {
         if (kind == CloudTransferKind::SnapshotUpload &&
             phase == CloudPublicationPhase::UploadingSnapshot &&
             transferId == snapshotTransferId) {
+            const auto replacement=replaceExpiredUpload(QStringLiteral("snapshot"),snapshotUploadId,error);
+            if(!replacement.isEmpty()) {
+                snapshotUploadId=replacement;snapshotTransferId=0;snapshotWaitingRetry=false;
+                fail(CloudPublicationPhase::UploadingSnapshot,QStringLiteral("The unfinished snapshot upload expired. Retry will prepare a new upload."),true);
+                return;
+            }
             if (error.retryable &&
                 snapshotAttempts < kMaximumTransferAttempts &&
                 !snapshotWaitingRetry && ports.retryTransfer) {
@@ -880,6 +1002,7 @@ struct CloudProjectPublisher::Impl {
         if (iterator == activeAssets.end() || !iterator->waitingRetry) return;
         iterator->waitingRetry = false;
         if (!ports.retryTransfer || !ports.retryTransfer(transferId)) {
+            iterator->waitingRetry = true;
             fail(CloudPublicationPhase::UploadingAssets,
                  QStringLiteral("Asset upload retry could not start"), true);
         }
@@ -903,7 +1026,7 @@ struct CloudProjectPublisher::Impl {
             return;
         setPhase(CloudPublicationPhase::PreparingSnapshot);
         const quint64 taskGeneration = generation;
-        const QString uploadId = ports.makeUuid ? ports.makeUuid() : QString();
+        const QString uploadId = durableUploadId(QStringLiteral("snapshot"));
         const QString directory =
             ports.stagingDirectory ? ports.stagingDirectory() : QString();
         const QString filename = uploadId + QStringLiteral(".json");
@@ -967,11 +1090,20 @@ struct CloudProjectPublisher::Impl {
             return;
         }
         snapshotPath = std::move(staged.path);
+        if(!pinSnapshotHash(staged.sha256)) {
+            fail(CloudPublicationPhase::PreparingSnapshot,
+                 QStringLiteral("Recovered snapshot differs from the original publication; no upload was replaced"),false);
+            return;
+        }
         snapshotSha256 = std::move(staged.sha256);
         snapshotByteSize = staged.byteSize;
         snapshotAssetIds = manifest.assetIds;
         canonicalDocument = std::move(staged.document);
         setPhase(CloudPublicationPhase::UploadingSnapshot);
+        startSnapshotUpload();
+    }
+
+    void startSnapshotUpload() {
         if (!ports.uploadSnapshot) {
             fail(CloudPublicationPhase::UploadingSnapshot,
                  QStringLiteral("Snapshot upload service is unavailable"),
@@ -993,6 +1125,45 @@ struct CloudProjectPublisher::Impl {
             fail(CloudPublicationPhase::UploadingSnapshot,
                  QStringLiteral("Snapshot upload could not start"), true);
         }
+    }
+
+    bool retryPublication() {
+        if (phase != CloudPublicationPhase::Failed || !retryAllowed || !prepared)
+            return false;
+        const auto next = resumePhase;
+        retryAllowed = false;
+        setPhase(next);
+        if (next == CloudPublicationPhase::CreatingProject) {
+            createRequestId = ports.createProject ? ports.createProject(prepared->metadata) : 0;
+            if (!createRequestId)
+                fail(next, QStringLiteral("Cloud project creation could not start"), true);
+        } else if (next == CloudPublicationPhase::UploadingAssets) {
+            const auto ids = activeAssets.keys();
+            for (const auto id : ids) {
+                auto it = activeAssets.find(id);
+                if (it == activeAssets.end() || !it->waitingRetry) continue;
+                it->attempts = 1;
+                retryAsset(generation, id);
+                if (phase == CloudPublicationPhase::Failed) break;
+            }
+            pumpAssets();
+        } else if (next == CloudPublicationPhase::UploadingSnapshot) {
+            snapshotAttempts = 1;
+            if (snapshotTransferId) {
+                snapshotWaitingRetry = true;
+                retrySnapshot(generation, snapshotTransferId);
+            } else {
+                startSnapshotUpload();
+            }
+        } else if (next == CloudPublicationPhase::Activating) {
+            publishRequestId = ports.publishProject ? ports.publishProject(projectId) : 0;
+            if (!publishRequestId)
+                fail(next, QStringLiteral("Cloud activation could not start"), true);
+        } else {
+            fail(next, QStringLiteral("Publication cannot resume from this phase"), false);
+            return false;
+        }
+        return true;
     }
 
     void snapshotCompleted(quint64 transferId,
@@ -1162,12 +1333,41 @@ quint64 CloudProjectPublisher::publish(
     m_impl->clearPublicationData();
     m_impl->setPhase(CloudPublicationPhase::Preflight);
     m_impl->emitProgress();
-    m_impl->dispatchPreflight(input);
+    auto publication = input;
+    if (publication.metadata.projectId.isEmpty() && m_impl->ports.makeUuid)
+        publication.metadata.projectId = m_impl->ports.makeUuid();
+    m_impl->projectId = publication.metadata.projectId;
+    m_impl->recoveryDirectory = input.recoveryDirectory;
+    if(!input.recoveryDirectory.isEmpty()) {
+        const auto& metadata=publication.metadata;
+        const QJsonObject record{{"version",1},{"projectId",metadata.projectId},{"title",metadata.title},
+            {"engineVersion",metadata.engineVersion},{"minimumAppVersion",metadata.minimumAppVersion},
+            {"formatVersion",metadata.formatVersion},{"pluginPolicy",metadata.pluginPolicy}};
+        const auto path=QDir(input.recoveryDirectory).filePath(QStringLiteral("publication-metadata.json"));
+        if((QFileInfo::exists(path)&&readPublicationRecord(path)!=record)||!savePublicationRecord(path,record)) {
+            const auto generation=m_impl->generation;
+            QTimer::singleShot(0,this,[this,generation]{
+                if(m_impl&&m_impl->generation==generation&&m_impl->phase==CloudPublicationPhase::Preflight)
+                    m_impl->fail(CloudPublicationPhase::Preflight,QStringLiteral("Publication recovery metadata could not be saved or does not match"),false);
+            });
+            return m_impl->generation;
+        }
+    }
+    m_impl->dispatchPreflight(std::move(publication));
     return m_impl->generation;
 }
 
 void CloudProjectPublisher::cancel() {
     if (m_impl) m_impl->cancelCurrent(true);
+}
+
+bool CloudProjectPublisher::retry() {
+    return m_impl && m_impl->retryPublication();
+}
+
+bool CloudProjectPublisher::canRetry() const noexcept {
+    return m_impl && m_impl->phase == CloudPublicationPhase::Failed &&
+           m_impl->retryAllowed;
 }
 
 CloudPublicationPhase CloudProjectPublisher::phase() const noexcept {
@@ -1195,6 +1395,9 @@ int CloudProjectPublisher::maximumConcurrentAssetUploads() const noexcept {
 }
 
 bool checkCloudProjectPublisherForTest(QString* error) {
+    if (!checkPublicationStagingForTest(error)) return false;
+    if (!checkCloudProjectTitleCoordinatorForTest(error)) return false;
+    if (!checkCloudProjectVersionCoordinatorForTest(error)) return false;
     const auto fail = [error](const QString& message) {
         if (error) *error = message;
         return false;
@@ -1202,6 +1405,37 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     QTemporaryDir directory;
     if (!directory.isValid())
         return fail(QStringLiteral("publisher test directory is unavailable"));
+    const auto recoveryProject=QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QString originalUpload;
+    {
+        CloudProjectPublisher first(nullptr,nullptr);
+        first.m_impl->projectId=recoveryProject;
+        first.m_impl->recoveryDirectory=directory.filePath(QStringLiteral("upload-recovery"));
+        originalUpload=first.m_impl->durableUploadId(QStringLiteral("snapshot"));
+        first.m_impl->snapshotUploadId=originalUpload;
+        if(originalUpload.isEmpty()||!first.m_impl->pinSnapshotHash(QString(64,QLatin1Char('a'))))
+            return fail(QStringLiteral("initial snapshot identity was not saved"));
+    }
+    {
+        CloudProjectPublisher recovered(nullptr,nullptr);
+        recovered.m_impl->projectId=recoveryProject;
+        recovered.m_impl->recoveryDirectory=directory.filePath(QStringLiteral("upload-recovery"));
+        recovered.m_impl->snapshotUploadId=recovered.m_impl->durableUploadId(QStringLiteral("snapshot"));
+        if(recovered.m_impl->snapshotUploadId!=originalUpload||
+           !recovered.m_impl->pinSnapshotHash(QString(64,QLatin1Char('a')))||
+           recovered.m_impl->pinSnapshotHash(QString(64,QLatin1Char('b'))))
+            return fail(QStringLiteral("restart replaced an upload identity or changed unknown-outcome snapshot bytes"));
+        CloudTransferError unknown;
+        unknown.code=CloudTransferErrorCode::Timeout;
+        if(!recovered.m_impl->replaceExpiredUpload(QStringLiteral("snapshot"),originalUpload,unknown).isEmpty())
+            return fail(QStringLiteral("unknown snapshot outcome rotated its upload identity"));
+        CloudTransferError expired;
+        expired.code=CloudTransferErrorCode::UploadExpired;expired.httpStatus=410;expired.apiCode=QStringLiteral("upload_expired");
+        const auto replacement=recovered.m_impl->replaceExpiredUpload(QStringLiteral("snapshot"),originalUpload,expired);
+        if(replacement.isEmpty()||replacement==originalUpload||
+           recovered.m_impl->durableUploadId(QStringLiteral("snapshot"))!=replacement)
+            return fail(QStringLiteral("proven expired snapshot identity could not be safely renewed"));
+    }
 
     const QByteArray clipBytes("RIFF-publisher-clip");
     const QByteArray sampleBytes("RIFF-publisher-sampler");
@@ -1386,14 +1620,14 @@ bool checkCloudProjectPublisherForTest(QString* error) {
         return fail(QStringLiteral("publisher did not finish structural preflight"));
     }
 
-    const QString projectId =
-        QStringLiteral("76000000-0000-4000-8000-000000000001");
+    const QString projectId = creates.back().projectId;
     CloudProjectView uploading;
     uploading.role = CloudProjectRole::Owner;
     uploading.project.id = projectId;
     uploading.project.title = input.metadata.title;
     uploading.project.engineVersion = input.metadata.engineVersion;
     uploading.project.minimumAppVersion = input.metadata.minimumAppVersion;
+    uploading.project.pluginPolicy = input.metadata.pluginPolicy;
     uploading.project.formatVersion = daw::collab::kSharedProjectFormatVersion;
     uploading.project.status = CloudProjectStatus::Uploading;
     publisher.m_impl->projectReceived(
@@ -1447,6 +1681,15 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     const QByteArray secondBytes =
         assetUploads.at(1).second.assetId == clipAssetId ? clipBytes
                                                          : sampleBytes;
+    publisher.m_impl->activeAssets[assetUploads.at(1).first].attempts = kMaximumTransferAttempts;
+    publisher.m_impl->transferFailed(assetUploads.at(1).first,
+                                     CloudTransferKind::AssetUpload, retryableAssetError);
+    if (!publisher.canRetry() || !abortedUploads.isEmpty() ||
+        publisher.m_impl->completedUnits != 2 || !publisher.retry() ||
+        publisher.generation() != generation || assetUploads.size() != 2 ||
+        retriedTransfers.back() != assetUploads.at(1).first) {
+        return fail(QStringLiteral("manual asset retry lost completed work or upload identity"));
+    }
     completeAsset(1, secondBytes);
     if (snapshotUploads.size() != 1 ||
         publisher.phase() != CloudPublicationPhase::UploadingSnapshot ||
@@ -1490,6 +1733,8 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     const QVector<CloudPublicationPhase> expectedPhases{
         CloudPublicationPhase::Preflight,
         CloudPublicationPhase::CreatingProject,
+        CloudPublicationPhase::UploadingAssets,
+        CloudPublicationPhase::Failed,
         CloudPublicationPhase::UploadingAssets,
         CloudPublicationPhase::PreparingSnapshot,
         CloudPublicationPhase::UploadingSnapshot,
@@ -1550,9 +1795,21 @@ bool checkCloudProjectPublisherForTest(QString* error) {
     zeroAssets.metadata = input.metadata;
     const int snapshotsBeforeZero = snapshotUploads.size();
     publisher.publish(zeroAssets);
+    const QString stableProjectId = creates.back().projectId;
+    const quint64 zeroGeneration = publisher.generation();
+    const int createsBeforeRetry = creates.size();
+    CloudClientError lostResponse;
+    lostResponse.safeMessage = QStringLiteral("create response lost");
+    lostResponse.retryable = true;
+    publisher.m_impl->requestFailed(publisher.m_impl->createRequestId,
+                                    CloudRequestKind::CreateProject, lostResponse);
+    if (!publisher.canRetry() || !publisher.retry() ||
+        publisher.generation() != zeroGeneration || creates.size() != createsBeforeRetry + 1 ||
+        creates.back().projectId != stableProjectId) {
+        return fail(QStringLiteral("create retry replaced its idempotency identity"));
+    }
     CloudProjectView zeroUploading = uploading;
-    zeroUploading.project.id =
-        QStringLiteral("79000000-0000-4000-8000-000000000001");
+    zeroUploading.project.id = creates.back().projectId;
     publisher.m_impl->projectReceived(
         publisher.m_impl->createRequestId, CloudRequestKind::CreateProject,
         zeroUploading);
@@ -1576,6 +1833,18 @@ bool checkCloudProjectPublisherForTest(QString* error) {
         retriedTransfers.back() != zeroSnapshotTransfer) {
         return fail(QStringLiteral(
             "publisher did not resume a retryable snapshot upload"));
+    }
+    const QString retainedSnapshotPath = publisher.m_impl->snapshotPath;
+    const int snapshotCountBeforeRetry = snapshotUploads.size();
+    publisher.m_impl->snapshotAttempts = kMaximumTransferAttempts;
+    publisher.m_impl->transferFailed(zeroSnapshotTransfer,
+                                     CloudTransferKind::SnapshotUpload, retryableSnapshotError);
+    if (!publisher.canRetry() || !abortedUploads.isEmpty() ||
+        !QFile::exists(retainedSnapshotPath) || !publisher.retry() ||
+        snapshotUploads.size() != snapshotCountBeforeRetry ||
+        retriedTransfers.back() != zeroSnapshotTransfer ||
+        publisher.m_impl->snapshotUploadId != snapshotUploads.back().second.uploadId) {
+        return fail(QStringLiteral("snapshot retry discarded a potentially completed server upload"));
     }
     publisher.cancel();
     if (abortedUploads != QVector<QPair<QString, QString>>{

@@ -479,6 +479,9 @@ paths:
               oneOf:
                 - { $ref: "../../protocol/schema/project-command-v2.schema.json" }
                 - { $ref: "../../protocol/schema/project-command-v3.schema.json" }
+                - { $ref: "../../protocol/schema/project-command-v4.schema.json" }
+                - { $ref: "../../protocol/schema/project-command-v5.schema.json" }
+                - { $ref: "#/components/schemas/SessionCommandRequestV6" }
       responses:
         "201": { description: New operation committed, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
         "200": { description: Idempotent retry returned the original operation, content: { application/json: { schema: { $ref: "#/components/schemas/AppendOperationResult" } } } }
@@ -824,6 +827,103 @@ paths:
               properties: { target_member_id: { type: string, format: uuid } }
       responses:
         "200": { description: Host changed, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/mode:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    patch:
+      operationId: changeCloudProjectSessionMode
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SessionModeRequest" } } }
+      responses:
+        "200": { description: Atomic policy transition, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/control:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: controlCloudProjectSession
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SessionControlAction" } } }
+      responses:
+        "200": { description: Acknowledged action or idempotent retry with current control state, content: { application/json: { schema: { $ref: "#/components/schemas/SessionControlResult" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/plugins/catalog:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    get:
+      operationId: getCloudProjectPluginCatalog
+      security: [{ desktopBearer: [] }]
+      responses:
+        "200": { description: Exact plugin inventory intersection across ready editors, content: { application/json: { schema: { $ref: "#/components/schemas/SessionPluginCatalog" } } } }
+    put:
+      operationId: updateCloudProjectPluginInventory
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [pluginInventory]
+              properties:
+                pluginInventory: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
+      responses:
+        "200": { description: Updated common catalog, content: { application/json: { schema: { $ref: "#/components/schemas/SessionPluginCatalog" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/moderation:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: moderateCloudProjectSession
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, targetUserId]
+              properties:
+                action: { enum: [kick, readmit, ban, unban] }
+                targetUserId: { type: string, format: uuid }
+      responses:
+        "200": { description: Owner-only moderation applied, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectSessionState" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/edit-leases:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
+    post:
+      operationId: acquireProjectEditLease
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EditLeaseRequest" } } }
+      responses:
+        "200": { description: Bounded exclusive element edit lease, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectEditLease" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/desktop/projects/{projectId}/sessions/{sessionId}/edit-leases/{leaseId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/SessionId" }
+      - { name: leaseId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: renewProjectEditLease
+      security: [{ desktopBearer: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EditLeaseRenewal" } } }
+      responses:
+        "200": { description: Holder lease renewed after current permission check, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectEditLease" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: releaseProjectEditLease
+      security: [{ desktopBearer: [] }]
+      responses:
+        "204": { description: Holder lease released }
         "403": { $ref: "#/components/responses/Error" }
   /v1/desktop/projects/{projectId}/sessions/{sessionId}/leases:
     parameters: [{ $ref: "#/components/parameters/ProjectId" }, { $ref: "#/components/parameters/SessionId" }]
@@ -1304,6 +1404,9 @@ components:
         message: { type: string }
         field_errors: { type: object, additionalProperties: { type: string } }
         request_id: { type: string }
+        required_app_version: { type: string, maxLength: 64, description: Exact application version required by the live session. }
+        required_engine_version: { type: string, maxLength: 64 }
+        minimum_app_version: { type: string, maxLength: 64 }
     StableCollaborationErrorCode:
       type: string
       description: Stable machine-readable release errors that desktop clients may branch on.
@@ -1348,6 +1451,7 @@ components:
         format_version: { const: 7 }
         engine_version: { type: string, maxLength: 64 }
         minimum_app_version: { type: string, maxLength: 64 }
+        plugin_policy: { enum: [builtin_only, external_checked] }
         head_seq: { type: integer, format: int64, minimum: 0 }
         snapshot_seq: { type: integer, format: int64, minimum: 0 }
         created_at: { type: string, format: date-time }
@@ -1365,6 +1469,8 @@ components:
       additionalProperties: false
       required: [title, format_version, engine_version, minimum_app_version]
       properties:
+        projectId: { type: string, format: uuid, description: Stable client generated publication identity; reuse after unknown outcomes. }
+        pluginPolicy: { enum: [builtin_only, external_checked], default: builtin_only }
         title: { type: string, minLength: 1, maxLength: 160 }
         format_version: { const: 7 }
         engine_version: { type: string, minLength: 1, maxLength: 64 }
@@ -1610,7 +1716,7 @@ components:
         actor_user_id: { type: [string, "null"], format: uuid }
         actor_device_id: { type: [string, "null"], format: uuid }
         kind: { type: string }
-        schemaVersion: { const: 2 }
+        schemaVersion: { enum: [2, 3, 4, 5, 6] }
         baseServerSeq: { type: integer, format: int64, minimum: 0 }
         payload:
           type: object
@@ -1665,7 +1771,10 @@ components:
         mode: { enum: [independent, follow_host, synchronized] }
         status: { enum: [starting, active, ending, ended] }
         version: { type: integer, format: int64, minimum: 1 }
-        command_schema_version: { enum: [2, 3] }
+        command_schema_version: { enum: [2, 3, 4, 5, 6] }
+        app_version: { type: string }
+        plugin_policy: { enum: [builtin_only, external_checked] }
+        catalog_revision: { type: integer, minimum: 1 }
         plugin_requirements_revision: { type: integer, format: int64, minimum: 0 }
         plugin_requirements: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
         created_at: { type: string, format: date-time }
@@ -1679,8 +1788,10 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { enum: [2, 3] }
+        commandSchemaVersion: { enum: [2, 3, 4, 5, 6] }
         projectFormatVersion: { const: 7 }
+        pluginPolicy: { enum: [builtin_only, external_checked], default: builtin_only }
+        pluginInventory: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
     JoinProjectSessionRequest:
       type: object
       additionalProperties: false
@@ -1688,8 +1799,10 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { enum: [2, 3] }
+        commandSchemaVersion: { enum: [2, 3, 4, 5, 6] }
         projectFormatVersion: { const: 7 }
+        pluginPolicy: { enum: [builtin_only, external_checked], default: builtin_only }
+        pluginInventory: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
         password: { type: string, minLength: 6, maxLength: 128, writeOnly: true, description: Required when the session reports passwordRequired }
         readiness: { $ref: "#/components/schemas/PluginReadinessReport" }
     StartProjectSessionRequest:
@@ -1699,14 +1812,16 @@ components:
       properties:
         appVersion: { type: string, minLength: 5, maxLength: 64, description: SemVer 2.0.0 application version }
         engineVersion: { type: string, minLength: 1, maxLength: 64 }
-        commandSchemaVersion: { enum: [2, 3] }
+        commandSchemaVersion: { enum: [2, 3, 4, 5, 6] }
         projectFormatVersion: { const: 7 }
+        pluginPolicy: { enum: [builtin_only, external_checked], default: builtin_only }
+        pluginInventory: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
         mode: { enum: [independent, follow_host, synchronized], default: independent }
         password: { type: string, minLength: 6, maxLength: 128, writeOnly: true, description: Optional session password; omit for an unprotected session }
         pluginRequirements: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
         readiness: { $ref: "#/components/schemas/PluginReadinessReport" }
       allOf:
-        - if: { properties: { commandSchemaVersion: { const: 3 } } }
+        - if: { properties: { commandSchemaVersion: { enum: [3, 4, 5] } } }
           then:
             required: [mode, pluginRequirements, readiness]
             properties: { mode: { const: independent } }
@@ -1722,6 +1837,7 @@ components:
         stateSchemaVersion: { type: integer, minimum: 0, maximum: 2147483647 }
         kind: { enum: [instrument, effect] }
         channelMode: { enum: [auto, mono, stereo, dual-mono] }
+        parameterFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
     PluginReadinessResult:
       type: object
       additionalProperties: false
@@ -1734,6 +1850,7 @@ components:
         stateSchemaVersion: { type: integer, minimum: 0, maximum: 2147483647 }
         kind: { enum: [instrument, effect] }
         channelMode: { enum: [auto, mono, stereo, dual-mono] }
+        parameterFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
         status: { enum: [ready, missing, version_mismatch, probe_failed] }
         buildHmac: { type: string, pattern: "^[0-9a-f]{64}$" }
     PluginReadinessReport:
@@ -1757,6 +1874,7 @@ components:
         readiness_status: { enum: [ready, blocked, viewer] }
         readiness_revision: { type: integer, format: int64, minimum: 0 }
         plugin_readiness: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginReadinessResult" } }
+        plugin_inventory: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
         joined_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time }
         left_at: { type: [string, "null"], format: date-time }
@@ -1765,6 +1883,10 @@ components:
       additionalProperties: false
       required: [session, members, passwordRequired]
       properties:
+        expected_head_seq: { type: integer, minimum: 0, description: Verified local head required for an owner version migration. }
+        pluginPolicy: { type: string, enum: [builtin_only, external_checked] }
+        pluginPolicy: { enum: [builtin_only, external_checked] }
+        control: { $ref: "#/components/schemas/SessionControl" }
         session: { $ref: "#/components/schemas/ProjectLiveSession" }
         members: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ProjectSessionMember" } }
         passwordRequired: { type: boolean, description: Whether a new participant must supply a session password. The password itself is never returned. }
@@ -1775,6 +1897,116 @@ components:
       properties:
         track_id: { type: string, format: uuid }
         ttl_seconds: { type: integer, minimum: 5, maximum: 120 }
+    SessionCommandRequestV6:
+      type: object
+      additionalProperties: false
+      required: [command, sessionVersion]
+      properties:
+        command: { $ref: "../../protocol/schema/project-command-v6.schema.json" }
+        sessionVersion: { type: integer, minimum: 1 }
+    SessionModeRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, expectedVersion]
+      properties:
+        mode: { enum: [independent, follow_host, synchronized] }
+        expectedVersion: { type: integer, minimum: 1 }
+        transport: { $ref: "#/components/schemas/SessionTransport" }
+        audition: { $ref: "#/components/schemas/SessionAudition" }
+      description: Switching out of independent requires the current leader's transport and audition seed.
+    SessionTransport:
+      type: object
+      additionalProperties: false
+      required: [playing, positionSeconds, rate]
+      properties:
+        revision: { type: integer, minimum: 0 }
+        playing: { type: boolean }
+        positionSeconds: { type: number, minimum: 0, maximum: 1000000000 }
+        rate: { type: number, minimum: 0.25, maximum: 4 }
+        serverTimeMs: { type: integer, minimum: 0 }
+        effectiveAtServerMs: { type: integer, minimum: 0 }
+        loopEnabled: { type: boolean }
+        loopStartSeconds: { type: number, minimum: 0, maximum: 1000000000 }
+        loopEndSeconds: { type: number, minimum: 0, maximum: 1000000000 }
+    SessionAudition:
+      type: object
+      additionalProperties: false
+      required: [mutedTrackIds, soloTrackIds]
+      properties:
+        revision: { type: integer, minimum: 0 }
+        mutedTrackIds: { type: array, uniqueItems: true, maxItems: 8192, items: { type: string, format: uuid } }
+        soloTrackIds: { type: array, uniqueItems: true, maxItems: 8192, items: { type: string, format: uuid } }
+    SessionControl:
+      type: object
+      additionalProperties: false
+      required: [mode, sessionVersion, hostMemberId, transport, audition]
+      properties:
+        mode: { enum: [independent, follow_host, synchronized] }
+        sessionVersion: { type: integer, minimum: 1 }
+        hostMemberId: { type: [string, "null"], format: uuid }
+        transport: { $ref: "#/components/schemas/SessionTransport" }
+        audition: { $ref: "#/components/schemas/SessionAudition" }
+    SessionControlAction:
+      type: object
+      additionalProperties: false
+      required: [actionId, expectedSessionVersion, kind]
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedSessionVersion: { type: integer, minimum: 1 }
+        kind: { enum: [play, pause, stop, seek, loop, audition] }
+        positionSeconds: { type: number, minimum: 0, maximum: 1000000000 }
+        rate: { type: number, minimum: 0.25, maximum: 4 }
+        trackId: { type: string, format: uuid }
+        muted: { type: boolean }
+        solo: { type: boolean }
+        loopEnabled: { type: boolean }
+        loopStartSeconds: { type: number, minimum: 0, maximum: 1000000000 }
+        loopEndSeconds: { type: number, minimum: 0, maximum: 1000000000 }
+    SessionControlResult:
+      type: object
+      additionalProperties: false
+      required: [actionId, control]
+      properties:
+        actionId: { type: string, format: uuid }
+        control: { $ref: "#/components/schemas/SessionControl" }
+    SessionPluginCatalog:
+      type: object
+      additionalProperties: false
+      required: [catalogRevision, pluginPolicy, plugins]
+      properties:
+        catalogRevision: { type: integer, minimum: 1 }
+        pluginPolicy: { enum: [builtin_only, external_checked] }
+        plugins: { type: array, maxItems: 512, items: { $ref: "#/components/schemas/PluginRequirement" } }
+    EditLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [fieldKeys]
+      properties:
+        fieldKeys:
+          description: Entity keys such as clip UUID or plugin UUID, optionally followed by a field suffix; prefix hierarchy conflicts atomically with durable command touched fields. A recording:<memberUuid> marker must identify the authenticated member and prevents mode changes until recording completes or the renewable lease expires, without locking a track against another recorder.
+          type: array
+          minItems: 1
+          maxItems: 64
+          uniqueItems: true
+          items: { type: string, maxLength: 512 }
+        ttlSeconds: { type: integer, minimum: 1, maximum: 30, default: 15 }
+        expectedSessionVersion: { type: integer, minimum: 1 }
+    EditLeaseRenewal:
+      type: object
+      additionalProperties: false
+      properties:
+        ttlSeconds: { type: integer, minimum: 1, maximum: 30, default: 15 }
+        expectedSessionVersion: { type: integer, minimum: 1 }
+    ProjectEditLease:
+      type: object
+      additionalProperties: false
+      required: [leaseId, sessionId, holderMemberId, fieldKeys, expiresAt]
+      properties:
+        leaseId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        holderMemberId: { type: string, format: uuid }
+        fieldKeys: { type: array, minItems: 1, maxItems: 64, items: { type: string, maxLength: 512 } }
+        expiresAt: { type: string, format: date-time }
     ProjectTrackLease:
       type: object
       additionalProperties: false
@@ -1951,11 +2183,11 @@ components:
           required: [enabled, protocol, protocols, project_format, command_schema, command_schemas, recording, max_participants]
           properties:
             enabled: { type: boolean }
-            protocol: { const: vlt-collab-v3 }
-            protocols: { type: array, items: { enum: [vlt-collab-v2, vlt-collab-v3] }, minItems: 2, maxItems: 2 }
+            protocol: { const: vlt-collab-v6 }
+            protocols: { type: array, items: { enum: [vlt-collab-v2, vlt-collab-v3, vlt-collab-v4, vlt-collab-v5, vlt-collab-v6] }, minItems: 5, maxItems: 5 }
             project_format: { const: 7 }
-            command_schema: { const: 3 }
-            command_schemas: { type: array, items: { enum: [2, 3] }, minItems: 2, maxItems: 2 }
+            command_schema: { const: 6 }
+            command_schemas: { type: array, items: { enum: [2, 3, 4, 5, 6] }, minItems: 5, maxItems: 5 }
             recording: { const: true }
             max_participants: { type: integer, minimum: 1, maximum: 8 }
     LoginRequest:

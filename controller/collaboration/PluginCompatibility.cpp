@@ -12,7 +12,7 @@ namespace {
 auto requirementKey(const PluginRequirement& value) {
     return std::tie(value.format, value.nativeUid, value.vendor, value.version,
                     value.stateSchemaVersion, value.instrument,
-                    value.channelMode);
+                    value.channelMode, value.parameterFingerprint);
 }
 
 void appendRequirement(std::vector<PluginRequirement>& result,
@@ -26,6 +26,7 @@ void appendRequirement(std::vector<PluginRequirement>& result,
     requirement.stateSchemaVersion = insert.stateSchemaVersion;
     requirement.instrument = instrument;
     requirement.channelMode = insert.channelMode;
+    requirement.parameterFingerprint = insert.parameterFingerprint;
     result.push_back(std::move(requirement));
 }
 
@@ -40,6 +41,40 @@ bool supportsChannelMode(const plugins::PluginDescriptor& descriptor,
 }
 
 } // namespace
+
+bool pluginSatisfiesRequirement(const plugins::PluginDescriptor& descriptor,
+                               const PluginRequirement& requirement) {
+    return descriptor.format == toHostFormat(requirement.format) &&
+        descriptor.uid == requirement.nativeUid && descriptor.vendor == requirement.vendor &&
+        descriptor.version == requirement.version && descriptor.stateSchemaVersion == requirement.stateSchemaVersion &&
+        descriptor.isInstrument == requirement.instrument && supportsChannelMode(descriptor, requirement.channelMode) &&
+        (requirement.parameterFingerprint.empty() || descriptor.parameterFingerprint == requirement.parameterFingerprint);
+}
+
+std::vector<PluginRequirement> collectPluginInventory(const PluginManager& manager) {
+    std::vector<PluginRequirement> result;
+    for (const auto& descriptor : manager.plugins()) {
+        if (descriptor.format == plugins::Format::Unknown || descriptor.uid.empty() || descriptor.version.empty()) continue;
+        if (descriptor.format != plugins::Format::Internal && descriptor.parameterFingerprint.empty()) continue;
+        for (const auto mode : {PluginChannelMode::Auto, PluginChannelMode::Mono,
+                               PluginChannelMode::Stereo, PluginChannelMode::DualMono}) {
+            if (!supportsChannelMode(descriptor, mode)) continue;
+            PluginRequirement requirement;
+            requirement.format = toDocumentFormat(descriptor.format);
+            requirement.nativeUid = descriptor.uid;
+            requirement.vendor = descriptor.vendor;
+            requirement.version = descriptor.version;
+            requirement.stateSchemaVersion = descriptor.stateSchemaVersion;
+            requirement.instrument = descriptor.isInstrument;
+            requirement.channelMode = mode;
+            requirement.parameterFingerprint = descriptor.parameterFingerprint;
+            result.push_back(std::move(requirement));
+        }
+    }
+    std::ranges::sort(result, {}, requirementKey);
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
 
 bool PluginReadinessReport::ready() const noexcept {
     return !stayViewer &&
@@ -74,20 +109,18 @@ PluginReadinessReport evaluatePluginReadiness(
     PluginReadinessReport report;
     report.revision = revision;
     report.plugins.reserve(requirements.size());
+    const auto available = manager.plugins();
     for (const PluginRequirement& requirement : requirements) {
         PluginReadinessResult result;
         result.requirement = requirement;
-        const auto descriptor = manager.find(toHostFormat(requirement.format),
-                                             requirement.nativeUid);
-        if (!descriptor) {
+        const auto descriptor = std::find_if(available.begin(), available.end(),
+            [&](const auto& candidate) { return pluginSatisfiesRequirement(candidate, requirement); });
+        const bool installed = std::any_of(available.begin(), available.end(), [&](const auto& candidate) {
+            return candidate.format == toHostFormat(requirement.format) && candidate.uid == requirement.nativeUid;
+        });
+        if (!installed) {
             result.status = PluginReadinessStatus::Missing;
-        } else if (descriptor->vendor != requirement.vendor ||
-                   descriptor->version != requirement.version ||
-                   descriptor->stateSchemaVersion !=
-                       requirement.stateSchemaVersion ||
-                   descriptor->isInstrument != requirement.instrument ||
-                   !supportsChannelMode(*descriptor,
-                                        requirement.channelMode)) {
+        } else if (descriptor == available.end()) {
             result.status = PluginReadinessStatus::VersionMismatch;
         } else {
             // Every external cache entry was instantiated, activated and

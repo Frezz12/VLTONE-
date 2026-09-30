@@ -2,18 +2,25 @@
 
 #include "AssetCache.hpp"
 #include "EngineController.hpp"
+#include "collaboration/PluginCompatibility.hpp"
+#include "plugins/PluginConvert.hpp"
 
 #include "Core/AudioBuffer.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Recording/RecordingEngine.hpp"
 
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QPointer>
 #include <QSet>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QThreadPool>
 
 #include <algorithm>
 #include <cmath>
@@ -25,6 +32,7 @@ namespace collab {
 namespace {
 
 struct TrackLocalState {
+    bool muted = false;
     bool soloed = false;
     bool armed = false;
     bool monitor = false;
@@ -65,6 +73,30 @@ struct SamplerProjection {
 QString assetIdentity(const daw::AssetRef& asset) {
     if (!asset.assetId.empty()) return QString::fromStdString(asset.assetId);
     return QString::fromStdString(asset.sha256);
+}
+
+QString stateProbeIdentity(const daw::plugins::PluginDescriptor& descriptor,
+                          const daw::InsertModel& slot, double sampleRate) {
+    // File metadata invalidates a scan cache after a same-version replacement.
+    // Neither filenames nor native state bytes leave the process.
+    QJsonArray parts{
+        int(descriptor.format), QString::fromStdString(descriptor.uid),
+        QString::fromStdString(descriptor.vendor), QString::fromStdString(descriptor.version),
+        descriptor.stateSchemaVersion, QString::fromStdString(descriptor.parameterFingerprint),
+        QString::fromStdString(descriptor.path), QString::number(descriptor.fileSize),
+        QString::number(descriptor.fileModifiedTime), sampleRate, int(slot.channelMode),
+        QString::fromStdString(slot.stateAsset.sha256), QString::fromStdString(slot.rightStateAsset.sha256)};
+    const auto appendUnhashedCapture = [&](const daw::AssetRef& asset, const std::string& path) {
+        if (!asset.sha256.empty() || path.empty()) return;
+        const QFileInfo file(QString::fromStdString(path));
+        parts.append(file.absoluteFilePath());
+        parts.append(QString::number(file.size()));
+        parts.append(QString::number(file.lastModified().toMSecsSinceEpoch()));
+    };
+    appendUnhashedCapture(slot.stateAsset, slot.stateFile);
+    appendUnhashedCapture(slot.rightStateAsset, slot.rightStateFile);
+    return QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(parts).toJson(QJsonDocument::Compact),
+                                                      QCryptographicHash::Sha256).toHex());
 }
 
 QStringList missingIds(const std::vector<MissingRuntimeAsset>& missing) {
@@ -170,6 +202,7 @@ public:
 
         for (const daw::TrackModel& track : current.tracks) {
             trackLocal[track.id] = {
+                track.muted,
                 track.soloed,
                 track.armed,
                 track.monitor,
@@ -209,13 +242,13 @@ public:
         runtime.loopStartSeconds = loopStartSeconds;
         runtime.loopEndSeconds = loopEndSeconds;
         runtime.loopEnabled = loopEnabled;
-        runtime.notebookHtml = notebookHtml;
-        runtime.notebookCues = notebookCues;
+        // Notebook is document content. It must come from the confirmed reducer.
 
         for (daw::TrackModel& track : runtime.tracks) {
             if (const auto found = trackLocal.find(track.id);
                 found != trackLocal.end()) {
                 const TrackLocalState& local = found->second;
+                if (engine && engine->sessionAuditionEnabled()) track.muted = local.muted;
                 track.soloed = local.soloed;
                 track.armed = local.armed;
                 track.monitor = local.monitor;
@@ -258,8 +291,11 @@ public:
     }
 
     QString resolve(const daw::AssetRef& asset) const {
-        return assetCache && !asset.empty() ? assetCache->resolve(asset)
-                                            : QString{};
+        if (asset.empty()) return {};
+        const QString cached = assetCache ? assetCache->resolve(asset) : QString{};
+        if (!cached.isEmpty()) return cached;
+        const QString captured = publicationAssetSources.value(QString::fromStdString(asset.assetId));
+        return !captured.isEmpty() && QFileInfo(captured).isFile() ? captured : QString{};
     }
 
     void resolveAssets(daw::ProjectModel& runtime,
@@ -269,6 +305,14 @@ public:
             const QString trackLocation =
                 QStringLiteral("track:%1")
                     .arg(QString::fromStdString(track.id));
+            track.freeze.filePath.clear();
+            track.freeze.sourceFingerprint.clear();
+            if (!track.freeze.asset.empty()) {
+                const QString path = resolve(track.freeze.asset);
+                if (path.isEmpty()) addMissing(missing, track.freeze.asset,
+                    trackLocation + QStringLiteral("/freeze"), true);
+                else track.freeze.filePath = path.toStdString();
+            }
             for (daw::ClipModel& clip : track.clips) {
                 const QString clipLocation =
                     trackLocation + QStringLiteral("/clip:%1")
@@ -304,6 +348,24 @@ public:
                             true);
                     } else {
                         take.filePath = path.toStdString();
+                    }
+                }
+                for (auto& version : clip.offlineHistory) {
+                    const QString location = clipLocation + QStringLiteral("/render:%1")
+                        .arg(QString::fromStdString(version.id));
+                    version.source.filePath.clear();
+                    if (!version.source.asset.empty()) {
+                        const QString path = resolve(version.source.asset);
+                        if (path.isEmpty()) addMissing(missing, version.source.asset, location, true);
+                        else version.source.filePath = path.toStdString();
+                    }
+                    for (auto& take : version.source.takes) {
+                        take.filePath.clear();
+                        if (take.asset.empty()) continue;
+                        const QString path = resolve(take.asset);
+                        if (path.isEmpty()) addMissing(missing, take.asset,
+                            location + QStringLiteral("/take:%1").arg(QString::fromStdString(take.id)), true);
+                        else take.filePath = path.toStdString();
                     }
                 }
             }
@@ -363,6 +425,101 @@ public:
         sortMissing(missing);
     }
 
+    void setProbeStatus(const QString& insertId, const QString& status) {
+        if (probeStatuses.value(insertId) == status) return;
+        probeStatuses.insert(insertId, status);
+        emit q->pluginStateProbeChanged(insertId, status);
+    }
+
+    void completeProbe(const QString& key, quint64 generation, bool passed) {
+        if (generation != probeGeneration || !hasDocument) return;
+        pendingProbes.remove(key);
+        probeResults.insert(key, passed);
+        daw::collab::ChangeImpact impact;
+        for (auto it = currentProbeKeys.begin(); it != currentProbeKeys.end(); ++it) {
+            if (it.value() != key) continue;
+            setProbeStatus(it.key(), passed ? QStringLiteral("ready") : QStringLiteral("failed"));
+            impact.pluginInsertIds.insert(it.key().toStdString());
+        }
+        if (impact.pluginInsertIds.empty()) return; // Removed/replaced while the worker ran.
+        impact.graphRebuild = true;
+        impact.documentChanged = true;
+        requestLatest(daw::collab::ProjectionOrigin::Rebase, std::move(impact));
+    }
+
+    void gateExternalStates(daw::ProjectModel& runtime) {
+        currentProbeKeys.clear();
+        if (!engine) return;
+        const auto descriptors = engine->pluginManager().plugins();
+        visitInserts(runtime, [&](const std::string&, daw::InsertModel& slot, const QString& location) {
+            slot.runtimeStateBlocked = false;
+            if (slot.format == daw::PluginFormat::Internal || slot.format == daw::PluginFormat::None) return;
+            slot.runtimeStateBlocked = true;
+            slot.windowOpen = false;
+            const QString id = QString::fromStdString(slot.id);
+            if ((!slot.stateAsset.empty() && slot.stateFile.empty()) ||
+                (!slot.rightStateAsset.empty() && slot.rightStateFile.empty()) ||
+                std::any_of(slot.assetBindings.begin(), slot.assetBindings.end(), [&](const auto& binding) {
+                    return binding.required && resolve(binding.asset).isEmpty();
+                })) {
+                setProbeStatus(id, QStringLiteral("missing"));
+                return;
+            }
+            daw::collab::PluginRequirement requirement;
+            requirement.format = slot.format;
+            requirement.nativeUid = slot.uid;
+            requirement.vendor = slot.vendor;
+            requirement.version = slot.pluginVersion;
+            requirement.stateSchemaVersion = slot.stateSchemaVersion;
+            requirement.instrument = location.endsWith(QLatin1String("/instrument"));
+            requirement.channelMode = slot.channelMode;
+            requirement.parameterFingerprint = slot.parameterFingerprint;
+            const auto found = std::find_if(descriptors.begin(), descriptors.end(), [&](const auto& descriptor) {
+                return daw::collab::pluginSatisfiesRequirement(descriptor, requirement);
+            });
+            if (found == descriptors.end()) {
+                setProbeStatus(id, QStringLiteral("missing"));
+                return;
+            }
+            slot.path = found->path;
+            const QString key = stateProbeIdentity(*found, slot, runtime.sampleRate);
+            currentProbeKeys.insert(id, key);
+            if (const auto cached = probeResults.constFind(key); cached != probeResults.cend()) {
+                slot.runtimeStateBlocked = !cached.value();
+                setProbeStatus(id, cached.value() ? QStringLiteral("ready") : QStringLiteral("failed"));
+                return;
+            }
+            setProbeStatus(id, QStringLiteral("checking"));
+            if (pendingProbes.contains(key)) return;
+            pendingProbes.insert(key);
+            auto left = engine->pluginManager().sharedStateProbe(*found, slot.stateFile, runtime.sampleRate);
+            auto right = slot.channelMode == daw::PluginChannelMode::DualMono
+                ? engine->pluginManager().sharedStateProbe(*found, slot.rightStateFile, runtime.sampleRate)
+                : std::function<std::string()>{};
+            const quint64 generation = probeGeneration;
+            QPointer<EngineProjectProjectionAdapter> guard(q);
+            QThreadPool::globalInstance()->start([guard, key, generation, left = std::move(left), right = std::move(right)] {
+                if (!guard) return;
+                bool passed = false;
+                try { passed = left().empty() && (!right || right().empty()); } catch (...) {}
+                if (guard) QMetaObject::invokeMethod(guard, [guard, key, generation, passed] {
+                    if (guard) guard->m_impl->completeProbe(key, generation, passed);
+                }, Qt::QueuedConnection);
+            });
+        });
+        // Do not leave vanished slots in the status panel.
+        QSet<QString> present;
+        visitInserts(runtime, [&](const std::string&, const daw::InsertModel& slot, const QString&) {
+            if (slot.format != daw::PluginFormat::Internal && slot.format != daw::PluginFormat::None)
+                present.insert(QString::fromStdString(slot.id));
+        });
+        const auto oldIds = probeStatuses.keys();
+        for (const auto& id : oldIds) if (!present.contains(id)) {
+            probeStatuses.remove(id);
+            emit q->pluginStateProbeChanged(id, {});
+        }
+    }
+
     void publishMissing(std::vector<MissingRuntimeAsset> next) {
         sortMissing(next);
         if (sameMissing(missing, next)) return;
@@ -393,6 +550,14 @@ public:
         trackLocal.clear();
         clipExpanded.clear();
         pluginLocal.clear();
+        publicationAssetSources.clear();
+        ++probeGeneration;
+        pendingProbes.clear();
+        probeResults.clear();
+        currentProbeKeys.clear();
+        const auto oldProbeIds = probeStatuses.keys();
+        probeStatuses.clear();
+        for (const auto& id : oldProbeIds) emit q->pluginStateProbeChanged(id, {});
         if (hadMissing) {
             emit q->missingAssetsChanged({});
             emit q->missingAssetRefsChanged({});
@@ -409,10 +574,19 @@ public:
                     QString::fromStdString(asset.sha256) == sha256);
         };
         for (const daw::TrackModel& track : latest.project.tracks) {
+            if (matches(track.freeze.asset)) {
+                impact.trackIds.insert(track.id);
+                impact.graphRebuild = true;
+            }
             for (const daw::ClipModel& clip : track.clips) {
                 bool clipMatched = matches(clip.asset);
                 for (const daw::TakeModel& take : clip.takes)
                     clipMatched = clipMatched || matches(take.asset);
+                for (const auto& version : clip.offlineHistory) {
+                    clipMatched = clipMatched || matches(version.source.asset);
+                    for (const auto& take : version.source.takes)
+                        clipMatched = clipMatched || matches(take.asset);
+                }
                 if (!clipMatched) continue;
                 impact.trackIds.insert(track.id);
                 impact.clipIds.insert(clip.id);
@@ -447,6 +621,7 @@ public:
         std::vector<MissingRuntimeAsset> nextMissing;
         std::vector<SamplerProjection> samplerProjections;
         resolveAssets(runtime, nextMissing, samplerProjections);
+        gateExternalStates(runtime);
 
         const bool initialSnapshot =
             origin == daw::collab::ProjectionOrigin::Snapshot;
@@ -600,6 +775,7 @@ public:
     EngineProjectProjectionAdapter* q = nullptr;
     daw::EngineController* engine = nullptr;
     AssetCache* assetCache = nullptr;
+    QHash<QString, QString> publicationAssetSources;
     daw::collab::SharedProjectDocument latest;
     bool hasDocument = false;
     bool projecting = false;
@@ -617,6 +793,11 @@ public:
     daw::collab::ChangeImpact lastImpact;
     QString lastProjectionError;
     std::vector<MissingRuntimeAsset> missing;
+    quint64 probeGeneration = 0;
+    QSet<QString> pendingProbes;
+    QHash<QString, bool> probeResults;
+    QHash<QString, QString> currentProbeKeys;
+    QHash<QString, QString> probeStatuses;
 
     double loopStartSeconds = 0.0;
     double loopEndSeconds = 0.0;
@@ -668,6 +849,44 @@ void EngineProjectProjectionAdapter::clearDocument() {
         return;
     }
     m_impl->clear();
+}
+
+void EngineProjectProjectionAdapter::retryPluginStateProbes() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this] { retryPluginStateProbes(); }, Qt::QueuedConnection);
+        return;
+    }
+    ++m_impl->probeGeneration;
+    m_impl->pendingProbes.clear();
+    for (auto it = m_impl->probeResults.begin(); it != m_impl->probeResults.end();) {
+        if (!it.value()) it = m_impl->probeResults.erase(it);
+        else ++it;
+    }
+    daw::collab::ChangeImpact impact;
+    impact.graphRebuild = true;
+    impact.documentChanged = true;
+    m_impl->requestLatest(daw::collab::ProjectionOrigin::Rebase, std::move(impact));
+}
+
+void EngineProjectProjectionAdapter::setPublicationAssetSources(QHash<QString, QString> localSources) {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, localSources = std::move(localSources)]() mutable {
+            setPublicationAssetSources(std::move(localSources));
+        }, Qt::QueuedConnection);
+        return;
+    }
+    QHash<QString, QString> captured;
+    for (auto it = localSources.cbegin(); it != localSources.cend(); ++it) {
+        const QFileInfo file(it.value());
+        if (!it.key().isEmpty() && file.isAbsolute() && file.isFile())
+            captured.insert(it.key(), file.absoluteFilePath());
+    }
+    if (m_impl->publicationAssetSources == captured) return;
+    m_impl->publicationAssetSources = std::move(captured);
+    daw::collab::ChangeImpact impact;
+    impact.graphRebuild = true;
+    impact.documentChanged = true;
+    m_impl->requestLatest(daw::collab::ProjectionOrigin::Rebase, std::move(impact));
 }
 
 std::vector<MissingRuntimeAsset>
@@ -1073,6 +1292,83 @@ bool checkEngineProjectProjectionForTest(QString* error) {
         return fail(QStringLiteral(
             "verified snapshot did not clear the projection feedback latch"));
     }
+
+    // Freeze and offline history are portable media too, including inactive
+    // versions needed by undo. Never retain a foreign path while hydrating.
+    auto rendered = shared.project;
+    auto* renderedTrack = rendered.findTrack(audioTrack);
+    renderedTrack->freeze.asset = asset;
+    renderedTrack->freeze.filePath = "private/foreign-freeze.wav";
+    daw::OfflineRenderVersion version;
+    version.id = daw::newUuid();
+    version.source.asset = asset;
+    version.source.filePath = "private/foreign-history.wav";
+    daw::TakeModel historyTake;
+    historyTake.id = daw::newUuid();
+    historyTake.asset = asset;
+    historyTake.asset.assetId = daw::newUuid();
+    historyTake.asset.sha256 = std::string(64, 'b');
+    historyTake.filePath = "private/foreign-take.wav";
+    version.source.takes.push_back(historyTake);
+    renderedTrack->clips.front().offlineHistory.push_back(version);
+    std::vector<MissingRuntimeAsset> renderedMissing;
+    std::vector<SamplerProjection> renderedSamplers;
+    adapter.m_impl->resolveAssets(rendered, renderedMissing, renderedSamplers);
+    if (renderedTrack->freeze.filePath != imported.localPath.toStdString() ||
+        renderedTrack->clips.front().offlineHistory.back().source.filePath != imported.localPath.toStdString() ||
+        !renderedTrack->clips.front().offlineHistory.back().source.takes.front().filePath.empty() ||
+        std::none_of(renderedMissing.begin(), renderedMissing.end(), [&](const auto& item) {
+            return item.asset.assetId == historyTake.asset.assetId;
+        })) return fail(QStringLiteral("render history/freeze hydration omitted portable media or retained a foreign path"));
+
+    daw::InsertModel external;
+    external.id = daw::newUuid();
+    external.format = daw::PluginFormat::Vst3;
+    external.uid = "collaboration.selftest.uninstalled";
+    external.vendor = "Projection selftest";
+    external.pluginVersion = "1.0";
+    external.path = "private/foreign-plugin.vst3";
+    renderedTrack->inserts.push_back(external);
+    adapter.m_impl->gateExternalStates(rendered);
+    if (!renderedTrack->inserts.back().runtimeStateBlocked ||
+        !adapter.m_impl->pendingProbes.isEmpty())
+        return fail(QStringLiteral("unverified external plugin escaped the projection gate"));
+    daw::plugins::PluginDescriptor descriptor;
+    descriptor.uid = external.uid;
+    descriptor.version = "1.0";
+    const QString keyBefore = stateProbeIdentity(descriptor, external, 48000);
+    external.stateAsset.sha256 = std::string(64, 'c');
+    if (keyBefore == stateProbeIdentity(descriptor, external, 48000) ||
+        stateProbeIdentity(descriptor, external, 48000) == stateProbeIdentity(descriptor, external, 96000))
+        return fail(QStringLiteral("plugin probe cache ignored state identity or sample rate"));
+    const int beforeStaleProbe = projected;
+    adapter.m_impl->currentProbeKeys.insert(QString::fromStdString(external.id), QStringLiteral("new-state"));
+    adapter.m_impl->completeProbe(QStringLiteral("old-state"), adapter.m_impl->probeGeneration, true);
+    if (projected != beforeStaleProbe)
+        return fail(QStringLiteral("old plugin state completion activated a replaced slot"));
+    const quint64 oldGeneration = adapter.m_impl->probeGeneration;
+    adapter.clearDocument();
+    adapter.m_impl->completeProbe(QStringLiteral("new-state"), oldGeneration, true);
+    if (adapter.hasMaterializedDocument() || !adapter.m_impl->probeResults.isEmpty())
+        return fail(QStringLiteral("late plugin state completion crossed a project boundary"));
+    auto stagingAsset = asset;
+    stagingAsset.assetId = daw::newUuid();
+    stagingAsset.sha256.clear();
+    adapter.setPublicationAssetSources({
+        {QString::fromStdString(stagingAsset.assetId), source},
+        {QString::fromStdString(asset.assetId), source},
+        {QStringLiteral("relative-path"), QStringLiteral("tone.wav")}});
+    if (adapter.m_impl->resolve(stagingAsset) != source ||
+        adapter.m_impl->resolve(asset) != imported.localPath ||
+        adapter.m_impl->publicationAssetSources.contains(QStringLiteral("relative-path")))
+        return fail(QStringLiteral("publication sources overrode verified cache or accepted a relative path"));
+    auto foreignAsset = stagingAsset;
+    foreignAsset.assetId = daw::newUuid();
+    if (!adapter.m_impl->resolve(foreignAsset).isEmpty())
+        return fail(QStringLiteral("uncaptured asset resolved a local publication file"));
+    adapter.clearDocument();
+    if (!adapter.m_impl->resolve(stagingAsset).isEmpty())
+        return fail(QStringLiteral("publication source crossed a project boundary"));
     return true;
 }
 

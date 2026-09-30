@@ -19,10 +19,13 @@ json toJson(const PluginDescriptor& descriptor) {
         {"isInstrument", descriptor.isInstrument},
         {"hasEditor", descriptor.hasEditor},
         {"wantsMidi", descriptor.wantsMidi},
+        {"producesMidi", descriptor.producesMidi},
         {"inputChannels", descriptor.mainInputChannels},
         {"outputChannels", descriptor.mainOutputChannels},
         {"fileSize", descriptor.fileSize},
         {"fileModifiedTime", descriptor.fileModifiedTime},
+        {"stateSchemaVersion", descriptor.stateSchemaVersion},
+        {"parameterSchema", descriptor.parameterSchema},
     };
 }
 
@@ -40,10 +43,13 @@ PluginDescriptor fromJson(const json& value) {
     descriptor.isInstrument = value.value("isInstrument", false);
     descriptor.hasEditor = value.value("hasEditor", false);
     descriptor.wantsMidi = value.value("wantsMidi", false);
+    descriptor.producesMidi = value.value("producesMidi", false);
     descriptor.mainInputChannels = value.value("inputChannels", std::uint16_t(2));
     descriptor.mainOutputChannels = value.value("outputChannels", std::uint16_t(2));
     descriptor.fileSize = value.value("fileSize", std::uint64_t(0));
     descriptor.fileModifiedTime = value.value("fileModifiedTime", std::int64_t(0));
+    descriptor.stateSchemaVersion = value.value("stateSchemaVersion", 0);
+    descriptor.parameterSchema = value.value("parameterSchema", std::string{});
     return descriptor;
 }
 

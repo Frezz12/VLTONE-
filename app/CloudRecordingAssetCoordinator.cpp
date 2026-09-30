@@ -69,7 +69,7 @@ QString boundedSafeMessage(QString message, const QString& fallback) {
 
 bool sameAudioMetadata(const daw::AssetRef& asset,
                        const ClosedRecordingAsset& recording) {
-    return asset.kind == daw::AssetKind::Audio &&
+    return asset.kind == recording.kind &&
            asset.originalName == recording.displayName.toStdString() &&
            asset.mimeType == recording.contentType.toStdString() &&
            asset.codec == recording.codec.toStdString() &&
@@ -326,10 +326,19 @@ struct CloudRecordingAssetCoordinator::Impl {
         recording.displayName = safeBasename(recording.displayName);
         recording.contentType = recording.contentType.trimmed().toLower();
         recording.codec = recording.codec.trimmed();
+        if (recording.kind == daw::AssetKind::PluginState) {
+            if (recording.displayName.isEmpty() ||
+                recording.contentType != QLatin1String("application/vnd.vlt.plugin-state") ||
+                recording.sampleRate != 0 || recording.channels != 0 || recording.frames != 0) {
+                if (error) *error = QStringLiteral("Plugin state metadata is invalid");
+                return false;
+            }
+            return true;
+        }
         const bool audioContentType =
             recording.contentType.startsWith(QLatin1String("audio/")) &&
             recording.contentType.size() > qsizetype(sizeof("audio/") - 1);
-        if (recording.displayName.isEmpty() || !audioContentType ||
+        if (recording.kind != daw::AssetKind::Audio || recording.displayName.isEmpty() || !audioContentType ||
             !safeText(recording.contentType, 160) ||
             !safeText(recording.codec, 255) ||
             !std::isfinite(recording.sampleRate) ||
@@ -424,7 +433,7 @@ struct CloudRecordingAssetCoordinator::Impl {
     daw::AssetRef expectedAsset(const Item& item) const {
         daw::AssetRef asset;
         asset.assetId = item.recording.assetId.toStdString();
-        asset.kind = daw::AssetKind::Audio;
+        asset.kind = item.recording.kind;
         asset.originalName = item.recording.displayName.toStdString();
         asset.mimeType = item.recording.contentType.toStdString();
         asset.codec = item.recording.codec.toStdString();
@@ -468,7 +477,7 @@ struct CloudRecordingAssetCoordinator::Impl {
         input.sha256 =
             QString::fromStdString(item.imported.asset.sha256);
         input.byteSize = item.imported.asset.byteSize;
-        input.kind = CloudAssetKind::Audio;
+        input.kind = item.recording.kind == daw::AssetKind::PluginState ? CloudAssetKind::PluginState : CloudAssetKind::Audio;
         input.contentType = item.recording.contentType;
         input.displayName = item.recording.displayName;
         return input;
@@ -609,7 +618,7 @@ struct CloudRecordingAssetCoordinator::Impl {
                QString::fromStdString(asset.sha256) ==
                    QString::fromStdString(item.imported.asset.sha256) &&
                asset.byteSize == item.imported.asset.byteSize &&
-               asset.kind == daw::AssetKind::Audio &&
+               asset.kind == item.recording.kind &&
                asset.originalName == item.recording.displayName.toStdString() &&
                asset.mimeType == item.recording.contentType.toStdString() &&
                uploaded.contentType == item.recording.contentType;

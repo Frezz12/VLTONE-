@@ -18,7 +18,7 @@ namespace scan {
 /// Bumped when the descriptor schema or compatibility validation changes.
 /// Version 2 retries entries from before the VST3 connection-order fix,
 /// including plugins blacklisted after three failed initialization attempts.
-inline constexpr int kSchemaVersion = 2;
+inline constexpr int kSchemaVersion = 4;
 
 /// Serialise one descriptor. Returns a JSON object as text.
 std::string descriptorToJson(const PluginDescriptor& descriptor);

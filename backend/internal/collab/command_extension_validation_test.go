@@ -207,7 +207,7 @@ func TestMixerPluginAndClipCommandsStayInValidationLockstep(t *testing.T) {
 }
 
 func TestBuiltinEffectCommands(t *testing.T) {
-	for _, schemaVersion := range []int{2, 3} {
+	for _, schemaVersion := range []int{2, 3, 4, 5, 6} {
 		for _, uid := range []string{"daw.compressor", "daw.delay", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.modulation", "daw.pitch-corrector"} {
 			for _, chain := range []string{"master", "track", "samplerFx", "clip", "instrument"} {
 				trackID, clipID, insertID := uuid.New(), uuid.Nil, uuid.New()
@@ -229,7 +229,7 @@ func TestBuiltinEffectCommands(t *testing.T) {
 						t.Fatal(err)
 					}
 					err = validateCommandPayloadShapeForSchema(kind, payload, true, schemaVersion)
-					if chain == "instrument" {
+					if chain == "instrument" || (uid == "daw.modulation" && schemaVersion < 6) {
 						if !errors.Is(err, ErrValidation) {
 							t.Fatalf("v%d %s accepted effect %s as an instrument: %v", schemaVersion, kind, uid, err)
 						}

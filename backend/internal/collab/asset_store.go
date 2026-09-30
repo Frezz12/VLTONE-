@@ -1012,6 +1012,21 @@ func (s *AssetService) authorizeUploadTx(tx *gorm.DB, view ProjectView,
 		}
 		return nil
 	case model.ProjectActive, model.ProjectConflict:
+		var live model.ProjectSession
+		lookup := tx.Where("project_id = ? AND status IN ?", view.Project.ID, []string{model.ProjectSessionStarting, model.ProjectSessionActive, model.ProjectSessionEnding}).First(&live)
+		if lookup.Error != nil && !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
+			return lookup.Error
+		}
+		if lookup.Error == nil && live.CommandSchemaVersion >= CollaborationCommandSchemaV6 {
+			store := &Store{DB: tx, Now: s.Now}
+			member, err := store.activeSessionMemberTx(tx, live.ID, actorUserID, deviceID, actorSessionID, false)
+			if err != nil {
+				return ErrLiveSessionRequired
+			}
+			if err := SessionAllowsEdit(live, member); err != nil {
+				return err
+			}
+		}
 		if !snapshot {
 			if view.Project.Status != model.ProjectActive {
 				return ErrProjectInactive

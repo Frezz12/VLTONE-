@@ -1,0 +1,741 @@
+{
+  "description": "Version-gated public command fixtures; schemaVersion denotes first supported version.",
+  "commands": [
+    {
+      "schemaVersion": 4,
+      "opId": "00000000-0000-4000-8000-000000000100",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "recording.prepareMidi",
+      "payload": {
+        "recordingId": "00000000-0000-4000-8000-000000000006",
+        "contentId": "00000000-0000-4000-8000-000000000007",
+        "index": 0,
+        "count": 1,
+        "content": {
+          "notes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "pitch": 60,
+              "startBeats": 0,
+              "lengthBeats": 1,
+              "velocity": 100,
+              "muted": false,
+              "color": 0,
+              "pan": 0,
+              "channel": 2,
+              "releaseVelocity": 20,
+              "startOrder": 3,
+              "endOrder": 4
+            }
+          ],
+          "lanes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "name": "Pressure",
+              "cc": -2,
+              "channel": 2,
+              "key": 60,
+              "parameterId": "",
+              "slotId": "",
+              "defaultValue": 0,
+              "points": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000002",
+                  "beats": 0,
+                  "value": 0.5,
+                  "shape": "linear",
+                  "curve": 0,
+                  "eventOrder": 5
+                }
+              ]
+            }
+          ],
+          "takes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000004",
+              "name": "MIDI pass",
+              "offsetSeconds": 0,
+              "lengthSeconds": 2,
+              "clipOffsetSeconds": 0,
+              "gain": 1,
+              "muted": false,
+              "channels": 0,
+              "color": 0,
+              "notes": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000001",
+                  "pitch": 60,
+                  "startBeats": 0,
+                  "lengthBeats": 1,
+                  "velocity": 100,
+                  "muted": false,
+                  "color": 0,
+                  "pan": 0,
+                  "channel": 2,
+                  "releaseVelocity": 20,
+                  "startOrder": 3,
+                  "endOrder": 4
+                }
+              ],
+              "lanes": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000003",
+                  "name": "Pressure",
+                  "cc": -2,
+                  "channel": 2,
+                  "key": 60,
+                  "parameterId": "",
+                  "slotId": "",
+                  "defaultValue": 0,
+                  "points": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000002",
+                      "beats": 0,
+                      "value": 0.5,
+                      "shape": "linear",
+                      "curve": 0,
+                      "eventOrder": 5
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "comp": [
+            {
+              "id": "00000000-0000-4000-8000-000000000005",
+              "takeId": "00000000-0000-4000-8000-000000000004",
+              "startSeconds": 0,
+              "endSeconds": 2
+            }
+          ],
+          "expanded": true
+        }
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture"
+      ]
+    },
+    {
+      "schemaVersion": 4,
+      "opId": "00000000-0000-4000-8000-000000000101",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "recording.applyMidi",
+      "payload": {
+        "trackId": "00000000-0000-4000-8000-000000000008",
+        "clipId": "00000000-0000-4000-8000-000000000009",
+        "recordingId": "00000000-0000-4000-8000-000000000006",
+        "contentId": "00000000-0000-4000-8000-000000000007",
+        "count": 1
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture"
+      ]
+    },
+    {
+      "schemaVersion": 4,
+      "opId": "00000000-0000-4000-8000-000000000102",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "recording.restoreMidi",
+      "payload": {
+        "trackId": "00000000-0000-4000-8000-000000000008",
+        "clipId": "00000000-0000-4000-8000-000000000009",
+        "operationId": "00000000-0000-4000-8000-000000000010"
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture"
+      ]
+    },
+    {
+      "schemaVersion": 4,
+      "opId": "00000000-0000-4000-8000-000000000103",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "take.add",
+      "payload": {
+        "trackId": "00000000-0000-4000-8000-000000000008",
+        "clipId": "00000000-0000-4000-8000-000000000009",
+        "take": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "name": "MIDI pass",
+          "offsetSeconds": 0,
+          "lengthSeconds": 2,
+          "clipOffsetSeconds": 0,
+          "gain": 1,
+          "muted": false,
+          "channels": 0,
+          "color": 0,
+          "notes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "pitch": 60,
+              "startBeats": 0,
+              "lengthBeats": 1,
+              "velocity": 100,
+              "muted": false,
+              "color": 0,
+              "pan": 0,
+              "channel": 2,
+              "releaseVelocity": 20,
+              "startOrder": 3,
+              "endOrder": 4
+            }
+          ],
+          "lanes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "name": "Pressure",
+              "cc": -2,
+              "channel": 2,
+              "key": 60,
+              "parameterId": "",
+              "slotId": "",
+              "defaultValue": 0,
+              "points": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000002",
+                  "beats": 0,
+                  "value": 0.5,
+                  "shape": "linear",
+                  "curve": 0,
+                  "eventOrder": 5
+                }
+              ]
+            }
+          ]
+        },
+        "afterId": ""
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture"
+      ]
+    },
+    {
+      "schemaVersion": 5,
+      "opId": "00000000-0000-4000-8000-000000000104",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "slide.set",
+      "payload": {
+        "trackId": "00000000-0000-4000-8000-000000000008",
+        "clipId": "00000000-0000-4000-8000-000000000009",
+        "takeId": "",
+        "slideId": "00000000-0000-4000-8000-000000000011",
+        "slide": {
+          "id": "00000000-0000-4000-8000-000000000011",
+          "startBeats": 0,
+          "lengthBeats": 1,
+          "referenceNoteId": "00000000-0000-4000-8000-000000000001",
+          "targetNoteIds": [
+            "00000000-0000-4000-8000-000000000001"
+          ],
+          "chord": false,
+          "muted": false,
+          "points": [
+            {
+              "time": 0,
+              "pitch": 60,
+              "shape": 0,
+              "curve": 0
+            },
+            {
+              "time": 1,
+              "pitch": 67,
+              "shape": 0,
+              "curve": 0
+            }
+          ]
+        }
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture"
+      ]
+    },
+    {
+      "schemaVersion": 5,
+      "opId": "00000000-0000-4000-8000-000000000100",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "recording.prepareMidi",
+      "payload": {
+        "recordingId": "00000000-0000-4000-8000-000000000006",
+        "contentId": "00000000-0000-4000-8000-000000000007",
+        "index": 0,
+        "count": 1,
+        "content": {
+          "notes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "pitch": 60,
+              "startBeats": 0,
+              "lengthBeats": 1,
+              "velocity": 100,
+              "muted": false,
+              "color": 0,
+              "pan": 0,
+              "channel": 2,
+              "releaseVelocity": 20,
+              "startOrder": 3,
+              "endOrder": 4
+            }
+          ],
+          "lanes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "name": "Pressure",
+              "cc": -2,
+              "channel": 2,
+              "key": 60,
+              "parameterId": "",
+              "slotId": "",
+              "defaultValue": 0,
+              "points": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000002",
+                  "beats": 0,
+                  "value": 0.5,
+                  "shape": "linear",
+                  "curve": 0,
+                  "eventOrder": 5
+                }
+              ]
+            }
+          ],
+          "takes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000004",
+              "name": "MIDI pass",
+              "offsetSeconds": 0,
+              "lengthSeconds": 2,
+              "clipOffsetSeconds": 0,
+              "gain": 1,
+              "muted": false,
+              "channels": 0,
+              "color": 0,
+              "notes": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000001",
+                  "pitch": 60,
+                  "startBeats": 0,
+                  "lengthBeats": 1,
+                  "velocity": 100,
+                  "muted": false,
+                  "color": 0,
+                  "pan": 0,
+                  "channel": 2,
+                  "releaseVelocity": 20,
+                  "startOrder": 3,
+                  "endOrder": 4
+                }
+              ],
+              "lanes": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000003",
+                  "name": "Pressure",
+                  "cc": -2,
+                  "channel": 2,
+                  "key": 60,
+                  "parameterId": "",
+                  "slotId": "",
+                  "defaultValue": 0,
+                  "points": [
+                    {
+                      "id": "00000000-0000-4000-8000-000000000002",
+                      "beats": 0,
+                      "value": 0.5,
+                      "shape": "linear",
+                      "curve": 0,
+                      "eventOrder": 5
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "comp": [
+            {
+              "id": "00000000-0000-4000-8000-000000000005",
+              "takeId": "00000000-0000-4000-8000-000000000004",
+              "startSeconds": 0,
+              "endSeconds": 2
+            }
+          ],
+          "expanded": true,
+          "slideNotes": [
+            {
+              "id": "00000000-0000-4000-8000-000000000011",
+              "startBeats": 0,
+              "lengthBeats": 1,
+              "referenceNoteId": "00000000-0000-4000-8000-000000000001",
+              "targetNoteIds": [
+                "00000000-0000-4000-8000-000000000001"
+              ],
+              "chord": false,
+              "muted": false,
+              "points": [
+                {
+                  "time": 0,
+                  "pitch": 60,
+                  "shape": 0,
+                  "curve": 0
+                },
+                {
+                  "time": 1,
+                  "pitch": 67,
+                  "shape": 0,
+                  "curve": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture"
+      ]
+    },
+    {
+      "schemaVersion": 5,
+      "opId": "10000000-0000-4000-8000-000000000003",
+      "transactionId": "",
+      "baseServerSeq": 2,
+      "kind": "plugin.add",
+      "payload": {
+        "location": {
+          "chain": "instrument",
+          "trackId": "20000000-0000-4000-8000-000000000001",
+          "clipId": ""
+        },
+        "insert": {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "name": "Sampler",
+          "bypassed": false,
+          "format": "internal",
+          "uid": "daw.sampler",
+          "vendor": "VLTONE",
+          "pluginVersion": "1.0.0",
+          "stateSchemaVersion": 1,
+          "mix": 1,
+          "channelMode": "auto",
+          "sidechainTrackId": "",
+          "stateAsset": null,
+          "rightStateAsset": null,
+          "parameters": [],
+          "rightParameters": [],
+          "assetBindings": [],
+          "slideDelivery": 1,
+          "slideBendRange": 48,
+          "slideReleaseReserve": 2
+        },
+        "afterId": ""
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "plugin:30000000-0000-4000-8000-000000000001:generation",
+        "plugin:30000000-0000-4000-8000-000000000001:lifecycle",
+        "plugin:30000000-0000-4000-8000-000000000001:position"
+      ]
+    },
+    {
+      "schemaVersion": 6,
+      "opId": "00000000-0000-4000-8000-000000000105",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "project.setScalar",
+      "payload": {
+        "field": "notebookHtml",
+        "value": "<p>Shared session notes</p>"
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture",
+        "project:renderGeneration"
+      ]
+    },
+    {
+      "schemaVersion": 6,
+      "opId": "00000000-0000-4000-8000-000000000106",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "project.setNotebookCues",
+      "payload": {
+        "cues": [
+          {
+            "seconds": 4.5,
+            "text": "Chorus starts"
+          }
+        ]
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project.fixture",
+        "project:renderGeneration"
+      ]
+    },
+    {
+      "schemaVersion": 6,
+      "opId": "10000000-0000-4000-8000-000000000003",
+      "transactionId": "",
+      "baseServerSeq": 2,
+      "kind": "plugin.add",
+      "payload": {
+        "location": {
+          "chain": "instrument",
+          "trackId": "20000000-0000-4000-8000-000000000001",
+          "clipId": ""
+        },
+        "insert": {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "name": "External Effect",
+          "bypassed": false,
+          "format": "vst3",
+          "uid": "com.example.effect",
+          "vendor": "Example",
+          "pluginVersion": "1.2.3",
+          "stateSchemaVersion": 0,
+          "mix": 1,
+          "channelMode": "auto",
+          "sidechainTrackId": "",
+          "stateAsset": null,
+          "rightStateAsset": null,
+          "parameters": [],
+          "rightParameters": [],
+          "assetBindings": [],
+          "slideDelivery": 1,
+          "slideBendRange": 48,
+          "slideReleaseReserve": 2,
+          "parameterFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "afterId": ""
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "plugin:30000000-0000-4000-8000-000000000001:generation",
+        "plugin:30000000-0000-4000-8000-000000000001:lifecycle",
+        "plugin:30000000-0000-4000-8000-000000000001:position",
+        "project:renderGeneration"
+      ]
+    },
+    {
+      "schemaVersion": 6,
+      "opId": "00000000-0000-4000-8000-000000000082",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "track.setFreeze",
+      "payload": {
+        "trackId": "00000000-0000-4000-8000-000000000008",
+        "asset": {
+          "assetId": "00000000-0000-4000-8000-000000000081",
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "kind": "audio",
+          "byteSize": 4800,
+          "originalName": "Rendered.wav"
+        },
+        "durationSeconds": 2,
+        "sampleRate": 48000
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project:renderGeneration"
+      ]
+    },
+    {
+      "schemaVersion": 6,
+      "opId": "00000000-0000-4000-8000-000000000084",
+      "transactionId": "",
+      "baseServerSeq": 0,
+      "kind": "clip.setRenderState",
+      "payload": {
+        "trackId": "00000000-0000-4000-8000-000000000008",
+        "clipId": "00000000-0000-4000-8000-000000000009",
+        "source": {
+          "asset": {
+            "assetId": "00000000-0000-4000-8000-000000000081",
+            "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "kind": "audio",
+            "byteSize": 4800,
+            "originalName": "Rendered.wav"
+          },
+          "durationSeconds": 2,
+          "offsetSeconds": 0,
+          "fadeInSeconds": 0,
+          "fadeOutSeconds": 0,
+          "fadeInCurve": 0,
+          "fadeOutCurve": 0,
+          "fadeInMode": "gain",
+          "fadeOutMode": "gain",
+          "gain": 1,
+          "pan": 0,
+          "channels": 2,
+          "takes": [],
+          "comp": [],
+          "compCrossfadeMs": 5,
+          "sampleEdit": {
+            "loopMode": 0,
+            "loopStart": 0,
+            "loopEnd": 1,
+            "stretchMode": 0,
+            "stretchTime": 1,
+            "stretchPitch": 0,
+            "formant": 0,
+            "rootNote": 0,
+            "boost": 0,
+            "eqLow": 0,
+            "eqMid": 0,
+            "eqHigh": 0,
+            "ringMix": 0,
+            "ringFreq": 0,
+            "cut": 0,
+            "res": 0,
+            "reverbType": 0,
+            "reverb": 0,
+            "stereoDelay": 0,
+            "pogo": 0,
+            "removeDc": false,
+            "reversePolarity": false,
+            "normalize": false,
+            "fadeStereo": false,
+            "reverse": false,
+            "swapStereo": false
+          },
+          "analysis": {
+            "version": 0,
+            "offsetSeconds": 0,
+            "durationSeconds": 0,
+            "tempo": {
+              "status": 0,
+              "bpm": 0,
+              "confidence": 0,
+              "stability": 0,
+              "alternatives": [],
+              "variable": false
+            },
+            "key": {
+              "status": 0,
+              "root": -1,
+              "scale": "",
+              "confidence": 0,
+              "alternateRoot": -1,
+              "alternateScale": "",
+              "tuningCents": 0
+            }
+          },
+          "warp": {
+            "enabled": false,
+            "preservePitch": true,
+            "mode": 4,
+            "baselineDurationSeconds": 0,
+            "sensitivity": 50,
+            "markers": []
+          }
+        },
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000083",
+            "parentId": "",
+            "label": "Offline EQ",
+            "source": {
+              "asset": {
+                "assetId": "00000000-0000-4000-8000-000000000081",
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "kind": "audio",
+                "byteSize": 4800,
+                "originalName": "Rendered.wav"
+              },
+              "durationSeconds": 2,
+              "offsetSeconds": 0,
+              "fadeInSeconds": 0,
+              "fadeOutSeconds": 0,
+              "fadeInCurve": 0,
+              "fadeOutCurve": 0,
+              "fadeInMode": "gain",
+              "fadeOutMode": "gain",
+              "gain": 1,
+              "pan": 0,
+              "channels": 2,
+              "takes": [],
+              "comp": [],
+              "compCrossfadeMs": 5,
+              "sampleEdit": {
+                "loopMode": 0,
+                "loopStart": 0,
+                "loopEnd": 1,
+                "stretchMode": 0,
+                "stretchTime": 1,
+                "stretchPitch": 0,
+                "formant": 0,
+                "rootNote": 0,
+                "boost": 0,
+                "eqLow": 0,
+                "eqMid": 0,
+                "eqHigh": 0,
+                "ringMix": 0,
+                "ringFreq": 0,
+                "cut": 0,
+                "res": 0,
+                "reverbType": 0,
+                "reverb": 0,
+                "stereoDelay": 0,
+                "pogo": 0,
+                "removeDc": false,
+                "reversePolarity": false,
+                "normalize": false,
+                "fadeStereo": false,
+                "reverse": false,
+                "swapStereo": false
+              },
+              "analysis": {
+                "version": 0,
+                "offsetSeconds": 0,
+                "durationSeconds": 0,
+                "tempo": {
+                  "status": 0,
+                  "bpm": 0,
+                  "confidence": 0,
+                  "stability": 0,
+                  "alternatives": [],
+                  "variable": false
+                },
+                "key": {
+                  "status": 0,
+                  "root": -1,
+                  "scale": "",
+                  "confidence": 0,
+                  "alternateRoot": -1,
+                  "alternateScale": "",
+                  "tuningCents": 0
+                }
+              },
+              "warp": {
+                "enabled": false,
+                "preservePitch": true,
+                "mode": 4,
+                "baselineDurationSeconds": 0,
+                "sensitivity": 50,
+                "markers": []
+              }
+            }
+          }
+        ],
+        "versionId": "00000000-0000-4000-8000-000000000083",
+        "injection": {
+          "stage": "none",
+          "anchorChannelId": ""
+        }
+      },
+      "preconditions": [],
+      "touchedFields": [
+        "project:renderGeneration"
+      ]
+    }
+  ]
+}

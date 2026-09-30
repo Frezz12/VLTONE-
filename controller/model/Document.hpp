@@ -666,6 +666,9 @@ struct InsertModel {
     std::string name;              ///< display name; survives even a free slot
     bool bypassed = false;
 
+    /// Edge-only readiness flag: never serialized into a project or command.
+    bool runtimeStateBlocked = false;
+
     PluginFormat format = PluginFormat::None;
     std::string uid;               ///< resolved before `path`, so a moved plugin still loads
     std::string path;              ///< last known module location
@@ -702,6 +705,7 @@ struct InsertModel {
     /// Exact product/state compatibility. `path` remains a per-machine lookup
     /// hint; these values are the durable shared requirements.
     std::string pluginVersion;
+    std::string parameterFingerprint;
     int stateSchemaVersion = 0;
     AssetRef stateAsset;
     AssetRef rightStateAsset;
@@ -736,7 +740,8 @@ struct TrackFreezeState {
     double sampleRate = 0.0;
     // Runtime validation, rebuilt after resolving portable media on load.
     std::string sourceFingerprint;
-    bool active() const { return !filePath.empty(); }
+    AssetRef asset;
+    bool active() const { return !filePath.empty() || !asset.empty(); }
 };
 
 struct TrackModel {

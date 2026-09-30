@@ -52,9 +52,17 @@ string(REGEX REPLACE "//[^\r\n]*" ""
 # method identifier before the first top-level body/semicolon.
 macro(vlt_consider_engine_controller_declaration VLT_DECLARATION)
     string(STRIP "${VLT_DECLARATION}" VLT_DECLARATION_STRIPPED)
+    # A callable data member has parentheses inside std::function<...>, but
+    # does not declare an EngineController method. Remove balanced template
+    # argument groups before looking for the method's own parameter list.
+    set(VLT_METHOD_DECLARATION "${VLT_DECLARATION_STRIPPED}")
+    while(VLT_METHOD_DECLARATION MATCHES "<[^<>]*>")
+        string(REGEX REPLACE "<[^<>]*>" "" VLT_METHOD_DECLARATION
+               "${VLT_METHOD_DECLARATION}")
+    endwhile()
     if(NOT VLT_DECLARATION_STRIPPED MATCHES "^(using|typedef|struct|class|enum)([ \t\r\n]|$)")
         string(REGEX MATCH "[A-Za-z_~][A-Za-z0-9_~]*[ \t\r\n]*\\("
-               VLT_METHOD_TOKEN "${VLT_DECLARATION_STRIPPED}")
+               VLT_METHOD_TOKEN "${VLT_METHOD_DECLARATION}")
         if(VLT_METHOD_TOKEN)
             string(REGEX REPLACE "[ \t\r\n]*\\($" "" VLT_METHOD_NAME
                    "${VLT_METHOD_TOKEN}")
@@ -124,7 +132,7 @@ if(VLT_MUTATION_LEDGER_TEXT MATCHES "Unclassified")
         "Collaboration release gate failed: capability ledger contains Unclassified")
 endif()
 string(REGEX MATCHALL
-       "VLT_MUTATION\\([A-Za-z_][A-Za-z0-9_]*, (SharedCommand|LocalOnly|BlockedV1)\\)"
+       "VLT_MUTATION\\([A-Za-z_][A-Za-z0-9_]*, (SharedCommand|SessionAction|LocalOnly|BlockedV1)\\)"
        VLT_MUTATION_ROWS "${VLT_MUTATION_LEDGER_TEXT}")
 string(REGEX MATCHALL "VLT_MUTATION\\(" VLT_LEDGER_ROW_PREFIXES
        "${VLT_MUTATION_LEDGER_TEXT}")
@@ -194,7 +202,7 @@ if(VLT_STALE_GETTER_EXCEPTIONS)
         "${VLT_STALE_GETTER_TEXT}")
 endif()
 
-foreach(VLT_CAPABILITY SharedCommand LocalOnly BlockedV1)
+foreach(VLT_CAPABILITY SharedCommand SessionAction LocalOnly BlockedV1)
     if(NOT VLT_MUTATION_LEDGER_TEXT MATCHES
        "VLT_MUTATION\\([^,]+, ${VLT_CAPABILITY}\\)")
         message(FATAL_ERROR

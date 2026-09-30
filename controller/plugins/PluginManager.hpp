@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -95,6 +96,11 @@ public:
     std::vector<plugins::PluginDescriptor> plugins() const;
     std::vector<plugins::PluginDescriptor> effects() const;
     std::vector<plugins::PluginDescriptor> instruments() const;
+    void setParameterFingerprintFunction(std::function<std::string(std::string_view)> fingerprint) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_parameterFingerprint = std::move(fingerprint);
+        m_catalogueRevision.fetch_add(1, std::memory_order_release);
+    }
     /// Stable cache identity for UI presentation models. The instance id
     /// prevents an allocator-reused address from reviving another manager's
     /// menu, while the revision changes whenever visible catalogue data does.
@@ -120,6 +126,13 @@ public:
     /// Control thread; opens the module, so it may block for a while.
     std::unique_ptr<plugins::PluginInstance> instantiate(
         const plugins::PluginDescriptor& descriptor);
+    /// Worker thread only. Runs native state loading in disposable daw_scan;
+    /// empty result means success, otherwise a concrete diagnostic. This never
+    /// permits a different version or claims portable external sample content.
+    std::string probeSharedState(const plugins::PluginDescriptor& descriptor,
+        const std::string& absoluteStatePath, double sampleRate = 48000.0) const;
+    std::function<std::string()> sharedStateProbe(plugins::PluginDescriptor descriptor,
+        std::string absoluteStatePath, double sampleRate = 48000.0) const;
 
 private:
     struct Candidate {
@@ -140,6 +153,7 @@ private:
     /// and both do so far too rarely for the lock to matter.
     mutable std::mutex m_mutex;
     PluginCache m_cache;
+    std::function<std::string(std::string_view)> m_parameterFingerprint;
 
     std::thread m_worker;
     std::atomic<bool> m_scanning{false};

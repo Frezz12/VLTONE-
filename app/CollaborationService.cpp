@@ -322,7 +322,24 @@ CollaborationService::CollaborationService(account::Service* account,
     qRegisterMetaType<SnapshotRequest>();
     qRegisterMetaType<WireEnvelope>();
     m_monotonicClock.start();
+    m_clockEpochMs = nowMs();
     m_lastTransportSent.start();
+    auto* controlTimer = new QTimer(this);
+    controlTimer->setInterval(1000);
+    connect(controlTimer, &QTimer::timeout, this, [this] {
+        if (hashRoundInFlight() && m_hashRoundDeadlineMs <= estimatedServerTimeMs()) {
+            clearHashRound();
+            trustedResyncRequired(false, false, tr("State verification timed out. Reconnect to retry."));
+        }
+        if (!isOnline() || m_commandSchemaVersion < 6) return;
+        sendPendingControl();
+        const qint64 current = m_clockEpochMs + m_monotonicClock.elapsed();
+        if (current - m_clockPingAt >= 5000) {
+            m_clockPingAt = current;
+            sendEnvelope(WireType::ClockPing, {{QStringLiteral("clientSentAtMs"), double(current)}});
+        }
+    });
+    controlTimer->start();
     if (m_account) {
         connect(m_account, &account::Service::authenticatedChanged, this,
                 [this](bool) { refreshAccountState(); });
@@ -350,9 +367,9 @@ bool CollaborationService::setCommandSchemaVersion(int version) {
     if (version == m_commandSchemaVersion) return true;
     m_commandSchemaVersion = version;
     m_transportConnected = false;
+    clearSessionControl();
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
+    clearHashRound();
     emit commandSchemaVersionChanged(version);
     emit roomIdentityChanged({}, {}, {});
     if (m_shouldConnect && !m_projectId.isEmpty()) reconnectNow();
@@ -368,13 +385,11 @@ void CollaborationService::setProjectId(const QString& projectId,
     if (safe == m_projectId && requestConnection == m_shouldConnect) return;
     m_projectId = safe;
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
-    m_hashRoundServerSequence = 0;
-    m_hashRoundDeadlineMs = 0;
+    clearHashRound();
     m_bootstrapServerSequence = 0;
     m_bootstrapStateHash.clear();
     m_transportConnected = false;
+    clearSessionControl();
     m_sessionReadOnly = false;
     m_pendingRecoveryBlocked = false;
     m_resyncPending = false;
@@ -390,14 +405,12 @@ void CollaborationService::setProjectId(const QString& projectId,
 void CollaborationService::clearProject() {
     m_projectId.clear();
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
-    m_hashRoundServerSequence = 0;
-    m_hashRoundDeadlineMs = 0;
+    clearHashRound();
     m_bootstrapServerSequence = 0;
     m_bootstrapStateHash.clear();
     m_shouldConnect = false;
     m_transportConnected = false;
+    clearSessionControl();
     m_sessionReadOnly = false;
     m_pendingRecoveryBlocked = false;
     m_resyncPending = false;
@@ -417,11 +430,9 @@ void CollaborationService::reconnectNow() {
     }
     m_shouldConnect = true;
     m_transportConnected = false;
+    clearSessionControl();
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
-    m_hashRoundServerSequence = 0;
-    m_hashRoundDeadlineMs = 0;
+    clearHashRound();
     m_sessionReadOnly = false;
     m_resyncPending = false;
     m_authorizationRequested = false;
@@ -434,14 +445,12 @@ void CollaborationService::reconnectNow() {
 void CollaborationService::disconnectFromProject() {
     m_shouldConnect = false;
     m_transportConnected = false;
+    clearSessionControl();
     m_sessionReadOnly = false;
     m_resyncPending = false;
     m_authorizationRequested = false;
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
-    m_hashRoundServerSequence = 0;
-    m_hashRoundDeadlineMs = 0;
+    clearHashRound();
     m_presenceStore.clear();
     m_localSessionState.setHostParticipantId({});
     emit roomIdentityChanged({}, {}, {});
@@ -520,13 +529,11 @@ void CollaborationService::trustedTransportConnected() {
 void CollaborationService::trustedTransportDisconnected(
     const QString& safeReason) {
     m_transportConnected = false;
+    clearSessionControl();
     m_transportSent = false;
     m_presenceStore.clear();
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
-    m_hashRoundServerSequence = 0;
-    m_hashRoundDeadlineMs = 0;
+    clearHashRound();
     m_localSessionState.setHostParticipantId({});
     emit roomIdentityChanged({}, {}, {});
     if (!m_shouldConnect) {
@@ -544,13 +551,11 @@ void CollaborationService::trustedTransportDisconnected(
 void CollaborationService::trustedTransportUnavailable(
     const QString& safeReason) {
     m_transportConnected = false;
+    clearSessionControl();
     m_transportSent = false;
     m_presenceStore.clear();
     m_sessionId.clear();
-    m_hashRoundId.clear();
-    m_hashRoundSessionId.clear();
-    m_hashRoundServerSequence = 0;
-    m_hashRoundDeadlineMs = 0;
+    clearHashRound();
     m_localSessionState.setHostParticipantId({});
     emit roomIdentityChanged({}, {}, {});
     // Keep authorization latched until reconnectNow() so a permanent endpoint
@@ -560,6 +565,15 @@ void CollaborationService::trustedTransportUnavailable(
         ? tr("Collaboration transport is unavailable")
         : safeDisplayName(safeReason);
     setState(CollaborationState::Unavailable, detail);
+}
+
+void CollaborationService::trustedSessionExcluded(const QString& action) {
+    if (action != QLatin1String("kick") && action != QLatin1String("ban")) return;
+    emit localSessionExcluded(action);
+    m_shouldConnect = false;
+    trustedTransportUnavailable(action == QLatin1String("ban")
+        ? tr("The project owner blocked your access to this project.")
+        : tr("The project owner removed you from this session."));
 }
 
 void CollaborationService::trustedResyncRequired(
@@ -598,6 +612,7 @@ void CollaborationService::trustedOfflineProjectOpened() {
     if (m_projectId.isEmpty()) return;
     m_shouldConnect = false;
     m_transportConnected = false;
+    clearSessionControl();
     m_sessionReadOnly = true;
     m_resyncPending = false;
     m_authorizationRequested = false;
@@ -637,6 +652,7 @@ void CollaborationService::refreshAccountState() {
     }
     if (!m_account || !m_account->authenticated()) {
         m_transportConnected = false;
+    clearSessionControl();
         m_authorizationRequested = false;
         m_presenceStore.clear();
         setState(CollaborationState::SignedOut, tr("Sign in to collaborate"));
@@ -644,6 +660,7 @@ void CollaborationService::refreshAccountState() {
     }
     if (m_account->snapshot().offline) {
         m_transportConnected = false;
+    clearSessionControl();
         m_authorizationRequested = false;
         m_presenceStore.clear();
         setState(CollaborationState::NoConnection,
@@ -716,12 +733,16 @@ bool CollaborationService::sendEnvelope(WireType type,
 
 bool CollaborationService::canSubmitOperations() const {
     return m_transportConnected && m_state == CollaborationState::Synced &&
-           !m_pendingRecoveryBlocked;
+           !m_sessionReadOnly && !m_resyncPending && !m_pendingRecoveryBlocked && (m_commandSchemaVersion < 6 ||
+           (m_control.sessionVersion > 0 && (m_localRole == QLatin1String("owner") || m_localRole == QLatin1String("editor")) && (m_control.mode != QLatin1String("follow_host") ||
+            m_control.hostMemberId == localParticipantId())));
 }
 
 bool CollaborationService::canSubmitRecoveryOperations() const {
     return m_transportConnected && m_state == CollaborationState::Synced &&
-           m_pendingRecoveryBlocked;
+           !m_sessionReadOnly && !m_resyncPending && m_pendingRecoveryBlocked && (m_commandSchemaVersion < 6 ||
+           (m_control.sessionVersion > 0 && (m_localRole == QLatin1String("owner") || m_localRole == QLatin1String("editor")) && (m_control.mode != QLatin1String("follow_host") ||
+            m_control.hostMemberId == localParticipantId())));
 }
 
 void CollaborationService::setPendingRecoveryBlocked(bool blocked) {
@@ -734,15 +755,128 @@ void CollaborationService::setPendingRecoveryBlocked(bool blocked) {
 
 bool CollaborationService::submitOperation(const QJsonObject& command) {
     if (!canSubmitOperations() || command.isEmpty()) return false;
-    return sendEnvelope(WireType::OpSubmit,
-                        QJsonObject{{QStringLiteral("command"), command}});
+    QJsonObject payload{{QStringLiteral("command"), command}};
+    if (m_commandSchemaVersion >= 6) payload.insert(QStringLiteral("sessionVersion"), double(m_control.sessionVersion));
+    return sendEnvelope(WireType::OpSubmit, payload);
 }
 
 bool CollaborationService::submitRecoveryOperation(
     const QJsonObject& command) {
     if (!canSubmitRecoveryOperations() || command.isEmpty()) return false;
-    return sendEnvelope(WireType::OpSubmit,
-                        QJsonObject{{QStringLiteral("command"), command}});
+    QJsonObject payload{{QStringLiteral("command"), command}};
+    if (m_commandSchemaVersion >= 6) payload.insert(QStringLiteral("sessionVersion"), double(m_control.sessionVersion));
+    return sendEnvelope(WireType::OpSubmit, payload);
+}
+
+bool CollaborationService::canControlSession() const {
+    return m_commandSchemaVersion >= 6 && hasSharedTransport() &&
+        isOnline() && !m_sessionReadOnly && !m_resyncPending && !m_pendingRecoveryBlocked &&
+        m_control.sessionVersion > 0 && (m_localRole == QLatin1String("owner") || m_localRole == QLatin1String("editor")) &&
+        (m_control.mode == QLatin1String("synchronized") ||
+         m_control.hostMemberId == localParticipantId()) && m_state == CollaborationState::Synced;
+}
+
+bool CollaborationService::canChangeSessionMode() const {
+    return m_commandSchemaVersion >= 6 && isOnline() && m_state == CollaborationState::Synced &&
+        !m_sessionReadOnly && !m_resyncPending && !m_pendingRecoveryBlocked &&
+        m_control.sessionVersion > 0 &&
+        (m_localRole == QLatin1String("owner") || m_localRole == QLatin1String("editor")) &&
+        (mayModerate() || m_control.hostMemberId == localParticipantId());
+}
+
+qint64 CollaborationService::estimatedServerTimeMs() const {
+    return m_clockEpochMs + m_monotonicClock.elapsed() + m_serverClockOffsetMs;
+}
+
+bool CollaborationService::submitSessionControl(const QString& kind, const QJsonObject& values) {
+    if (!canControlSession() || m_pendingControls.size() >= 64) return false;
+    const auto number = [&values](const QString& key, double low, double high) {
+        const auto value = values.value(key);
+        return value.isDouble() && std::isfinite(value.toDouble()) &&
+               value.toDouble() >= low && value.toDouble() <= high;
+    };
+    QStringList allowed{QStringLiteral("positionSeconds"), QStringLiteral("rate")};
+    if (kind == QLatin1String("audition")) {
+        allowed = {QStringLiteral("trackId"), QStringLiteral("muted"), QStringLiteral("solo")};
+        if (canonicalUuid(values.value(QStringLiteral("trackId"))).isEmpty() ||
+            (!values.contains(QStringLiteral("muted")) && !values.contains(QStringLiteral("solo")))) return false;
+        for (const auto& key : {QStringLiteral("muted"), QStringLiteral("solo")})
+            if (values.contains(key) && !values.value(key).isBool()) return false;
+    } else {
+        if (kind != QLatin1String("play") && kind != QLatin1String("pause") &&
+            kind != QLatin1String("stop") && kind != QLatin1String("seek") &&
+            kind != QLatin1String("loop")) return false;
+        if ((kind == QLatin1String("seek") || values.contains(QStringLiteral("positionSeconds"))) &&
+            !number(QStringLiteral("positionSeconds"), 0, 1e9)) return false;
+        if (values.contains(QStringLiteral("rate")) && !number(QStringLiteral("rate"), .25, 4)) return false;
+        if (kind == QLatin1String("loop")) {
+            allowed += {QStringLiteral("loopEnabled"), QStringLiteral("loopStartSeconds"), QStringLiteral("loopEndSeconds")};
+            if (!values.value(QStringLiteral("loopEnabled")).isBool() ||
+                !number(QStringLiteral("loopStartSeconds"), 0, 1e9) || !number(QStringLiteral("loopEndSeconds"), 0, 1e9) ||
+                (values.value(QStringLiteral("loopEnabled")).toBool() &&
+                 values.value(QStringLiteral("loopEndSeconds")).toDouble() <= values.value(QStringLiteral("loopStartSeconds")).toDouble())) return false;
+        }
+    }
+    for (auto it = values.begin(); it != values.end(); ++it)
+        if (!allowed.contains(it.key())) return false;
+    QJsonObject action = values;
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    action.insert(QStringLiteral("actionId"), id);
+    action.insert(QStringLiteral("kind"), kind);
+    action.insert(QStringLiteral("expectedSessionVersion"), double(m_control.sessionVersion));
+    m_pendingControls.push_back(action);
+    if (m_pendingControls.size() == 1) sendPendingControl();
+    return true;
+}
+
+void CollaborationService::sendPendingControl() {
+    if (canControlSession() && !m_pendingControls.isEmpty())
+        sendEnvelope(WireType::SessionControl, m_pendingControls.front());
+}
+
+bool CollaborationService::acknowledgeControl(const QString& actionId) {
+    if (actionId.isEmpty() || m_pendingControls.isEmpty() ||
+        m_pendingControls.front().value(QStringLiteral("actionId")).toString() != actionId) return false;
+    m_pendingControls.removeFirst();
+    return true;
+}
+
+void CollaborationService::clearHashRound() {
+    const bool active = hashRoundInFlight();
+    m_hashRoundId.clear();
+    m_hashRoundSessionId.clear();
+    m_hashRoundServerSequence = 0;
+    m_hashRoundDeadlineMs = 0;
+    if (active) emit hashRoundChanged(false);
+}
+
+void CollaborationService::clearSessionControl() {
+    m_pendingControls.clear();
+    m_readinessRevisions.clear();
+    m_requirementsRevision = 0;
+    m_control = {};
+    m_ownerUserId.clear();
+    m_localRole.clear();
+    m_clockPingAt = 0;
+    m_serverClockOffsetMs = 0;
+    m_bestClockRttMs = 60000;
+    m_localSessionState.useIndependentTransport();
+    emit sessionControlChanged();
+}
+
+bool CollaborationService::installSessionControl(const QJsonObject& json) {
+    const auto next = sessionControlFromJson(json);
+    if (!next || next->sessionVersion < m_control.sessionVersion ||
+        (next->sessionVersion == m_control.sessionVersion &&
+         (next->transportRevision < m_control.transportRevision || next->auditionRevision < m_control.auditionRevision))) return false;
+    if (next->sessionVersion != m_control.sessionVersion) m_pendingControls.clear();
+    const bool hostChanged = next->hostMemberId != m_control.hostMemberId;
+    m_control = *next;
+    m_localSessionState.setHostParticipantId(m_control.hostMemberId);
+    if (hostChanged) emit roomIdentityChanged(m_sessionId, localParticipantId(), m_control.hostMemberId);
+    emit sessionControlChanged();
+    emit stateChanged(m_state, m_stateDetail);
+    return true;
 }
 
 void CollaborationService::sendPresence(const PresencePacket& packet) {
@@ -783,6 +917,7 @@ void CollaborationService::sendPresence(const PresencePacket& packet) {
 
 void CollaborationService::sendTransport(const TransportFrame& frame) {
     if (!isOnline()) return;
+    if (m_commandSchemaVersion >= 6) return;
     const bool stateTransition = !m_transportSent ||
                                  frame.playing != m_lastTransportPlaying;
     if (!stateTransition && m_lastTransportSent.elapsed() < 100) return;
@@ -813,13 +948,14 @@ bool CollaborationService::acceptHashRound(const QJsonObject& payload) {
     if (roundId.isEmpty() || sessionId.isEmpty() ||
         sessionId != m_sessionId || !serverSequence || !deadline ||
         *deadline > quint64(std::numeric_limits<qint64>::max()) ||
-        qint64(*deadline) <= nowMs()) {
+        qint64(*deadline) <= estimatedServerTimeMs()) {
         return false;
     }
     m_hashRoundId = roundId;
     m_hashRoundSessionId = sessionId;
     m_hashRoundServerSequence = *serverSequence;
     m_hashRoundDeadlineMs = qint64(*deadline);
+    emit hashRoundChanged(true);
     if (*serverSequence != m_bootstrapServerSequence) {
         trustedResyncRequired(false, false,
                               tr("Refreshing project for hash verification"));
@@ -840,7 +976,7 @@ void CollaborationService::requestOrSendRoundHash() {
     if (m_hashRoundId.isEmpty() ||
         m_hashRoundSessionId != m_sessionId ||
         m_hashRoundServerSequence != m_bootstrapServerSequence ||
-        m_hashRoundDeadlineMs <= nowMs()) {
+        m_hashRoundDeadlineMs <= estimatedServerTimeMs()) {
         return;
     }
     if (!m_bootstrapStateHash.isEmpty()) {
@@ -857,7 +993,7 @@ bool CollaborationService::sendSnapshotHash() {
         m_hashRoundId.isEmpty() ||
         m_hashRoundSessionId != m_sessionId ||
         m_hashRoundServerSequence != m_bootstrapServerSequence ||
-        m_hashRoundDeadlineMs <= nowMs()) return false;
+        m_hashRoundDeadlineMs <= estimatedServerTimeMs()) return false;
     return sendEnvelope(
         WireType::SnapshotHash,
         QJsonObject{
@@ -878,6 +1014,69 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         emit protocolWarning(
             tr("Unsupported collaboration message: %1").arg(envelope.typeName));
         return;
+    }
+    if (envelope.type == WireType::ClockPong) {
+        if (m_commandSchemaVersion < 6 || envelope.payload.size() != 2 ||
+            !envelope.participantId.isEmpty()) return;
+        const auto sent = exactSequence(envelope.payload.value(QStringLiteral("clientSentAtMs")));
+        const auto server = exactSequence(envelope.payload.value(QStringLiteral("serverTimeMs")));
+        const qint64 current = m_clockEpochMs + m_monotonicClock.elapsed();
+        if (sent && server && *sent > 0 && qint64(*sent) == m_clockPingAt) {
+            const qint64 rtt = current - qint64(*sent);
+            if (rtt >= 0 && rtt < 10000 && rtt <= m_bestClockRttMs + 20) {
+                m_bestClockRttMs = std::min(m_bestClockRttMs, rtt);
+                m_serverClockOffsetMs = qint64(*server) - (qint64(*sent) + rtt / 2);
+            }
+        }
+        return;
+    }
+    if (envelope.type == WireType::SessionControlChanged || envelope.type == WireType::SessionModeChanged ||
+        envelope.type == WireType::SessionParticipantModerated ||
+        (envelope.type == WireType::SessionHostChanged && m_commandSchemaVersion >= 6)) {
+        if (m_commandSchemaVersion < 6 || !envelope.participantId.isEmpty() || m_sessionId.isEmpty()) return;
+        const auto control = envelope.payload.value(QStringLiteral("control")).toObject();
+        if (!sessionControlFromJson(control)) {
+            emit protocolWarning(tr("Ignored invalid session control"));
+            return;
+        }
+        const bool acknowledged = acknowledgeControl(envelope.payload.value(QStringLiteral("actionId")).toString());
+        installSessionControl(control); // Older duplicate receipts still acknowledge their action.
+        if (envelope.type == WireType::SessionParticipantModerated) {
+            const QString action = envelope.payload.value(QStringLiteral("action")).toString();
+            const QString target = canonicalUuid(envelope.payload.value(QStringLiteral("targetUserId")));
+            if (!target.isEmpty() && target == accountUserId() &&
+                (action == QLatin1String("kick") || action == QLatin1String("ban"))) {
+                trustedSessionExcluded(action);
+                return;
+            }
+        }
+        if (acknowledged) sendPendingControl();
+        return;
+    }
+    if (envelope.type == WireType::SessionRequirementsChanged) {
+        const auto revision = exactSequence(envelope.payload.value(QStringLiteral("pluginRequirementsRevision")));
+        if (m_commandSchemaVersion < 6 || !envelope.participantId.isEmpty() || m_sessionId.isEmpty() ||
+            !revision || *revision <= m_requirementsRevision || !envelope.payload.value(QStringLiteral("pluginRequirements")).isArray() ||
+            !installSessionControl(envelope.payload.value(QStringLiteral("control")).toObject())) return;
+        m_requirementsRevision = *revision;
+        m_pendingControls.clear();
+        m_sessionReadOnly = true;
+        setState(CollaborationState::ReadOnly, tr("Checking updated plugin requirements"));
+        emit liveSessionRequirementsChanged(m_sessionId, qint64(*revision));
+        return;
+    }
+    if (envelope.type == WireType::SessionCatalogChanged) {
+        emit pluginCatalogChanged(envelope.payload);
+        return;
+    }
+    if (envelope.type == WireType::OpRejected) {
+        const QString actionId = envelope.payload.value(QStringLiteral("actionId")).toString();
+        if (acknowledgeControl(actionId)) {
+            emit sessionActionRejected(safeDisplayName(envelope.payload.value(QStringLiteral("message")).toString()));
+            emit sessionControlChanged();
+            m_pendingControls.clear();
+            return;
+        }
     }
     if (envelope.type == WireType::Welcome) {
         const auto headSequence = exactSequence(
@@ -903,6 +1102,7 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         const auto local = participantFromJson(
             envelope.payload.value(QStringLiteral("participant")).toObject());
         if (local) {
+            m_localRole = local->role;
             bool present = false;
             for (const ParticipantIdentity& participant : participants)
                 present = present ||
@@ -911,9 +1111,22 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             m_presenceStore.setLocalParticipantId(local->participantId);
         }
         m_presenceStore.replaceParticipants(participants);
-        m_localSessionState.setHostParticipantId(schemaId(
-            envelope.payload.value(QStringLiteral("hostParticipantId")).toString(),
-            64));
+        m_ownerUserId = envelope.payload.value(QStringLiteral("ownerUserId")).toString();
+        m_requirementsRevision = exactSequence(envelope.payload.value(QStringLiteral("pluginRequirementsRevision"))).value_or(0);
+        if (m_commandSchemaVersion >= 6) {
+            m_control = {};
+            if (!installSessionControl(envelope.payload.value(QStringLiteral("control")).toObject())) {
+                trustedTransportUnavailable(tr("Server omitted valid session control state"));
+                return;
+            }
+            // Initial server time handles wall-clock skew before RTT refinement.
+            m_serverClockOffsetMs = envelope.serverTimeMs - (m_clockEpochMs + m_monotonicClock.elapsed());
+            m_clockPingAt = m_clockEpochMs + m_monotonicClock.elapsed();
+            sendEnvelope(WireType::ClockPing, {{QStringLiteral("clientSentAtMs"), double(m_clockPingAt)}});
+        }
+        if (m_commandSchemaVersion < 6)
+            m_localSessionState.setHostParticipantId(schemaId(
+                envelope.payload.value(QStringLiteral("hostParticipantId")).toString(), 64));
         emit roomIdentityChanged(
             m_sessionId, m_presenceStore.localParticipantId(),
             m_localSessionState.hostParticipantId());
@@ -992,10 +1205,7 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             emit protocolWarning(tr("Invalid hash verification result"));
             return;
         }
-        m_hashRoundId.clear();
-        m_hashRoundSessionId.clear();
-        m_hashRoundServerSequence = 0;
-        m_hashRoundDeadlineMs = 0;
+        clearHashRound();
         if (!m_sessionReadOnly && !m_resyncPending) {
             setState(CollaborationState::Synced, tr("Session synced"));
         }
@@ -1043,6 +1253,27 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
             emit protocolWarning(tr("Invalid plugin readiness update"));
             return;
         }
+        if (*revision < m_requirementsRevision ||
+            *revision < m_readinessRevisions.value(participantId, 0)) return;
+        m_readinessRevisions.insert(participantId, *revision);
+        if (auto participant = m_presenceStore.participantById(participantId)) {
+            participant->role = effectiveRole;
+            m_presenceStore.upsertParticipant(*participant);
+        }
+        if (participantId == localParticipantId()) {
+            m_localRole = effectiveRole;
+            const bool writable = readinessStatus == QLatin1String("ready") &&
+                (effectiveRole == QLatin1String("owner") || effectiveRole == QLatin1String("editor"));
+            m_sessionReadOnly = !writable;
+            if (!writable) {
+                m_pendingControls.clear();
+                clearHashRound();
+                setState(CollaborationState::ReadOnly, tr("Plugin compatibility must be resolved"));
+            } else if (m_state == CollaborationState::ReadOnly) {
+                setState(CollaborationState::Joining, tr("Verifying shared project state"));
+            }
+            emit stateChanged(m_state, m_stateDetail);
+        }
         emit participantReadinessChanged(
             participantId, effectiveRole, readinessStatus, qint64(*revision));
         return;
@@ -1086,13 +1317,11 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         const QString endedSessionId = m_sessionId;
         m_shouldConnect = false;
         m_transportConnected = false;
+    clearSessionControl();
         m_sessionReadOnly = false;
         m_resyncPending = false;
         m_sessionId.clear();
-        m_hashRoundId.clear();
-        m_hashRoundSessionId.clear();
-        m_hashRoundServerSequence = 0;
-        m_hashRoundDeadlineMs = 0;
+        clearHashRound();
         m_presenceStore.clear();
         m_localSessionState.setHostParticipantId({});
         emit roomIdentityChanged({}, {}, {});
@@ -1114,6 +1343,9 @@ void CollaborationService::handleEnvelope(const WireEnvelope& envelope) {
         return;
     }
     if (envelope.type == WireType::TransportState) {
+        // v6 playback has one server-authoritative control revision. A legacy
+        // presence frame must never bypass its policy or scheduled clock.
+        if (m_commandSchemaVersion >= 6 || !isOnline()) return;
         TransportFrame frame;
         frame.participantId = envelope.participantId;
         frame.positionSeconds = std::max(
@@ -1289,6 +1521,161 @@ bool checkCollaborationPresenceSafetyForTest(QString* error) {
     localSession.noteLocalTransportInteraction();
     if (localSession.transportMode() != TransportMode::Independent)
         return fail(QStringLiteral("local transport did not leave follow mode"));
+
+    QJsonObject control = QJsonDocument::fromJson(R"({
+      "mode":"synchronized","sessionVersion":1,
+      "hostMemberId":"00000000-0000-4000-8000-000000000001",
+      "transport":{"revision":0,"playing":false,"positionSeconds":0,"rate":1,
+        "serverTimeMs":1000,"effectiveAtServerMs":1000,"loopEnabled":false,
+        "loopStartSeconds":0,"loopEndSeconds":0},
+      "audition":{"revision":0,"mutedTrackIds":[],"soloTrackIds":[]}
+    })").object();
+    if (!sessionControlFromJson(control)) return fail(QStringLiteral("valid v6 control rejected"));
+    for (const QString& field : {QStringLiteral("rate"), QStringLiteral("playing"), QStringLiteral("serverTimeMs")}) {
+        auto invalid = control;
+        auto transport = invalid.value(QStringLiteral("transport")).toObject();
+        transport.remove(field);
+        invalid.insert(QStringLiteral("transport"), transport);
+        if (sessionControlFromJson(invalid)) return fail(QStringLiteral("missing control fields were silently defaulted"));
+    }
+    auto invalidControl = control;
+    auto invalidTransport = control.value(QStringLiteral("transport")).toObject();
+    invalidTransport.insert(QStringLiteral("rate"), QStringLiteral("1"));
+    invalidControl.insert(QStringLiteral("transport"), invalidTransport);
+    if (sessionControlFromJson(invalidControl)) return fail(QStringLiteral("string playback rate accepted"));
+    invalidControl = control;
+    invalidControl.insert(QStringLiteral("hostMemberId"), QStringLiteral(""));
+    if (sessionControlFromJson(invalidControl)) return fail(QStringLiteral("empty host id accepted instead of null"));
+
+    CollaborationService service(nullptr);
+    service.m_projectId = QStringLiteral("00000000-0000-4000-8000-000000000010");
+    service.m_sessionId = QStringLiteral("00000000-0000-4000-8000-000000000011");
+    service.m_presenceStore.setLocalParticipantId(QStringLiteral("00000000-0000-4000-8000-000000000002"));
+    service.m_transportConnected = true;
+    service.m_state = CollaborationState::Synced;
+    service.m_localRole = QStringLiteral("editor");
+    if (!service.installSessionControl(control)) return fail(QStringLiteral("initial control not installed"));
+    const QString originalHost = service.m_control.hostMemberId;
+    service.m_control.hostMemberId = service.localParticipantId();
+    service.m_localRole = QStringLiteral("owner");
+    if (!service.canChangeSessionMode()) return fail(QStringLiteral("ready conductor cannot change the session mode"));
+    service.m_sessionReadOnly = true;
+    if (service.canChangeSessionMode()) return fail(QStringLiteral("read-only conductor can change session mode"));
+    service.m_sessionReadOnly = false;
+    service.m_state = CollaborationState::Joining;
+    if (service.canChangeSessionMode()) return fail(QStringLiteral("unready conductor can change session mode"));
+    service.m_state = CollaborationState::Synced;
+    service.m_localRole.clear();
+    if (service.canChangeSessionMode()) return fail(QStringLiteral("unknown role can change session mode"));
+    service.m_localRole = QStringLiteral("editor");
+    service.m_control.hostMemberId = originalHost;
+    int legacyAccepted = 0;
+    QObject::connect(&service.m_localSessionState, &LocalSessionState::remoteTransportAccepted,
+                     &service, [&](const TransportFrame&) { ++legacyAccepted; });
+    service.m_localSessionState.setHostParticipantId(originalHost);
+    service.m_localSessionState.followHost();
+    WireEnvelope legacyFrame;
+    legacyFrame.type = WireType::TransportState;
+    legacyFrame.participantId = originalHost;
+    legacyFrame.sentAtMs = 1000;
+    legacyFrame.payload = {{QStringLiteral("positionSeconds"), 4}, {QStringLiteral("playing"), true}};
+    service.handleEnvelope(legacyFrame);
+    if (legacyAccepted != 0) return fail(QStringLiteral("legacy frame bypassed v6 transport control"));
+    service.m_commandSchemaVersion = 5;
+    legacyFrame.protocol = service.protocolName();
+    service.handleEnvelope(legacyFrame);
+    if (legacyAccepted != 1) return fail(QStringLiteral("legacy transport compatibility was removed"));
+    service.m_commandSchemaVersion = 6;
+    service.m_localSessionState.useIndependentTransport();
+    QList<QJsonObject> sentControls;
+    QObject::connect(&service, &CollaborationService::outboundTextMessage, &service, [&](const QString& message) {
+        const auto json = QJsonDocument::fromJson(message.toUtf8()).object();
+        if (json.value(QStringLiteral("type")).toString() == QLatin1String("session.control"))
+            sentControls.push_back(json.value(QStringLiteral("payload")).toObject());
+    });
+    if (!service.submitSessionControl(QStringLiteral("play")) ||
+        !service.submitSessionControl(QStringLiteral("stop")) ||
+        !service.submitSessionControl(QStringLiteral("seek"), {{QStringLiteral("positionSeconds"), 12.5}}) ||
+        sentControls.size() != 1 || service.m_pendingControls.size() != 3)
+        return fail(QStringLiteral("rapid transport gestures were not serialized"));
+    service.sendPendingControl();
+    if (sentControls.size() != 2 || sentControls[0] != sentControls[1])
+        return fail(QStringLiteral("transport retry changed action identity or overtook the queue"));
+    const auto acknowledge = [&](int revision) {
+        auto transport = control.value(QStringLiteral("transport")).toObject();
+        transport.insert(QStringLiteral("revision"), revision);
+        control.insert(QStringLiteral("transport"), transport);
+        WireEnvelope reply;
+        reply.type = WireType::SessionControlChanged;
+        reply.payload = {{QStringLiteral("actionId"), service.m_pendingControls.front().value(QStringLiteral("actionId"))},
+                         {QStringLiteral("control"), control}};
+        service.handleEnvelope(reply);
+        return reply;
+    };
+    auto firstReceipt = acknowledge(1);
+    if (sentControls.back().value(QStringLiteral("kind")).toString() != QLatin1String("stop"))
+        return fail(QStringLiteral("Stop did not follow acknowledged Play"));
+    acknowledge(2);
+    if (sentControls.back().value(QStringLiteral("kind")).toString() != QLatin1String("seek"))
+        return fail(QStringLiteral("Seek did not follow acknowledged Stop"));
+    acknowledge(3);
+    service.handleEnvelope(firstReceipt);
+    if (!service.m_pendingControls.isEmpty() || service.m_control.transportRevision != 3)
+        return fail(QStringLiteral("duplicate receipt rewound playback"));
+    if (service.submitSessionControl(QStringLiteral("seek"), {{QStringLiteral("positionSeconds"), -1}}))
+        return fail(QStringLiteral("negative seek was submitted"));
+    service.submitSessionControl(QStringLiteral("play"));
+    control.insert(QStringLiteral("sessionVersion"), 2);
+    control.insert(QStringLiteral("mode"), QStringLiteral("follow_host"));
+    service.installSessionControl(control);
+    if (!service.m_pendingControls.isEmpty() || service.canControlSession() || service.canSubmitOperations())
+        return fail(QStringLiteral("host-only policy left follower writes or stale controls enabled"));
+    control.insert(QStringLiteral("sessionVersion"), 3);
+    control.insert(QStringLiteral("mode"), QStringLiteral("synchronized"));
+    service.installSessionControl(control);
+
+    // An echoed ping uses elapsed time anchored once, not a moving wall clock.
+    service.m_clockPingAt = service.m_clockEpochMs + service.m_monotonicClock.elapsed() - 40;
+    WireEnvelope pong;
+    pong.type = WireType::ClockPong;
+    pong.payload = {{QStringLiteral("clientSentAtMs"), double(service.m_clockPingAt)},
+                    {QStringLiteral("serverTimeMs"), double(service.m_clockPingAt + 2020)}};
+    service.handleEnvelope(pong);
+    if (std::abs(service.m_serverClockOffsetMs - 2000) > 30 || service.m_bestClockRttMs > 100)
+        return fail(QStringLiteral("clock estimate ignored round-trip delay"));
+    const qint64 acceptedOffset = service.m_serverClockOffsetMs;
+    pong.payload.insert(QStringLiteral("clientSentAtMs"), double(service.m_clockPingAt - 1));
+    service.handleEnvelope(pong);
+    if (service.m_serverClockOffsetMs != acceptedOffset)
+        return fail(QStringLiteral("unsolicited clock echo changed the estimate"));
+
+    WireEnvelope readiness;
+    readiness.type = WireType::SessionReadinessChanged;
+    readiness.payload = {{QStringLiteral("participantId"), service.localParticipantId()},
+        {QStringLiteral("effectiveRole"), QStringLiteral("viewer")},
+        {QStringLiteral("readinessStatus"), QStringLiteral("blocked")},
+        {QStringLiteral("readinessRevision"), 2}};
+    service.handleEnvelope(readiness);
+    if (service.m_localRole != QLatin1String("viewer") || service.canSubmitOperations())
+        return fail(QStringLiteral("readiness revocation left local writes enabled"));
+    readiness.payload.insert(QStringLiteral("readinessRevision"), 1);
+    readiness.payload.insert(QStringLiteral("effectiveRole"), QStringLiteral("editor"));
+    readiness.payload.insert(QStringLiteral("readinessStatus"), QStringLiteral("ready"));
+    service.handleEnvelope(readiness);
+    if (service.m_localRole != QLatin1String("viewer"))
+        return fail(QStringLiteral("stale readiness promoted a blocked participant"));
+    service.m_localRole = QStringLiteral("editor");
+    service.m_sessionReadOnly = false;
+    service.m_state = CollaborationState::Synced;
+    service.submitSessionControl(QStringLiteral("play"));
+    service.trustedTransportDisconnected();
+    if (!service.m_pendingControls.isEmpty() || service.m_control.sessionVersion != 0 ||
+        service.m_serverClockOffsetMs != 0 || !service.m_localRole.isEmpty())
+        return fail(QStringLiteral("disconnect retained stale controls or authorization"));
+    const qsizetype sentBeforeLateReceipt = sentControls.size();
+    service.handleEnvelope(firstReceipt);
+    if (service.m_control.sessionVersion != 0 || sentControls.size() != sentBeforeLateReceipt)
+        return fail(QStringLiteral("late disconnected receipt revived an old session"));
     return true;
 }
 

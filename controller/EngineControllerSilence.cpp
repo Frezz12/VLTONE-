@@ -1,4 +1,6 @@
 #include "EngineController.hpp"
+#include "collaboration/ProjectReducer.hpp"
+#include "recovery/CloudRecordingRecovery.hpp"
 #include "model/ProjectMemory.hpp"
 #include "platform/PathUtils.hpp"
 
@@ -22,7 +24,7 @@ bool unchangedRegion(const std::vector<SilenceRegion>& regions, double duration)
 audio::Result EngineController::prepareStripSilence(const std::vector<ClipAddress>& clips,
     std::vector<StripSilenceSource>& sources) try {
     sources.clear();
-    if (cloudProjectBound()) return silenceFailure("Strip Silence is available in local projects.");
+    if (!sharedEditingAllowed()) return silenceFailure("This session is read-only.");
     if (isRecording()) return silenceFailure("Stop recording before processing audio clips.");
     if (clips.empty()) return silenceFailure("Select one or more audio clips.");
     flushDeferredClipSync();
@@ -80,7 +82,8 @@ audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSil
     const StripSilenceSettings& settings, std::vector<ClipAddress>& created,
     bool recordUndo, SilenceApplyMode mode) {
     created.clear();
-    if (cloudProjectBound()) return silenceFailure("Strip Silence is available in local projects.");
+    if (!sharedEditingAllowed()) return silenceFailure("This session is read-only.");
+    const auto sourceRevision = projectRevision();
     if (isRecording()) return silenceFailure("Stop recording before processing audio clips.");
     if (sources.empty() || sources.size() != regions.size()) return silenceFailure("Invalid silence analysis.");
     const auto options = sanitizedStripSilenceSettings(settings);
@@ -130,7 +133,7 @@ audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSil
     // Clip FX. Undo/redo restores exactly the same sound on every fragment.
     // Recording already captured these states before landing the take. Its
     // caller also owns the transaction and publishes all tracks together.
-    if (mode == SilenceApplyMode::Edit)
+    if (mode == SilenceApplyMode::Edit && !cloudProjectBound())
         if (auto result = captureLibraryPlugins(pluginSources); !result) return result;
     for (const auto& track : pluginSources) for (const auto& captured : track.clips)
         for (auto& original : beforeByTrack[track.id].clips)
@@ -186,6 +189,21 @@ audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSil
     ProjectModel before, after;
     for (auto& [id, track] : beforeByTrack) before.tracks.push_back(std::move(track));
     for (auto& [id, track] : afterByTrack) after.tracks.push_back(std::move(track));
+    if (cloudProjectBound()) {
+        std::vector<std::string> paths;
+        for (const auto& path : files.paths) paths.push_back(platform::pathToUtf8(path));
+        files.committed = true;
+        const bool queued = submitSharedDerivedMutation(paths, AssetKind::Audio,
+            [this, before, after = std::move(after), paths](const auto& assets) mutable -> collab::CommandBody {
+                for (auto& track : after.tracks) for (auto& clip : track.clips) {
+                    const auto found = std::find(paths.begin(), paths.end(), clip.filePath);
+                    if (found != paths.end()) clip.asset = assets[std::size_t(found - paths.begin())];
+                }
+                return derivedProjectCommands(before, after);
+            }, sourceRevision, "Strip Silence");
+        if (!queued) { created.clear(); return silenceFailure("The project changed or silence processing could not be submitted."); }
+        return audio::Result::ok();
+    }
     if (mode == SilenceApplyMode::Recording) {
         for (auto& track : after.tracks)
             if (auto* target = m_project.findTrack(track.id)) target->clips = std::move(track.clips);
@@ -206,6 +224,89 @@ audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSil
     }
     return audio::Result::ok();
 }
+
+audio::Result EngineController::prepareAutomaticRecordingSilence(
+    const collab::SharedProjectDocument& base, const recovery::CloudRecordingRecoveryRun& run,
+    collab::ProjectCommand& command) try {
+    if (std::none_of(run.captures.begin(), run.captures.end(), [](const auto& capture) { return capture.semantics.autoSilence; }))
+        return audio::Result::ok();
+    const auto* original = std::get_if<collab::RecordingCommit>(&command.body);
+    if (!original || !original->batch || command.meta.schemaVersion < 6)
+        return silenceFailure("Automatic recording silence requires a v6 recording transaction.");
+    auto projected = base;
+    if (auto applied = collab::ProjectReducer::apply(projected, command); !applied.accepted())
+        return silenceFailure(applied.message);
+    auto transformed = *original;
+    transformed.batch = std::make_shared<collab::BatchCommand>(*original->batch);
+    const auto append = [&](collab::CommandBody body) {
+        collab::ProjectCommand child; child.body = std::move(body);
+        transformed.batch->commands.push_back(std::move(child));
+    };
+    EngineController draft;
+    draft.m_project = projected.project;
+    std::vector<collab::AddClip> added;
+    for (const auto& child : original->batch->commands)
+        if (const auto* clip = std::get_if<collab::AddClip>(&child.body); clip && clip->kind == ClipKind::Audio) added.push_back(*clip);
+    for (const auto& capture : run.captures) {
+        if (!capture.semantics.autoSilence) continue;
+        draft.m_sampleRate = capture.sampleRate;
+        draft.m_project.tempo = capture.semantics.silenceTempo;
+        for (const auto& entry : added) {
+            if (entry.trackId != capture.trackId) continue;
+            auto* clip = draft.findClip(entry.trackId, entry.clipId);
+            if (!clip) continue;
+            const bool direct = clip->asset.assetId == capture.assetId;
+            const bool layered = std::any_of(clip->takes.begin(), clip->takes.end(), [&](const auto& take) { return take.asset.assetId == capture.assetId; });
+            if (!direct && !layered) continue;
+            if (direct) clip->filePath = capture.localWavPath;
+            for (auto& take : clip->takes) if (take.asset.assetId == capture.assetId) take.filePath = capture.localWavPath;
+            std::vector<StripSilenceSource> sources;
+            if (auto ready = draft.prepareStripSilence({{entry.trackId, entry.clipId}}, sources); !ready) return ready;
+            const auto& source = sources.front();
+            const auto envelope = buildSilenceEnvelope(source.placements, source.durationSeconds, source.sampleRate);
+            const auto regions = detectSilenceRegions(envelope, capture.semantics.stripSilence, source.original.startSeconds, source.tempo);
+            if (unchangedRegion(regions, source.durationSeconds)) continue;
+            append(collab::DeleteClip{entry.trackId, entry.clipId});
+            std::string anchor = entry.afterId;
+            for (std::size_t i = 0; i < regions.size(); ++i) {
+                auto piece = sliceSilenceRegion(source.original, regions[i], source.durationSeconds,
+                    capture.semantics.stripSilence.fadeMs, source.tempo);
+                const auto seed = run.opId + ":" + entry.clipId + ":" + std::to_string(i);
+                piece.id = collab::deterministicMigrationId("recording-silence-clip", seed);
+                append(collab::AddClip{entry.trackId, piece.id, ClipKind::Audio, piece.name,
+                    piece.startSeconds, piece.durationSeconds, piece.color, anchor});
+                append(collab::SetClipProperty{entry.trackId, piece.id, collab::ClipProperty::OffsetSeconds, piece.offsetSeconds});
+                append(collab::SetClipProperty{entry.trackId, piece.id, collab::ClipProperty::CompCrossfadeMs, piece.compCrossfadeMs});
+                append(collab::SetClipFade{entry.trackId, piece.id, piece.fadeInSeconds, piece.fadeOutSeconds});
+                if (!piece.asset.empty()) append(collab::SetClipAsset{entry.trackId, piece.id, piece.asset});
+                std::map<std::string, std::string> takeIds;
+                std::string takeAnchor;
+                for (std::size_t j = 0; j < piece.takes.size(); ++j) {
+                    auto take = piece.takes[j]; const auto previous = take.id;
+                    take.id = collab::deterministicMigrationId("recording-silence-take", seed + ":" + std::to_string(j));
+                    takeIds[previous] = take.id; take.filePath.clear();
+                    append(collab::AddTake{entry.trackId, piece.id, take, takeAnchor});
+                    takeAnchor = take.id;
+                }
+                std::string compAnchor;
+                for (std::size_t j = 0; j < piece.comp.size(); ++j) {
+                    auto part = piece.comp[j];
+                    part.id = collab::deterministicMigrationId("recording-silence-comp", seed + ":" + std::to_string(j));
+                    part.takeId = takeIds.at(part.takeId);
+                    append(collab::UpsertCompSegment{entry.trackId, piece.id, part, compAnchor});
+                    compAnchor = part.id;
+                }
+                anchor = piece.id;
+            }
+        }
+    }
+    auto candidate = command; candidate.body = std::move(transformed);
+    auto verified = base;
+    if (auto applied = collab::ProjectReducer::apply(verified, candidate); !applied.accepted())
+        return silenceFailure("Automatic recording silence could not be prepared: " + applied.message);
+    command = std::move(candidate);
+    return audio::Result::ok();
+} catch (const std::exception& error) { return silenceFailure(error.what()); }
 
 void EngineController::stripRecordedSilence(const FinalizedRecordingTrack& recording) {
     if (recording.midi || !recording.semantics.autoSilence || cloudProjectBound()) return;

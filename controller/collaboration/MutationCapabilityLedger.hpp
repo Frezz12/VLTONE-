@@ -6,6 +6,7 @@ namespace daw::collab {
 
 enum class MutationCapability {
     SharedCommand,
+    SessionAction,
     LocalOnly,
     BlockedV1,
     Unclassified,

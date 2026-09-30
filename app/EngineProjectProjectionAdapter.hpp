@@ -3,6 +3,7 @@
 #include "collaboration/EngineControllerAdapter.hpp"
 
 #include <QObject>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 
@@ -52,6 +53,10 @@ public:
     /// local project.  Late AssetCache completions are ignored until another
     /// verified snapshot is projected.
     void clearDocument();
+    void retryPluginStateProbes();
+    /// Explicit local publication capture only. These paths never enter the
+    /// shared document and are cleared on document detach or explicit reset.
+    void setPublicationAssetSources(QHash<QString, QString> localSources);
 
     std::vector<MissingRuntimeAsset> missingAssets() const;
     QStringList missingAssetIds() const;
@@ -70,10 +75,12 @@ signals:
     void projectionFailed(const QString& message);
     void missingAssetsChanged(const QStringList& assetIds);
     void missingAssetRefsChanged(const QList<daw::AssetRef>& assets);
+    void pluginStateProbeChanged(const QString& insertId, const QString& status);
 
 private:
     class Impl;
     std::unique_ptr<Impl> m_impl;
+    friend bool checkEngineProjectProjectionForTest(QString* error);
 };
 
 /// Deterministic offscreen check used by --collaboration-selftest.

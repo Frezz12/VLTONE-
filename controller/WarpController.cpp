@@ -6,7 +6,7 @@ namespace daw {
 
 std::string EngineController::warpUnavailableReason(const std::string& trackId,
                                                     const std::string& clipId) {
-    if (cloudProjectBound()) return "Warp is available in local projects only.";
+    if (!sharedEditingAllowed()) return "This session is read-only.";
     if (isTrackFrozen(trackId)) return "Unfreeze the track before using Warp.";
     const auto* clip = audioClip(trackId, clipId);
     if (!clip) return "Select an audio clip.";
@@ -45,6 +45,7 @@ bool EngineController::initializeClipWarp(const std::string& trackId, const std:
 
 bool EngineController::setClipWarp(const std::string& trackId, const std::string& clipId,
                                   const ClipWarpModel& warp, const std::string& label) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return false;
     if (!warpUnavailableReason(trackId, clipId).empty() || !validWarp(warp) ||
         (!warp.empty() && warpMaximumRatio(warp, tempo()) > 1000)) return false;
     auto* clip = findClip(trackId, clipId);
@@ -62,6 +63,13 @@ bool EngineController::setClipWarp(const std::string& trackId, const std::string
     }
     const auto before = clip->warp;
     const double originalDuration = clip->durationSeconds;
+    if (cloudProjectBound() && !m_warpEdit) {
+        auto after = *clip; after.warp = warp;
+        after.durationSeconds = warp.empty() ? originalDuration : warp.enabled ?
+            beatsToSeconds(warp.markers.back().targetBeats, tempo()) : warp.baselineDurationSeconds;
+        if (!warp.empty()) after.offsetSeconds = warp.markers.front().sourceSeconds;
+        return submitSharedMutation(collab::sharedRenderState(trackId, after), label) == collab::SharedMutationResult::Submitted;
+    }
     auto apply = [this, trackId, clipId, originalDuration](const ClipWarpModel& value) {
         applyClipWarpState(trackId, clipId, value, originalDuration);
     };
@@ -85,10 +93,11 @@ void EngineController::applyClipWarpState(const std::string& trackId, const std:
 }
 
 void EngineController::beginWarpEdit(const std::string& trackId, const std::string& clipId) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return;
     cancelWarpPreview();
     cancelWarpEdit();
     if (!warpUnavailableReason(trackId, clipId).empty()) return;
-    if (const auto* clip = audioClip(trackId, clipId)) m_warpEdit = WarpEdit{trackId, clipId, clip->warp};
+    if (const auto* clip = audioClip(trackId, clipId)) m_warpEdit = WarpEdit{trackId, clipId, clip->warp, clip->durationSeconds, clip->offsetSeconds};
 }
 
 void EngineController::commitWarpEdit() {
@@ -100,22 +109,33 @@ void EngineController::commitWarpEdit() {
     m_warpEdit.reset();
     flushDeferredClipSync();
     if (!clip || after == edit.before) return;
-    const auto apply = [this, track = edit.trackId, clipId = edit.clipId, duration](const ClipWarpModel& value) {
+    if (cloudProjectBound()) {
+        auto command = collab::sharedRenderState(edit.trackId, *clip);
+        if (auto* target = findClip(edit.trackId, edit.clipId)) target->offsetSeconds = edit.beforeOffset;
+        applyClipWarpState(edit.trackId, edit.clipId, edit.before, edit.beforeDuration);
+        (void)submitSharedMutation(std::move(command), "Move Warp Markers");
+        return;
+    }
+    const double offset = clip->offsetSeconds;
+    const auto apply = [this, track = edit.trackId, clipId = edit.clipId](const ClipWarpModel& value, double duration, double offset) {
+        if (auto* target = findClip(track, clipId)) target->offsetSeconds = offset;
         applyClipWarpState(track, clipId, value, duration);
     };
-    m_undo.push("Move Warp Markers", [apply, before = edit.before] { apply(before); }, [apply, after] { apply(after); });
+    m_undo.push("Move Warp Markers", [apply, edit] { apply(edit.before, edit.beforeDuration, edit.beforeOffset); },
+        [apply, after, duration, offset] { apply(after, duration, offset); });
 }
 
 void EngineController::cancelWarpEdit() {
     if (!m_warpEdit) return;
     const auto edit = *m_warpEdit;
-    setClipWarp(edit.trackId, edit.clipId, edit.before);
+    if (auto* target = findClip(edit.trackId, edit.clipId)) target->offsetSeconds = edit.beforeOffset;
+    applyClipWarpState(edit.trackId, edit.clipId, edit.before, edit.beforeDuration);
     m_warpEdit.reset();
     flushDeferredClipSync();
 }
 
 bool EngineController::validWarpPreview() const {
-    if (!m_warpPreview || cloudProjectBound() || isTrackFrozen(m_warpPreview->trackId)) return false;
+    if (!m_warpPreview || !sharedEditingAllowed() || isTrackFrozen(m_warpPreview->trackId)) return false;
     const auto& session = *m_warpPreview;
     const auto* clip = audioClip(session.trackId, session.clipId);
     return clip && clip->warp == session.before && clip->startSeconds == session.startSeconds &&
@@ -134,6 +154,7 @@ const ClipWarpModel* EngineController::warpPreviewMap() const {
 }
 
 bool EngineController::beginWarpPreview(const std::string& trackId, const std::string& clipId) {
+    if (!sharedGestureAllowed("clip:" + clipId)) return false;
     cancelWarpEdit();
     cancelWarpPreview();
     if (!warpUnavailableReason(trackId, clipId).empty()) return false;

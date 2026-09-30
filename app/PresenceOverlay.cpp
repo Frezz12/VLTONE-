@@ -50,12 +50,18 @@ PresenceOverlay::PresenceOverlay(QWidget* surface, SurfaceAddress address,
                 [this](SurfaceKind surface) {
                     if (surface == m_address.kind) onPresenceChanged();
                 });
+        connect(m_store, &PresenceStore::remoteCursorsVisibleChanged, this,
+                [this](bool visible) {
+                    if (!visible) m_animationTimer.stop();
+                    setVisible(visible);
+                    if (visible) onPresenceChanged();
+                });
     }
-    m_animationTimer.setInterval(33);
+    m_animationTimer.setInterval(16);
     m_animationTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_animationTimer, &QTimer::timeout, this, [this] { update(); });
     syncGeometry();
-    show();
+    setVisible(!m_store || m_store->remoteCursorsVisible());
     raise();
 }
 
@@ -65,6 +71,8 @@ void PresenceOverlay::setPointMapper(PointMapper mapper) {
 }
 
 bool PresenceOverlay::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_surface && event && event->type() == QEvent::Hide)
+        m_animationTimer.stop();
     if (watched == m_surface && event &&
         (event->type() == QEvent::Resize || event->type() == QEvent::Show ||
          event->type() == QEvent::LayoutRequest ||
@@ -89,15 +97,16 @@ void PresenceOverlay::syncGeometry() {
 }
 
 void PresenceOverlay::onPresenceChanged() {
+    if (!isVisible() || (m_store && !m_store->remoteCursorsVisible())) return;
     update();
     if (!m_reduceMotion && !m_animationTimer.isActive())
         m_animationTimer.start();
 }
 
 void PresenceOverlay::paintEvent(QPaintEvent*) {
-    if (!m_store) return;
+    if (!m_store || !m_store->remoteCursorsVisible()) return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const auto cursors = m_store->cursorsForSurface(m_address, now);
+    const auto cursors = m_store->cursorsForSurface(m_address, now, !m_reduceMotion);
     bool animationNeeded = false;
 
     QPainter painter(this);

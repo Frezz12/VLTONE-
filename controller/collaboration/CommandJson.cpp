@@ -601,7 +601,7 @@ bool bindingsFromJson(const json& value,
     return true;
 }
 
-json sharedInsertToJson(const InsertModel& insert) {
+json sharedInsertToJson(const InsertModel& insert, std::uint32_t schemaVersion) {
     json out{{"id", insert.id},
                 {"name", insert.name},
                 {"bypassed", insert.bypassed},
@@ -620,18 +620,19 @@ json sharedInsertToJson(const InsertModel& insert) {
                 {"parameters", parametersToJson(insert.parameters)},
                 {"rightParameters", parametersToJson(insert.rightParameters)},
                 {"assetBindings", bindingsToJson(insert.assetBindings)}};
+    if (schemaVersion >= 6 && !insert.parameterFingerprint.empty()) out["parameterFingerprint"] = insert.parameterFingerprint;
     if (insert.sidechainTrackIds.size() > 1) out["sidechainTrackIds"] = insert.sidechainTrackIds;
     if (insert.slideDelivery || insert.slideBendRange != 2 || insert.slideReleaseReserve != 2) { out["slideDelivery"]=insert.slideDelivery; out["slideBendRange"]=insert.slideBendRange; out["slideReleaseReserve"]=insert.slideReleaseReserve; }
     return out;
 }
 
-bool sharedInsertFromJson(const json& value, InsertModel& insert) {
+bool sharedInsertFromJson(const json& value, InsertModel& insert, std::uint32_t schemaVersion) {
     if (!hasExactKeys(value,
                       {"id", "name", "bypassed", "format", "uid", "vendor",
                        "pluginVersion", "stateSchemaVersion", "mix",
                        "channelMode", "sidechainTrackId", "stateAsset",
                        "rightStateAsset", "parameters", "rightParameters",
-                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve"}) ||
+                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve","parameterFingerprint"}) ||
         !value.at("id").is_string() || !value.at("name").is_string() ||
         !value.at("bypassed").is_boolean() ||
         !value.at("format").is_string() || !value.at("uid").is_string() ||
@@ -645,7 +646,8 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
     }
     const std::string format = value.at("format").get<std::string>();
     const std::string channelMode = value.at("channelMode").get<std::string>();
-    if (format != "internal" ||
+    const bool external = format == "clap" || format == "vst3" || format == "vst" || format == "au";
+    if ((format != "internal" && !(schemaVersion >= 3 && external)) ||
         (channelMode != "auto" && channelMode != "mono" &&
          channelMode != "stereo" && channelMode != "dual-mono")) {
         return false;
@@ -658,6 +660,12 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
     insert.uid = value.at("uid").get<std::string>();
     insert.vendor = value.at("vendor").get<std::string>();
     insert.pluginVersion = value.at("pluginVersion").get<std::string>();
+    if (value.contains("parameterFingerprint")) {
+        if (schemaVersion < 6 || !value.at("parameterFingerprint").is_string()) return false;
+        insert.parameterFingerprint = value.at("parameterFingerprint").get<std::string>();
+        if (insert.parameterFingerprint.size() != 64 || !std::all_of(insert.parameterFingerprint.begin(),
+            insert.parameterFingerprint.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) return false;
+    }
     insert.stateSchemaVersion = value.at("stateSchemaVersion").get<int>();
     insert.mix = value.at("mix").get<float>();
     if(value.contains("slideDelivery")&&!value.at("slideDelivery").is_number_integer())return false;
@@ -679,6 +687,67 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert) {
            parametersFromJson(value.at("rightParameters"),
                               insert.rightParameters) &&
            bindingsFromJson(value.at("assetBindings"), insert.assetBindings);
+}
+
+json renderSourceToJson(const ClipAudioVersionSource& source) {
+    json takes = json::array(), comp = json::array(), markers = json::array();
+    for (const auto& take : source.takes) takes.push_back(takeToJson(take));
+    for (const auto& segment : source.comp) comp.push_back(compSegmentToJson(segment));
+    for (const auto& marker : source.warp.markers)
+        markers.push_back({{"id", marker.id}, {"sourceSeconds", marker.sourceSeconds},
+            {"targetBeats", marker.targetBeats}, {"locked", marker.locked}});
+    return json{{"asset", serialization::assetRefToJson(source.asset)},
+        {"durationSeconds", source.durationSeconds}, {"offsetSeconds", source.offsetSeconds},
+        {"fadeInSeconds", source.fadeInSeconds}, {"fadeOutSeconds", source.fadeOutSeconds},
+        {"fadeInCurve", source.fadeInCurve}, {"fadeOutCurve", source.fadeOutCurve},
+        {"fadeInMode", source.fadeInMode == ClipFadeMode::Tape ? "tape" : "gain"},
+        {"fadeOutMode", source.fadeOutMode == ClipFadeMode::Tape ? "tape" : "gain"},
+        {"gain", source.gain}, {"pan", source.pan}, {"channels", source.channels},
+        {"takes", std::move(takes)}, {"comp", std::move(comp)}, {"compCrossfadeMs", source.compCrossfadeMs},
+        {"sampleEdit", sampleEditToJson(source.sampleEdit)}, {"analysis", musicalAnalysisToJson(source.musicalAnalysis)},
+        {"warp", {{"enabled", source.warp.enabled}, {"preservePitch", source.warp.preservePitch},
+            {"mode", source.warp.mode}, {"baselineDurationSeconds", source.warp.baselineDurationSeconds},
+            {"sensitivity", source.warp.sensitivity}, {"markers", std::move(markers)}}}};
+}
+
+bool renderSourceFromJson(const json& value, ClipAudioVersionSource& source) {
+    if (!hasExactKeys(value, {"asset", "durationSeconds", "offsetSeconds", "fadeInSeconds", "fadeOutSeconds",
+        "fadeInCurve", "fadeOutCurve", "fadeInMode", "fadeOutMode", "gain", "pan", "channels",
+        "takes", "comp", "compCrossfadeMs", "sampleEdit", "analysis", "warp"}) ||
+        !assetFromJson(value.at("asset"), source.asset, true) ||
+        !value.at("takes").is_array() || value.at("takes").size() > 1024 ||
+        !value.at("comp").is_array() || value.at("comp").size() > 8192 ||
+        !sampleEditFromJson(value.at("sampleEdit"), source.sampleEdit) ||
+        !musicalAnalysisFromJson(value.at("analysis"), source.musicalAnalysis)) return false;
+    source.durationSeconds = value.at("durationSeconds").get<double>();
+    source.offsetSeconds = value.at("offsetSeconds").get<double>();
+    source.fadeInSeconds = value.at("fadeInSeconds").get<double>();
+    source.fadeOutSeconds = value.at("fadeOutSeconds").get<double>();
+    source.fadeInCurve = value.at("fadeInCurve").get<double>();
+    source.fadeOutCurve = value.at("fadeOutCurve").get<double>();
+    source.gain = value.at("gain").get<float>(); source.pan = value.at("pan").get<float>();
+    source.channels = value.at("channels").get<int>();
+    source.compCrossfadeMs = value.at("compCrossfadeMs").get<double>();
+    const auto in = value.at("fadeInMode").get<std::string>(), out = value.at("fadeOutMode").get<std::string>();
+    if ((in != "gain" && in != "tape") || (out != "gain" && out != "tape")) return false;
+    source.fadeInMode = in == "tape" ? ClipFadeMode::Tape : ClipFadeMode::Gain;
+    source.fadeOutMode = out == "tape" ? ClipFadeMode::Tape : ClipFadeMode::Gain;
+    for (const auto& item : value.at("takes")) { TakeModel take; if (!takeFromJson(item, take)) return false; source.takes.push_back(std::move(take)); }
+    for (const auto& item : value.at("comp")) { CompSegment segment; if (!compSegmentFromJson(item, segment)) return false; source.comp.push_back(std::move(segment)); }
+    const auto& warp = value.at("warp");
+    if (!hasExactKeys(warp, {"enabled", "preservePitch", "mode", "baselineDurationSeconds", "sensitivity", "markers"}) ||
+        !warp.at("markers").is_array() || warp.at("markers").size() > 8192) return false;
+    source.warp.enabled = warp.at("enabled").get<bool>();
+    source.warp.preservePitch = warp.at("preservePitch").get<bool>();
+    source.warp.mode = warp.at("mode").get<int>();
+    source.warp.baselineDurationSeconds = warp.at("baselineDurationSeconds").get<double>();
+    source.warp.sensitivity = warp.at("sensitivity").get<double>();
+    for (const auto& item : warp.at("markers")) {
+        if (!hasExactKeys(item, {"id", "sourceSeconds", "targetBeats", "locked"})) return false;
+        source.warp.markers.push_back({item.at("id").get<std::string>(), item.at("sourceSeconds").get<double>(),
+            item.at("targetBeats").get<double>(), item.at("locked").get<bool>()});
+    }
+    return true;
 }
 
 json conditionToJson(const CommandCondition& condition) {
@@ -712,7 +781,7 @@ CommandMeta metaFromJson(const json& value) {
 }
 
 json bodyToJson(const ProjectCommand& command) {
-    return std::visit([](const auto& body) -> json {
+    return std::visit([&command](const auto& body) -> json {
         using T = std::decay_t<decltype(body)>;
         if constexpr (std::is_same_v<T, SetProjectScalar>) {
             return json{{"field", projectScalarName(body.field)},
@@ -722,6 +791,11 @@ json bodyToJson(const ProjectCommand& command) {
                         {"denominator", body.denominator}};
         } else if constexpr (std::is_same_v<T, SetProjectKey>) {
             return json{{"root", body.root}, {"scale", body.scale}};
+        } else if constexpr (std::is_same_v<T, SetNotebookCues>) {
+            json cues = json::array();
+            for (const auto& cue : body.cues)
+                cues.push_back({{"seconds", cue.seconds}, {"text", cue.text}});
+            return json{{"cues", std::move(cues)}};
         } else if constexpr (std::is_same_v<T, AddTrack>) {
             return json{{"trackId", body.trackId},
                         {"trackKind", toString(body.kind)},
@@ -790,6 +864,16 @@ json bodyToJson(const ProjectCommand& command) {
                         {"clipId", body.clipId},
                         {"property", clipPropertyName(body.property)},
                         {"value", scalarToJson(body.value)}};
+        } else if constexpr (std::is_same_v<T, SetTrackFreeze>) {
+            return json{{"trackId", body.trackId}, {"asset", serialization::assetRefToJson(body.asset)},
+                {"durationSeconds", body.durationSeconds}, {"sampleRate", body.sampleRate}};
+        } else if constexpr (std::is_same_v<T, SetClipRenderState>) {
+            auto history = json::array();
+            for (const auto& version : body.history) history.push_back({{"id", version.id}, {"parentId", version.parentId},
+                {"label", version.label}, {"source", renderSourceToJson(version.source)}});
+            return json{{"trackId", body.trackId}, {"clipId", body.clipId}, {"source", renderSourceToJson(body.source)},
+                {"history", std::move(history)}, {"versionId", body.versionId},
+                {"injection", {{"stage", toString(body.injection.stage)}, {"anchorChannelId", body.injection.anchorChannelId}}}};
         } else if constexpr (std::is_same_v<T, SetClipAsset>) {
             return json{{"trackId", body.trackId},
                         {"clipId", body.clipId},
@@ -827,7 +911,7 @@ json bodyToJson(const ProjectCommand& command) {
                         {"analysis", musicalAnalysisToJson(body.analysis)}};
         } else if constexpr (std::is_same_v<T, AddPluginInsert>) {
             return json{{"location", pluginLocationToJson(body.location)},
-                        {"insert", sharedInsertToJson(body.insert)},
+                        {"insert", sharedInsertToJson(body.insert, command.meta.schemaVersion)},
                         {"afterId", body.afterId}};
         } else if constexpr (std::is_same_v<T, DeletePluginInsert>) {
             return json{{"location", pluginLocationToJson(body.location)},
@@ -843,7 +927,7 @@ json bodyToJson(const ProjectCommand& command) {
         } else if constexpr (std::is_same_v<T, ReplacePluginInsert>) {
             return json{{"location", pluginLocationToJson(body.location)},
                         {"insertId", body.insertId},
-                        {"replacement", sharedInsertToJson(body.replacement)}};
+                        {"replacement", sharedInsertToJson(body.replacement, command.meta.schemaVersion)}};
         } else if constexpr (std::is_same_v<T, SetPluginProperty>) {
             return json{{"location", pluginLocationToJson(body.location)},
                         {"insertId", body.insertId},
@@ -1071,6 +1155,60 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
             !scalarFromJson(payload.at("value"), body.value)) {
             error = "invalid project scalar payload";
             return false;
+        }
+        if (body.field == ProjectScalar::NotebookHtml && schemaVersion < 6) {
+            error = "shared notebook requires protocol 6";
+            return false;
+        }
+        out = std::move(body);
+        return true;
+    }
+    if (kind == "track.setFreeze") {
+        if (schemaVersion < 6 || !hasExactKeys(payload, {"trackId", "asset", "durationSeconds", "sampleRate"})) return false;
+        SetTrackFreeze body;
+        body.trackId = payload.at("trackId").get<std::string>();
+        if (!assetFromJson(payload.at("asset"), body.asset, true)) return false;
+        body.durationSeconds = payload.at("durationSeconds").get<double>();
+        body.sampleRate = payload.at("sampleRate").get<double>();
+        out = std::move(body); return true;
+    }
+    if (kind == "clip.setRenderState") {
+        if (schemaVersion < 6 || !hasExactKeys(payload, {"trackId", "clipId", "source", "history", "versionId", "injection"}) ||
+            !payload.at("history").is_array() || payload.at("history").size() > 64) return false;
+        SetClipRenderState body;
+        body.trackId = payload.at("trackId").get<std::string>(); body.clipId = payload.at("clipId").get<std::string>();
+        body.versionId = payload.at("versionId").get<std::string>();
+        if (!renderSourceFromJson(payload.at("source"), body.source)) return false;
+        for (const auto& item : payload.at("history")) {
+            if (!hasExactKeys(item, {"id", "parentId", "label", "source"})) return false;
+            OfflineRenderVersion version;
+            version.id = item.at("id").get<std::string>(); version.parentId = item.at("parentId").get<std::string>();
+            version.label = item.at("label").get<std::string>();
+            if (!renderSourceFromJson(item.at("source"), version.source)) return false;
+            body.history.push_back(std::move(version));
+        }
+        const auto& injection = payload.at("injection");
+        if (!hasExactKeys(injection, {"stage", "anchorChannelId"})) return false;
+        const auto stage = injection.at("stage").get<std::string>();
+        body.injection.stage = playbackInjectionStageFromString(stage);
+        if (toString(body.injection.stage) != stage) return false;
+        body.injection.anchorChannelId = injection.at("anchorChannelId").get<std::string>();
+        out = std::move(body); return true;
+    }
+    if (kind == "project.setNotebookCues") {
+        if (schemaVersion < 6 || !hasExactKeys(payload, {"cues"}) ||
+            !payload.at("cues").is_array() || payload.at("cues").size() > 2000) {
+            error = "invalid notebook cues";
+            return false;
+        }
+        SetNotebookCues body;
+        for (const auto& cue : payload.at("cues")) {
+            if (!hasExactKeys(cue, {"seconds", "text"}) ||
+                !cue.at("seconds").is_number() || !cue.at("text").is_string()) {
+                error = "invalid notebook cue";
+                return false;
+            }
+            body.cues.push_back({cue.at("seconds").get<double>(), cue.at("text").get<std::string>()});
         }
         out = std::move(body);
         return true;
@@ -1395,7 +1533,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         AddPluginInsert body;
         body.afterId = payload.value("afterId", std::string());
         if (!pluginLocationFromJson(payload.at("location"), body.location) ||
-            !sharedInsertFromJson(payload.at("insert"), body.insert)) {
+            !sharedInsertFromJson(payload.at("insert"), body.insert, schemaVersion)) {
             error = "invalid plugin add value";
             return false;
         }
@@ -1458,7 +1596,7 @@ bool parseBody(const std::string& kind, const json& payload, CommandBody& out,
         body.insertId = payload.value("insertId", std::string());
         if (!pluginLocationFromJson(payload.at("location"), body.location) ||
             !sharedInsertFromJson(payload.at("replacement"),
-                                  body.replacement)) {
+                                  body.replacement, schemaVersion)) {
             error = "invalid plugin replacement value";
             return false;
         }

@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vlt.studio/protocol/schema/session-control-action-v6.schema.json",
+  "title": "VLT reliable session action v6",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actionId",
+    "expectedSessionVersion",
+    "kind"
+  ],
+  "properties": {
+    "actionId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "expectedSessionVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "kind": {
+      "enum": [
+        "play",
+        "pause",
+        "stop",
+        "seek",
+        "loop",
+        "audition"
+      ]
+    },
+    "positionSeconds": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "rate": {
+      "type": "number",
+      "minimum": 0.25,
+      "maximum": 4
+    },
+    "trackId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "muted": {
+      "type": "boolean"
+    },
+    "solo": {
+      "type": "boolean"
+    },
+    "loopEnabled": {
+      "type": "boolean"
+    },
+    "loopStartSeconds": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "loopEndSeconds": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000000000
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {
+          "const": "audition"
+        }
+      },
+      "required": [
+        "trackId"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "muted"
+          ]
+        },
+        {
+          "required": [
+            "solo"
+          ]
+        }
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "positionSeconds"
+            ]
+          },
+          {
+            "required": [
+              "rate"
+            ]
+          },
+          {
+            "required": [
+              "loopEnabled"
+            ]
+          },
+          {
+            "required": [
+              "loopStartSeconds"
+            ]
+          },
+          {
+            "required": [
+              "loopEndSeconds"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "kind": {
+          "enum": [
+            "play",
+            "pause",
+            "stop",
+            "seek",
+            "loop"
+          ]
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "trackId"
+            ]
+          },
+          {
+            "required": [
+              "muted"
+            ]
+          },
+          {
+            "required": [
+              "solo"
+            ]
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "seek"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "positionSeconds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "loop"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "loopEnabled",
+              "loopStartSeconds",
+              "loopEndSeconds"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "loopEnabled"
+                  ]
+                },
+                {
+                  "required": [
+                    "loopStartSeconds"
+                  ]
+                },
+                {
+                  "required": [
+                    "loopEndSeconds"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

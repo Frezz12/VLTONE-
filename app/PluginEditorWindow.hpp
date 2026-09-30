@@ -72,6 +72,8 @@ public:
     void initializeEditor();
     bool isEditorInitialized() const { return m_editorReady; }
     bool isClosing() const { return m_closing; }
+    void refreshAccessPolicy();
+    void setEditAccessCheck(std::function<bool()> check) { m_editAccessCheck = std::move(check); }
     void setHostKeyHandler(std::function<bool(QKeyEvent*, bool)> handler) {
         m_hostKeyHandler = std::move(handler);
     }
@@ -128,6 +130,8 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    bool m_readOnly = false;
+    std::function<bool()> m_editAccessCheck;
     friend class PluginEditorNativeKeyboard;
     bool routeHostKey(QKeyEvent* event, bool textEntry);
     std::function<bool(QKeyEvent*, bool)> m_hostKeyHandler;

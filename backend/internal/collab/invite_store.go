@@ -372,6 +372,9 @@ func (s *Store) redeemInvite(ctx context.Context, actorUserID uuid.UUID,
 func (s *Store) acceptInviteTx(tx *gorm.DB, invite model.ProjectInvite,
 	project model.CloudProject, actorUserID uuid.UUID, now time.Time,
 	result *ProjectView) error {
+	if err := requireNotBannedTx(tx, project.ID, actorUserID); err != nil {
+		return err
+	}
 	role := invite.Role
 	if project.OwnerUserID == actorUserID {
 		role = model.ProjectRoleOwner

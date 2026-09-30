@@ -15,6 +15,8 @@ type ClientCompatibility struct {
 	EngineVersion        string
 	CommandSchemaVersion int
 	ProjectFormatVersion int
+	PluginPolicy         string
+	PluginInventory      []PluginRequirement
 }
 
 type semanticVersion struct {
@@ -31,7 +33,7 @@ func ValidateClientCompatibility(project model.CloudProject,
 		client.ProjectFormatVersion != CollaborationProjectFormatVersion ||
 		client.ProjectFormatVersion != project.FormatVersion ||
 		client.EngineVersion == "" || client.EngineVersion != project.EngineVersion {
-		return incompatiblef("collaboration client is incompatible with the project")
+		return &CompatibilityError{Message: "The collaboration client is incompatible with the project.", RequiredEngineVersion: project.EngineVersion, MinimumAppVersion: project.MinimumAppVersion}
 	}
 	appVersion, ok := parseSemanticVersion(client.AppVersion)
 	if !ok {
@@ -42,7 +44,7 @@ func ValidateClientCompatibility(project model.CloudProject,
 		return incompatiblef("project minimum application version is invalid")
 	}
 	if compareSemanticVersions(appVersion, minimumVersion) < 0 {
-		return incompatiblef("application version is below the project minimum")
+		return &CompatibilityError{Message: "The project requires application version " + project.MinimumAppVersion + " or later.", MinimumAppVersion: project.MinimumAppVersion, RequiredEngineVersion: project.EngineVersion}
 	}
 	return nil
 }

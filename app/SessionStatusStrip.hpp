@@ -42,23 +42,30 @@ public:
     int participants = 0;
     bool localIsHost = false;
     bool readOnly = false;
+    QString mode;
+    QString conductor;
+    int persistentProblems = 0;
 
     /// Aggregated across CloudAssetTransferManager transfer ids. `transfersTotal`
     /// counts everything in the current burst, finished included, so "4 of 12"
     /// does not walk backwards as transfers complete.
     int transfersActive = 0;
     int transfersDone = 0;
+    int transfersFailed = 0;
+    int transfersDownloading = 0;
     quint64 transferBytesDone = 0;
     quint64 transferBytesTotal = 0;
 
     qsizetype hydrationDone = 0;
     qsizetype hydrationTotal = 0;
+    qsizetype hydrationFailed = 0;
 
     int publishDone = 0;
     int publishTotal = 0;
 
     /// Local edits still waiting on the server.
     qsizetype pendingOperations = 0;
+    qsizetype localResultsPending = 0;
     bool hashRoundInFlight = false;
 
     /// Last safe notice. Server text arrives pre-bounded; nothing here is ever
@@ -106,24 +113,48 @@ public:
     /// Shows one transient line in the notice area. This is where the formerly
     /// invisible statusBar()->showMessage() calls should go.
     void showNotice(const QString& safeMessage, bool error, int timeoutMs);
+    void setSessionMode(const QString& mode, bool mayChange);
+    void setMayModerate(bool allowed);
+    /// Authoritative lobby details may include people waiting for admission.
+    void setParticipantStatus(const QString& participantId, const QString& userId,
+                              const QString& nickname, const QString& status);
+    void refreshDetails();
+    void setPluginProbeStatus(const QString& insertId, const QString& status);
+    /// Empty label removes a resolved/discarded recovery item. Paths are only
+    /// passed back on explicit user activation, never rendered in the strip.
+    void setLocalResultRecovery(const QString& path, const QString& label);
 
 signals:
     void cloudProjectsRequested();
     void joinSessionRequested();
     void invitePeopleRequested();
+    void sessionSettingsRequested();
+    void sessionModeRequested(const QString& mode);
+    void participantModerationRequested(const QString& participantId,
+                                        const QString& userId,
+                                        const QString& action);
+    void participantLeadRequested(const QString& participantId);
+    void retryUploadsRequested();
+    void cancelUploadsRequested();
+    void reconnectRequested();
+    void retryPublicationRequested();
+    void retryPluginProbesRequested();
+    void localResultRecoveryRequested(const QString& path);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void applyTheme();
 
     struct Impl;
     std::unique_ptr<Impl> m_impl;
+    friend bool checkSessionStatusStripForTest(QString* error);
 };
 
-/// Widget-free check of the aggregation rules and the rendered strings.
-/// Requires only QCoreApplication.
+/// Checks aggregation with QCoreApplication, plus persistent errors and popup
+/// actions when QApplication is available.
 bool checkSessionStatusStripForTest(QString* error = nullptr);
 
 } // namespace collab

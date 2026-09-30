@@ -48,6 +48,7 @@ type CloudProject struct {
 	FormatVersion     int        `gorm:"not null" json:"format_version"`
 	EngineVersion     string     `gorm:"not null;default:''" json:"engine_version"`
 	MinimumAppVersion string     `gorm:"not null;default:''" json:"minimum_app_version"`
+	PluginPolicy      string     `gorm:"not null;default:external_checked" json:"plugin_policy"`
 	HeadSeq           int64      `gorm:"not null;default:0" json:"head_seq"`
 	SnapshotSeq       int64      `gorm:"not null;default:0" json:"snapshot_seq"`
 	CreatedAt         time.Time  `json:"created_at"`
@@ -251,6 +252,11 @@ type ProjectSession struct {
 	CreatedBy                  *uuid.UUID     `gorm:"type:uuid" json:"created_by,omitempty"`
 	HostMemberID               *uuid.UUID     `gorm:"type:uuid" json:"host_member_id,omitempty"`
 	Mode                       string         `gorm:"not null;default:independent" json:"mode"`
+	AppVersion                 string         `gorm:"not null;default:''" json:"app_version"`
+	PluginPolicy               string         `gorm:"not null;default:external_checked" json:"plugin_policy"`
+	CatalogRevision            int64          `gorm:"not null;default:1" json:"catalog_revision"`
+	TransportState             datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"-"`
+	AuditionState              datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"-"`
 	Status                     string         `gorm:"not null;default:starting" json:"status"`
 	Version                    int64          `gorm:"not null;default:1" json:"version"`
 	CommandSchemaVersion       int            `gorm:"not null;default:2" json:"command_schema_version"`
@@ -280,6 +286,7 @@ type ProjectSessionMember struct {
 	ReadinessStatus   string         `gorm:"not null;default:ready" json:"readiness_status"`
 	ReadinessRevision int64          `gorm:"not null;default:0" json:"readiness_revision"`
 	PluginReadiness   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"plugin_readiness"`
+	PluginInventory   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"plugin_inventory"`
 	JoinedAt          time.Time      `json:"joined_at"`
 	LastSeenAt        time.Time      `json:"last_seen_at"`
 	LeftAt            *time.Time     `json:"left_at,omitempty"`

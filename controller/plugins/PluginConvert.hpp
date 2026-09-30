@@ -37,6 +37,7 @@ inline void applyDescriptor(InsertModel& slot,
     slot.name = descriptor.name;
     slot.vendor = descriptor.vendor;
     slot.pluginVersion = descriptor.version;
+    slot.parameterFingerprint = descriptor.parameterFingerprint;
     slot.stateSchemaVersion = descriptor.stateSchemaVersion;
     // The old plugin's state and parameters mean nothing to the new one.
     slot.stateFile.clear();

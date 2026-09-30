@@ -66,6 +66,11 @@ bool AuInstance::initialize() {
     // call into a component that does not implement it, so the check is the
     // descriptor's rather than a return code's.
     m_acceptsMidi = m_descriptor.wantsMidi || m_descriptor.isInstrument;
+    UInt32 midiOutputSize = 0;
+    Boolean midiOutputWritable = false;
+    m_descriptor.producesMidi = AudioUnitGetPropertyInfo(m_unit,
+        kAudioUnitProperty_MIDIOutputCallbackInfo, kAudioUnitScope_Global, 0,
+        &midiOutputSize, &midiOutputWritable) == noErr && midiOutputSize > 0;
     readParameters();
     readBuses();
     refreshLatency();

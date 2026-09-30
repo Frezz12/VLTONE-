@@ -201,7 +201,7 @@ StripSilenceDialog::StripSilenceDialog(daw::EngineController& controller,
     connect(m_internal, &QCheckBox::toggled, this, [this](bool on) { m_settings.splitInternal = on; updatePreview(); });
     m_auto = new QCheckBox(tr("Auto Silence after recording"), this); m_auto->setObjectName("AutoSilenceEnabled");
     m_auto->setChecked(controller.recordingPrefs().autoSilence);
-    m_auto->setEnabled(!controller.hasCloudProjectBinding() && !controller.isRecording() && !controller.isCountingIn());
+    m_auto->setEnabled(!controller.isRecording() && !controller.isCountingIn());
     m_auto->setToolTip(tr("Apply these settings to recorded audio when recording stops. Recording and cleanup share one Undo."));
     connect(m_auto, &QCheckBox::toggled, this, [this](bool on) { rememberSettings(); ui::silence::setAutomatic(m_controller, on); });
     options->addWidget(m_internal); options->addStretch(); options->addWidget(m_auto); root->addLayout(options);

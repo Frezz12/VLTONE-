@@ -128,7 +128,7 @@ PluginBatchDialog::PluginBatchDialog(daw::EngineController& controller, std::vec
     });
     connect(m_add, &QPushButton::clicked, this, [this] {
         if (!m_draft) return;
-        auto* menu = ui::buildPluginMenu(this, m_draft.get(), false,
+        auto* menu = ui::buildPluginMenu(this, &m_controller, false,
             [this](const auto& plugin) { addPlugin(plugin); });
         menu->exec(m_add->mapToGlobal(QPoint(0, m_add->height())));
         menu->deleteLater();
@@ -152,7 +152,7 @@ QLabel[role="secondary"] { color: %3; font-size: 12px; }
            t.separator().name(), t.accent.name()));
     const auto valid = m_controller.validatePluginBatch(m_targets);
     if (m_targets.size() < 2 || !valid) showError(tr("Select at least two compatible tracks or audio clips."));
-    else if (controller.hasCloudProjectBinding()) showError(tr("Shared Plugins are available in local projects."));
+    else if (!controller.sharedEditingAllowed()) showError(tr("This session is read-only."));
     else switchSource(0);
     rebuildRack();
 }
@@ -210,8 +210,8 @@ bool PluginBatchDialog::switchSource(int index) {
 
 void PluginBatchDialog::refreshAvailability() {
     m_listen->setEnabled(bool(m_draft));
-    m_add->setEnabled(m_draft && m_controller.validatePluginBatch(m_targets, m_slots.size() + 1).isOk());
-    m_apply->setEnabled(m_draft && !m_slots.empty() && m_controller.validatePluginBatch(m_targets, m_slots.size()).isOk());
+    m_add->setEnabled(m_draft && m_controller.sharedEditingAllowed() && m_controller.validatePluginBatch(m_targets, m_slots.size() + 1).isOk());
+    m_apply->setEnabled(m_draft && m_controller.sharedEditingAllowed() && !m_slots.empty() && m_controller.validatePluginBatch(m_targets, m_slots.size()).isOk());
 }
 
 void PluginBatchDialog::rebuildRack() {
@@ -261,7 +261,8 @@ void PluginBatchDialog::rebuildRack() {
 }
 
 void PluginBatchDialog::addPlugin(const daw::plugins::PluginDescriptor& plugin, bool open) {
-    if (!m_draft || !m_controller.validatePluginBatch(m_targets, m_slots.size() + 1)) return;
+    if (!m_draft || !m_controller.sharedPluginAllowed(plugin) || !m_controller.sharedEditingAllowed() ||
+        !m_controller.validatePluginBatch(m_targets, m_slots.size() + 1)) return;
     const auto& source = m_targets[m_sourceIndex];
     const auto id = source.clipId.empty() ? m_draft->addInsert(source.trackId, plugin)
         : m_draft->addClipFxInsert(source.trackId, source.clipId, plugin);

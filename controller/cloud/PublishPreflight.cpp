@@ -219,6 +219,7 @@ PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
         const std::string trackLocation =
             "track:" + (track.id.empty() ? std::to_string(trackIndex) : track.id);
         requireId(track.id, trackLocation, report);
+        addAsset(track.freeze.asset, trackLocation + "/freeze", report, seenAssets, AssetKind::Audio);
         if (track.instrument.isLoaded() || !track.instrument.id.empty())
             requireId(track.instrument.id, trackLocation + "/instrument", report);
         inspectInsert(track.instrument, trackLocation + "/instrument", report,
@@ -234,10 +235,11 @@ PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
                 trackLocation + "/clip:" +
                 (clip.id.empty() ? std::to_string(clipIndex) : clip.id);
             requireId(clip.id, clipLocation, report);
-            if (!clip.warp.empty() || std::any_of(clip.offlineHistory.begin(), clip.offlineHistory.end(),
-                    [](const auto& version) { return !version.source.warp.empty(); }))
-                report.blockers.push_back({PublishIssueKind::LocalWarp, clipLocation, clip.id,
-                    {}, clip.name, "Warp is local-only. Bounce to a new audio clip before publishing."});
+            for (const auto& version : clip.offlineHistory) {
+                addAsset(version.source.asset, clipLocation + "/history:" + version.id, report, seenAssets, AssetKind::Audio);
+                for (const auto& take : version.source.takes)
+                    addAsset(take.asset, clipLocation + "/history:" + version.id + "/take:" + take.id, report, seenAssets, AssetKind::Audio);
+            }
             addAsset(clip.asset, clipLocation + "/audio", report, seenAssets,
                      AssetKind::Audio);
             inspectInsertList(clip.inserts, clipLocation, report, seenAssets);

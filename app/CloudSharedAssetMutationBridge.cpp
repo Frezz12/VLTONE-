@@ -91,6 +91,7 @@ CloudSharedAssetMutationBridge::prepare(
         return daw::collab::SharedMutationResult::Blocked;
 
     CloudSharedAssetMutationInput input;
+    input.kind = request.kind;
     input.projectId = projectId;
     input.uploadId = QString::fromStdString(request.requestId);
     input.assetId = QString::fromStdString(request.assetId);

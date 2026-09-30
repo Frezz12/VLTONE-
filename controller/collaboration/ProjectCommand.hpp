@@ -16,12 +16,13 @@ namespace daw::collab {
 inline constexpr std::uint32_t kProjectCommandSchemaVersionV2 = 2;
 inline constexpr std::uint32_t kProjectCommandSchemaVersionV3 = 3;
 inline constexpr std::uint32_t kProjectCommandSchemaVersionV4 = 4;
-inline constexpr std::uint32_t kProjectCommandSchemaVersion = 5;
+inline constexpr std::uint32_t kProjectCommandSchemaVersionV5 = 5;
+inline constexpr std::uint32_t kProjectCommandSchemaVersion = 6;
 
 inline constexpr bool supportedProjectCommandSchemaVersion(
     std::uint32_t version) noexcept {
     return version == kProjectCommandSchemaVersionV2 || version == kProjectCommandSchemaVersionV3 || version == kProjectCommandSchemaVersionV4 ||
-           version == kProjectCommandSchemaVersion;
+           version == kProjectCommandSchemaVersionV5 || version == kProjectCommandSchemaVersion;
 }
 inline constexpr std::size_t kMaxProjectCommandPreconditions = 1024;
 inline constexpr std::size_t kMaxProjectCommandTouchedFields = 8192;
@@ -38,6 +39,7 @@ enum class ProjectScalar : std::uint8_t {
     RenderSampleRate,
     MasterVolume,
     MasterPan,
+    NotebookHtml,
 };
 
 enum class TrackProperty : std::uint8_t {
@@ -147,6 +149,30 @@ struct SetProjectKey {
     int root = 0;
     std::string scale = "major";
 };
+
+struct SetNotebookCues {
+    std::vector<NotebookCueModel> cues;
+};
+
+struct SetTrackFreeze {
+    std::string trackId;
+    AssetRef asset;
+    double durationSeconds = 0;
+    double sampleRate = 0;
+};
+
+/// A rendered audio source is swapped atomically with its undoable history.
+/// Arrangement identity and realtime inserts remain outside this command.
+struct SetClipRenderState {
+    std::string trackId;
+    std::string clipId;
+    ClipAudioVersionSource source;
+    std::vector<OfflineRenderVersion> history;
+    std::string versionId;
+    PlaybackInjection injection;
+};
+
+SetClipRenderState sharedRenderState(const std::string& trackId, const ClipModel& clip);
 
 struct AddTrack {
     std::string trackId;
@@ -612,7 +638,7 @@ struct RecordingCommit {
 };
 
 using CommandBody = std::variant<SetProjectScalar, SetTimeSignature,
-                                 SetProjectKey, AddTrack, DeleteTrack,
+                                 SetProjectKey, SetNotebookCues, SetTrackFreeze, SetClipRenderState, AddTrack, DeleteTrack,
                                  RestoreTrack, MoveTrack, SetTrackProperty,
                                  SetTrackParent, SetTrackOutput, AddSend,
                                  DeleteSend, RestoreSend, MoveSend,

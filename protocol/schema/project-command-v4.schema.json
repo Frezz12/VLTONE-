@@ -1,0 +1,2435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vlt.studio/protocol/schema/project-command-v4.schema.json",
+  "title": "VLT Project Command v4",
+  "description": "Collaboration v4. Retains the v3 external plugin contract and adds expressive MIDI, MIDI take content and atomic multipart MIDI recording. Previous command schemas remain immutable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "opId",
+    "transactionId",
+    "baseServerSeq",
+    "kind",
+    "payload",
+    "preconditions",
+    "touchedFields"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 4
+    },
+    "opId": {
+      "$ref": "#/$defs/id"
+    },
+    "transactionId": {
+      "$ref": "#/$defs/optionalId"
+    },
+    "baseServerSeq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "kind": {
+      "$ref": "#/$defs/kind"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/precondition"
+      },
+      "maxItems": 1024
+    },
+    "touchedFields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "minItems": 1,
+      "maxItems": 8192,
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/bodyShape"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "$ref": "project-command-v2.schema.json#/$defs/id"
+    },
+    "optionalId": {
+      "$ref": "project-command-v2.schema.json#/$defs/optionalId"
+    },
+    "kind": {
+      "enum": [
+        "project.setScalar",
+        "project.setTimeSignature",
+        "project.setKey",
+        "track.add",
+        "track.delete",
+        "track.restore",
+        "track.move",
+        "track.setProperty",
+        "track.setParent",
+        "track.setOutput",
+        "send.add",
+        "send.delete",
+        "send.restore",
+        "send.move",
+        "send.setProperty",
+        "clip.add",
+        "clip.delete",
+        "clip.restore",
+        "clip.move",
+        "clip.setProperty",
+        "clip.setAsset",
+        "clip.setSampleEdit",
+        "clip.setFade",
+        "clip.setFadeCurve",
+        "clip.setFadeMode",
+        "clip.setPatternOwner",
+        "clip.setMusicalAnalysis",
+        "plugin.add",
+        "plugin.delete",
+        "plugin.restore",
+        "plugin.move",
+        "plugin.replace",
+        "plugin.setProperty",
+        "plugin.setState",
+        "plugin.setParameter",
+        "plugin.removeParameter",
+        "plugin.setAssetBinding",
+        "plugin.removeAssetBinding",
+        "samplerFx.setLevels",
+        "note.upsert",
+        "note.delete",
+        "note.restore",
+        "automationPoint.upsert",
+        "automationPoint.delete",
+        "automationPoint.restore",
+        "controllerLane.add",
+        "controllerLane.delete",
+        "controllerLane.restore",
+        "controllerLane.setTarget",
+        "controllerLane.setDefault",
+        "automation.setTarget",
+        "automation.setDefault",
+        "automation.setActive",
+        "take.add",
+        "take.delete",
+        "take.restore",
+        "take.move",
+        "take.setProperty",
+        "compSegment.upsert",
+        "compSegment.delete",
+        "compSegment.restore",
+        "recording.commit",
+        "batch",
+        "recording.prepareMidi",
+        "recording.applyMidi",
+        "recording.restoreMidi"
+      ]
+    },
+    "scalarValue": {
+      "$ref": "project-command-v2.schema.json#/$defs/scalarValue"
+    },
+    "precondition": {
+      "$ref": "project-command-v2.schema.json#/$defs/precondition"
+    },
+    "setScalarPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/setScalarPayload"
+    },
+    "timeSignaturePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/timeSignaturePayload"
+    },
+    "projectKeyPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/projectKeyPayload"
+    },
+    "trackAddPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackAddPayload"
+    },
+    "trackIdPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackIdPayload"
+    },
+    "trackRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackRestorePayload"
+    },
+    "trackMovePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackMovePayload"
+    },
+    "trackPropertyPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackPropertyPayload"
+    },
+    "trackParentPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackParentPayload"
+    },
+    "trackOutputPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/trackOutputPayload"
+    },
+    "send": {
+      "$ref": "project-command-v2.schema.json#/$defs/send"
+    },
+    "sendAddPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/sendAddPayload"
+    },
+    "sendRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/sendRefPayload"
+    },
+    "sendRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/sendRestorePayload"
+    },
+    "sendMovePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/sendMovePayload"
+    },
+    "sendPropertyPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/sendPropertyPayload"
+    },
+    "clipAddPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipAddPayload"
+    },
+    "clipRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipRefPayload"
+    },
+    "clipRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipRestorePayload"
+    },
+    "clipMovePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipMovePayload"
+    },
+    "clipPropertyPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipPropertyPayload"
+    },
+    "assetRef": {
+      "$ref": "project-command-v2.schema.json#/$defs/assetRef"
+    },
+    "optionalAssetRef": {
+      "$ref": "project-command-v2.schema.json#/$defs/optionalAssetRef"
+    },
+    "pluginStateAssetRef": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginStateAssetRef"
+    },
+    "optionalPluginStateAssetRef": {
+      "$ref": "project-command-v2.schema.json#/$defs/optionalPluginStateAssetRef"
+    },
+    "clipAssetPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipAssetPayload"
+    },
+    "sampleEdit": {
+      "$ref": "project-command-v2.schema.json#/$defs/sampleEdit"
+    },
+    "clipSampleEditPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipSampleEditPayload"
+    },
+    "clipFadePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipFadePayload"
+    },
+    "clipFadeCurvePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipFadeCurvePayload"
+    },
+    "clipFadeModePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipFadeModePayload"
+    },
+    "clipPatternOwnerPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipPatternOwnerPayload"
+    },
+    "musicalAnalysis": {
+      "$ref": "project-command-v2.schema.json#/$defs/musicalAnalysis"
+    },
+    "clipMusicalAnalysisPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/clipMusicalAnalysisPayload"
+    },
+    "pluginLocation": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginLocation"
+    },
+    "insertParameter": {
+      "$ref": "project-command-v2.schema.json#/$defs/insertParameter"
+    },
+    "pluginAssetBinding": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginAssetBinding"
+    },
+    "samplerAssetBinding": {
+      "$ref": "project-command-v2.schema.json#/$defs/samplerAssetBinding"
+    },
+    "sharedInsert": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/builtinSharedInsert"
+        },
+        {
+          "$ref": "#/$defs/externalSharedInsert"
+        }
+      ]
+    },
+    "pluginAddPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insert",
+        "afterId"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insert": {
+          "$ref": "#/$defs/sharedInsert"
+        },
+        "afterId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "instrument"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "afterId": {
+                "const": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "insert": {
+                "properties": {
+                  "format": {
+                    "const": "internal"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "location": {
+                    "properties": {
+                      "chain": {
+                        "const": "instrument"
+                      }
+                    }
+                  },
+                  "insert": {
+                    "properties": {
+                      "uid": {
+                        "const": "daw.sampler"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "location": {
+                    "properties": {
+                      "chain": {
+                        "enum": [
+                          "master",
+                          "track",
+                          "samplerFx",
+                          "clip"
+                        ]
+                      }
+                    }
+                  },
+                  "insert": {
+                    "properties": {
+                      "uid": {
+                        "enum": [
+                          "daw.delay",
+                          "daw.compressor",
+                          "daw.equalizer",
+                          "daw.gravity",
+                          "daw.graphit",
+                          "daw.doubler",
+                          "daw.doubler-pro",
+                          "daw.chorus",
+                          "daw.flanger",
+                          "daw.phaser",
+                          "daw.pitch-corrector"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "pluginRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginRefPayload"
+    },
+    "pluginRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginRestorePayload"
+    },
+    "pluginMovePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginMovePayload"
+    },
+    "pluginReplacePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "replacement"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "replacement": {
+          "$ref": "#/$defs/sharedInsert"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "replacement": {
+                "properties": {
+                  "format": {
+                    "const": "internal"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "location": {
+                    "properties": {
+                      "chain": {
+                        "const": "instrument"
+                      }
+                    }
+                  },
+                  "replacement": {
+                    "properties": {
+                      "uid": {
+                        "const": "daw.sampler"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "location": {
+                    "properties": {
+                      "chain": {
+                        "enum": [
+                          "master",
+                          "track",
+                          "samplerFx",
+                          "clip"
+                        ]
+                      }
+                    }
+                  },
+                  "replacement": {
+                    "properties": {
+                      "uid": {
+                        "enum": [
+                          "daw.delay",
+                          "daw.compressor",
+                          "daw.equalizer",
+                          "daw.gravity",
+                          "daw.graphit",
+                          "daw.doubler",
+                          "daw.doubler-pro",
+                          "daw.chorus",
+                          "daw.flanger",
+                          "daw.phaser",
+                          "daw.pitch-corrector"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "sidechainTrackIds": {
+      "$ref": "project-command-v2.schema.json#/$defs/sidechainTrackIds"
+    },
+    "pluginPropertyPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginPropertyPayload"
+    },
+    "pluginStatePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "pluginVersion",
+        "stateSchemaVersion",
+        "stateAsset",
+        "rightStateAsset",
+        "parameters",
+        "rightParameters",
+        "assetBindings"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "pluginVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "stateSchemaVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "stateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "rightStateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "rightParameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "assetBindings": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/pluginAssetBinding"
+          }
+        }
+      }
+    },
+    "pluginParameterPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginParameterPayload"
+    },
+    "pluginRemoveParameterPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginRemoveParameterPayload"
+    },
+    "pluginBindingPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginBindingPayload"
+    },
+    "pluginRemoveBindingPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/pluginRemoveBindingPayload"
+    },
+    "samplerFxLevelsPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/samplerFxLevelsPayload"
+    },
+    "note": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pitch",
+        "startBeats",
+        "lengthBeats",
+        "velocity",
+        "muted",
+        "color",
+        "pan"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "pitch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "startBeats": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lengthBeats": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "velocity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "pan": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "releaseVelocity": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "endOrder": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854776000
+        },
+        "startOrder": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854776000
+        }
+      }
+    },
+    "noteUpsertPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "note"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        },
+        "afterId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      }
+    },
+    "noteRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/noteRefPayload"
+    },
+    "noteRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/noteRestorePayload"
+    },
+    "automationPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "beats",
+        "value",
+        "shape",
+        "curve"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "beats": {
+          "type": "number",
+          "minimum": 0
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "shape": {
+          "enum": [
+            "linear",
+            "hold",
+            "scurve"
+          ]
+        },
+        "curve": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "eventOrder": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854776000
+        }
+      }
+    },
+    "automationPointUpsertPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "point"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "laneId": {
+          "$ref": "#/$defs/optionalId"
+        },
+        "point": {
+          "$ref": "#/$defs/automationPoint"
+        },
+        "afterId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      }
+    },
+    "automationPointRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/automationPointRefPayload"
+    },
+    "automationPointRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/automationPointRestorePayload"
+    },
+    "controllerLaneTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cc",
+        "parameterId",
+        "slotId"
+      ],
+      "properties": {
+        "cc": {
+          "type": "integer",
+          "minimum": -5,
+          "maximum": 127
+        },
+        "parameterId": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "slotId": {
+          "$ref": "#/$defs/optionalId"
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "key": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "cc": {
+                "const": -1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "parameterId": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "controllerLaneAddPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "laneId",
+        "name",
+        "target",
+        "defaultValue",
+        "afterId"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "laneId": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "target": {
+          "$ref": "#/$defs/controllerLaneTarget"
+        },
+        "defaultValue": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "afterId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      }
+    },
+    "controllerLaneRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/controllerLaneRefPayload"
+    },
+    "controllerLaneRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/controllerLaneRestorePayload"
+    },
+    "controllerLaneTargetPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "laneId",
+        "target"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "laneId": {
+          "$ref": "#/$defs/id"
+        },
+        "target": {
+          "$ref": "#/$defs/controllerLaneTarget"
+        }
+      }
+    },
+    "controllerLaneDefaultPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/controllerLaneDefaultPayload"
+    },
+    "automationTarget": {
+      "$ref": "project-command-v2.schema.json#/$defs/automationTarget"
+    },
+    "automationTargetPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/automationTargetPayload"
+    },
+    "automationDefaultPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/automationDefaultPayload"
+    },
+    "automationActivePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/automationActivePayload"
+    },
+    "audioMetadata": {
+      "$ref": "project-command-v2.schema.json#/$defs/audioMetadata"
+    },
+    "audioAssetRef": {
+      "$ref": "project-command-v2.schema.json#/$defs/audioAssetRef"
+    },
+    "take": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/audioTake"
+        },
+        {
+          "$ref": "#/$defs/midiTake"
+        }
+      ]
+    },
+    "takeAddPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "take",
+        "afterId"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "take": {
+          "$ref": "#/$defs/take"
+        },
+        "afterId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      }
+    },
+    "takeRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/takeRefPayload"
+    },
+    "takeRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/takeRestorePayload"
+    },
+    "takeMovePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/takeMovePayload"
+    },
+    "takePropertyPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/takePropertyPayload"
+    },
+    "compSegment": {
+      "$ref": "project-command-v2.schema.json#/$defs/compSegment"
+    },
+    "compSegmentUpsertPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/compSegmentUpsertPayload"
+    },
+    "compSegmentRefPayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/compSegmentRefPayload"
+    },
+    "compSegmentRestorePayload": {
+      "$ref": "project-command-v2.schema.json#/$defs/compSegmentRestorePayload"
+    },
+    "nonBatchBody": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "project.setScalar"
+            },
+            "payload": {
+              "$ref": "#/$defs/setScalarPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "project.setTimeSignature"
+            },
+            "payload": {
+              "$ref": "#/$defs/timeSignaturePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "project.setKey"
+            },
+            "payload": {
+              "$ref": "#/$defs/projectKeyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackIdPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.move"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackMovePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.setProperty"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackPropertyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.setParent"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackParentPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "track.setOutput"
+            },
+            "payload": {
+              "$ref": "#/$defs/trackOutputPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "send.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/sendAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "send.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/sendRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "send.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/sendRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "send.move"
+            },
+            "payload": {
+              "$ref": "#/$defs/sendMovePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "send.setProperty"
+            },
+            "payload": {
+              "$ref": "#/$defs/sendPropertyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.move"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipMovePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setProperty"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipPropertyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setAsset"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipAssetPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setSampleEdit"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipSampleEditPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setFade"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipFadePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setFadeCurve"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipFadeCurvePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setFadeMode"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipFadeModePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setPatternOwner"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipPatternOwnerPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setMusicalAnalysis"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipMusicalAnalysisPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.move"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginMovePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.replace"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginReplacePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.setProperty"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginPropertyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.setState"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginStatePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.setParameter"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginParameterPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.removeParameter"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginRemoveParameterPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.setAssetBinding"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginBindingPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin.removeAssetBinding"
+            },
+            "payload": {
+              "$ref": "#/$defs/pluginRemoveBindingPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "samplerFx.setLevels"
+            },
+            "payload": {
+              "$ref": "#/$defs/samplerFxLevelsPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "note.upsert"
+            },
+            "payload": {
+              "$ref": "#/$defs/noteUpsertPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "note.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/noteRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "note.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/noteRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "automationPoint.upsert"
+            },
+            "payload": {
+              "$ref": "#/$defs/automationPointUpsertPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "automationPoint.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/automationPointRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "automationPoint.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/automationPointRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "controllerLane.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/controllerLaneAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "controllerLane.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/controllerLaneRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "controllerLane.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/controllerLaneRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "controllerLane.setTarget"
+            },
+            "payload": {
+              "$ref": "#/$defs/controllerLaneTargetPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "controllerLane.setDefault"
+            },
+            "payload": {
+              "$ref": "#/$defs/controllerLaneDefaultPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "automation.setTarget"
+            },
+            "payload": {
+              "$ref": "#/$defs/automationTargetPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "automation.setDefault"
+            },
+            "payload": {
+              "$ref": "#/$defs/automationDefaultPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "automation.setActive"
+            },
+            "payload": {
+              "$ref": "#/$defs/automationActivePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "take.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/takeAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "take.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/takeRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "take.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/takeRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "take.move"
+            },
+            "payload": {
+              "$ref": "#/$defs/takeMovePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "take.setProperty"
+            },
+            "payload": {
+              "$ref": "#/$defs/takePropertyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "compSegment.upsert"
+            },
+            "payload": {
+              "$ref": "#/$defs/compSegmentUpsertPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "compSegment.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/compSegmentRefPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "compSegment.restore"
+            },
+            "payload": {
+              "$ref": "#/$defs/compSegmentRestorePayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "recording.prepareMidi"
+            },
+            "payload": {
+              "$ref": "#/$defs/prepareMidiPayload"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "recording.applyMidi"
+            },
+            "payload": {
+              "$ref": "#/$defs/applyMidiPayload"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "recording.restoreMidi"
+            },
+            "payload": {
+              "$ref": "#/$defs/restoreMidiPayload"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        }
+      ]
+    },
+    "batchItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "payload",
+        "preconditions"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/precondition"
+          },
+          "maxItems": 1024
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonBatchBody"
+        }
+      ]
+    },
+    "batchPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commands"
+      ],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/batchItem"
+          }
+        }
+      }
+    },
+    "recordingLease": {
+      "$ref": "project-command-v2.schema.json#/$defs/recordingLease"
+    },
+    "recordingCommitItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "payload",
+        "preconditions"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "clip.add",
+            "clip.setProperty",
+            "clip.setAsset",
+            "take.add",
+            "compSegment.upsert",
+            "recording.applyMidi",
+            "clip.delete",
+            "clip.setPatternOwner"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/precondition"
+          },
+          "maxItems": 1024
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setProperty"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipPropertyPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setAsset"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipAssetPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "take.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/takeAddPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "compSegment.upsert"
+            },
+            "payload": {
+              "$ref": "#/$defs/compSegmentUpsertPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "recording.applyMidi"
+            },
+            "payload": {
+              "$ref": "#/$defs/applyMidiPayload"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.delete"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipRefPayload"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "clip.setPatternOwner"
+            },
+            "payload": {
+              "$ref": "#/$defs/clipPatternOwnerPayload"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        }
+      ]
+    },
+    "recordingCommitPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "leases",
+        "commands"
+      ],
+      "properties": {
+        "leases": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/recordingLease"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/recordingCommitItem"
+          }
+        }
+      }
+    },
+    "bodyShape": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonBatchBody"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "recording.commit"
+            },
+            "payload": {
+              "$ref": "#/$defs/recordingCommitPayload"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "batch"
+            },
+            "payload": {
+              "$ref": "#/$defs/batchPayload"
+            }
+          }
+        }
+      ]
+    },
+    "builtinSharedInsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "bypassed",
+        "format",
+        "uid",
+        "vendor",
+        "pluginVersion",
+        "stateSchemaVersion",
+        "mix",
+        "channelMode",
+        "sidechainTrackId",
+        "stateAsset",
+        "rightStateAsset",
+        "parameters",
+        "rightParameters",
+        "assetBindings"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "bypassed": {
+          "type": "boolean"
+        },
+        "format": {
+          "const": "internal"
+        },
+        "uid": {
+          "enum": [
+            "daw.sampler",
+            "daw.delay",
+            "daw.compressor",
+            "daw.equalizer",
+            "daw.gravity",
+            "daw.graphit",
+            "daw.doubler",
+            "daw.doubler-pro",
+            "daw.chorus",
+            "daw.flanger",
+            "daw.phaser",
+            "daw.pitch-corrector"
+          ]
+        },
+        "vendor": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "pluginVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "stateSchemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mix": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "channelMode": {
+          "enum": [
+            "auto",
+            "mono",
+            "stereo",
+            "dual-mono"
+          ]
+        },
+        "sidechainTrackId": {
+          "$ref": "#/$defs/optionalId"
+        },
+        "sidechainTrackIds": {
+          "$ref": "#/$defs/sidechainTrackIds"
+        },
+        "stateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "rightStateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "rightParameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "assetBindings": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/pluginAssetBinding"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "uid": {
+                "const": "daw.sampler"
+              }
+            },
+            "required": [
+              "uid"
+            ]
+          },
+          "then": {
+            "properties": {
+              "assetBindings": {
+                "items": {
+                  "$ref": "#/$defs/samplerAssetBinding"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "externalPluginText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "pattern": "^[^/\\\\\\u0000-\\u001f]+$"
+    },
+    "externalSharedInsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "bypassed",
+        "format",
+        "uid",
+        "vendor",
+        "pluginVersion",
+        "stateSchemaVersion",
+        "mix",
+        "channelMode",
+        "sidechainTrackId",
+        "stateAsset",
+        "rightStateAsset",
+        "parameters",
+        "rightParameters",
+        "assetBindings"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "bypassed": {
+          "type": "boolean"
+        },
+        "format": {
+          "enum": [
+            "clap",
+            "vst3",
+            "au",
+            "vst"
+          ]
+        },
+        "uid": {
+          "$ref": "#/$defs/externalPluginText"
+        },
+        "vendor": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/externalPluginText"
+            },
+            {
+              "maxLength": 200
+            }
+          ]
+        },
+        "pluginVersion": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/externalPluginText"
+            },
+            {
+              "maxLength": 200
+            }
+          ]
+        },
+        "stateSchemaVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "mix": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "channelMode": {
+          "enum": [
+            "auto",
+            "mono",
+            "stereo",
+            "dual-mono"
+          ]
+        },
+        "sidechainTrackId": {
+          "$ref": "#/$defs/optionalId"
+        },
+        "sidechainTrackIds": {
+          "$ref": "#/$defs/sidechainTrackIds"
+        },
+        "stateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "rightStateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "rightParameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "assetBindings": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/pluginAssetBinding"
+          }
+        }
+      }
+    },
+    "midiLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "cc",
+        "parameterId",
+        "slotId",
+        "channel",
+        "key",
+        "defaultValue",
+        "points"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "cc": {
+          "type": "integer",
+          "minimum": -5,
+          "maximum": 127
+        },
+        "parameterId": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "slotId": {
+          "$ref": "#/$defs/optionalId"
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "key": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "defaultValue": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "points": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/automationPoint"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "cc": {
+                "const": -1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "parameterId": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "midiTake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "offsetSeconds",
+        "lengthSeconds",
+        "clipOffsetSeconds",
+        "gain",
+        "muted",
+        "channels",
+        "color",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "offsetSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lengthSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "clipOffsetSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "channels": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "lanes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/midiLane"
+          }
+        }
+      }
+    },
+    "audioTake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "offsetSeconds",
+        "lengthSeconds",
+        "clipOffsetSeconds",
+        "gain",
+        "muted",
+        "channels",
+        "color",
+        "asset"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "offsetSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lengthSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "clipOffsetSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "channels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "asset": {
+          "$ref": "#/$defs/audioAssetRef"
+        }
+      }
+    },
+    "midiComp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "takeId",
+        "startSeconds",
+        "endSeconds"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "takeId": {
+          "$ref": "#/$defs/id"
+        },
+        "startSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "endSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "$comment": "The runtime additionally requires endSeconds > startSeconds."
+    },
+    "midiContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "notes",
+        "lanes",
+        "takes",
+        "comp",
+        "expanded"
+      ],
+      "properties": {
+        "notes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "lanes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/midiLane"
+          }
+        },
+        "takes": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/midiTake"
+          }
+        },
+        "comp": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/midiComp"
+          }
+        },
+        "expanded": {
+          "type": "boolean"
+        }
+      }
+    },
+    "prepareMidiPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordingId",
+        "contentId",
+        "index",
+        "count",
+        "content"
+      ],
+      "properties": {
+        "recordingId": {
+          "$ref": "#/$defs/id"
+        },
+        "contentId": {
+          "$ref": "#/$defs/id"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1023
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "content": {
+          "$ref": "#/$defs/midiContent"
+        }
+      },
+      "$comment": "The runtime additionally requires index < count and enforces consistent part counts/content ids across an upload."
+    },
+    "applyMidiPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "recordingId",
+        "contentId",
+        "count"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "recordingId": {
+          "$ref": "#/$defs/id"
+        },
+        "contentId": {
+          "$ref": "#/$defs/id"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        }
+      }
+    },
+    "restoreMidiPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId",
+        "clipId",
+        "operationId"
+      ],
+      "properties": {
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "clipId": {
+          "$ref": "#/$defs/id"
+        },
+        "operationId": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    }
+  }
+}

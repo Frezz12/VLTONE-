@@ -77,8 +77,14 @@ database down-migrations are never run.
 After the acceptance test, set `COLLABORATION_ENABLED=true` and deploy/restart,
 then grant individual accounts online access from **Admin → Users**. The
 database entitlement defaults to false. `COLLAB_ALLOWED_USER_IDS` is only an
-emergency OR override and should normally stay empty. Cloud recording must
-remain false for V1.
+emergency OR override and should normally stay empty. Enable
+`COLLAB_RECORDING_ENABLED=true` for the v6 recording workflow after validating
+storage transfers and recording permissions on an isolated database.
+
+If Apache injects analytics, exclude `/join`, `/en/join` and `/ru/join` using
+`packaging/server/apache/vlt-metrika.conf`. The matching loader also skips invitation pages
+and removes URL fragments from ordinary page hits. Verify the public endpoint,
+because checks against the standalone Next.js server bypass Apache's filters.
 
 To explicitly return to the prior application version:
 

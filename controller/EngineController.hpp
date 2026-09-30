@@ -13,6 +13,7 @@
 #include "cloud/CloudPublicationCapture.hpp"
 #include "collaboration/SharedAssetMutationSink.hpp"
 #include "collaboration/SharedMutationSink.hpp"
+#include "collaboration/PluginCompatibility.hpp"
 #include "plugins/PluginManager.hpp"
 
 #include "Host/PluginNode.hpp"
@@ -52,8 +53,11 @@
 
 namespace daw {
 
+namespace recovery { struct CloudRecordingRecoveryRun; }
+
 namespace collab {
 struct ChangeImpact;
+struct SharedProjectDocument;
 }
 
 /// The framework-agnostic application controller: it owns the graph engine and
@@ -149,6 +153,45 @@ public:
     collab::SharedMutationResult completeSharedAssetMutation(
         const std::string& requestId, const AssetRef& verifiedAsset);
     void cancelSharedAssetMutation(const std::string& requestId);
+    /// Generated results survive rejection and restart until the caller explicitly discards them.
+    void setSharedResultRecoveryCallback(std::function<void(const std::string&)> callback) { m_sharedResultRecoveryCallback = std::move(callback); }
+    bool discardSharedResultRecovery(const std::string& manifestPath);
+    std::vector<std::string> sharedResultRecoveryManifests() const;
+
+    void setSharedEditingAllowed(bool allowed) noexcept { m_sharedEditingAllowed = allowed; }
+    void setSharedGestureLeaseCheck(std::function<bool(std::string_view)> check) { m_sharedGestureLeaseCheck = std::move(check); }
+    bool sharedGestureAllowed(std::string_view resource) const {
+        return m_restoringSharedPreview || !cloudProjectBound() || (sharedEditingAllowed() &&
+            (!m_sharedGestureLeaseCheck || m_sharedGestureLeaseCheck(resource)));
+    }
+    using SessionTransportHandler = std::function<void(std::string_view, double, double, bool)>;
+    void setSessionTransportHandler(SessionTransportHandler handler) { m_sessionTransportHandler = std::move(handler); }
+    bool sharedEditingAllowed() const { return !cloudProjectBound() || m_sharedEditingAllowed; }
+    struct TrackAuditionState {
+        std::string trackId;
+        bool muted = false;
+        bool soloed = false;
+    };
+    void setSessionAuditionPolicy(bool enabled, bool writable,
+        std::function<void(const std::vector<TrackAuditionState>&)> changed = {});
+    bool sessionAuditionEnabled() const noexcept { return m_sessionAuditionEnabled; }
+    void setSharedPluginCatalog(std::vector<collab::PluginRequirement> catalog, bool enabled) {
+        if (m_sharedPluginCatalog == catalog && m_sharedPluginCatalogEnabled == enabled) return;
+        m_sharedPluginCatalog = std::move(catalog); m_sharedPluginCatalogEnabled = enabled;
+        ++m_sharedPluginCatalogRevision;
+    }
+    std::uint64_t sharedPluginCatalogRevision() const noexcept { return m_sharedPluginCatalogRevision; }
+    bool sharedPluginAllowed(const plugins::PluginDescriptor& descriptor) const;
+    std::vector<TrackAuditionState> trackAuditionState() const;
+    void applySessionAuditionState(const std::vector<TrackAuditionState>& state);
+    /// Queue one bounded control-thread capture; verified uploads precede the
+    /// atomic plugin.setState command. Calls for the same slot coalesce.
+    void queuePluginStateSync(const std::string& channelId, const std::string& insertId);
+    void pumpPluginStateSync(std::size_t maxCaptures = 1);
+    void setPluginStateSyncCallback(std::function<void(
+        const std::string&, const std::string&, bool)> callback) {
+        m_pluginStateSyncCallback = std::move(callback);
+    }
 
     /// Handles of the engine nodes that make up one channel. Exposed so tools
     /// and tests can look at what the routing actually compiled to.
@@ -208,6 +251,8 @@ public:
     };
     /// Prepare immutable source data on the control thread, then analyze it on
     /// a worker. Applying validates the source again and creates one undo item.
+    audio::Result prepareAutomaticRecordingSilence(const collab::SharedProjectDocument& base,
+        const recovery::CloudRecordingRecoveryRun& run, collab::ProjectCommand& command);
     audio::Result prepareStripSilence(const std::vector<ClipAddress>& clips,
         std::vector<StripSilenceSource>& sources);
     audio::Result applyStripSilence(const std::vector<StripSilenceSource>& sources,
@@ -310,7 +355,7 @@ public:
     /// not carry SHA-256 values yet: hashing belongs to the publisher worker,
     /// not to this control-thread/plugin seam.
     cloud::CloudPublicationCapture captureCloudPublicationV1(
-        const std::string& stagingParent = {});
+        const std::string& stagingParent = {}, bool allowExternal = false);
     /// Replace only the engine-facing materialization of a cloud document.
     ///
     /// `runtimeDocument` is a disposable edge copy: cloud AssetRef values have
@@ -1755,6 +1800,7 @@ public:
         bool midiOverdubMerge = false;
         bool autoSilence = false;
         StripSilenceSettings stripSilence;
+        double silenceTempo = 120.0;
         bool trimTakesToRegion = true;
         bool autoExpandAfterRecord = false;
         double compCrossfadeMs = 5.0;
@@ -1974,7 +2020,7 @@ public:
     /// everything it did into one entry.
     std::size_t undoDepth() const { return m_undo.depth(); }
     std::size_t undoEstimatedBytes() const { return m_undo.estimatedBytes(); }
-    std::uint64_t projectRevision() const { return m_undo.revision(); }
+    std::uint64_t projectRevision() const { return m_undo.revision() + m_sharedProjectionRevision; }
     std::uint64_t projectGeneration() const { return m_projectGeneration; }
     /// Includes live placements before their gesture enters undo history.
     std::uint64_t clipGeometryRevision() const { return m_clipGeometryRevision; }
@@ -2057,6 +2103,8 @@ private:
     collab::SharedMutationResult submitSharedMutation(
         collab::CommandBody body, std::string undoLabel,
         std::optional<std::string> transactionId = std::nullopt);
+    bool submitSharedPluginSnapshotBatch(std::shared_ptr<collab::BatchCommand> batch,
+        const std::vector<ChainSlotSnapshot>& snapshots, std::string label);
     /// Shares an imported audio clip before its bytes exist in the cloud.
     /// `clip` must carry an empty asset: the clip.add batch goes out now, so
     /// the clip appears for every participant immediately, and the verified
@@ -2195,6 +2243,23 @@ private:
     std::shared_ptr<const engine::SampleBuffer> loadSamples(const std::string& path);
     void pruneDecodedSampleCache();
     struct PendingSharedAssetMutation;
+    struct SharedDerivedMutation;
+    struct BounceJob;
+    audio::Result commitBounceOutputs(const BounceRequest& request, std::vector<BounceJob>& jobs, BounceReport& out, bool keepFilesOnFailure = false);
+    collab::CommandBody derivedProjectCommands(const ProjectModel& before, const ProjectModel& after) const;
+    void retainSharedDerivedResult(const std::vector<std::string>& paths, std::uint64_t revision, const std::string& label, std::string_view status);
+    bool submitSharedDerivedMutation(std::vector<std::string> paths, AssetKind kind,
+        std::function<collab::CommandBody(const std::vector<AssetRef>&)> makeCommand,
+        std::uint64_t sourceRevision, std::string label);
+    bool submitSharedAssetTransaction(std::vector<collab::SharedAssetMutationRequest> requests,
+        std::function<collab::CommandBody(const std::vector<AssetRef>&)> makeCommand,
+        std::uint64_t sourceRevision, std::string label);
+    collab::SharedMutationResult advanceSharedDerivedMutation(const std::shared_ptr<SharedDerivedMutation>& mutation);
+    bool persistSharedDerivedResult(const SharedDerivedMutation& mutation, std::string_view status,
+                                    const collab::CommandBody* command = nullptr);
+    struct PluginStateUpload;
+    void uploadPluginStatePart(const std::shared_ptr<PluginStateUpload>& upload, bool right);
+    void finishPluginStateUpload(const std::shared_ptr<PluginStateUpload>& upload, const std::string& error);
     collab::SharedMutationResult prepareSharedAssetMutation(
         collab::SharedAssetMutationRequest request,
         PendingSharedAssetMutation pending);
@@ -2222,6 +2287,7 @@ private:
     struct WarpEdit {
         std::string trackId, clipId;
         ClipWarpModel before;
+        double beforeDuration = 0, beforeOffset = 0;
     };
     std::optional<WarpEdit> m_warpEdit;
     struct WarpPreview {
@@ -2238,16 +2304,44 @@ private:
                            const ClipWarpModel& warp, double fallbackDuration);
     std::optional<uint32_t> m_defaultTrackColor;
     collab::SharedMutationSink* m_sharedMutationSink = nullptr;
+    bool m_sharedEditingAllowed = true;
+    bool m_sharedPluginCatalogEnabled = false;
+    std::uint64_t m_sharedPluginCatalogRevision = 0;
+    std::vector<collab::PluginRequirement> m_sharedPluginCatalog;
+    SessionTransportHandler m_sessionTransportHandler;
+    bool m_sessionAuditionEnabled = false;
+    bool m_sessionAuditionWritable = true;
+    std::function<void(const std::vector<TrackAuditionState>&)> m_auditionChanged;
+    struct PluginStateSyncEntry {
+        std::string channelId;
+        std::string insertId;
+        bool dirty = false;
+        bool pending = false;
+        std::uint64_t generation = 0;
+        std::vector<std::uint8_t> left;
+        std::vector<std::uint8_t> right;
+    };
+    std::unordered_map<std::string, PluginStateSyncEntry> m_pluginStateSync;
+    std::function<void(const std::string&, const std::string&, bool)> m_pluginStateSyncCallback;
     collab::SharedAssetMutationSink* m_sharedAssetMutationSink = nullptr;
+    std::function<void(const std::string&)> m_sharedResultRecoveryCallback;
     struct PendingSharedAssetMutation {
         AssetRef expected;
         std::string cleanupPath;
+        collab::SharedAssetMutationRequest request;
         std::function<collab::SharedMutationResult(
             EngineController&, const AssetRef&)> complete;
+        std::function<void()> cancelled;
     };
+    bool persistSharedAssetResult(const PendingSharedAssetMutation& pending, std::string_view status,
+                                  const AssetRef* verified = nullptr);
     std::unordered_map<std::string, PendingSharedAssetMutation>
         m_pendingSharedAssetMutations;
     std::uint64_t m_clipGeometryRevision = 1;
+    std::uint64_t m_sharedProjectionRevision = 0;
+    std::function<bool(std::string_view)> m_sharedGestureLeaseCheck;
+    bool m_restoringSharedPreview = false;
+    void restoreSharedPreview(const std::function<void()>& restore);
     UndoStack m_undo;
     WaveformCache m_waveforms;
     PluginManager m_pluginManager;
@@ -2404,6 +2498,10 @@ private:
     void appendLibraryStates(recovery::RecoverySnapshot& snapshot) const;
     void loadLibraryStates(const std::string& packageDir,
                            const std::string& fallbackPackageDir = {});
+    audio::Result loadLocalClipShelf();
+    audio::Result persistLocalClipShelf(bool mergeCurrent);
+    std::vector<ClipLibraryEntry> m_localClipShelf;
+    bool m_localClipShelfLoaded = false;
     audio::Result restoreLibraryPluginStates(const std::vector<TrackModel>& tracks,
                                              bool clipsOnlyForFirst);
     std::unordered_map<std::string, std::vector<std::uint8_t>> m_clipLibraryStates;
