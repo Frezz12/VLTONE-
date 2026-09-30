@@ -77,6 +77,19 @@ qsizetype uniquePendingOperationCount(
     return qsizetype(operationIds.size());
 }
 
+std::optional<ProjectCommand> journalCommandFromJson(
+    const nlohmann::json& json, const QString& projectId, const QString& operationId) {
+    if (QUuid(projectId).isNull() || QUuid(operationId).isNull()) return std::nullopt;
+    auto command = daw::collab::projectCommandFromJson(json);
+    if (!command || command->meta.operationId != operationId.toStdString())
+        return std::nullopt;
+    // The eight-field wire format deliberately omits envelope metadata.
+    // Restore the project from the authenticated journal namespace, just as
+    // incoming committed commands restore it from their server envelope.
+    command->meta.projectId = projectId.toStdString();
+    return command;
+}
+
 bool persistPendingCommand(const CollaborationService* service,
                            const ProjectCommand& command) {
     // Dependency-injected/state-machine fixtures have no authenticated account
@@ -531,13 +544,9 @@ CollaborationCommandBridge::journaledOperations(
             bytes.constData(), bytes.constData() + bytes.size(), nullptr,
             false);
         if (json.is_discarded()) continue;
-        std::string error;
-        auto command = daw::collab::projectCommandFromJson(json, &error);
-        if (!command || command->meta.projectId != projectId ||
-            QString::fromStdString(command->meta.operationId) !=
-                files.at(index).completeBaseName().toLower()) {
-            continue;
-        }
+        auto command = journalCommandFromJson(json, projectId,
+            files.at(index).completeBaseName().toLower());
+        if (!command) continue;
         result.push_back(std::move(*command));
     }
     return result;
@@ -545,9 +554,25 @@ CollaborationCommandBridge::journaledOperations(
 
 bool CollaborationCommandBridge::retireJournaledOperation(
     const QString& projectId, const QString& operationId) {
+    QString transactionId;
+    const QString path = pendingJournalPath(m_service, projectId, operationId);
+    if (!path.isEmpty() && QFileInfo::exists(path)) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) return false;
+        const auto bytes = file.read(kMaximumJournaledCommandBytes + 1);
+        if (bytes.size() > kMaximumJournaledCommandBytes) return false;
+        const auto json = nlohmann::json::parse(bytes.constData(),
+            bytes.constData() + bytes.size(), nullptr, false);
+        const auto command = journalCommandFromJson(json, projectId, operationId);
+        if (!command) return false;
+        transactionId = QString::fromStdString(command->meta.transactionId);
+    }
     const bool removed =
         removePendingCommand(m_service, projectId, operationId);
-    if (removed) forgetPending(operationId.toStdString());
+    if (removed) {
+        forgetPending(operationId.toStdString());
+        if (!transactionId.isEmpty()) emit localTransactionDurablyObserved(transactionId);
+    }
     return removed;
 }
 
@@ -1430,6 +1455,15 @@ bool checkCollaborationCommandBridgeForTest(QString* error) {
     ProjectCommand local = scalarCommand(
         "33333333-3333-4333-8333-333333333333",
         daw::collab::ProjectScalar::Tempo, 135.0);
+    const auto journalJson = daw::collab::projectCommandToJson(local);
+    const QString journalOperation = QString::fromStdString(local.meta.operationId);
+    const auto restoredJournal = journalCommandFromJson(journalJson, projectId, journalOperation);
+    if (!restoredJournal || restoredJournal->meta.projectId != projectId.toStdString() ||
+        daw::collab::projectCommandToJson(*restoredJournal) != journalJson ||
+        journalCommandFromJson(journalJson, projectId, QStringLiteral("44444444-4444-4444-8444-444444444444")) ||
+        journalCommandFromJson(journalJson, QString(), journalOperation) ||
+        journalCommandFromJson(nlohmann::json::object(), projectId, journalOperation))
+        return fail(QStringLiteral("saved pending command lost its project binding or accepted corrupt metadata"));
     const LocalOperationResult submitted = bridge.submitLocal(local);
     if (!submitted.submitted() || sent.size() != 1 ||
         gateway.pending().size() != 1 ||
