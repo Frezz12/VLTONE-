@@ -74,7 +74,7 @@ bool PianoRollWindow::checkWorkflowsForTest(const QString& images) {
     workspace.show();
     pianoFrame.present();
     QApplication::processEvents();
-    bool ok = true;
+    bool ok = PianoRollView::checkVelocityRampForTest(images);
     const auto check = [&](bool pass, const char* label) {
         std::printf("%s piano workflow: %s\n", pass ? "PASS" : "FAIL", label);
         ok &= pass;
@@ -295,4 +295,159 @@ bool TimelineWidget::checkMidiClipOpeningForTest() {
     std::printf("%s piano workflow: empty MIDI lane creates only, existing clip opens on double click\n",
                 onlyCreate && thenOpen ? "PASS" : "FAIL");
     return onlyCreate && thenOpen;
+}
+
+bool PianoRollView::checkVelocityRampForTest(const QString& images) {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false).isOk()) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Midi, "Velocity ramp");
+    const auto clipId = controller.addMidiClip(track, 0, 8);
+    PianoRollView view(&controller);
+    view.setAttribute(Qt::WA_DontShowOnScreen);
+    view.resize(800, 400);
+    view.setClip(QString::fromStdString(track), QString::fromStdString(clipId));
+    view.show();
+    QApplication::processEvents();
+    view.m_showKeyboard = view.m_showVelocityLane = true;
+    view.m_laneHeight = 110;
+    view.m_laneParam = LaneParam::Velocity;
+    view.m_pxPerBeat = 100;
+    view.m_rowHeight = 16;
+    view.m_scrollX = 0;
+    view.m_scrollY = (127 - 66) * 16 - 150;
+    view.m_tool = Tool::Draw;
+
+    std::vector<daw::NoteModel> fixture(7);
+    const double beats[] = {0.5, 1, 1.5, 2, 2, 3, 4};
+    const int velocities[] = {90, 70, 50, 110, 80, 100, 60};
+    for (std::size_t i = 0; i < fixture.size(); ++i) {
+        fixture[i].id = "ramp-" + std::to_string(i);
+        fixture[i].startBeats = beats[i];
+        fixture[i].lengthBeats = 0.25;
+        fixture[i].pitch = 60 + int(i);
+        fixture[i].velocity = velocities[i];
+        fixture[i].pan = float(i) * 0.1f - 0.3f;
+    }
+    controller.setClipNotes(track, clipId, fixture, "Prepare Velocity Ramp Check");
+    view.invalidateSoundingPitchIndex();
+    view.invalidateNotePaintIndex();
+    const auto notes = [&] { return daw::midiNotes(*view.clip()); };
+    const auto original = notes();
+    view.m_selected = {QString::fromStdString(original.back().id)};
+    view.m_primary = *view.m_selected.begin();
+    const auto selection = view.m_selected;
+    const auto primary = view.m_primary;
+    const auto depth = controller.undoDepth();
+    bool ok = true;
+    const auto check = [&](bool pass, const char* label) {
+        std::printf("%s velocity ramp: %s\n", pass ? "PASS" : "FAIL", label);
+        ok &= pass;
+    };
+    const auto point = [&](double beat, int velocity) {
+        return QPointF(view.beatsToX(beat), view.laneValueToY(velocity / 127.0));
+    };
+    const auto mouse = [&](QEvent::Type type, QPointF pos,
+                           Qt::MouseButton button = Qt::RightButton) {
+        QMouseEvent event(type, pos, view.mapToGlobal(pos),
+                          type == QEvent::MouseMove ? Qt::NoButton : button,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : button,
+                          Qt::NoModifier);
+        QApplication::sendEvent(&view, &event);
+    };
+    const auto matches = [&](std::initializer_list<int> values) {
+        if (values.size() != original.size()) return false;
+        auto expected = original;
+        auto value = values.begin();
+        for (auto& note : expected) note.velocity = *value++;
+        return notes() == expected;
+    };
+    mouse(QEvent::MouseButtonPress, point(1, 100) + QPointF(2, 0));
+    mouse(QEvent::MouseMove, point(3, 20));
+    check(matches({90, 100, 80, 60, 60, 20, 60}) &&
+          view.m_selected == selection && view.m_primary == primary &&
+          controller.undoDepth() == depth && view.m_auditionPitch < 0,
+          "downward ramp follows note onset, includes chords and unselected notes, preserves other properties");
+    if (!images.isEmpty()) {
+        QDir().mkpath(images);
+        view.grab().save(QDir(images).filePath("velocity-ramp.png"));
+    }
+    mouse(QEvent::MouseMove, point(2, 50));
+    check(matches({90, 100, 75, 50, 50, 100, 60}),
+          "shrinking the range restores notes outside the new line");
+    mouse(QEvent::MouseMove, point(0.5, 40));
+    check(matches({40, 100, 50, 110, 80, 100, 60}),
+          "reversing left restores the previous span and draws in the other direction");
+    mouse(QEvent::MouseMove, point(3, 20));
+    mouse(QEvent::MouseButtonRelease, point(3, 40));
+    const auto downward = notes();
+    check(matches({90, 100, 85, 70, 70, 40, 60}) &&
+          controller.undoDepth() == depth + 1 && !view.hasActivePointerGesture() &&
+          view.m_laneOrig.empty(),
+          "release applies its exact endpoint and commits one undo for the whole gesture");
+    controller.undo();
+    check(notes() == original, "undo restores all original velocities");
+    controller.redo();
+    check(notes() == downward, "redo restores the complete ramp");
+    controller.undo();
+
+    mouse(QEvent::MouseButtonPress, point(1, 20));
+    mouse(QEvent::MouseButtonRelease, point(3, 100));
+    check(matches({90, 20, 40, 60, 60, 100, 60}) &&
+          controller.undoDepth() == depth + 1,
+          "an upward ramp also works when the final move is coalesced into release");
+    controller.undo();
+    mouse(QEvent::MouseButtonPress, point(1, 127));
+    mouse(QEvent::MouseMove, QPointF(view.beatsToX(3), view.laneTop() - 500));
+    check(matches({90, 127, 127, 127, 127, 127, 60}),
+          "dragging above the lane clamps velocity at 127");
+    mouse(QEvent::MouseButtonRelease, QPointF(view.beatsToX(3), view.height() + 100));
+    check(matches({90, 127, 96, 64, 64, 1, 60}),
+          "dragging below the lane clamps at the existing minimum velocity of 1");
+    controller.undo();
+
+    mouse(QEvent::MouseButtonPress, point(1, 100));
+    mouse(QEvent::MouseMove, point(2, 40));
+    QEvent lostGrab(QEvent::UngrabMouse);
+    QApplication::sendEvent(&view, &lostGrab);
+    check(matches({90, 100, 70, 40, 40, 100, 60}) &&
+          !view.hasActivePointerGesture() && controller.undoDepth() == depth + 1,
+          "losing the mouse grab safely commits the last delivered endpoint");
+    controller.undo();
+    mouse(QEvent::MouseButtonPress, point(1, 100));
+    mouse(QEvent::MouseMove, point(2, 40));
+    view.setLaneParam(LaneParam::Pan);
+    check(matches({90, 100, 70, 40, 40, 100, 60}) &&
+          !view.hasActivePointerGesture() && controller.undoDepth() == depth + 1,
+          "switching to pan ends the velocity gesture without changing pan");
+    const auto panDepth = controller.undoDepth();
+    mouse(QEvent::MouseButtonPress, point(1, 20));
+    mouse(QEvent::MouseButtonRelease, point(3, 100));
+    check(matches({90, 100, 70, 40, 40, 100, 60}) &&
+          controller.undoDepth() == panDepth,
+          "right-click behavior in the pan lane remains unchanged");
+    view.setLaneParam(LaneParam::Velocity);
+    controller.undo();
+
+    mouse(QEvent::MouseButtonPress, point(5, 40));
+    mouse(QEvent::MouseButtonRelease, point(6, 80));
+    check(notes() == original && controller.undoDepth() == depth,
+          "an empty span does not change notes or add history");
+    const auto erasePoint = view.noteRect(original.front()).center();
+    mouse(QEvent::MouseButtonPress, erasePoint);
+    mouse(QEvent::MouseButtonRelease, erasePoint);
+    auto erased = original;
+    erased.erase(erased.begin());
+    check(notes() == erased && controller.undoDepth() == depth + 1,
+          "right-drag in the note grid still erases notes");
+    controller.undo();
+    view.m_selected = {QString::fromStdString(original[1].id),
+                       QString::fromStdString(original[5].id)};
+    view.m_primary = QString::fromStdString(original[1].id);
+    mouse(QEvent::MouseButtonPress, point(1, 70), Qt::LeftButton);
+    mouse(QEvent::MouseMove, point(1, 80), Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, point(1, 80), Qt::LeftButton);
+    check(matches({90, 80, 50, 110, 80, 110, 60}) &&
+          controller.undoDepth() == depth + 1,
+          "left-drag still adjusts the selected group by a relative velocity offset");
+    return ok;
 }

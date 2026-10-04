@@ -5,6 +5,7 @@
 
 #include <span>
 #include <string>
+#include <cmath>
 
 namespace daw::engine {
 
@@ -12,6 +13,12 @@ namespace daw::engine {
 /// and continue to sum every input. PluginNode separates Sidechain edges into
 /// the first auxiliary input bus instead of leaking them into the dry signal.
 enum class InputRole : std::uint8_t { Main = 0, Sidechain = 1 };
+
+/// Offline-only opt-in. Ordered nodes own their DSP state and depend solely on
+/// their context and immutable session data. Capture nodes expose their last
+/// block to the file sink and must not advance until that block is consumed.
+/// Unknown nodes retain the block-synchronous renderer.
+enum class OfflineNodePolicy : std::uint8_t { Barrier, Ordered, Capture };
 
 /// Compile-time MIDI participation. The graph uses this to reserve fixed event
 /// storage only for nodes and edges that can actually carry MIDI. The default is
@@ -22,6 +29,8 @@ enum class MidiNodeRole : std::uint8_t {
     Input = 1,
     Output = 2,
     InputOutput = 3,
+    /// Forwards upstream events, but cannot generate any without MIDI input.
+    Passthrough = 7,
 };
 
 constexpr bool acceptsMidi(MidiNodeRole role) noexcept {
@@ -51,16 +60,51 @@ struct ProcessContext {
     /// Index-parallel with `inputs`.
     std::span<const InputRole> inputRoles;
     FrameCount frames = 0;
-    SamplePos timelinePosition = 0;   // in samples, at the block start
+    SamplePos timelinePosition = 0;   // timeline sample at this node's input
     SampleRate sampleRate = 48000.0;
     bool playing = false;
     /// The realtime deadline is lifted (mixdown, freeze, bounce). It does not
     /// license a different signal: the offline render must match the live one
     /// sample for sample.
     bool offline = false;
-    /// Musical time for this block. Derived from the transport once per block,
-    /// so every node in the graph agrees on it.
+    /// Musical time of the aligned inputs, adjusted for upstream latency.
     TransportInfo transport;
+
+    void compensateInputLatency(FrameCount latency) noexcept {
+        if (latency == 0 || (!playing && !offline) || sampleRate <= 0.0 ||
+            transport.tempo <= 0.0) return;
+        const double samplesPerBeat = 60.0 * sampleRate / transport.tempo;
+        const double originalBeat = transport.ppqPosition;
+        timelinePosition -= SamplePos(latency);
+        transport.ppqPosition -= double(latency) / samplesPerBeat;
+        // During a live cycle, delayed audio at the loop's beginning belongs
+        // to the preceding cycle's end. Offline passes run a linear range.
+        const double loopLength = transport.loopEndPpq - transport.loopStartPpq;
+        if (!offline && transport.looping && loopLength > 0.0 &&
+            originalBeat >= transport.loopStartPpq &&
+            transport.ppqPosition < transport.loopStartPpq) {
+            double offset = std::fmod(transport.ppqPosition - transport.loopStartPpq, loopLength);
+            if (offset < 0.0) offset += loopLength;
+            const double wrapped = transport.loopStartPpq + offset;
+            timelinePosition += SamplePos(std::llround((wrapped - transport.ppqPosition) * samplesPerBeat));
+            transport.ppqPosition = wrapped;
+        }
+        const double barLength = transport.timeSigDenominator > 0
+            ? double(transport.timeSigNumerator) * 4.0 / transport.timeSigDenominator : 4.0;
+        transport.barStartPpq = barLength > 0.0
+            ? std::floor(transport.ppqPosition / barLength) * barLength : 0.0;
+    }
+
+    double ppqAtOffset(FrameCount frame) const noexcept {
+        double beat = transport.ppqPosition;
+        if (sampleRate > 0.0 && transport.tempo > 0.0)
+            beat += double(frame) * transport.tempo / (sampleRate * 60.0);
+        if (!offline && playing && transport.looping &&
+            transport.loopEndPpq > transport.loopStartPpq && beat >= transport.loopEndPpq)
+            beat = transport.loopStartPpq + std::fmod(beat - transport.loopStartPpq,
+                transport.loopEndPpq - transport.loopStartPpq);
+        return beat;
+    }
 
     /// The MIDI arriving on the same edges as the audio, in the same order.
     ///
@@ -103,6 +147,10 @@ public:
     /// scheduler job. This never changes their DSP calls or summation order.
     virtual bool canFuseTask() const noexcept { return false; }
 
+    virtual OfflineNodePolicy offlineNodePolicy() const noexcept {
+        return OfflineNodePolicy::Barrier;
+    }
+
     /// Whether this node reads and/or writes MIDI. Audio-only built-ins return
     /// None, avoiding a reserved 512-event buffer per node. InputOutput remains
     /// the default for source compatibility with custom Node implementations.
@@ -127,6 +175,8 @@ public:
     /// Queried after preparation and after a complete offline block. The live
     /// callback's fallback audio is not evidence of a successful export.
     virtual Status offlineStatus() const noexcept { return {}; }
+    /// Last live block's DSP status; fallback silence is still a failed block.
+    virtual Status processStatus() const noexcept { return {}; }
     /// Control thread: warm immutable source data before play/locate. Must not
     /// mutate live DSP state; the published graph may still be processing.
     virtual void preparePlayback(SamplePos) {}

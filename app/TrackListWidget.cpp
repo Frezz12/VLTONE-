@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "UiPerformance.hpp"
 #include "UiFrameClock.hpp"
 #include "TrackListWidget.hpp"
@@ -629,17 +630,20 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                     monitor->setToolTip(tr("Input monitoring"));
                 });
 
-        // Only ever seen while there is a recording to be had — see
-        // `applyRecordChips`. It says "this take lands here", and because the
-        // targets *are* the selection, clicking it adds or removes the track
-        // from that selection rather than setting some second kind of arm.
+    }
+    if (recordable || folder) {
         record = chip("R", Theme::record(),
-                      tr("Record onto this track. Pinning one track — or "
-                         "several — overrides the selection until they are all "
-                         "un-pinned."));
+                      folder
+                          ? tr("Record onto the first free track in this folder. "
+                               "Pinning overrides the selection.")
+                          : tr("Record onto this track. Pinning one track — or "
+                               "several — overrides the selection until they are all "
+                               "un-pinned."));
         record->hide();
-        connect(record, &QAbstractButton::clicked, this, [this, id](bool on) {
-            emit recordPinToggled(id, on);
+        connect(record, &QAbstractButton::clicked, this, [this, id] {
+            // A selected target is already lit, but its first click must pin
+            // it. Toggle the explicit pin, not the selection's checked state.
+            emit recordPinToggled(id, !m_recordPins.contains(id));
         });
     }
 
@@ -878,10 +882,13 @@ void TrackListWidget::refreshGlobalChips() {
     }
 }
 
-void TrackListWidget::setRecordState(bool engaged, const QStringList& targets) {
-    if (m_recordEngaged == engaged && m_recordTargets == targets) return;
+void TrackListWidget::setRecordState(bool engaged, const QStringList& targets,
+                                     const QStringList& pins) {
+    if (m_recordEngaged == engaged && m_recordTargets == targets &&
+        m_recordPins == pins) return;
     m_recordEngaged = engaged;
     m_recordTargets = targets;
+    m_recordPins = pins;
     applyRecordChips();
 }
 
@@ -891,7 +898,10 @@ void TrackListWidget::applyRecordChips() {
         const QString id = QString::fromStdString(row.id);
         row.record->setVisible(m_recordEngaged);
         QSignalBlocker block(row.record);
-        row.record->setChecked(m_recordTargets.contains(id));
+        const bool pinned = m_recordPins.contains(id);
+        const bool targeted = m_recordTargets.contains(id);
+        row.record->setChecked(targeted || pinned);
+        row.record->setAutoMark(targeted && !pinned);
         applyRowAdaptivity(row);
     }
 }
@@ -1222,8 +1232,9 @@ void TrackListWidget::wheelEvent(QWheelEvent* ev) {
     // wheel over this column asks for the same movement the timeline would
     // have made.
     if (ev->phase() == Qt::ScrollBegin) m_wheelScrollRemainder = 0.0;
-    const int delta = ui::wholeScrollPixels(-ui::scrollPixels(*ev).y(), m_wheelScrollRemainder);
-    if (delta) emit verticalScrollRequested(delta);
+    ui::ScrollMotion::scroll(this,{0,-ui::scrollPixels(*ev).y()},!ev->pixelDelta().isNull(),
+        [this]{return QPointF(0,m_scrollY);},
+        [this](QPointF p){const int delta=int(std::lround(p.y()))-m_scrollY;if(delta)emit verticalScrollRequested(delta);});
     if (ev->phase() == Qt::ScrollEnd) m_wheelScrollRemainder = 0.0;
     ev->accept();
 }
@@ -1716,15 +1727,14 @@ void TrackListWidget::showDropFeedback() {
 }
 
 void TrackListWidget::finishDrag() {
-    const int from = m_dragRow;
+    const auto movedIds = m_dragTrackIds;
     const int to = m_dropRow;
     const bool intoFolder = m_dropIntoFolder;
     const int folderRow = m_dropFolderRow;
     cancelDrag();
-    if (from < 0 || from >= int(m_rows.size()) || to < 0) return;
+    if (movedIds.empty() || to < 0) return;
 
     const auto& project = m_controller->project();
-    const std::string movedId = m_rows[size_t(from)].id;
 
     std::string parentId;
     size_t targetIndex = 0;
@@ -1744,7 +1754,7 @@ void TrackListWidget::finishDrag() {
         targetIndex = project.indexOf(neighbourId);
     }
 
-    if (m_controller->moveTrack(movedId, targetIndex, parentId)) {
+    if (m_controller->moveTracks(movedIds, targetIndex, parentId)) {
         emit orderChanged();
     }
 }
@@ -1752,7 +1762,8 @@ void TrackListWidget::finishDrag() {
 void TrackListWidget::cancelDrag() {
     m_pressing = false;
     m_dragging = false;
-    m_dragRow = -1;
+    m_dragTrackIds.clear();
+    m_clickSelectionOnRelease.clear();
     m_dropRow = -1;
     m_dropIntoFolder = false;
     m_dropFolderRow = -1;
@@ -2067,20 +2078,11 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
         }
     }
 
-    // Text entry still owns its caret and selection gestures, but clicking the
-    // track name must first establish the same row context as clicking any
-    // other non-control part of the header.
+    // An idle name shares the header's selection and reorder gestures. Only
+    // an active rename owns QLineEdit's caret, text drag and context menu.
     if (w->property("trackSelectionOnly").toBool()) {
         const auto* name = qobject_cast<QLineEdit*>(w);
-        const bool editing = name && !name->isReadOnly();
-        if (ev->type() == QEvent::MouseButtonPress && !editing) {
-            auto* mouse = static_cast<QMouseEvent*>(ev);
-            if (mouse->button() == Qt::LeftButton)
-                clickSelect(id.toString(), mouse->modifiers());
-        }
-        // An idle name opens the track menu, including Rename. During an edit
-        // QLineEdit keeps its text-specific context menu.
-        if (ev->type() != QEvent::ContextMenu || editing)
+        if (name && !name->isReadOnly())
             return QWidget::eventFilter(obj, ev);
     }
 
@@ -2130,10 +2132,24 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
                 w->setCursor(Qt::SizeVerCursor);
                 return true;
             }
-            clickSelect(id.toString(), me->modifiers());
+            const QString trackId = id.toString();
+            m_clickSelectionOnRelease.clear();
+            if (!(me->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) &&
+                m_selectedIds.size() > 1 && m_selectedIds.contains(trackId)) {
+                // A plain click collapses on release; a drag carries the set.
+                m_clickSelectionOnRelease = trackId;
+                if (m_selectedId != trackId) {
+                    m_selectedId = trackId;
+                    applyHighlight();
+                    emitSelection();
+                }
+            } else {
+                clickSelect(trackId, me->modifiers());
+            }
             m_pressing = true;
             m_pressPos = posInList;
-            m_dragRow = rowAtPosition(m_pressPos);
+            m_dragTrackIds = actionTargets(trackId);
+            return true;
         }
         return false; // children still get the click
     }
@@ -2179,6 +2195,7 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
             return false;
         }
         m_dragging = true;
+        m_clickSelectionOnRelease.clear();
         setCursor(Qt::ClosedHandCursor);
         updateDropTarget(pos);
         return true;
@@ -2197,9 +2214,17 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
             finishDrag();
             return true;
         }
-        m_pressing = false;
+        if (m_pressing) {
+            const QString clicked = m_clickSelectionOnRelease;
+            cancelDrag();
+            if (!clicked.isEmpty()) clickSelect(clicked, Qt::NoModifier);
+            return true;
+        }
         return false;
     }
+    case QEvent::UngrabMouse:
+        if (m_pressing) cancelDrag();
+        break;
     case QEvent::ContextMenu: {
         auto* ce = static_cast<QContextMenuEvent*>(ev);
         // Right-clicking inside a selection acts on the whole of it; right-

@@ -6,6 +6,7 @@
 #include "Internal/SamplerPrecompute.hpp"
 #include "Internal/SamplerVoice.hpp"
 #include "Common/RealtimeSnapshot.hpp"
+#include "DSP/DeClick.hpp"
 
 #include <array>
 #include <atomic>
@@ -183,6 +184,9 @@ private:
     /// Published snapshot. Loaded once per block by `process` and kept alive
     /// for its duration, so the control thread may replace it at any time.
     engine::RealtimeSnapshot<SampleData> m_sample;
+    engine::dsp::DeClick m_sourceTransition;
+    const engine::SampleBuffer* m_renderAudio = nullptr;
+    bool m_sourceOutputInitialized = false;
     /// The decode, before the precomputed stage — kept so changing a
     /// precomputed knob re-bakes from the original instead of compounding.
     std::shared_ptr<const engine::SampleBuffer> m_raw;

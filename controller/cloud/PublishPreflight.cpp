@@ -11,7 +11,7 @@
 namespace daw::cloud {
 namespace {
 
-constexpr std::array<std::string_view, 13> kBuiltinUids{
+constexpr std::array<std::string_view, 15> kBuiltinUids{
     "daw.delay",
     "daw.modulation",
     "daw.sampler",
@@ -19,6 +19,8 @@ constexpr std::array<std::string_view, 13> kBuiltinUids{
     "daw.gravity",
     "daw.graphit",
     "daw.compressor",
+    "daw.cla2a",
+    "daw.channel-color",
     "daw.doubler",
     "daw.doubler-pro",
     "daw.chorus",
@@ -213,6 +215,7 @@ PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
     std::unordered_map<std::string, std::string> seenAssets;
 
     inspectInsertList(project.masterInserts, "master", report, seenAssets);
+    inspectInsertList(project.masterMiniModules,"masterMiniModules",report,seenAssets);
     for (std::size_t trackIndex = 0; trackIndex < project.tracks.size();
          ++trackIndex) {
         const TrackModel& track = project.tracks[trackIndex];
@@ -224,6 +227,9 @@ PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
             requireId(track.instrument.id, trackLocation + "/instrument", report);
         inspectInsert(track.instrument, trackLocation + "/instrument", report,
                       seenAssets);
+        inspectInsertList(track.miniModules,trackLocation+"/miniModules",report,seenAssets);
+        if(track.channelColor) { requireId(track.channelColor->id,trackLocation+"/channelColor",report);
+            inspectInsert(*track.channelColor,trackLocation+"/channelColor",report,seenAssets); }
         inspectInsertList(track.samplerFx.inserts, trackLocation + "/sampler-fx",
                           report, seenAssets);
         inspectInsertList(track.inserts, trackLocation, report, seenAssets);

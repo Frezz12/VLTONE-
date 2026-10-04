@@ -42,6 +42,9 @@ struct Spec {
     /// and automation retain the device block's event resolution. An explicit
     /// size (up to 8192) is available for compatibility checks and benchmarks.
     std::uint32_t blockSize = 0;
+    /// Compatibility/benchmark switch; eligibility is checked by the engine.
+    bool pipeline = true;
+    bool forcePipeline = false;
     Channels channels = Channels::Stereo;
 
     // ── Range ──
@@ -113,6 +116,7 @@ struct Progress {
 
 struct Report {
     std::vector<std::string> files;
+    bool usedPipeline = false;
     bool cancelled = false;
     /// Everything actually written, including any tail.
     double renderedSeconds = 0.0;

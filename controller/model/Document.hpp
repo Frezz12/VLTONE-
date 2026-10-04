@@ -2,8 +2,10 @@
 
 #include "DSP/Curve.hpp"
 #include "Common/WarpMap.hpp"
+#include "Internal/MiniModuleDefinition.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -653,12 +655,16 @@ PluginEditorChannel pluginEditorChannelFromString(const std::string& name);
 struct InsertParameter {
     std::string id;      ///< format-native, stable across versions
     double value = 0.0;
+    friend bool operator==(const InsertParameter&, const InsertParameter&) = default;
 };
 
 /// An insert (plugin) slot on a channel. `format == None` means a free slot —
 /// which is exactly the shape every project written before plugin hosting has,
 /// so old files load with no migration step.
 struct InsertModel {
+    std::optional<plugins::mini::MiniModuleDefinition> miniModule;
+    std::string miniModuleMode;
+    bool miniModulePostFx = false;
     /// Stable across a plugin swap in the same slot, which is what lets the
     /// stored state, the automation lanes and an open editor window keep
     /// pointing at the right thing.
@@ -706,6 +712,8 @@ struct InsertModel {
     /// hint; these values are the durable shared requirements.
     std::string pluginVersion;
     std::string parameterFingerprint;
+    /// Fixed component profile of the channel-owned COLOR stage (16 hex digits).
+    std::string profileSeed;
     int stateSchemaVersion = 0;
     AssetRef stateAsset;
     AssetRef rightStateAsset;
@@ -795,6 +803,9 @@ struct TrackModel {
     /// nothing in the engine reads it yet. Persisted so a project keeps the
     /// choice across the change.
     InsertModel instrument;
+    /// Absent until COLOR is configured; the graph owns a bypassed default.
+    std::optional<InsertModel> channelColor;
+    std::vector<InsertModel> miniModules;
     /// A sampler-only post-instrument lane. It is silent/inactive unless the
     /// current instrument is the owning built-in sampler.
     SamplerFxModel samplerFx;
@@ -835,6 +846,8 @@ struct NotebookCueModel {
 };
 
 struct ProjectMetadata {
+    /// Identity for local UI preferences; collapse flags never enter the document.
+    std::string miniModuleProjectId;
     std::string name = "Untitled";
     std::string author;
     /// Project artwork. A saved package owns its copy in Content/; an unsaved
@@ -868,6 +881,7 @@ struct ProjectMetadata {
     float masterVolume = 1.0f;
     float masterPan = 0.0f;
     std::vector<InsertModel> masterInserts;
+    std::vector<InsertModel> masterMiniModules;
 };
 
 struct ProjectModel : ProjectMetadata {

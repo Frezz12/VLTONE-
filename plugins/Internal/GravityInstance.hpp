@@ -96,6 +96,7 @@ public:
     static std::string_view uid() noexcept;
 
     const PluginDescriptor& descriptor() const noexcept override { return m_descriptor; }
+    bool supportsOfflinePipelining() const noexcept override { return true; }
     void setListener(PluginListener* listener) noexcept override { m_listener = listener; }
 
     bool setBusLayout(const PluginBusLayout& wanted, PluginBusLayout& accepted) override;

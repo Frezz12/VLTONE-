@@ -1,0 +1,140 @@
+{
+  "format": "vltcreator",
+  "version": 2,
+  "name": "SDK SeededNoise",
+  "definition": {
+    "id": "creator.sdk.SeededNoise",
+    "name": "SDK SeededNoise",
+    "version": 4,
+    "nodes": [
+      {
+        "id": "in",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "out",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "cpp",
+        "type": "cpp_function",
+        "version": 1,
+        "parameters": {},
+        "function": {
+          "aggregateReturn": false,
+          "analyzedHash": "52ae453cf5e68740d950ff225587bb986706703001b47c7932b4bf55b7cc7c09",
+          "arguments": [
+            "$state",
+            "level"
+          ],
+          "context": false,
+          "entry": "process",
+          "inputs": [
+            {
+              "cppType": "float",
+              "default": 0.029999999329447746,
+              "id": "level",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "level",
+              "signature": "",
+              "type": "number"
+            }
+          ],
+          "outputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "out",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "Output",
+              "signature": "",
+              "type": "audio"
+            }
+          ],
+          "prepare": true,
+          "reset": false,
+          "returnType": "vlt::AudioFrame",
+          "sdk": 1,
+          "source": "#include <vlt/creator.hpp>\n\nstruct State {\n    vlt::Random random;\n};\n\nvoid prepare(State& state, vlt::PrepareContext& context)\n{\n    state.random.seed(context.seed);\n}\n\nVLT_NODE vlt::AudioFrame process(\n    State& state, VLT_PORT(\"level\") float level = 0.03f)\n{\n    level = vlt::clamp(level, 0.0f, 0.2f);\n    return {(state.random.next() * 2.0f - 1.0f) * level,\n            (state.random.next() * 2.0f - 1.0f) * level};\n}\n",
+          "stateType": "State"
+        }
+      },
+      {
+        "id": "ui",
+        "type": "interface",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "ui",
+        "to": "cpp",
+        "fromPort": "level",
+        "toPort": "level"
+      },
+      {
+        "from": "cpp",
+        "to": "out",
+        "fromPort": "out",
+        "toPort": "in"
+      }
+    ],
+    "controls": [
+      {
+        "id": "level",
+        "name": "level",
+        "unit": "",
+        "min": 0.0,
+        "max": 0.2,
+        "default": 0.03,
+        "log": false,
+        "style": "",
+        "bindings": []
+      }
+    ],
+    "modes": [],
+    "defaultMode": "",
+    "appearance": {
+      "theme": "studio",
+      "controlStyle": "machined",
+      "backgroundColor": "",
+      "backgroundImage": ""
+    },
+    "code": {
+      "abi": 1,
+      "wasm": "AGFzbQEAAAABHgVgAn9/AX9gAABgAAF/YAR8f39+AGAGf398fH5/AAIPAQN2bHQHcmVzZXJ2ZQAAAwgHAQICAgMBBAQFAXABAQEFBQEBBIACBggBfwFBwMwECwdnCAZtZW1vcnkCAA9fX3N0YWNrX3BvaW50ZXIDAA12bHRfaGVhcF9iYXNlAAIHdmx0X2FiaQADCXZsdF90YWJsZQAECHZsdF9pbml0AAUJdmx0X3Jlc2V0AAYLdmx0X3Byb2Nlc3MABwqQBAcCAAsIAEHAzISAAAsEAEEBCwgAQcCIgIAAC3cAEIGAgIAAQQAgATYCsIiAgABBACAAOQOIiICAAEEAIAM3A6iIgIAAQQBCADcD0IuAgABBACADQgGFIgNCASADQgFWGzcDgIiAgABBACACQQN0IgFBBBCAgICAADYC0IqAgABBACABQQQQgICAgAA2ApCLgIAACwIAC/gCBAF+AnwCfQF8I4CAgIAAQRBrGkEAIAM5A5CIgIAAQQAgBUEARzoAtIiAgAACQCAAQQJHDQACQCABRQ0AIARCf3whBkEAKAKQi4CAACEFQQAoAtCKgIAAIQBBACsDiIiAgAAhB0EAKQOAiICAACEERAAAAAAAAAAAIQgDQCAFQwAAAABDzcxMPiAAKgIAIgkgCUPNzEw+XhsgCUMAAAAAXRsiCSAEQg2GIASFIgRCB4ggBIUiBEIRhiAEhSIEQiiItUMAAIAzlCIKIAqSQwAAgL+SlDgCACAFQQRqIAkgBEINhiAEhSIEQgeIIASFIgRCEYYgBIUiBEIoiLVDAACAM5QiCiAKkkMAAIC/kpQ4AgAgAEEIaiEAIAVBCGohBSAGQgF8IQYgCCILRAAAAAAAAPA/oCEIIAFBf2oiAQ0AC0EAIAY3A6CIgIAAQQAgBDcDgIiAgABBACACIAMgC6IgB0QAAAAAAABOQKKjoDkDmIiAgAALDwsACws/AQBBgAgLOAEAAAAAAAAAAAAAAABw50AAAAAAAABeQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAACUgbGx2bS5mdW5jX2F0dHIuYW5ub3RhdGUudmx0Lm5vZGX/////AJUBBG5hbWUADAttb2R1bGUud2FzbQFiCAAHcmVzZXJ2ZQERX193YXNtX2NhbGxfY3RvcnMCDXZsdF9oZWFwX2Jhc2UDB3ZsdF9hYmkECXZsdF90YWJsZQUIdmx0X2luaXQGCXZsdF9yZXNldAcLdmx0X3Byb2Nlc3MHEgEAD19fc3RhY2tfcG9pbnRlcgkIAQAFLmRhdGEAJglwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQEFY2xhbmcGMjAuMS44AJQBD3RhcmdldF9mZWF0dXJlcwgrC2J1bGstbWVtb3J5Kw9idWxrLW1lbW9yeS1vcHQrFmNhbGwtaW5kaXJlY3Qtb3ZlcmxvbmcrCm11bHRpdmFsdWUrD211dGFibGUtZ2xvYmFscysTbm9udHJhcHBpbmctZnB0b2ludCsPcmVmZXJlbmNlLXR5cGVzKwhzaWduLWV4dA==",
+      "sourceHash": "1d08b136f59a4baa8019044b41f75dc963091d18e3b93ad517fc6130c09217ca"
+    }
+  },
+  "activeMode": "",
+  "positions": {
+    "": {
+      "in": [
+        20,
+        40
+      ],
+      "cpp": [
+        390,
+        40
+      ],
+      "out": [
+        820,
+        40
+      ],
+      "ui": [
+        20,
+        310
+      ]
+    }
+  },
+  "viewports": {},
+  "codeNode": "cpp",
+  "codeCursors": {}
+}

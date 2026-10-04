@@ -71,6 +71,7 @@ struct CompiledGraph {
         std::uint32_t dependencies = 0;  // in-degree
         std::uint32_t inlineSuccessor = kInvalidNode;
         bool inlineTask = false;
+        FrameCount inputLatency = 0;     // arrival time of the aligned inputs
         FrameCount latency = 0;          // cumulative, from the sources
     };
 
@@ -167,6 +168,12 @@ public:
     /// graph that has any latency in it at all.
     Result<std::shared_ptr<const CompiledGraph>> compile(
         const PrepareInfo& info, const CompiledGraph* previous = nullptr);
+
+    /// Check before compile mutates a node shared with a running snapshot.
+    /// New nodes may prepare freely; reused nodes need the render gate when
+    /// their preparation or sidechain activation is about to change.
+    bool requiresRenderStopped(const PrepareInfo& info,
+                               const CompiledGraph& previous) const;
 
     /// True when the graph changed since the last compile.
     bool isDirty() const noexcept { return m_dirty; }

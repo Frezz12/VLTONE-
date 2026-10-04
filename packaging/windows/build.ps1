@@ -10,6 +10,8 @@ param(
     [string] $WindowsSdkVersion = "10.0.26100.0",
     [ValidateRange(0, 65535)]
     [int] $BuildNumber = 0,
+    [ValidatePattern('^([A-Za-z0-9]+([. -][A-Za-z0-9]+)*)?$')]
+    [string] $ReleaseChannel = "beta",
     [string] $SignPfxPath = "",
     [switch] $DisableCollaboration,
     [switch] $RequireSignature,
@@ -48,6 +50,10 @@ $artifactVersion = if ($BuildNumber -gt 0) {
     "$applicationVersion-Build-$BuildNumber"
 } else {
     $applicationVersion
+}
+if ($ReleaseChannel) {
+    $displayVersion += " $ReleaseChannel"
+    $artifactVersion += "-" + $ReleaseChannel.Replace(" ", "-")
 }
 $vcpkgManifest = Get-Content -LiteralPath (Join-Path $repository "vcpkg.json") `
     -Raw | ConvertFrom-Json
@@ -238,7 +244,7 @@ Invoke-Checked cmake --preset windows-vcpkg -B $BuildDirectory `
     "-DDAW_ENABLE_COLLABORATION=$collaboration" `
     "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=$collaboration" `
     "-DVLTONE_BUILD_NUMBER=$BuildNumber" `
-    "-DVLTONE_RELEASE_CHANNEL=" `
+    "-DVLTONE_RELEASE_CHANNEL=$ReleaseChannel" `
     "-DVLT_DEFAULT_API_ORIGIN=$ApiOrigin" `
     "-DCMAKE_SYSTEM_VERSION=$WindowsSdkVersion"
 # Catch Qt binary/header incompatibilities before compiling the full engine.

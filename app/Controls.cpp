@@ -6,6 +6,9 @@
 #include "UiConstants.hpp"
 
 #include <QAction>
+#include <QAccessibleWidget>
+#include <QAccessible>
+#include <QInputDialog>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QFontMetrics>
@@ -2423,12 +2426,35 @@ constexpr int kSamplerKnobSize = 40;
 constexpr int kSamplerKnobWidth = 72;
 constexpr int kSamplerKnobHeight = 78;
 constexpr int kKnobCaptionHeight = 13;
+class AccessibleKnob final : public QAccessibleWidget, public QAccessibleValueInterface {
+public:
+    explicit AccessibleKnob(Knob* knob) : QAccessibleWidget(knob,QAccessible::Slider) {}
+    void* interface_cast(QAccessible::InterfaceType type) override {
+        return type==QAccessible::ValueInterface ? static_cast<QAccessibleValueInterface*>(this) : QAccessibleWidget::interface_cast(type);
+    }
+    QVariant currentValue() const override { return static_cast<Knob*>(object())->value(); }
+    void setCurrentValue(const QVariant& value) override {
+        bool ok=false; const auto next=value.toDouble(&ok); if(ok) static_cast<Knob*>(object())->editValue(next);
+    }
+    QVariant maximumValue() const override { return static_cast<Knob*>(object())->maximumValue(); }
+    QVariant minimumValue() const override { return static_cast<Knob*>(object())->minimumValue(); }
+    QVariant minimumStepSize() const override { return .1; }
+};
+QAccessibleInterface* knobAccessibleFactory(const QString&,QObject* object) {
+    if(auto* knob=qobject_cast<Knob*>(object)) return new AccessibleKnob(knob);
+    return nullptr;
+}
 } // namespace
 
 Knob::Knob(const QString& caption, QWidget* parent)
     : QWidget(parent), m_caption(caption) {
+    static const bool installed=[] { QAccessible::installFactory(knobAccessibleFactory); return true; }();
+    (void)installed;
+    setAccessibleName(caption);
     setFixedSize(kKnobSize + 12, kKnobSize + kKnobCaptionHeight);
-    setCursor(Qt::SizeVerCursor);
+    // No cursor override: a knob keeps the arrow while it is dragged, so the
+    // pointer never turns into a glyph that has to be re-read every time the
+    // user reaches for a control.
     setFocusPolicy(Qt::TabFocus);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
@@ -2503,10 +2529,22 @@ void Knob::setVisualStyle(VisualStyle style) {
 }
 
 void Knob::setValue(double value) {
+    if (!std::isfinite(value)) return;
     const double clamped = std::clamp(value, m_min, m_max);
     if (std::abs(clamped - m_value) < 1e-9) return;
     m_value = clamped;
+    QAccessibleValueChangeEvent changed(this,m_value); QAccessible::updateAccessibility(&changed);
     update();
+}
+
+void Knob::editValue(double value) {
+    if (!isEnabled() || !std::isfinite(value)) return;
+    commit(value); emit editFinished();
+}
+
+void Knob::finishEditing() {
+    if (!m_dragging) return;
+    m_dragging=false; ValueBubble::dismiss(); update(); emit editFinished();
 }
 
 double Knob::fraction() const {
@@ -2543,11 +2581,13 @@ QString elidedCaption(const QPainter& p, const QString& text, int width) {
 } // namespace
 
 void Knob::commit(double value) {
+    if (!std::isfinite(value)) return;
     double next = std::clamp(value, m_min, m_max);
     if (m_detent) next = std::clamp(m_detent(next), m_min, m_max);
     if (m_stepped) next = std::round(next);
     if (std::abs(next - m_value) < 1e-9) return;
     m_value = next;
+    QAccessibleValueChangeEvent changed(this,m_value); QAccessible::updateAccessibility(&changed);
     update();
     emit valueChanged(m_value);
 }
@@ -2849,7 +2889,7 @@ void Knob::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
     m_dragging = true;
     m_dragStartFraction = fraction();
-    m_dragStartY = int(ev->position().y());
+    m_dragStartY = ev->position().y();
     ValueBubble::showFor(this, QPoint(width() / 2, 0), text());
     update();
 }
@@ -2859,7 +2899,9 @@ void Knob::mouseMoveEvent(QMouseEvent* ev) {
     const double travel = (ev->modifiers() & Qt::ShiftModifier) ? kKnobTravel * 4.0
                                                                 : kKnobTravel;
     const double moved = double(m_dragStartY) - ev->position().y();
-    commit(valueForFraction(m_dragStartFraction + moved / travel));
+    m_dragStartY = ev->position().y();
+    m_dragStartFraction=std::clamp(m_dragStartFraction+moved/travel,0.0,1.0);
+    commit(valueForFraction(m_dragStartFraction));
     ValueBubble::showFor(this, QPoint(width() / 2, 0), text());
 }
 
@@ -2881,14 +2923,20 @@ void Knob::mouseDoubleClickEvent(QMouseEvent*) {
 }
 
 void Knob::contextMenuEvent(QContextMenuEvent* event) {
-    if (!m_automatable) {
-        QWidget::contextMenuEvent(event);
-        return;
-    }
-    if (automationContextMenu(this, event)) emit automateRequested();
+    finishEditing();
+    QMenu menu(this);
+    auto* precise=menu.addAction(tr("Enter value…"));
+    auto* automate=m_automatable ? menu.addAction(tr("Create automation")) : nullptr;
+    const auto picked=menu.exec(event->globalPos());
+    if (picked==precise) {
+        bool accepted=false;
+        const double next=QInputDialog::getDouble(this,accessibleName(),tr("Value"),m_value,m_min,m_max,3,&accepted);
+        if (accepted) editValue(next);
+    } else if (automate && picked==automate) emit automateRequested();
 }
 
 void Knob::wheelEvent(QWheelEvent* ev) {
+    if (ev->angleDelta().y()==0) { ev->ignore(); return; }
     const double fine = (ev->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
     const double direction = ev->angleDelta().y() > 0 ? 1.0 : -1.0;
     if (m_logarithmic && m_min > 0.0 && m_max > m_min && !m_stepped)
@@ -2901,6 +2949,8 @@ void Knob::wheelEvent(QWheelEvent* ev) {
 }
 
 bool Knob::event(QEvent* event) {
+    if (event->type()==QEvent::UngrabMouse || event->type()==QEvent::Hide || event->type()==QEvent::WindowDeactivate)
+        finishEditing();
     if (event->type() == QEvent::ShortcutOverride) {
         const auto* key = static_cast<QKeyEvent*>(event);
         if (!(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {

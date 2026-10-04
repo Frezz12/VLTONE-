@@ -337,6 +337,61 @@ whatever else is using them.
 to one physical output pair. PortAudio receives those selectors through
 `PaAsioStreamInfo`; full multi-output buses are deliberately outside this scope.
 
+## Plugin scanner diagnostics
+
+The controller schedules one disposable process per discovery or component
+validation, with one shared limit across CLAP, VST1/2, VST3 and AU. The automatic
+limit is the logical CPU count capped at four (two if unknown). For a diagnostic
+run, call PluginManager::startScan(false, {.maxProcesses = 1}); the explicit
+range is one to four. scanSnapshot() provides consistent component progress,
+active jobs, outcomes, timings, cache reuse and infrastructure errors.
+
+The helper supports --discover --format=… --path=… and
+--validate-descriptor --format=…, which reads one descriptor JSON from stdin.
+The --protocol command advertises transport version 1 and command capabilities.
+Result compatibility remains schema 4; the disk cache is version 2 and migrates
+version 1 without revalidating current entries. Shared-state probes continue
+using --validate --shared-state with fresh inspection.
+
+Pending discoveries and components survive cancellation. A timed-out attempt
+gets one exclusive retry after ordinary jobs; crashes do not retry automatically.
+Cancelled attempts do not increment counters or blacklist a component. Full
+rescan retains unchanged modules' last good descriptors until their replacement
+results arrive. A current, completed catalogue starts no helper, even for the
+handshake.
+
+Run the process-level acceptance test with:
+
+~~~powershell
+ctest --test-dir build-windows -R "plugin_(parallel_scan|scan|vst|vst3|contract)_test" --output-on-failure
+~~~
+
+On macOS, also run plugin_au_scan_test. It exercises real system Audio Units
+through the new protocol. An unavailable system component registry produces
+CTest **Skipped** (exit 77), not evidence that AU validation works. Both Windows
+and macOS acceptance runs are required before releasing the parallel scanner.
+
+The optional plugin_scan_benchmark target accepts a JSON manifest:
+
+~~~json
+{
+  "outputDirectory": "/absolute/path/to/disposable/scan-benchmark",
+  "processCounts": [1, 4, 1, 4],
+  "modules": [
+    {"format": "vst3", "path": "/absolute/path/to/Example.vst3"}
+  ]
+}
+~~~
+
+Build this target explicitly, then pass the manifest filename to the executable.
+It creates separate caches and a report.json, checks catalogue equality, and
+does not use the user's cache. Only listed modules execute code; other candidates
+in those folders receive benchmark-only exclusion records. An optional module
+limit selects the first N discovered components of a large shell; its initial
+discovery is reported separately as setupDiscoveryMs, outside timed validation.
+Alternate process counts to expose OS filesystem-cache and plugin warm-up effects;
+timings are observations, not a CI requirement for a fixed speedup.
+
 ## Windows validation status
 
 The results from the first native Windows bring-up are now captured as

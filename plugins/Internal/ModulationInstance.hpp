@@ -37,6 +37,7 @@ class ModulationInstance : public PluginInstance {
     explicit ModulationInstance(Kind kind);
     Kind kind() const noexcept { return m_kind; }
     const PluginDescriptor &descriptor() const noexcept override { return descriptorFor(m_kind); }
+    bool supportsOfflinePipelining() const noexcept override { return true; }
     void setListener(PluginListener *listener) noexcept override { m_listener = listener; }
     bool setBusLayout(const PluginBusLayout &, PluginBusLayout &) override;
     PluginBusLayout busLayout() const override { return m_layout; }

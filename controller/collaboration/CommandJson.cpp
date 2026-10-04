@@ -621,6 +621,7 @@ json sharedInsertToJson(const InsertModel& insert, std::uint32_t schemaVersion) 
                 {"rightParameters", parametersToJson(insert.rightParameters)},
                 {"assetBindings", bindingsToJson(insert.assetBindings)}};
     if (schemaVersion >= 6 && !insert.parameterFingerprint.empty()) out["parameterFingerprint"] = insert.parameterFingerprint;
+    if (schemaVersion >= 6 && !insert.profileSeed.empty()) out["profileSeed"] = insert.profileSeed;
     if (insert.sidechainTrackIds.size() > 1) out["sidechainTrackIds"] = insert.sidechainTrackIds;
     if (insert.slideDelivery || insert.slideBendRange != 2 || insert.slideReleaseReserve != 2) { out["slideDelivery"]=insert.slideDelivery; out["slideBendRange"]=insert.slideBendRange; out["slideReleaseReserve"]=insert.slideReleaseReserve; }
     return out;
@@ -632,7 +633,7 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert, std::uint32_t 
                        "pluginVersion", "stateSchemaVersion", "mix",
                        "channelMode", "sidechainTrackId", "stateAsset",
                        "rightStateAsset", "parameters", "rightParameters",
-                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve","parameterFingerprint"}) ||
+                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve","parameterFingerprint","profileSeed"}) ||
         !value.at("id").is_string() || !value.at("name").is_string() ||
         !value.at("bypassed").is_boolean() ||
         !value.at("format").is_string() || !value.at("uid").is_string() ||
@@ -665,6 +666,12 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert, std::uint32_t 
         insert.parameterFingerprint = value.at("parameterFingerprint").get<std::string>();
         if (insert.parameterFingerprint.size() != 64 || !std::all_of(insert.parameterFingerprint.begin(),
             insert.parameterFingerprint.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) return false;
+    }
+    if(value.contains("profileSeed")) {
+        if(schemaVersion<6 || !value["profileSeed"].is_string()) return false;
+        insert.profileSeed=value["profileSeed"].get<std::string>();
+        if(insert.profileSeed.size()!=16 || !std::all_of(insert.profileSeed.begin(),insert.profileSeed.end(),
+            [](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');})) return false;
     }
     insert.stateSchemaVersion = value.at("stateSchemaVersion").get<int>();
     insert.mix = value.at("mix").get<float>();

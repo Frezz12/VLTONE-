@@ -100,8 +100,10 @@ std::string categoryName(VstIntPtr category, bool instrument) {
     }
 }
 
-PluginDescriptor describe(AEffect* effect, const std::string& path,
-                          std::string_view shellName) {
+} // namespace
+
+PluginDescriptor vst::describeEffect(AEffect* effect, const std::string& path,
+                                     std::string_view shellName) {
     PluginDescriptor descriptor;
     descriptor.format = Format::Vst;
     descriptor.path = path;
@@ -158,6 +160,7 @@ PluginDescriptor describe(AEffect* effect, const std::string& path,
     return descriptor;
 }
 
+namespace {
 bool parseUid(std::string_view uid, VstInt32& value) {
     if (uid.size() != 8 &&
         !(uid.size() > 9 && uid.starts_with("00000000:"))) {
@@ -230,8 +233,8 @@ std::vector<std::string> VstFactory::enumerateCandidates(
     return found;
 }
 
-std::vector<PluginDescriptor> VstFactory::inspect(
-    const std::string& path) const {
+static std::vector<PluginDescriptor> inspectVst(
+    const std::string& path, bool discoveryOnly) {
     std::vector<PluginDescriptor> descriptors;
     auto module = VstModule::open(path);
     if (!module) return descriptors;
@@ -245,7 +248,7 @@ std::vector<PluginDescriptor> VstFactory::inspect(
         root->dispatcher(root, effGetPlugCategory, 0, 0, nullptr, 0.0f);
 
     if (category != kPlugCategShell) {
-        descriptors.push_back(describe(root, path, {}));
+        descriptors.push_back(vst::describeEffect(root, path));
         root->dispatcher(root, effClose, 0, 0, nullptr, 0.0f);
         return descriptors;
     }
@@ -263,6 +266,15 @@ std::vector<PluginDescriptor> VstFactory::inspect(
     root->dispatcher(root, effClose, 0, 0, nullptr, 0.0f);
 
     for (const ShellEntry& child : children) {
+        if (discoveryOnly) {
+            PluginDescriptor descriptor;
+            descriptor.format = Format::Vst;
+            descriptor.path = path;
+            descriptor.uid = hexUid(child.id);
+            descriptor.name = child.name;
+            descriptors.push_back(std::move(descriptor));
+            continue;
+        }
         vst::HostContext childHost{&scanner, &shellScanHostDispatch, child.id};
         AEffect* effect = module->create(childHost);
         if (!effect) continue;
@@ -274,7 +286,7 @@ std::vector<PluginDescriptor> VstFactory::inspect(
             effect->dispatcher(effect, effClose, 0, 0, nullptr, 0.0f);
             continue;
         }
-        PluginDescriptor descriptor = describe(effect, path, child.name);
+        PluginDescriptor descriptor = vst::describeEffect(effect, path, child.name);
         // A shell component is addressed by the id returned by the shell even
         // if the child forgot to copy it into AEffect::uniqueID.
         descriptor.uid = hexUid(child.id);
@@ -282,6 +294,14 @@ std::vector<PluginDescriptor> VstFactory::inspect(
         effect->dispatcher(effect, effClose, 0, 0, nullptr, 0.0f);
     }
     return descriptors;
+}
+
+std::vector<PluginDescriptor> VstFactory::inspect(const std::string& path) const {
+    return inspectVst(path, false);
+}
+
+std::vector<PluginDescriptor> VstFactory::discover(const std::string& path) const {
+    return inspectVst(path, true);
 }
 
 std::unique_ptr<PluginInstance> VstFactory::create(

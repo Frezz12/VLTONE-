@@ -504,7 +504,7 @@ bool ClapInstance::activate(const PluginProcessInfo& info) {
     // Match PluginNode's fixed block-event budget. Keeping all event layouts
     // in one union means a dense chord/CC block can use the whole budget
     // without four independent worst-case allocations per plugin instance.
-    const std::size_t kBlockEventCapacity = engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate);
+    const std::size_t kBlockEventCapacity = pluginBlockEventCapacity(m_descriptor, info, m_parameters.size());
     const std::size_t capacity =
         std::max(kBlockEventCapacity, m_parameters.size() + 256);
     m_inputEventScratch.resize(capacity);
@@ -986,7 +986,7 @@ PluginProcessDisposition ClapInstance::process(
     }
 
     clap_process_t process{};
-    process.steady_time = context.sampleTime;
+    process.steady_time = context.steadyTime;
     process.frames_count = frames;
     process.transport = &transport;
     process.audio_inputs = m_inputBufferDescs.empty() ? nullptr : m_inputBufferDescs.data();

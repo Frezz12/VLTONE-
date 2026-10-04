@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "PianoRollWindow.hpp"
 #include "SlideCurveEditor.hpp"
 #include "SlideNotes.hpp"
@@ -481,7 +482,7 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     m_geometryPaintNotes.clear();
     m_noteUpdateScratch.clear();
     m_laneOrig.clear();
-    m_laneDragging = m_marquee = m_erasing = m_muting = false;
+    m_laneDragging = m_laneRamping = m_marquee = m_erasing = m_muting = false;
     m_scrubbingPlayhead = false;
     m_rangeGrab = RangeGrab::None;
     m_pointerButton = Qt::NoButton;
@@ -712,6 +713,8 @@ void PianoRollView::setLaneHeight(double px) {
 }
 
 void PianoRollView::setLaneParam(LaneParam param, const QString& laneId) {
+    if (param != m_laneParam || laneId != m_laneId)
+        finishInterruptedPointerGesture();
     m_laneParam = param;
     m_laneId = laneId;
     emitStatus();
@@ -833,11 +836,12 @@ bool PianoRollView::checkAuditionForTest() {
         return std::vector<daw::engine::MidiEvent>(buffer.events().begin(),
                                                   buffer.events().end());
     };
-    const auto one = [&](const std::string& id, int pitch, bool on) {
+    const auto one = [&](const std::string& id, int pitch, bool on, bool audition = true) {
         const auto result = events(id);
         return result.size() == 1 && result.front().data1 == pitch &&
+            (audition ? result.front().noteId >= 0 : result.front().noteId < 0) &&
             (on ? result.front().isNoteOn() && result.front().data2 == 83
-                : result.front().isNoteOff());
+                : result.front().isNoteOff() && result.front().isNoteChoke == audition);
     };
     const auto point = [&](double beat, int pitch) {
         return QPointF(view.beatsToX(beat),
@@ -861,6 +865,10 @@ bool PianoRollView::checkAuditionForTest() {
     const QString first = view.m_primary;
     check(one(track, 60, true) && events(other).empty() && !view.m_auditionPerformance,
           "placing a note sounds only its clip's instrument at the drawn velocity");
+    bool stillHeld = true;
+    for (int block = 0; block < 30; ++block) stillHeld &= events(track).empty();
+    check(stillHeld && view.m_auditionPitch == 60,
+          "holding past the written note length does not schedule a preview note-off");
     mouse(QEvent::MouseButtonRelease, point(0.5, 60));
     check(one(track, 60, false), "release ends the drawn note preview");
     mouse(QEvent::MouseButtonPress, point(2, 62));
@@ -874,6 +882,44 @@ bool PianoRollView::checkAuditionForTest() {
           "changing pitch during placement releases the old preview");
     mouse(QEvent::MouseButtonRelease, point(3, 65));
     check(one(track, 65, false), "release ends the final placement pitch");
+    mouse(QEvent::MouseButtonPress, point(3.5, 67));
+    check(one(track, 67, true), "a coalesced-release placement starts its preview");
+    mouse(QEvent::MouseButtonRelease, point(3.75, 69));
+    check(one(track, 67, false) && view.note(view.m_primary)->pitch == 69,
+          "release commits the final pitch without sounding a new preview");
+
+    controller.play();
+    mouse(QEvent::MouseButtonPress, point(6, 72));
+    const QString duringPlay = view.m_primary;
+    check(controller.isPlaying() && events(track).empty() && view.m_auditionPitch < 0,
+          "placing a note during Play is silent");
+    mouse(QEvent::MouseMove, point(6.5, 73));
+    mouse(QEvent::MouseButtonRelease, point(6.75, 74));
+    check(events(track).empty() && view.note(duringPlay)->pitch == 74,
+          "placement and its final pitch still edit immediately during Play");
+    const QPointF playingKey(20, point(0, 60).y());
+    mouse(QEvent::MouseButtonPress, playingKey);
+    check(one(track, 60, true, false), "piano keys remain a performance input during Play");
+    view.refreshPlayheadFrame();
+    check(events(track).empty(), "transport updates do not cut a performed piano key");
+    mouse(QEvent::MouseButtonRelease, playingKey);
+    check(one(track, 60, false, false), "performed key release keeps ordinary MIDI semantics");
+
+    controller.pause();
+    mouse(QEvent::MouseButtonPress, point(6, 70));
+    check(one(track, 70, true), "a paused transport allows held note preview");
+    controller.play();
+    view.refreshPlayheadFrame();
+    check(one(track, 70, false) && view.m_auditionPitch < 0,
+          "starting Play cuts a held placement preview");
+    mouse(QEvent::MouseMove, point(6.25, 70));
+    mouse(QEvent::MouseButtonRelease, point(6.25, 70));
+    check(events(track).empty(), "movement and release cannot restart preview during Play");
+    controller.stop();
+    mouse(QEvent::MouseButtonPress, point(7, 71));
+    check(one(track, 71, true), "a stopped transport allows preview again");
+    mouse(QEvent::MouseButtonRelease, point(7, 71));
+    check(one(track, 71, false), "the resumed preview still ends on release");
 
     auto body = view.noteRect(*view.note(first)).center();
     mouse(QEvent::MouseButtonPress, body);
@@ -913,14 +959,14 @@ bool PianoRollView::checkAuditionForTest() {
 
     const QPointF piano(20, point(0, 60).y());
     mouse(QEvent::MouseButtonPress, piano);
-    check(one(track, 60, true), "the onscreen piano keyboard still sounds");
+    check(one(track, 60, true, false), "the onscreen piano keyboard still sounds");
     mouse(QEvent::MouseMove, piano - QPointF(0, 16));
     const auto keys = events(track);
     check(keys.size() == 2 && keys[0].isNoteOff() && keys[0].data1 == 60 &&
           keys[1].isNoteOn() && keys[1].data1 == 61,
           "dragging piano keys changes the heard pitch");
     mouse(QEvent::MouseButtonRelease, piano - QPointF(0, 16));
-    check(one(track, 61, false), "piano key release ends its preview");
+    check(one(track, 61, false, false), "piano key release ends its preview");
 
     for (QEvent::Type type : {QEvent::FocusOut, QEvent::UngrabMouse,
                               QEvent::WindowDeactivate, QEvent::Hide}) {
@@ -2284,6 +2330,41 @@ double PianoRollView::laneValueAtY(double y) const {
     const double bottom = double(height()) - kHandleRadius - 2.0;
     const double travel = std::max(1.0, bottom - top);
     return std::clamp((bottom - y) / travel, 0.0, 1.0);
+}
+
+void PianoRollView::updateVelocityRamp(const QPointF& pos) {
+    if (!m_laneRamping || !clip()) return;
+    const QPointF endpoint(std::max(0.0, xToBeats(pos.x())),
+                           std::max(1.0 / 127.0, laneValueAtY(pos.y())));
+    const double from = std::min(m_laneRampAnchor.x(), endpoint.x());
+    const double to = std::max(m_laneRampAnchor.x(), endpoint.x());
+    const double previousFrom = std::min(m_laneRampAnchor.x(), m_laneRampEnd.x());
+    const double previousTo = std::max(m_laneRampAnchor.x(), m_laneRampEnd.x());
+    const double tolerance = 0.5 / std::max(1.0, pxPerBeat());
+    const double span = endpoint.x() - m_laneRampAnchor.x();
+    m_noteUpdateScratch.clear();
+    for (const auto& original : m_laneOrig) {
+        const double beat = original.startBeats;
+        const bool inside = beat >= from - tolerance && beat <= to + tolerance;
+        const bool wasInside = beat >= previousFrom - tolerance &&
+                               beat <= previousTo + tolerance;
+        if (!inside && !wasInside) continue;
+        daw::NoteModel next = original;
+        if (inside) {
+            const double fraction = std::abs(span) > 1e-9
+                ? std::clamp((beat - m_laneRampAnchor.x()) / span, 0.0, 1.0)
+                : 1.0;
+            const double value = m_laneRampAnchor.y() +
+                fraction * (endpoint.y() - m_laneRampAnchor.y());
+            next.velocity = std::clamp(int(std::lround(value * 127.0)), 1, 127);
+        }
+        // Receding or reversing the line restores notes from the press snapshot.
+        m_noteUpdateScratch.push_back(std::move(next));
+    }
+    m_laneRampEnd = endpoint;
+    m_controller->setNoteStates(m_trackId.toStdString(), m_clipId.toStdString(),
+                                m_noteUpdateScratch);
+    update();
 }
 
 QPointF PianoRollView::laneHandle(const daw::NoteModel& n) const {
@@ -4153,8 +4234,23 @@ void PianoRollView::paintLane(QPainter& p) {
         }
     } else paintLaneValues(p);
 
+    if (m_laneRamping) {
+        p.save();
+        p.setClipRect(parameterField, Qt::IntersectClip);
+        const QPointF anchor(beatsToX(m_laneRampAnchor.x()),
+                             laneValueToY(m_laneRampAnchor.y()));
+        const QPointF endpoint(beatsToX(m_laneRampEnd.x()),
+                               laneValueToY(m_laneRampEnd.y()));
+        p.setPen(QPen(laneAccent, 1.5));
+        p.drawLine(anchor, endpoint);
+        p.setBrush(laneAccent);
+        p.drawEllipse(anchor, 3.0, 3.0);
+        p.drawEllipse(endpoint, 3.0, 3.0);
+        p.restore();
+    }
+
     // The value of whatever is being dragged, so a move is readable.
-    if (m_laneDragging && !m_primary.isEmpty()) {
+    if (m_laneDragging && !m_laneRamping && !m_primary.isEmpty()) {
         if (const auto* n = note(m_primary)) {
             QString readout = tr("velocity %1").arg(n->velocity);
             if (m_laneParam == LaneParam::Pan) {
@@ -4427,7 +4523,26 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     m_duplicateDragPending = false;
     m_duplicateDragCreated = false;
 
-    // The right button erases in every mode; the Erase tool uses the same
+    if (ev->button() == Qt::RightButton && m_showVelocityLane &&
+        m_laneParam == LaneParam::Velocity && !m_preview &&
+        pos.x() >= keyboardWidth() && pos.y() > laneTop() + kLaneGripPx) {
+        double beat = std::max(0.0, xToBeats(pos.x()));
+        if (const auto* hit = note(handleAt(pos))) beat = hit->startBeats;
+        m_laneRampAnchor = QPointF(beat, std::max(1.0 / 127.0, laneValueAtY(pos.y())));
+        m_laneRampEnd = m_laneRampAnchor;
+        m_laneOrig = daw::midiNotes(*clip());
+        m_noteUpdateScratch.reserve(m_laneOrig.size());
+        m_laneDragging = m_laneRamping = true;
+        m_suppressContextMenu = true;
+        setCursor(Qt::CrossCursor);
+        // The anchor is a note onset when a column is hit; keep that exact beat
+        // for the press update even if the pointer landed beside its stem.
+        updateVelocityRamp(QPointF(beatsToX(beat), pos.y()));
+        ev->accept();
+        return;
+    }
+
+    // The right button erases in every grid mode; the Erase tool uses the same
     // stroke with the left button. Holding and sweeping rubs out a run of notes.
     // Arming it anywhere over the grid, not only on top of a note, is what
     // makes that sweep usable: you start the stroke on empty space and rub
@@ -4740,6 +4855,11 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
         return;
     }
 
+    if (m_laneRamping) {
+        updateVelocityRamp(pos);
+        return;
+    }
+
     if (m_laneDragging) {
         // Delta, not absolute: a group keeps its relative dynamics — or its
         // relative stereo spread, when the lane is on pan.
@@ -4866,13 +4986,14 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
                                     m_clipId.toStdString(), m_moveWorking);
         // Only the new note being placed follows the pointer audibly. Moving
         // existing notes, including Shift-drag copies, is a silent edit.
-        if (m_drawing) auditionPitch(pitch);
+        if (m_drawing && m_pointerButton != Qt::NoButton) auditionPitch(pitch);
     }
     invalidateSoundingPitchIndex();
     update();
 }
 
 void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
+    stopAudition();
     if (slideRelease()) { m_pointerButton = Qt::NoButton; ev->accept(); return; }
     m_pointerButton = Qt::NoButton;
     if (m_rangeGrab != RangeGrab::None) {
@@ -4908,6 +5029,7 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
                               Qt::LeftButton, ev->modifiers());
         mouseMoveEvent(&finalMove);
     }
+    if (m_laneRamping) updateVelocityRamp(ev->position());
     // One signal per gesture, not per move: the moves themselves are live edits.
     const bool changed =
         (m_moving && !m_duplicateDragPending) || m_resizing || m_laneDragging ||
@@ -4953,7 +5075,7 @@ void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
     m_duplicateDragPending = false;
     m_duplicateDragCreated = false;
     m_geometryPaintNotes.clear();
-    m_laneDragging = false;
+    m_laneDragging = m_laneRamping = false;
     m_marquee = false;
     m_erasing = false;
     m_eraseChanged = false;
@@ -5127,6 +5249,7 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
     // independent, because a dense chord voicing and a long phrase need
     // different things from the same clip.
     if (modifiers & Qt::ControlModifier) {
+        ui::ScrollMotion::cancel(this);
         // Pixel deltas are far smaller than a notch, so the exponent keeps a
         // pinch-less trackpad zoom moving at the same rate as a wheel.
         zoomHorizontal(std::pow(1.0015, fine ? dy : dy * 0.9));
@@ -5134,6 +5257,7 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
         return;
     }
     if (modifiers & Qt::AltModifier) {
+        ui::ScrollMotion::cancel(this);
         zoomVertical(std::pow(1.0015, fine ? dy : dy * 0.9));
         ev->accept();
         return;
@@ -5142,6 +5266,7 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
     // gesture that changes several notes at once.
     if (m_showVelocityLane && ev->position().y() >= laneTop() &&
         !m_selected.isEmpty() && m_laneParam != LaneParam::Controller) {
+        ui::ScrollMotion::cancel(this);
         m_wheelAccum += int(std::lround(fine ? dy * 4.0 : dy));
         const int steps = m_wheelAccum / kWheelPerStep;
         if (steps != 0) {
@@ -5158,15 +5283,10 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
 
     // Shift is the mouse-wheel way of asking for horizontal scroll; a trackpad
     // just reports the sideways component and needs no modifier.
-    if (modifiers & Qt::ShiftModifier) {
-        setScrollX(m_scrollX - dy - dx);
-    } else {
-        if (dx != 0.0) setScrollX(m_scrollX - dx);
-        m_scrollY -= dy;
-        clampScroll();
-    }
-    emit viewportChanged();
-    ui::FrameWidget::update();
+    const QPointF delta=modifiers&Qt::ShiftModifier ? QPointF(-dy-dx,0) : QPointF(-dx,-dy);
+    ui::ScrollMotion::scroll(this,delta,fine,
+        [this]{return QPointF(m_scrollX,m_scrollY);},
+        [this](QPointF p){setScrollX(p.x());setScrollY(p.y());emit viewportChanged();ui::FrameWidget::update();});
     ev->accept();
 }
 
@@ -5195,6 +5315,11 @@ bool PianoRollView::event(QEvent* ev) {
             help->pos().x() >= keyboardWidth()) {
             QToolTip::showText(help->globalPos(),
                 tr("Local range for copying and repeating notes. Double-click to clear; the timeline loop is unchanged."), this);
+        } else if (clip() && m_showVelocityLane && m_laneParam == LaneParam::Velocity &&
+                   help->pos().x() >= keyboardWidth() &&
+                   help->pos().y() > laneTop() + kLaneGripPx) {
+            QToolTip::showText(help->globalPos(),
+                tr("Right-drag to draw a velocity ramp."), this);
         } else {
             QToolTip::hideText();
             ev->ignore();
@@ -5299,9 +5424,7 @@ void PianoRollView::keyReleaseEvent(QKeyEvent* ev) {
 
 void PianoRollView::contextMenuEvent(QContextMenuEvent* ev) {
     if (m_suppressContextMenu) {
-        // The same right-press armed the eraser; a menu on top of that would be
-        // the second thing one button did, and it would land under the pointer
-        // exactly where the sweep is about to go.
+        // A right-button edit already owns this press; do not open a menu over it.
         m_suppressContextMenu = false;
         ev->accept();
         return;
@@ -5385,8 +5508,10 @@ void PianoRollView::updateCursor(const QPointF& pos) {
         unsetCursor();
         return;
     }
-    // While the right button is down the pointer *is* an eraser, whatever tool
-    // is selected — that is the one gesture that ignores the tool entirely.
+    if (m_laneRamping) {
+        setCursor(Qt::CrossCursor);
+        return;
+    }
     if (m_erasing) {
         setCursor(toolCursor(icons::Glyph::Eraser));
         return;
@@ -5551,6 +5676,7 @@ void PianoRollView::muteAt(const QPointF& pos, bool muted) {
 
 void PianoRollView::refreshPlayheadFrame() {
     if (!m_controller || !isVisible()) return;
+    if (m_controller->isPlaying() && !m_auditionPerformance) stopAudition();
 
     double currentX = -1.0;
     if (const auto* c = clip()) {
@@ -5598,6 +5724,12 @@ void PianoRollView::setLivePitches(const PitchMask& pitches) {
 }
 
 void PianoRollView::auditionPitch(int pitch) {
+    // Piano keys remain a performance input during playback. Placing notes
+    // previews the instrument only while the project transport is stopped.
+    if (m_pressedKey < 0 && m_controller->isPlaying()) {
+        stopAudition();
+        return;
+    }
     if (pitch == m_auditionPitch) return;
     stopAudition();
     if (pitch < 0 || pitch > 127 || m_trackId.isEmpty()) return;
@@ -8279,7 +8411,8 @@ bool PianoRollWindow::checkInteractionGesturesForTest() {
            numericToolControls && coalescedToolPreview &&
            navigatorZoom && navigatorAnchored && reverses && resets &&
            scrollAboveGrid &&
-           m_view->checkInteractionGesturesForTest() && checkMidiFileActionsForTest();
+           m_view->checkInteractionGesturesForTest() &&
+           PianoRollView::checkVelocityRampForTest() && checkMidiFileActionsForTest();
 }
 
 void PianoRollWindow::applyNavigationTheme() {

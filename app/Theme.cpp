@@ -146,8 +146,8 @@ QColor Theme::sectionDivider() const {
 }
 
 QColor Theme::accentText() const {
-    const QColor darkInk(18, 18, 20);
-    const QColor lightInk(250, 250, 252);
+    const QColor darkInk = accent.saturation() == 0 ? grey(18) : QColor(18, 18, 20);
+    const QColor lightInk = accent.saturation() == 0 ? grey(250) : QColor(250, 250, 252);
     const double luminance = relativeLuminance(accent);
     const double darkContrast = (luminance + 0.05) /
                                 (relativeLuminance(darkInk) + 0.05);
@@ -187,7 +187,15 @@ ThemeManager::ThemeManager() {
         m_defaultFont = app->font();
 
     m_presets = {
+        // Neutral black/grey chrome, including highlights and selection.
         make("dark", "Dark", true,
+             grey(18), grey(28), grey(40),
+             grey(237), grey(173),
+             grey(180), grey(212),
+             grey(192), grey(224),
+             grey(40), grey(64), QColor(180, 180, 180, 60),
+             grey(22), grey(24)),
+        make("dark-blue", "Dark Blue", true,
              colorFromRgb(0x17191D), colorFromRgb(0x25292F), colorFromRgb(0x333943),
              colorFromRgb(0xEDF0F4), colorFromRgb(0xA8B1BD),
              colorFromRgb(0x639EE4), colorFromRgb(0x86B8F0),

@@ -40,6 +40,9 @@ private:
     std::size_t firstSlot(std::uint64_t source, std::uint64_t page) const noexcept;
     std::size_t pin(std::uint64_t source, std::uint64_t page) noexcept;
     bool request(std::uint64_t source, std::uint64_t page) noexcept;
+    static std::uint64_t requestKey(const Request& request) noexcept;
+    void finishRequest(const Request& request) noexcept;
+    std::array<std::atomic<std::uint64_t>, 4096> m_pendingRequests{};
     void fill(std::uint64_t id, std::uint64_t page, const Source& source);
     void worker();
     bool m_locked = false;
@@ -71,7 +74,7 @@ public:
     std::span<const float> view(PcmReadCache& cache, std::uint64_t source,
                                 std::size_t sample, std::size_t count) noexcept;
 private:
-    struct Pin { PcmReadCache* cache; std::uint64_t source, page; std::size_t slot; const float* data; };
+    struct Pin { PcmReadCache* cache; std::uint64_t source, page; std::size_t slot; const float* data; std::uint64_t retryTick = 0; };
     void release(Pin& pin) noexcept;
     // Only the initialized prefix is inspected/released. Ordinary DSP nodes
     // never read PCM, and must not clear eight cursor records on every block.

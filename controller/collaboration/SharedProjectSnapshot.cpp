@@ -296,10 +296,13 @@ bool decodePluginLocation(const json& value, PluginLocation& result) {
     result.trackId = value.value("trackId", std::string());
     result.clipId = value.value("clipId", std::string());
     switch (result.chain) {
+        case PluginChain::MiniModules:
+            return false; // Mini modules are local-only.
         case PluginChain::Master:
             return result.trackId.empty() && result.clipId.empty();
         case PluginChain::Track:
         case PluginChain::Instrument:
+        case PluginChain::ChannelColor:
         case PluginChain::SamplerFx:
             return isUuid(result.trackId) && result.clipId.empty();
         case PluginChain::Clip:
@@ -415,11 +418,14 @@ audio::Result serializeSharedProjectSnapshot(
     for (const auto& [id, value] : document.deletedPluginInserts) {
         const bool validLocation = [&] {
             switch (value.location.chain) {
+                case PluginChain::MiniModules:
+                    return false; // Mini modules are local-only.
                 case PluginChain::Master:
                     return value.location.trackId.empty() &&
                            value.location.clipId.empty();
                 case PluginChain::Track:
                 case PluginChain::Instrument:
+                case PluginChain::ChannelColor:
                 case PluginChain::SamplerFx:
                     return isUuid(value.location.trackId) &&
                            value.location.clipId.empty();
@@ -601,8 +607,7 @@ audio::Result deserializeSharedProjectSnapshot(
             "vlt-shared-project-snapshot" ||
         root.value("schemaVersion", 0) !=
             kSharedProjectSnapshotSchemaVersion ||
-        root.value("projectFormatVersion", 0) !=
-            kSharedProjectFormatVersion ||
+        root.value("projectFormatVersion", 0) != kSharedProjectFormatVersion ||
         !root.at("project").is_object()) {
         return invalid("shared snapshot envelope is invalid");
     }

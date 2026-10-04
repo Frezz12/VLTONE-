@@ -191,11 +191,34 @@ float Svf::processLowpass(int channel, float input) noexcept {
     return float(v2);
 }
 
+float Svf::processHighpass(int channel, float input) noexcept {
+    const double v0 = input;
+    const double v3 = v0 - m_ic2[channel];
+    const double v1 = m_a1 * m_ic1[channel] + m_a2 * v3;
+    const double v2 = m_ic2[channel] + m_a2 * m_ic1[channel] + m_a3 * v3;
+    m_ic1[channel] = 2.0 * v1 - m_ic1[channel];
+    m_ic2[channel] = 2.0 * v2 - m_ic2[channel];
+    return float(v0 - m_k * v1 - v2);
+}
+
+float Svf::processBandpass(int channel, float input) noexcept {
+    const double v0 = input;
+    const double v3 = v0 - m_ic2[channel];
+    const double v1 = m_a1 * m_ic1[channel] + m_a2 * v3;
+    const double v2 = m_ic2[channel] + m_a2 * m_ic1[channel] + m_a3 * v3;
+    m_ic1[channel] = 2.0 * v1 - m_ic1[channel];
+    m_ic2[channel] = 2.0 * v2 - m_ic2[channel];
+    return float(v1);
+}
+
 // ── Voice ──────────────────────────────────────────────────────────────────
 
 void Voice::start(int key, int channel, float velocity, float notePan,
                   const SamplerSettings& settings, const SampleData& sample,
                   double sampleRate, bool smoothStart, std::int32_t noteId) noexcept {
+    m_beginSteal = m_active && m_rendered;
+    m_stealLength = std::max(1, int(sampleRate * 0.005));
+    m_stealRemaining = m_beginSteal ? m_stealLength : 0;
     m_active = true;
     m_key = key;
     m_noteId = noteId;
@@ -588,14 +611,24 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
                 r = m_filter.processLowpass(1, r);
             }
 
+            float outputLeft = float(double(l) * gain * gainLeft);
+            float outputRight = float(double(r) * gain * gainRight);
+            if (m_stealRemaining) {
+                if (m_beginSteal) {
+                    m_stealCorrection[0] = m_lastOutput[0] - outputLeft;
+                    m_stealCorrection[1] = m_lastOutput[1] - outputRight;
+                    m_beginSteal = false;
+                }
+                const float fade = float(m_stealRemaining--) / m_stealLength;
+                outputLeft += m_stealCorrection[0] * fade;
+                outputRight += m_stealCorrection[1] * fade;
+            }
+            m_lastOutput[0] = outputLeft; m_lastOutput[1] = outputRight;
             if (outRight) {
-                outLeft[done + i] += float(double(l) * gain * gainLeft);
-                outRight[done + i] += float(double(r) * gain * gainRight);
+                outLeft[done + i] += outputLeft;
+                outRight[done + i] += outputRight;
             } else {
-                // Average both sides for mono, including duplicated mono
-                // samples, without doubling their original level.
-                outLeft[done + i] += float((double(l) * gainLeft +
-                                            double(r) * gainRight) * gain * 0.5);
+                outLeft[done + i] += (outputLeft + outputRight) * 0.5f;
             }
         }
 

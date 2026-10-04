@@ -16,6 +16,7 @@ public:
         : m_selected(selected), m_name(std::move(name)) {}
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void process(const ProcessContext& context) override {
         for (ChannelCount outChannel = 0;
@@ -66,6 +67,7 @@ public:
     explicit StereoMergeNode(std::string name) : m_name(std::move(name)) {}
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void process(const ProcessContext& context) override {
         for (ChannelCount channel = 0;

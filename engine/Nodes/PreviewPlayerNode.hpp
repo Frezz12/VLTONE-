@@ -2,6 +2,7 @@
 
 #include "Audio/SampleBuffer.hpp"
 #include "DSP/Simd.hpp"
+#include "DSP/DeClick.hpp"
 #include "Graph/Node.hpp"
 #include "Common/RealtimeSnapshot.hpp"
 
@@ -33,26 +34,25 @@ public:
         : m_name(std::move(name)) {}
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
     bool isSource() const noexcept override { return true; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
 
     // ── Control thread ──
 
-    /// Arm `audio` and play it from the start. A null buffer stops playback.
-    ///
-    /// The buffer is published before the command, so the audio thread can
-    /// never see "play" paired with the previous buffer. `atomic_store` on a
-    /// `shared_ptr` is the convention the other nodes use: the audio thread may
-    /// still be reading the old buffer, and the shared_ptr keeps it alive until
-    /// it is not.
+    /// Publish source and restart serial together. A stop has its own serial,
+    /// so rapid browser changes cannot pair a new buffer with an old playhead.
     void start(std::shared_ptr<const SampleBuffer> audio) {
         if (audio) audio->prepareRead();
-        m_audio.publish(std::move(audio));
-        m_command.store(int(Command::Play), std::memory_order_release);
+        m_seek.store(-1, std::memory_order_release);
+        const auto serial = m_serial.fetch_add(1, std::memory_order_relaxed) + 1;
+        m_audio.publish(std::make_shared<const Request>(Request{std::move(audio), serial}));
     }
 
     void stop() noexcept {
-        m_command.store(int(Command::Stop), std::memory_order_release);
+        m_seek.store(-1, std::memory_order_release);
+        m_stopSerial.store(m_serial.fetch_add(1, std::memory_order_relaxed) + 1,
+                           std::memory_order_release);
     }
 
     /// Loop at the end of the source instead of stopping. Takes effect on the
@@ -76,8 +76,10 @@ public:
     /// Jump to a source frame. −1 means "nothing posted", which is why the
     /// queue slot is signed.
     void seekFrames(std::int64_t frame) {
-        const auto audio = m_audio.controlCopy();
-        if (audio) audio->prepareRead(FrameCount(std::clamp<std::int64_t>(frame, 0, audio->frames())));
+        const auto request = m_audio.controlCopy();
+        if (request && request->audio)
+            request->audio->prepareRead(FrameCount(std::clamp<std::int64_t>(
+                frame, 0, request->audio->frames())));
         m_seek.store(std::max<std::int64_t>(0, frame), std::memory_order_release);
     }
 
@@ -107,9 +109,12 @@ public:
         // what keeps an audition out of an export.
         m_playing.store(false, std::memory_order_relaxed);
         m_position.store(0, std::memory_order_relaxed);
-        m_command.store(int(Command::None), std::memory_order_relaxed);
+        const auto request = m_audio.read();
+        m_appliedSerial = std::max(request ? request->serial : 0,
+            m_stopSerial.load(std::memory_order_acquire));
         m_seek.store(-1, std::memory_order_relaxed);
         m_readPosition = 0.0;
+        m_declick.reset();
     }
 
     void process(const ProcessContext& context) override {
@@ -122,28 +127,30 @@ public:
         // for a future path that renders without resetting.
         if (context.offline || context.frames == 0) return;
 
-        const int command = m_command.exchange(int(Command::None),
-                                               std::memory_order_acquire);
-        if (command == int(Command::Play)) {
+        auto request = m_audio.read();
+        const auto stop = m_stopSerial.load(std::memory_order_acquire);
+        const auto serial = std::max(request ? request->serial : 0, stop);
+        if (serial != m_appliedSerial) {
+            m_appliedSerial = serial;
             m_readPosition = 0.0;
-            m_playing.store(true, std::memory_order_relaxed);
-        } else if (command == int(Command::Stop)) {
-            m_playing.store(false, std::memory_order_relaxed);
             m_position.store(0, std::memory_order_relaxed);
+            m_playing.store(request && request->serial > stop &&
+                request->audio && request->audio->frames(), std::memory_order_relaxed);
+            m_declick.begin(m_sampleRate);
         }
 
         const std::int64_t seek = m_seek.exchange(-1, std::memory_order_acquire);
-        if (seek >= 0) m_readPosition = double(seek);
-
-        // Deliberately no `!context.playing` guard: an audition has nothing to
-        // do with the playhead.
-        if (!m_playing.load(std::memory_order_relaxed)) return;
-
-        auto audio = m_audio.read();
-        if (!audio || audio->frames() == 0) {
-            m_playing.store(false, std::memory_order_relaxed);
+        if (seek >= 0) {
+            m_readPosition = double(seek);
+            m_declick.begin(m_sampleRate);
+        }
+        // A stopped audition still drains its short correction tail.
+        if (!m_playing.load(std::memory_order_relaxed) ||
+            !request || !request->audio) {
+            m_declick.process(context.output, context.frames);
             return;
         }
+        const auto* audio = request->audio.get();
         if (!context.offline && loop()) audio->hintRead();
         m_sourceRate.store(audio->sampleRate(), std::memory_order_relaxed);
         m_sourceFrames.store(audio->frames(), std::memory_order_relaxed);
@@ -157,11 +164,17 @@ public:
         const auto sourceFrames = std::int64_t(audio->frames());
         const float gain = m_gain.load(std::memory_order_relaxed);
         const bool looping = m_loop.load(std::memory_order_relaxed);
+        if (gain != m_previousGain || step != m_previousStep)
+            m_declick.begin(m_sampleRate);
+        m_previousGain = gain;
+        m_previousStep = step;
 
         FrameCount written = 0;
         while (written < context.frames) {
             if (m_readPosition >= double(sourceFrames)) {
                 if (!looping) break;
+                m_declick.begin(m_sampleRate, std::max<FrameCount>(
+                    1, FrameCount(double(sourceFrames) / step / 2.0)));
                 // Keep the fractional part across the wrap: with a non-integer
                 // step, snapping to 0 would drift the loop a little each time.
                 m_readPosition -= double(sourceFrames);
@@ -212,10 +225,25 @@ public:
                     destination[i] += (a + (b - a) * fraction) * gain;
                 }
             }
+            if (!looping) {
+                // A known file end can fade before it runs out, preserving its
+                // exact duration instead of appending a held-sample tail.
+                const double fadeFrames = std::max(1.0, m_sampleRate * 0.005);
+                const double remaining = std::floor((double(sourceFrames) - m_readPosition) / step);
+                if (remaining - count < fadeFrames) {
+                    for (ChannelCount ch = 0; ch < channels; ++ch)
+                        for (FrameCount i = 0; i < count; ++i)
+                            context.output.data(ch)[written + i] *= float(std::clamp(
+                                (remaining - i - 1.0) / fadeFrames, 0.0, 1.0));
+                }
+            }
+            m_declick.process(context.output, count, written);
             m_readPosition += double(count) * step;
             written += count;
         }
 
+        if (written < context.frames)
+            m_declick.process(context.output, context.frames - written, written);
         if (m_readPosition >= double(sourceFrames) && !looping) {
             m_playing.store(false, std::memory_order_relaxed);
             m_position.store(0, std::memory_order_relaxed);
@@ -227,12 +255,14 @@ public:
     }
 
 private:
-    enum class Command { None = 0, Play, Stop };
-
+    struct Request {
+        std::shared_ptr<const SampleBuffer> audio;
+        std::uint64_t serial;
+    };
     std::string m_name;
-    RealtimeSnapshot<SampleBuffer> m_audio;
+    RealtimeSnapshot<Request> m_audio;
 
-    std::atomic<int> m_command{int(Command::None)};
+    std::atomic<std::uint64_t> m_serial{0}, m_stopSerial{0};
     std::atomic<std::int64_t> m_seek{-1};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_loop{false};
@@ -244,6 +274,10 @@ private:
 
     /// Audio thread only: the fractional read head, in source frames.
     double m_readPosition = 0.0;
+    std::uint64_t m_appliedSerial = 0;
+    float m_previousGain = 1.0f;
+    double m_previousStep = 1.0;
+    dsp::DeClick m_declick;
     SampleRate m_sampleRate = 48000.0;
 };
 

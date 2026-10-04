@@ -45,6 +45,10 @@ int main(int argc, char** argv) {
     if (argc > 1) {
         const bool checkpointProbe = fs::path(argv[0]).stem() == "checkpoint-scanner";
         if (argc == 2 && std::string(argv[1]) == "--protocol") {
+            if (checkpointProbe) {
+                std::printf("%s\n", plugins::scan::encodeHandshake().c_str());
+                return 0;
+            }
             std::printf("{\"schema\":%d,\"plugins\":[]}\n",
                         plugins::scan::kSchemaVersion - (checkpointProbe ? 0 : 1));
             return 0;
@@ -54,7 +58,7 @@ int main(int argc, char** argv) {
                 const std::string argument = argv[i];
                 if (!argument.starts_with("--path=")) continue;
                 const fs::path plugin = argument.substr(7);
-                if (plugin.filename() != "B.clap") continue;
+                if (plugin.filename() != "B.clap" && plugin.filename() != "b.clap") continue;
                 std::ofstream(plugin.parent_path() / "paused") << "ready";
                 const auto deadline = std::chrono::steady_clock::now() +
                                       std::chrono::seconds(5);
@@ -262,6 +266,7 @@ int main(int argc, char** argv) {
         plugins::PluginDescriptor descriptor;
         descriptor.format = plugins::Format::Clap;
         descriptor.uid = "com.example.good";
+        descriptor.path = good.path;
         descriptor.name = "Good";
         descriptor.isInstrument = true;
         good.plugins.push_back(descriptor);
@@ -450,8 +455,8 @@ int main(int argc, char** argv) {
             PluginCache repairedCache;
             repairedCache.load(repairPath);
             const auto* repairedEntry = repairedCache.find(plugins::Format::Clap, pluginPath);
-            check(repairedEntry && repairedEntry->scannerVerified && repairedEntry->attempts == 0,
-                  "repair is saved with a verified scanner and reset attempt count");
+            check(repairedEntry && repairedEntry->scannerVerified && repairedEntry->attempts == 1,
+                  "repair counts the verified discovery, excluding legacy protocol failures");
             repaired.setScannerPath("/nonexistent/daw_scan");
             repaired.startScan();
             repaired.waitForScan();
@@ -556,7 +561,7 @@ int main(int argc, char** argv) {
         PluginManager manager(cachePath);
         manager.setScannerPath(helper.string());
         useTestFolder(manager, folder);
-        manager.startScan();
+        manager.startScan(false, {.maxProcesses = 1});
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!fs::exists(folder / "paused") && manager.isScanning() &&
                std::chrono::steady_clock::now() < deadline) {
@@ -564,14 +569,15 @@ int main(int argc, char** argv) {
         }
         PluginCache checkpoint;
         check(fs::exists(folder / "paused") && manager.isScanning() &&
-                  checkpoint.load(cachePath) && checkpoint.entries().size() == 1 &&
-                  checkpoint.find(plugins::Format::Clap, (folder / "A.clap").string()),
+                  checkpoint.load(cachePath) && checkpoint.entries().size() == 2 &&
+                  checkpoint.find(plugins::Format::Clap, (folder / "A.clap").string())->complete(),
               "a completed bundle is on disk while the next one is still being scanned");
         manager.cancelScan();
         std::ofstream(folder / "resume") << "continue";
         manager.waitForScan();
         check(manager.lastScanError().empty() && manager.blacklist().size() == 1 &&
-                  checkpoint.load(cachePath) && checkpoint.entries().size() == 1,
+                  checkpoint.load(cachePath) && checkpoint.entries().size() == 2 &&
+                  !checkpoint.find(plugins::Format::Clap, (folder / "B.clap").string())->complete(),
               "cancellation keeps completed work without blacklisting the interrupted bundle");
 
         manager.setScannerPath(scanner);

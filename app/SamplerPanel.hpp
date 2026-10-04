@@ -1,6 +1,7 @@
 #pragma once
 #include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
+#include "SamplePitchAnalysis.hpp"
 
 #include <QColor>
 #include <QHash>
@@ -8,10 +9,14 @@
 #include <QWidget>
 
 #include <functional>
+#include <atomic>
 #include <memory>
 
 class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
+class QPushButton;
+class QScrollArea;
 class QTimer;
 class QToolButton;
 class QVBoxLayout;
@@ -167,7 +172,11 @@ private:
     QWidget* buildSamplerBody();
     QWidget* buildEnvelopeSection();
     QWidget* buildToolSection();
+    QWidget* buildTuningSection();
     QWidget* buildWaveformSection();
+    void detectPitch();
+    void refreshPitchAnalysis();
+    void applyDetectedPitch(bool setRoot);
     void rebuildFxSlots();
     void showOfflineHistory();
     void showFxMenu(int index, const QString& replaceId = {});
@@ -212,6 +221,7 @@ private:
     SamplerWaveform* m_waveform = nullptr;
     SamplerEnvelopeView* m_envelope = nullptr;
     SamplerKeyboard* m_keyboard = nullptr;
+    QScrollArea* m_keyboardScroll = nullptr;
     QWidget* m_fxSlotsHost = nullptr;
     QVBoxLayout* m_fxSlotsLayout = nullptr;
     ui::PanKnob* m_fxPan = nullptr;
@@ -223,6 +233,17 @@ private:
     QLabel* m_fxGainLabel = nullptr;
     QTimer* m_poll = nullptr;
     ui::Knob* m_formantKnob = nullptr;
+    QDoubleSpinBox* m_fineTune = nullptr;
+    QPushButton* m_detectPitch = nullptr;
+    QPushButton* m_applyRoot = nullptr;
+    QPushButton* m_correctTuning = nullptr;
+    QLabel* m_pitchResult = nullptr;
+    std::shared_ptr<const daw::plugins::sampler::SampleData> m_pitchSample;
+    double m_pitchStart = 0, m_pitchEnd = 1;
+    quint64 m_pitchGeneration = 0;
+    bool m_pitchBusy = false, m_pitchAnalyzed = false;
+    daw::analysis::SamplePitchEstimate m_pitchEstimate;
+    std::shared_ptr<std::atomic<bool>> m_pitchCancelled;
     float m_fxGestureVolume = 1.0f;
     float m_fxGesturePan = 0.0f;
     bool m_fxLevelGesture = false;

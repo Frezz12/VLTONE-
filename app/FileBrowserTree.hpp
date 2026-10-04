@@ -12,6 +12,7 @@ class QMenu;
 
 class QFileSystemWatcher;
 namespace ui::browserprefs { struct Collection; }
+namespace daw { struct WaveformPeaks; }
 
 /// The browser's file tree: the folders the user chose, and what is inside them.
 ///
@@ -24,6 +25,10 @@ namespace ui::browserprefs { struct Collection; }
 class FileBrowserTree : public QTreeWidget {
     Q_OBJECT
 public:
+    void setDragPreview(const QString& path, const daw::WaveformPeaks& peaks);
+    std::shared_ptr<const daw::WaveformPeaks> dragPreview(const QString& path) const {
+        return path == m_dragPreviewPath ? m_dragPreview : nullptr;
+    }
     /// Open the selected item's existing right-click actions.
     bool showSelectedItemActionsMenu();
     bool populateSelectedItemActionsMenu(QMenu& menu);
@@ -145,6 +150,8 @@ protected:
                       const QModelIndex& index) const override;
 
 private:
+    QString m_dragPreviewPath;
+    std::shared_ptr<const daw::WaveformPeaks> m_dragPreview;
     void populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item);
     void populate(QTreeWidgetItem* parent, const QString& path);
     /// Fill a node the first time it is opened (it carries a placeholder child

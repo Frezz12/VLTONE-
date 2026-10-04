@@ -51,7 +51,8 @@ void bindInitialAssets(daw::ProjectModel& project, const std::vector<AssetCacheR
     };
     const auto insert=[&](daw::InsertModel& slot){bind(slot.stateAsset,&slot.stateFile);bind(slot.rightStateAsset,&slot.rightStateFile);for(auto& binding:slot.assetBindings)bind(binding.asset);};
     for(auto& slot:project.masterInserts)insert(slot);
-    for(auto& track:project.tracks){insert(track.instrument);for(auto& slot:track.samplerFx.inserts)insert(slot);for(auto& slot:track.inserts)insert(slot);bind(track.freeze.asset,&track.freeze.filePath);
+    for(auto& slot:project.masterMiniModules)insert(slot);
+    for(auto& track:project.tracks){for(auto& slot:track.miniModules)insert(slot);insert(track.instrument);for(auto& slot:track.samplerFx.inserts)insert(slot);for(auto& slot:track.inserts)insert(slot);bind(track.freeze.asset,&track.freeze.filePath);
         for(auto& clip:track.clips){bind(clip.asset,&clip.filePath);for(auto& slot:clip.inserts)insert(slot);for(auto& take:clip.takes)bind(take.asset,&take.filePath);
             for(auto& version:clip.offlineHistory){bind(version.source.asset,&version.source.filePath);for(auto& take:version.source.takes)bind(take.asset,&take.filePath);}
         }
@@ -135,6 +136,7 @@ bool PublicationStaging::submitCommand(ProjectCommand command, std::string label
 }
 SharedMutationResult PublicationStaging::submit(SharedMutationRequest request) {
     if (m_projectId.isEmpty()) return SharedMutationResult::LocalFallback;
+    if (m_gateway) prepareFixedColorEdits(request.body,m_gateway->optimistic());
     ProjectCommand command;
     command.meta=freshMeta();
     command.meta.transactionId = request.transactionId.value_or(command.meta.operationId);

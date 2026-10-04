@@ -17,7 +17,7 @@ concurrency:
 jobs:
   desktop:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       # Xcode 16's libc++ does not provide std::jthread/stop_token.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -27,6 +27,18 @@ jobs:
 
       - name: Install native dependencies
         run: brew install cmake ninja qt qtmultimedia qtwebengine qtserialport qtwebsockets portaudio rtmidi libsndfile nlohmann-json
+
+      - name: Restore Creator toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/creator-tools/llvm-20.1.8
+            .cache/creator-tools/wamrc
+            .cache/creator-tools/wasi-sysroot-27.0
+          key: creator-${{ runner.os }}-${{ runner.arch }}-llvm20.1.8-wamr2.4.5-wasi27-v1
+
+      - name: Prepare bundled Creator compiler
+        run: bash scripts/setup-creator-tools.sh
 
       - name: Configure Release desktop
         run: >-

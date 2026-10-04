@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vlt.studio/protocol/schema/project-command-v6.schema.json",
   "title": "VLT Project Command v6",
-  "description": "Collaboration v6. Adds the shared notebook and path-free external plugin parameter fingerprints. Session mode, conductor, playback, monitoring and moderation use the separate server-authoritative session control contract.",
+  "description": "Collaboration v6. Adds the shared notebook and path-free external plugin parameter fingerprints. Session mode, conductor, playback, monitoring and moderation use the separate server-authoritative session control contract. COLOR is a fixed source-channel tape/tube stage with a persistent component profile.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -427,7 +427,18 @@
       "$ref": "project-command-v5.schema.json#/$defs/optionalAssetRef"
     },
     "pluginStateAssetRef": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginStateAssetRef"
+      "allOf": [
+        {
+          "$ref": "#/$defs/assetRef"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "plugin-state"
+            }
+          }
+        }
+      ]
     },
     "optionalPluginStateAssetRef": {
       "$ref": "project-command-v5.schema.json#/$defs/optionalPluginStateAssetRef"
@@ -460,13 +471,123 @@
       "$ref": "project-command-v5.schema.json#/$defs/clipMusicalAnalysisPayload"
     },
     "pluginLocation": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginLocation"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chain",
+        "trackId",
+        "clipId"
+      ],
+      "properties": {
+        "chain": {
+          "enum": [
+            "master",
+            "track",
+            "instrument",
+            "samplerFx",
+            "clip",
+            "channelColor"
+          ]
+        },
+        "trackId": {
+          "$ref": "#/$defs/optionalId"
+        },
+        "clipId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "chain": {
+              "const": "master"
+            },
+            "trackId": {
+              "const": ""
+            },
+            "clipId": {
+              "const": ""
+            }
+          }
+        },
+        {
+          "properties": {
+            "chain": {
+              "enum": [
+                "track",
+                "instrument",
+                "samplerFx",
+                "channelColor"
+              ]
+            },
+            "trackId": {
+              "$ref": "#/$defs/id"
+            },
+            "clipId": {
+              "const": ""
+            }
+          }
+        },
+        {
+          "properties": {
+            "chain": {
+              "const": "clip"
+            },
+            "trackId": {
+              "$ref": "#/$defs/id"
+            },
+            "clipId": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      ]
     },
     "insertParameter": {
       "$ref": "project-command-v5.schema.json#/$defs/insertParameter"
     },
     "pluginAssetBinding": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginAssetBinding"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "asset",
+        "required"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "asset": {
+          "$ref": "#/$defs/assetRef"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "key": {
+                "const": "sample"
+              }
+            },
+            "required": [
+              "key"
+            ]
+          },
+          "then": {
+            "properties": {
+              "asset": {
+                "$ref": "#/$defs/audioAssetRef"
+              }
+            }
+          }
+        }
+      ]
     },
     "samplerAssetBinding": {
       "$ref": "project-command-v5.schema.json#/$defs/samplerAssetBinding"
@@ -582,8 +703,27 @@
                           "daw.flanger",
                           "daw.phaser",
                           "daw.pitch-corrector",
-                          "daw.modulation"
+                          "daw.modulation",
+                          "daw.cla2a"
                         ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "location": {
+                    "properties": {
+                      "chain": {
+                        "const": "channelColor"
+                      }
+                    }
+                  },
+                  "insert": {
+                    "properties": {
+                      "uid": {
+                        "const": "daw.channel-color"
                       }
                     }
                   }
@@ -591,17 +731,127 @@
               }
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "insert": {
+                "properties": {
+                  "uid": {
+                    "const": "daw.channel-color"
+                  },
+                  "format": {
+                    "const": "internal"
+                  }
+                }
+              },
+              "afterId": {
+                "const": ""
+              }
+            }
+          }
         }
       ]
     },
     "pluginRefPayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginRefPayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        }
+      }
     },
     "pluginRestorePayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginRestorePayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "deleteOperationId"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "deleteOperationId": {
+          "$ref": "#/$defs/id"
+        }
+      }
     },
     "pluginMovePayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginMovePayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "afterId"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "afterId": {
+          "$ref": "#/$defs/optionalId"
+        }
+      },
+      "not": {
+        "properties": {
+          "location": {
+            "properties": {
+              "chain": {
+                "const": "instrument"
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "afterId": {
+                "const": ""
+              }
+            }
+          }
+        }
+      ]
     },
     "pluginReplacePayload": {
       "type": "object",
@@ -684,14 +934,60 @@
                           "daw.flanger",
                           "daw.phaser",
                           "daw.pitch-corrector",
-                          "daw.modulation"
+                          "daw.modulation",
+                          "daw.cla2a"
                         ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "location": {
+                    "properties": {
+                      "chain": {
+                        "const": "channelColor"
+                      }
+                    }
+                  },
+                  "replacement": {
+                    "properties": {
+                      "uid": {
+                        "const": "daw.channel-color"
                       }
                     }
                   }
                 }
               }
             ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "replacement": {
+                "properties": {
+                  "uid": {
+                    "const": "daw.channel-color"
+                  },
+                  "format": {
+                    "const": "internal"
+                  }
+                }
+              }
+            }
           }
         }
       ]
@@ -700,22 +996,473 @@
       "$ref": "project-command-v5.schema.json#/$defs/sidechainTrackIds"
     },
     "pluginPropertyPayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginPropertyPayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "property",
+        "value"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "property": {
+          "enum": [
+            "name",
+            "bypassed",
+            "mix",
+            "channelMode",
+            "sidechainTrackId",
+            "sidechainTrackIds",
+            "slideDelivery",
+            "slideBendRange",
+            "slideReleaseReserve"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/scalarValue"
+            },
+            {
+              "$ref": "#/$defs/sidechainTrackIds"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "property": {
+              "const": "name"
+            },
+            "value": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "bypassed"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "mix"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "channelMode"
+            },
+            "value": {
+              "enum": [
+                "auto",
+                "mono",
+                "stereo",
+                "dual-mono"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "sidechainTrackId"
+            },
+            "value": {
+              "$ref": "#/$defs/optionalId"
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "sidechainTrackIds"
+            },
+            "value": {
+              "$ref": "#/$defs/sidechainTrackIds"
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "slideDelivery"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "slideBendRange"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 96
+            }
+          }
+        },
+        {
+          "properties": {
+            "property": {
+              "const": "slideReleaseReserve"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 20
+            }
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "property": {
+                "enum": [
+                  "name",
+                  "bypassed"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "pluginStatePayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginStatePayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "pluginVersion",
+        "stateSchemaVersion",
+        "stateAsset",
+        "rightStateAsset",
+        "parameters",
+        "rightParameters",
+        "assetBindings"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "pluginVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "stateSchemaVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "stateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "rightStateAsset": {
+          "$ref": "#/$defs/optionalPluginStateAssetRef"
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "rightParameters": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": {
+            "$ref": "#/$defs/insertParameter"
+          }
+        },
+        "assetBindings": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/pluginAssetBinding"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "parameters": {
+                "items": {
+                  "properties": {
+                    "id": {
+                      "enum": [
+                        "drive",
+                        "tone"
+                      ]
+                    },
+                    "value": {
+                      "minimum": -100,
+                      "maximum": 100
+                    }
+                  }
+                }
+              },
+              "rightStateAsset": {
+                "type": "null"
+              },
+              "rightParameters": {
+                "maxItems": 0
+              },
+              "assetBindings": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
     },
     "pluginParameterPayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginParameterPayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "parameterId",
+        "value",
+        "rightChannel"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "parameterId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "value": {
+          "type": "number"
+        },
+        "rightChannel": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "parameterId": {
+                "enum": [
+                  "drive",
+                  "tone"
+                ]
+              },
+              "value": {
+                "minimum": -100,
+                "maximum": 100
+              },
+              "rightChannel": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "pluginRemoveParameterPayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginRemoveParameterPayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "parameterId",
+        "rightChannel"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "parameterId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "rightChannel": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "parameterId": {
+                "enum": [
+                  "drive",
+                  "tone"
+                ]
+              },
+              "rightChannel": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "pluginBindingPayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginBindingPayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "binding"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "binding": {
+          "$ref": "#/$defs/pluginAssetBinding"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "instrument"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "binding": {
+                "$ref": "#/$defs/samplerAssetBinding"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "properties": {
+              "location": {
+                "properties": {
+                  "chain": {
+                    "const": "channelColor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "pluginRemoveBindingPayload": {
-      "$ref": "project-command-v5.schema.json#/$defs/pluginRemoveBindingPayload"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "insertId",
+        "key"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/pluginLocation"
+        },
+        "insertId": {
+          "$ref": "#/$defs/id"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        }
+      }
     },
     "samplerFxLevelsPayload": {
       "$ref": "project-command-v5.schema.json#/$defs/samplerFxLevelsPayload"
@@ -1811,7 +2558,9 @@
             "daw.flanger",
             "daw.phaser",
             "daw.pitch-corrector",
-            "daw.modulation"
+            "daw.modulation",
+            "daw.cla2a",
+            "daw.channel-color"
           ]
         },
         "vendor": {
@@ -1891,6 +2640,10 @@
         "parameterFingerprint": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "profileSeed": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
         }
       },
       "allOf": [
@@ -1912,6 +2665,63 @@
                   "$ref": "#/$defs/samplerAssetBinding"
                 }
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "uid": {
+                "const": "daw.channel-color"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "profileSeed"
+            ],
+            "properties": {
+              "mix": {
+                "const": 1
+              },
+              "channelMode": {
+                "const": "auto"
+              },
+              "sidechainTrackId": {
+                "const": ""
+              },
+              "parameters": {
+                "items": {
+                  "properties": {
+                    "id": {
+                      "enum": [
+                        "drive",
+                        "tone"
+                      ]
+                    },
+                    "value": {
+                      "minimum": -100,
+                      "maximum": 100
+                    }
+                  }
+                }
+              },
+              "rightParameters": {
+                "maxItems": 0
+              },
+              "assetBindings": {
+                "maxItems": 0
+              },
+              "rightStateAsset": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "profileSeed"
+              ]
             }
           }
         }

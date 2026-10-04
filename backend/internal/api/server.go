@@ -165,6 +165,39 @@ func (s *Server) Router() http.Handler {
 		r.With(s.webCSRF).Post("/v1/bug-reports", s.createBugReport)
 	})
 
+	// Forum. Reads resolve the session when present so signed-in visitors see
+	// their own reactions; writes always require the web session and CSRF.
+	r.Route("/v1/forum", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(s.webAuthOptional)
+			r.Get("/sections", s.forumSections)
+			r.Get("/sections/{slug}/topics", s.forumSectionTopics)
+			r.Get("/topics/{topicID}", s.forumTopic)
+			r.Get("/topics/{topicID}/posts", s.forumTopicPosts)
+			r.Get("/articles", s.forumArticles)
+			r.Get("/articles/{articleID}", s.forumArticle)
+			r.Get("/articles/{articleID}/comments", s.forumArticleComments)
+			r.Get("/users/{nickname}", s.forumUserProfile)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(s.webAuth)
+			r.Get("/me/profile", s.forumMyProfile)
+			r.With(s.webCSRF).Put("/me/profile", s.forumUpdateProfile)
+			r.With(s.webCSRF).Post("/topics", s.forumCreateTopic)
+			r.With(s.webCSRF).Put("/topics/{topicID}", s.forumUpdateTopic)
+			r.With(s.webCSRF).Delete("/topics/{topicID}", s.forumDeleteTopic)
+			r.With(s.webCSRF).Post("/topics/{topicID}/posts", s.forumCreatePost)
+			r.With(s.webCSRF).Put("/posts/{postID}", s.forumUpdatePost)
+			r.With(s.webCSRF).Delete("/posts/{postID}", s.forumDeletePost)
+			r.With(s.webCSRF).Post("/articles", s.forumCreateArticle)
+			r.With(s.webCSRF).Put("/articles/{articleID}", s.forumUpdateArticle)
+			r.With(s.webCSRF).Delete("/articles/{articleID}", s.forumDeleteArticle)
+			r.With(s.webCSRF).Post("/articles/{articleID}/comments", s.forumCreateComment)
+			r.With(s.webCSRF).Delete("/comments/{commentID}", s.forumDeleteComment)
+			r.With(s.webCSRF).Post("/reactions", s.forumToggleReaction)
+		})
+	})
+
 	r.Route("/v1/desktop/auth", func(r chi.Router) {
 		r.Post("/login", s.desktopLogin)
 		r.Post("/refresh", s.desktopRefresh)
@@ -463,11 +496,12 @@ func (s *Server) originAllowed(r *http.Request, admin bool) bool {
 	if origin == "" {
 		return s.Config.Environment == "development"
 	}
-	want := s.Config.PublicOrigin
 	if admin {
-		want = s.Config.AdminOrigin
+		return origin == s.Config.AdminOrigin
 	}
-	return origin == want
+	// Web requests may come from the main site or the forum site; both share
+	// the same session cookie and CSRF scheme.
+	return origin == s.Config.PublicOrigin || origin == s.Config.ForumOrigin
 }
 
 type contextKey string

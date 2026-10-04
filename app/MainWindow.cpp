@@ -1,3 +1,5 @@
+#include <QSpinBox>
+#include "ScrollMotion.hpp"
 #include "UiPerformance.hpp"
 #include "AudioImportPreparation.hpp"
 #include "MainWindow.hpp"
@@ -82,6 +84,7 @@
 #include "StripSilenceDialog.hpp"
 #include "PluginBatchDialog.hpp"
 #include "PluginManagerWindow.hpp"
+#include "CreatorWindow.hpp"
 #include "PluginQuickAdder.hpp"
 #include "PlatformDiagnostics.hpp"
 #include "TelemetrySnapshot.hpp"
@@ -5339,6 +5342,29 @@ bool MainWindow::checkAutomationEditorForTest() {
         return nullptr;
     };
 
+    // The controller assigns stable collaboration IDs when accepting a new
+    // curve. Validate its geometry, then retain that canonical identity for
+    // the exact post-retarget comparison below.
+    if (!curve() || curve()->points.size() != shape.size()) {
+        std::fprintf(stderr, "the accepted automation shape changed its point count\n");
+        editor->close();
+        return false;
+    }
+    QSet<QString> pointIds;
+    for (std::size_t index = 0; index < shape.size(); ++index) {
+        const auto& point = curve()->points[index];
+        const QString id = QString::fromStdString(point.id);
+        if (id.isEmpty() || pointIds.contains(id) || point.beats != shape[index].beats ||
+            point.value != shape[index].value || point.shape != shape[index].shape ||
+            point.curve != shape[index].curve || point.eventOrder != shape[index].eventOrder) {
+            std::fprintf(stderr, "the accepted automation shape changed its geometry or identity\n");
+            editor->close();
+            return false;
+        }
+        pointIds.insert(id);
+    }
+    shape = curve()->points;
+
     // ── The three fields say what the curve drives ──
     const QList<QComboBox*> fields = editor->findChildren<QComboBox*>();
     if (fields.size() < 3) {
@@ -5665,12 +5691,33 @@ bool MainWindow::checkKnobAutomationForTest() {
         return false;
     }
 
+    // The editor maps its host and lets the plugin settle asynchronously.
+    // Wait for that real readiness boundary before inspecting its controls.
+    QElapsedTimer editorReady;
+    editorReady.start();
+    while (!editor->isEditorInitialized() && editorReady.elapsed() < 4000) {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    }
+    if (!editor->isEditorInitialized()) {
+        std::fprintf(stderr, "the sampler's editor did not become ready\n");
+        editor->close();
+        return false;
+    }
+
     ui::Knob* knob = nullptr;
-    for (ui::Knob* candidate : editor->findChildren<ui::Knob*>()) {
-        if (candidate->isAutomatable()) {
-            knob = candidate;
-            break;
+    QElapsedTimer controlsReady;
+    controlsReady.start();
+    while (!knob && controlsReady.elapsed() < 4000) {
+        // Inserting the panel queues its layout/show events after readiness.
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        for (ui::Knob* candidate : editor->findChildren<ui::Knob*>()) {
+            if (candidate->isAutomatable() && candidate->isEnabled() && candidate->isVisibleTo(editor)) {
+                knob = candidate;
+                break;
+            }
         }
+        if (!knob) QThread::msleep(1);
     }
     if (!knob) {
         std::fprintf(stderr, "no knob in the editor offers automation\n");
@@ -5736,20 +5783,25 @@ bool MainWindow::checkKnobAutomationForTest() {
     // Exercise the real context menu, including QMenu::exec's selected action.
     const auto createFromMenu = [&] {
         QTimer choose;
-        choose.setSingleShot(true);
-        connect(&choose, &QTimer::timeout, knob, [] {
+        connect(&choose, &QTimer::timeout, knob, [&choose, knob] {
             auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
-            if (!menu || menu->actions().isEmpty()) return;
-            menu->setActiveAction(menu->actions().front());
-            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-            QApplication::sendEvent(menu, &enter);
+            if (!menu || menu->parentWidget() != knob || menu->actions().isEmpty()) return;
+            choose.stop();
+            const QPoint at = menu->actionGeometry(menu->actions().front()).center();
+            const QPoint global = menu->mapToGlobal(at);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(at), QPointF(global),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(menu, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(at), QPointF(global),
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(menu, &release);
         });
         QTimer timeout;
         timeout.setSingleShot(true);
         connect(&timeout, &QTimer::timeout, knob, [] {
             if (auto* popup = QApplication::activePopupWidget()) popup->close();
         });
-        choose.start(0);
+        choose.start(10);
         timeout.start(1000);
         const QPoint at = knob->rect().center();
         QContextMenuEvent menu(QContextMenuEvent::Mouse, at, knob->mapToGlobal(at));
@@ -6841,10 +6893,11 @@ bool MainWindow::checkTrackMixerSyncForTest() {
     if (!check(strip->findChild<QLabel*>("StripName")->text() == original,
                "undo did not restore the mixer name")) return false;
 
+    m_trackList->setSelectedTrack(QString::fromStdString(id));
     selectTrackFromHeader(QString::fromStdString(id));
     packSelectionIntoFolder(true);
     const std::string groupId = m_controller.project().findTrack(id)->parentId;
-    if (!check(!groupId.empty() && stripFor(groupId) &&
+    if (!check(!groupId.empty() && groupId != originalParent && stripFor(groupId) &&
                m_controller.project().findTrack(id)->outputBusId == groupId,
                "group channel did not appear with its track routing")) return false;
     const QString groupName = QStringLiteral("Renamed group");
@@ -6870,6 +6923,7 @@ bool MainWindow::checkTrackMixerSyncForTest() {
                m_controller.project().findTrack(id)->outputBusId == redoneGroup,
                "redo did not restore the group channel")) return false;
     m_controller.undo();
+    m_trackList->setSelectedTrack(QString::fromStdString(id));
     selectTrackFromHeader(QString::fromStdString(id));
     syncViews();
     const auto createSendFromStrip = [this](ChannelStrip* source) -> std::string {
@@ -8146,6 +8200,39 @@ bool MainWindow::checkLiveTempoForTest() {
 
 bool MainWindow::checkSettingsViewportForTest() {
     if (!m_settingsWindow) return false;
+    auto* smooth=m_settingsWindow->findChild<QCheckBox*>("SmoothScrollingEnabled");
+    auto* speed=m_settingsWindow->findChild<QSpinBox*>("ScrollMotionSpeed");
+    auto* strength=m_settingsWindow->findChild<QSlider*>("ScrollMotionStrength");
+    auto* reduced=m_settingsWindow->findChild<QCheckBox*>("NavigationReduceMotion");
+    if(!smooth || !speed || !strength || !reduced) return false;
+    auto& motion=ui::ScrollPreferences::instance();
+    const bool savedEnabled=motion.enabled(),savedReduced=motion.reducedMotion();
+    const int savedSpeed=motion.speed(),savedStrength=motion.strength();
+    smooth->setChecked(false);speed->setValue(130);strength->setValue(42);
+    bool motionControls=!motion.enabled() && motion.speed()==130 && motion.strength()==42 &&
+        QSettings().value("ui/scrollSpeed").toInt()==130 && QSettings().value("ui/scrollSmoothing").toInt()==42;
+    smooth->setChecked(true);reduced->setChecked(true);
+    motionControls &= !motion.effectiveEnabled() && !speed->isEnabled() && !strength->isEnabled();
+    motion.setReducedMotion(savedReduced);motion.setEnabled(savedEnabled);
+    motion.setSpeed(savedSpeed);motion.setStrength(savedStrength);
+    if(!motionControls) return false;
+    if(const QString shot=qEnvironmentVariable("DAW_MOTION_SCREENSHOT");!shot.isEmpty()) {
+        m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
+        if(auto* group=m_settingsWindow->findChild<QWidget*>("NavigationMotionSettings"))
+            for(auto* parent=group->parentWidget();parent;parent=parent->parentWidget())
+                if(auto* area=qobject_cast<QScrollArea*>(parent)){area->ensureWidgetVisible(group,0,12);break;}
+        QEventLoop settle;
+        QTimer::singleShot(250, &settle, &QEventLoop::quit);
+        settle.exec();
+        ui::graphics::WorkspaceSurface* surface=nullptr;
+        for(auto* root=static_cast<QWidget*>(m_settingsWindow);root && !surface;root=root->parentWidget())
+            surface=root->findChild<ui::graphics::WorkspaceSurface*>(QString(),Qt::FindDirectChildrenOnly);
+        if(surface)
+            surface->quickWindow()->grabWindow().save(shot);
+        else
+            m_settingsWindow->grab().save(shot);
+    }
+
     PluginManagerWindow pluginManager(&m_controller, this);
     if (const QString shot = qEnvironmentVariable("DAW_PLUGIN_MANAGER_SCREENSHOT");
         !shot.isEmpty()) {
@@ -8567,7 +8654,10 @@ bool MainWindow::checkTimelineRulersForTest() {
         QApplication::sendEvent(m_timeline, &press);
         QApplication::sendEvent(m_timeline, &release);
         const double expected = originalHorizontal + point.x() / originalScale;
-        if (std::abs(m_controller.positionSeconds() - expected) > 1e-6)
+        // The transport stores sample positions, so a pixel's fractional time
+        // is rounded to the nearest sample by a real seek.
+        const double expectedSample = std::llround(expected * m_controller.sampleRate()) / m_controller.sampleRate();
+        if (std::abs(m_controller.positionSeconds() - expectedSample) > 1e-9)
             return fail("ruler row did not seek to the clicked time");
     }
     bars->trigger();
@@ -9301,8 +9391,13 @@ bool MainWindow::checkContextSyncForTest() {
     const QString trackId =
         QString::fromStdString(m_controller.project().tracks.front().id);
     setContextPanelVisible(true);
+    m_trackList->setSelectedTrack(trackId);
     selectTrackFromHeader(trackId);
-    QApplication::processEvents();
+    // Header clicks establish the track-list selection before this handler.
+    // Wait for its context swap so findChild cannot return an outgoing row.
+    QEventLoop contextSettled;
+    QTimer::singleShot(380, &contextSettled, &QEventLoop::quit);
+    contextSettled.exec();
 
     ui::MiniSlider* level = m_contextPanel->findChild<ui::MiniSlider*>(
         QStringLiteral("ContextPanelTrackVolume"));
@@ -9692,6 +9787,10 @@ QJsonObject MainWindow::telemetrySnapshot(bool detailed) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (m_creatorWindow && !m_creatorWindow->close()) {
+        event->ignore();
+        return;
+    }
 #ifdef DAW_ENABLE_COLLABORATION
     if (!prepareCloudRecordingForProjectTransition()) {
         event->ignore();
@@ -9733,6 +9832,8 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
 }
 
 MainWindow::~MainWindow() {
+    delete m_creatorWindow;
+    m_creatorWindow = nullptr;
     // Children are destroyed by ~QObject, which runs *after* m_controller — a
     // member of this class — is already gone. Anything whose destructor talks
     // to the engine has to be taken down here, while it is still there: the
@@ -10669,6 +10770,13 @@ void MainWindow::buildLayout() {
             &MainWindow::openPluginEditor);
     connect(m_mixer, &MixerWidget::settingsRequested, this,
             [this] { openSettings(SettingsWindow::kMixerTab); });
+    const auto automateColor=[this](const QString& channel,const QString& slot,const QString& parameter) {
+        daw::AutomationTarget target; target.kind=daw::AutomationTargetKind::PluginParameter;
+        target.channelId=channel.toStdString(); target.slotId=slot.toStdString(); target.parameterId=parameter.toStdString();
+        automateTarget(target);
+    };
+    connect(m_mixer,&MixerWidget::automatePluginRequested,this,automateColor);
+    connect(m_inspector,&InspectorWidget::automatePluginRequested,this,automateColor);
     connect(m_mixer, &MixerWidget::automateControlRequested, this,
             [this](const QString& trackId, bool pan) {
                 daw::AutomationTarget target;
@@ -11095,6 +11203,7 @@ void MainWindow::syncViews() {
     // context panel its values moved — without it a gain readout would still
     // show the pre-undo number.
     m_selection.refresh();
+    refreshRecordChips();
     syncAutomationVisibilityButton();
     layoutContextPanel();
 }
@@ -11189,6 +11298,7 @@ void MainWindow::syncStructureViews() {
         }
     }
     m_selection.refresh();
+    refreshRecordChips();
     syncAutomationVisibilityButton();
     layoutContextPanel();
     scheduleDeferredStructureRefresh();
@@ -12477,6 +12587,21 @@ void MainWindow::buildMenus() {
 
     auto* view = menuBar()->addMenu(tr("&View"));
     view->setObjectName(QStringLiteral("CommandMenu.View"));
+    auto* creator = addCommand(view, "view.creator", tr("Creator"), kView, {});
+    connect(creator, &QAction::triggered, this, [this] {
+        if (!m_creatorWindow) {
+            m_creatorWindow = new ui::CreatorWindow(&m_controller, this);
+            connect(m_creatorWindow, &ui::CreatorWindow::modulesCompiled, this, [this] {
+                markDirty();
+                if (m_mixer) m_mixer->rebuild();
+                if (m_inspector) m_inspector->rebuild();
+            });
+        }
+        m_creatorWindow->show();
+        m_creatorWindow->raise();
+        m_creatorWindow->activateWindow();
+    });
+    view->addSeparator();
     auto* fullScreen = addCommand(view, "view.fullScreen", tr("Full Screen"), kView,
                                   QKeySequence(Qt::Key_F11));
     fullScreen->setCheckable(true);
@@ -13568,6 +13693,161 @@ bool MainWindow::checkMidiInput() {
     return passed && m_midiInput->checkQueueOverflowForTest();
 }
 
+bool MainWindow::checkFolderRecordingForTest() {
+    if (!m_trackList || !m_timeline) return false;
+    QTemporaryDir media;
+    if (!media.isValid()) return false;
+    const auto prefsBefore = m_controller.recordingPrefs();
+    const auto directoryBefore = m_controller.recordDirectory();
+    const auto selectedBefore = m_selectedTrackId;
+    const auto pinsBefore = m_recordPins;
+    const bool engagedBefore = m_recordEngaged;
+    const auto folder = m_controller.addTrack(daw::TrackKind::Folder, "Recording group");
+    m_controller.setFolderSumming(folder, true);
+    const auto first = m_controller.addTrack(daw::TrackKind::Midi, "Overlapping");
+    const auto second = m_controller.addTrack(daw::TrackKind::Midi, "Future");
+    const auto third = m_controller.addTrack(daw::TrackKind::Midi, "Past take");
+    const auto fourth = m_controller.addTrack(daw::TrackKind::Midi, "Empty");
+    const auto plain = m_controller.addTrack(daw::TrackKind::Folder, "Plain folder");
+    const auto outside = m_controller.addTrack(daw::TrackKind::Midi, "Outside");
+    for (const auto& id : {first, second, third, fourth})
+        m_controller.moveTrackToFolder(id, folder);
+    const auto restore = qScopeGuard([&] {
+        if (m_controller.isRecording()) stopRecordingNow();
+        cancelCountIn();
+        m_controller.stop();
+        m_controller.setRecordingPrefs(prefsBefore);
+        m_controller.setRecordDirectory(directoryBefore);
+        for (const auto& id : {fourth, third, second, first, folder, plain, outside})
+            m_controller.removeTrack(id);
+        m_recordPins = pinsBefore;
+        m_trackList->setSelectedTrack(selectedBefore);
+        selectTrackFromHeader(selectedBefore);
+        setRecordEngaged(engagedBefore);
+        syncViews();
+    });
+    const auto fail = [](const char* detail) {
+        std::fprintf(stderr, "FAIL Folder recording: %s\n", detail);
+        return false;
+    };
+    const auto qid = [](const std::string& id) { return QString::fromStdString(id); };
+    const auto select = [&](const std::string& id) {
+        m_trackList->setSelectedTrack(qid(id));
+        selectTrackFromHeader(qid(id));
+    };
+    const auto only = [](const std::string& id) { return std::vector<std::string>{id}; };
+    auto prefs = prefsBefore;
+    prefs.countInBeats = 1;
+    prefs.mode = daw::RecordMode::Overwrite;
+    prefs.midiOverdubMerge = false;
+    m_controller.setRecordingPrefs(prefs);
+    m_controller.setRecordDirectory(media.path().toStdString());
+    m_controller.setTempo(120.0);
+    m_controller.setLoopEnabled(false);
+    m_controller.addMidiClip(first, 9.0, 2.0);
+    m_controller.addMidiClip(second, 12.0, 1.0);
+    m_controller.addMidiClip(third, 1.0, 1.0);
+    m_controller.seekSeconds(10.0);
+    m_recordPins.clear();
+    syncViews();
+    select(folder);
+    setRecordEngaged(true);
+    QApplication::processEvents();
+
+    auto* groupR = m_trackList->rowChipForTest(qid(folder), "R");
+    auto* folderR = m_trackList->rowChipForTest(qid(plain), "R");
+    auto* thirdR = m_trackList->rowChipForTest(qid(third), "R");
+    if (!groupR || !folderR || !thirdR ||
+        !groupR->isVisibleTo(m_trackList) || !folderR->isVisibleTo(m_trackList) ||
+        !groupR->isChecked() || !thirdR->isChecked() ||
+        m_trackList->rowChipForTest(qid(folder), "I") ||
+        groupR->accessibleName().isEmpty())
+        return fail("groups and plain folders need accessible R controls, without input monitoring");
+    if (recordTargets() != only(third) || m_selectedTrackId != qid(folder))
+        return fail("selection did not choose the free lane without changing UI focus");
+
+    // The target is already checked by selection: its first click must pin it.
+    groupR->click();
+    if (!m_recordPins.contains(qid(folder)) || !groupR->isChecked())
+        return fail("first R click on a selected folder did not pin it");
+    select(outside);
+    if (recordTargets() != only(third))
+        return fail("a pinned folder did not outrank an outside selection");
+    groupR->click();
+    if (!m_recordPins.isEmpty() || recordTargets() != only(outside))
+        return fail("unpinning did not restore the selected leaf");
+    select(folder);
+    groupR->click();
+    const auto undoBefore = m_controller.undoDepth();
+    startRecordingSelection();
+    m_countInTimer->stop();
+    if (!m_controller.isCountingIn() || m_controller.countInTracks() != only(third))
+        return fail("folder destination was not chosen before count-in");
+    select(outside);
+    if (recordTargets() != only(third))
+        return fail("selection changed the pending take destination");
+    if (!m_controller.tickCountIn(1.0) ||
+        m_controller.recordingTracks() != only(third))
+        return fail("count-in did not start capture on the resolved lane");
+
+    audio::AudioBuffer input(2, 256), output(2, 256);
+    m_controller.liveMidiEvent(third, 0x90, 60, 100);
+    for (int block = 0; block < 24; ++block)
+        if (!m_controller.processDeviceBlockForTest(input, output, 256))
+            return fail("headless capture could not advance");
+    m_controller.liveMidiEvent(third, 0x80, 60, 0);
+    for (int block = 0; block < 4; ++block)
+        m_controller.processDeviceBlockForTest(input, output, 256);
+    refreshRecordChips();
+    if (recordTargets() != only(third) ||
+        !m_trackList->rowChipForTest(qid(third), "R")->isChecked() ||
+        m_trackList->rowChipForTest(qid(outside), "R")->isChecked())
+        return fail("active destination followed the selection during capture");
+    stopRecordingNow();
+    const auto* recorded = m_controller.project().findTrack(third);
+    if (!recorded || recorded->clips.size() != 2 ||
+        recorded->clips.back().notes.empty() ||
+        m_controller.undoDepth() != undoBefore + 1 ||
+        m_controller.project().findTrack(first)->clips.size() != 1 ||
+        m_controller.project().findTrack(second)->clips.size() != 1)
+        return fail("capture did not land one undoable take on the chosen lane");
+
+    m_controller.seekSeconds(10.0);
+    select(folder);
+    if (recordTargets() != only(fourth))
+        return fail("the next take did not advance past the newly occupied lane");
+    m_controller.undo();
+    syncViews();
+    if (recordTargets() != only(third))
+        return fail("undo did not make the previous lane available");
+    m_controller.redo();
+    syncViews();
+    if (recordTargets() != only(fourth))
+        return fail("redo did not restore destination occupancy");
+
+    m_controller.addMidiClip(fourth, 12.0, 1.0);
+    const auto count = m_controller.project().tracks.size();
+    const auto blockedUndo = m_controller.undoDepth();
+    startRecordingSelection();
+    if (!recordTargets().empty() || m_controller.isRecording() ||
+        m_controller.isCountingIn() ||
+        m_controller.project().tracks.size() != count ||
+        m_controller.undoDepth() != blockedUndo ||
+        statusBar()->currentMessage() != tr("No free recording track in the selected folders"))
+        return fail("an occupied folder fell back, created a lane, or failed silently");
+    select(outside);
+    if (!recordTargets().empty())
+        return fail("an occupied pinned folder fell back to the outside selection");
+    groupR = m_trackList->rowChipForTest(qid(folder), "R");
+    groupR->click();
+    select(plain);
+    if (!recordTargets().empty())
+        return fail("an empty selected folder fell back to another lane");
+
+    std::fprintf(stderr, "PASS Folder recording: R pins, selection, occupancy, count-in, capture, Undo/Redo, no new tracks\n");
+    return true;
+}
+
 bool MainWindow::checkRecordingContextForTest() {
     if (!m_timeline || !m_contextPanel || !m_typingKeyboard) return false;
     ui::ClipSel midi;
@@ -14141,10 +14421,16 @@ bool MainWindow::checkBrowser(const QString& folder, const QString& audioFile,
         return fail("Enter was not accepted for the selected audio file");
     const auto* loadedTarget = m_controller.project().findTrack(sampleTarget);
     if (!loadedTarget || loadedTarget->instrument.uid != "daw.sampler" ||
-        m_controller.undoDepth() != sampleLoadUndo + 1) {
+        m_controller.undoDepth() != std::min(sampleLoadUndo + 1, m_controller.undoLimit())) {
+        std::fprintf(stderr, "browser sample target: uid=%s, history=%zu -> %zu (limit %zu)\n",
+            loadedTarget ? loadedTarget->instrument.uid.c_str() : "missing",
+            sampleLoadUndo, m_controller.undoDepth(), m_controller.undoLimit());
         return fail("Enter did not load one Sampler into the selected MIDI channel");
     }
     m_controller.undo();
+    const auto* undoneTarget = m_controller.project().findTrack(sampleTarget);
+    if (!undoneTarget || undoneTarget->instrument.isLoaded())
+        return fail("one Undo did not restore the empty MIDI instrument slot");
     syncViews();
 
     // What a drag out of the browser would carry, fed straight into the
@@ -16492,40 +16778,28 @@ void MainWindow::setLayerInvertHeld(bool held) {
                              3000);
 }
 
-std::vector<std::string> MainWindow::recordTargets() const {
+std::vector<std::string> MainWindow::recordRequests() const {
     const auto& project = m_controller.project();
     std::vector<std::string> ids;
     const auto add = [&](const std::string& id) {
         const auto* track = project.findTrack(id);
-        if (!track) return;
-        if (track->kind == daw::TrackKind::Folder ||
-            track->kind == daw::TrackKind::Master) {
-            return;
-        }
-        if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        if (track && (daw::acceptsRecording(*track) || daw::isFolder(*track)) &&
+            std::find(ids.begin(), ids.end(), id) == ids.end())
+            ids.push_back(id);
     };
-
-    // A pinned track outranks everything. Pressing R says "record here", and it
-    // has to keep meaning that while another track is selected to be looked at
-    // — otherwise the take follows the pointer around the arrangement.
+    // A folder pin is still a request when all its children are occupied.
+    // Never let that case fall back to a track outside the requested folder.
     if (!m_recordPins.isEmpty()) {
         for (const QString& id : m_recordPins) add(id.toStdString());
-        if (!ids.empty()) return ids;
+        return ids;
     }
-
-    // With nothing pinned, the selection is the target — the whole of it.
     for (const QString& id : m_selection.tracks()) add(id.toStdString());
-    // …and whatever the header column has, which is the same set unless a clip
-    // click has since replaced the track selection with a clip one. Selecting a
-    // clip re-points the header at that clip's track, so this never widens the
-    // target beyond what the user last pointed at.
     if (m_trackList) {
         for (const QString& id : m_trackList->selectedTrackIds())
             add(id.toStdString());
     }
-    if (ids.empty() && !m_selectedTrackId.isEmpty()) {
+    if (ids.empty() && !m_selectedTrackId.isEmpty())
         add(m_selectedTrackId.toStdString());
-    }
     if (ids.empty()) {
         for (const auto& track : project.tracks) {
             if (track.kind == daw::TrackKind::Audio ||
@@ -16536,6 +16810,18 @@ std::vector<std::string> MainWindow::recordTargets() const {
         }
     }
     return ids;
+}
+
+std::vector<std::string> MainWindow::recordTargets() const {
+    if (m_controller.isRecording()) return m_controller.recordingTracks();
+    if (m_controller.isCountingIn()) return m_controller.countInTracks();
+#ifdef DAW_ENABLE_COLLABORATION
+    if (m_cloudRecording &&
+        (m_cloudRecording->phase == CloudRecordingRuntime::Phase::Acquiring ||
+         m_cloudRecording->phase == CloudRecordingRuntime::Phase::CountingIn))
+        return m_cloudRecording->trackIds;
+#endif
+    return m_controller.resolveRecordingTargets(recordRequests());
 }
 
 void MainWindow::setRecordEngaged(bool engaged) {
@@ -16564,7 +16850,15 @@ void MainWindow::startRecordingSelection() {
         if (m_controller.isCountingIn() || m_controller.isRecording()) return;
         const std::vector<std::string> targets = recordTargets();
         if (targets.empty()) {
-            statusBar()->showMessage(tr("Select a track to record onto"), 2000);
+            const auto requests = recordRequests();
+            const bool folder = std::any_of(requests.begin(), requests.end(),
+                [&](const std::string& id) {
+                    const auto* track = m_controller.project().findTrack(id);
+                    return track && daw::isFolder(*track);
+                });
+            statusBar()->showMessage(folder
+                ? tr("No free recording track in the selected folders")
+                : tr("Select a track to record onto"), 2000);
             return;
         }
         startCloudRecording(targets);
@@ -16574,7 +16868,15 @@ void MainWindow::startRecordingSelection() {
     if (m_controller.isCountingIn() || m_controller.isRecording()) return;
     const std::vector<std::string> targets = recordTargets();
     if (targets.empty()) {
-        statusBar()->showMessage(tr("Select a track to record onto"), 2000);
+        const auto requests = recordRequests();
+        const bool folder = std::any_of(requests.begin(), requests.end(),
+            [&](const std::string& id) {
+                const auto* track = m_controller.project().findTrack(id);
+                return track && daw::isFolder(*track);
+            });
+        statusBar()->showMessage(folder
+            ? tr("No free recording track in the selected folders")
+            : tr("Select a track to record onto"), 2000);
         return;
     }
 
@@ -17762,8 +18064,22 @@ void MainWindow::refreshRecordChips() {
     QStringList targets;
     for (const std::string& id : recordTargets())
         targets.push_back(QString::fromStdString(id));
+    // Show both the logical folder request and the actual destination.
+    // During capture only a folder containing a frozen destination is implicit.
+    const auto& project = m_controller.project();
+    for (const auto& id : recordRequests()) {
+        const auto* track = project.findTrack(id);
+        if (!track || !daw::isFolder(*track)) continue;
+        const bool containsTarget = std::any_of(targets.begin(), targets.end(),
+            [&](const QString& target) {
+                return daw::isDescendantOf(project, target.toStdString(), id);
+            });
+        if (containsTarget ||
+            (!m_controller.isRecording() && !m_controller.isCountingIn()))
+            targets.push_back(QString::fromStdString(id));
+    }
     m_trackList->setRecordState(m_recordEngaged || m_controller.isRecording(),
-                                targets);
+                                targets, m_recordPins);
 }
 
 void MainWindow::setRecordPinned(const QString& trackId, bool pinned) {
@@ -19916,6 +20232,7 @@ void MainWindow::refreshUi() {
         publishSessionTransport(false);
         updateLocalProcessingActions();
     }
+    if (m_recordEngaged) refreshRecordChips();
     const bool realtimeUi = m_controller.isPlaying() || m_controller.isRecording() ||
                             m_controller.isCountingIn();
     const int desiredInterval = realtimeUi ? 33 : 100;

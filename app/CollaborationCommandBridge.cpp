@@ -494,6 +494,7 @@ bool CollaborationCommandBridge::handlesCloudBinding() {
 
 daw::collab::SharedMutationResult CollaborationCommandBridge::submit(
     daw::collab::SharedMutationRequest request) {
+    if (m_gateway) daw::collab::prepareFixedColorEdits(request.body,m_gateway->optimistic());
     return submitShared(std::move(request.body),
                         std::move(request.undoLabel),
                         std::move(request.transactionId));

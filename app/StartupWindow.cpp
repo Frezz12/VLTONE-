@@ -1,4 +1,5 @@
 #include "StartupWindow.hpp"
+#include "plugins/PluginManager.hpp"
 
 #include "AccountService.hpp"
 #include "LocalizationManager.hpp"
@@ -254,11 +255,32 @@ void StartupWindow::showSystemLoading() {
 
 void StartupWindow::showPluginScan(std::uint32_t done, std::uint32_t total,
                                    const QString& currentPath) {
+    daw::ScanSnapshot snapshot;
+    snapshot.phase = daw::ScanPhase::Validating;
+    snapshot.componentsCompleted = done;
+    snapshot.componentsTotal = total;
+    snapshot.discoveryComplete = total != 0;
+    if (!currentPath.isEmpty()) {
+        daw::ScanJobInfo job;
+        job.path = currentPath.toStdString();
+        snapshot.activeJobs.push_back(std::move(job));
+    }
+    showPluginScan(snapshot);
+}
+
+void StartupWindow::showPluginScan(const daw::ScanSnapshot& snapshot) {
     m_loginPanel->hide();
     m_stage = Stage::PluginScan;
-    m_scanDone = done;
-    m_scanTotal = total;
-    m_scanPath = currentPath;
+    m_scanDone = snapshot.componentsCompleted;
+    m_scanTotal = snapshot.componentsTotal;
+    m_scanKnown = snapshot.discoveryComplete;
+    m_scanStopping = snapshot.phase == daw::ScanPhase::Stopping;
+    m_scanCancelled = snapshot.phase == daw::ScanPhase::Cancelled;
+    m_scanActive = std::uint32_t(snapshot.activeJobs.size());
+    m_scanPath = snapshot.activeJobs.empty() ? QString() :
+        QString::fromStdString(snapshot.activeJobs.front().path);
+    m_scanName = snapshot.activeJobs.empty() ? QString() :
+        QString::fromStdString(snapshot.activeJobs.front().name);
     renderStage();
 }
 
@@ -271,6 +293,11 @@ void StartupWindow::showReady(int pluginCount) {
 
 void StartupWindow::reject() {
     m_cancelled = true;
+    if (m_stage == Stage::PluginScan && !m_scanCancelled) {
+        m_scanStopping = true;
+        renderStage();
+        return;
+    }
     QDialog::reject();
 }
 
@@ -401,19 +428,20 @@ void StartupWindow::renderStage() {
             indeterminate = true;
             break;
         case Stage::PluginScan: {
-            status = tr("Checking plugins…");
-            if (m_scanTotal == 0) {
-                detail = tr("Looking for installed plugins");
-                indeterminate = true;
+            status = m_scanCancelled ? tr("Scan cancelled") :
+                     m_scanStopping ? tr("Stopping…") : tr("Checking plugins…");
+            if (!m_scanKnown) {
+                if (m_scanDone) count = tr("%1 checked").arg(m_scanDone);
+                indeterminate = !m_scanCancelled;
             } else {
-                const QString file = m_scanPath.isEmpty()
-                                         ? QString()
-                                         : QFileInfo(m_scanPath).fileName();
                 count = QStringLiteral("%1 / %2")
                             .arg(std::min(m_scanDone, m_scanTotal)).arg(m_scanTotal);
-                detail = file.isEmpty() ? tr("Looking for installed plugins") : file;
-                m_detail->setToolTip(m_scanPath);
             }
+            detail = m_scanName.isEmpty() ? QFileInfo(m_scanPath).fileName() : m_scanName;
+            if (detail.isEmpty()) detail = tr("Looking for installed plugins");
+            if (m_scanActive > 1) detail = tr("%1 (+%2 active)").arg(detail).arg(m_scanActive - 1);
+            if (m_scanCancelled) detail = tr("%1 components checked").arg(m_scanDone);
+            m_detail->setToolTip(m_scanPath);
             break;
         }
         case Stage::Ready:
@@ -448,7 +476,7 @@ void StartupWindow::renderStage() {
         m_detail->style()->polish(m_detail);
     }
     m_progress->setVisible(m_stage != Stage::SignIn);
-    if (m_stage == Stage::PluginScan && m_scanTotal > 0) {
+    if (m_stage == Stage::PluginScan && m_scanKnown && m_scanTotal > 0) {
         const int maximum = static_cast<int>(std::min<std::uint32_t>(
             m_scanTotal, std::numeric_limits<int>::max()));
         m_progress->setRange(0, maximum);
@@ -460,7 +488,9 @@ void StartupWindow::renderStage() {
             m_progress->setValue(m_stage == Stage::Ready ||
                                 m_stage == Stage::LicenseConfirmed ? 1 : 0);
     }
-    m_progress->setAccessibleDescription(status + QLatin1Char(' ') + count);
+    m_progress->setAccessibleDescription(m_stage == Stage::PluginScan && m_scanKnown
+        ? status + QLatin1Char(' ') + tr("Checked %1 of %2").arg(m_scanDone).arg(m_scanTotal)
+        : status + QLatin1Char(' ') + count);
     syncWindowSize();
 }
 
@@ -545,6 +575,26 @@ bool StartupWindow::checkForTest() {
     const bool discovery = m_progress->minimum() == 0 && m_progress->maximum() == 0 &&
                            m_count->text().isEmpty();
 
+    daw::ScanSnapshot scan;
+    scan.phase = daw::ScanPhase::Discovering;
+    scan.componentsCompleted = 2;
+    scan.componentsTotal = 7;
+    scan.activeJobs.resize(2);
+    scan.activeJobs.front().name = "Oldest component";
+    showPluginScan(scan);
+    const bool concurrentDiscovery = m_progress->maximum() == 0 &&
+        !m_count->text().isEmpty() && m_detail->accessibleName().contains(QStringLiteral("Oldest component"));
+    scan.discoveryComplete = true;
+    scan.phase = daw::ScanPhase::Validating;
+    showPluginScan(scan);
+    const bool componentProgress = m_progress->maximum() == 7 && m_progress->value() == 2;
+    scan.phase = daw::ScanPhase::Stopping;
+    showPluginScan(scan);
+    const bool stopping = m_status->text() == tr("Stopping…");
+    scan.phase = daw::ScanPhase::Cancelled;
+    showPluginScan(scan);
+    const bool cancelledScan = m_status->text() == tr("Scan cancelled");
+
     revealLogin({}, false);
     layout()->activate();
     m_loginPanel->layout()->activate();
@@ -569,7 +619,8 @@ bool StartupWindow::checkForTest() {
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(this, &escape);
     const bool passed = compact && progressTracksScan && stableLayout && completeScan &&
-                        discovery && loginFits && errorFits && reset && ready && cancelled();
+                        discovery && concurrentDiscovery && componentProgress && stopping && cancelledScan &&
+                        loginFits && errorFits && reset && ready && cancelled();
     if (!passed)
         qWarning() << "startup:" << compact << progressTracksScan << stableLayout
                    << completeScan << discovery << loginFits << errorFits << reset << ready

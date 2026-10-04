@@ -34,6 +34,7 @@ public:
     explicit TapNode(std::string name = "Tap") : m_name(std::move(name)) {}
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Capture; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
 
     /// Control thread, after final offline graph preparation. Delay the

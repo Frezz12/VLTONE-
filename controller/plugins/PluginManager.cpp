@@ -12,6 +12,10 @@
 #include <filesystem>
 #include <cmath>
 #include <unordered_map>
+#include <condition_variable>
+#include <deque>
+#include <set>
+#include <nlohmann/json.hpp>
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -377,6 +381,11 @@ std::string PluginManager::lastScanError() const {
     return m_scanError;
 }
 
+ScanSnapshot PluginManager::scanSnapshot() const {
+    std::lock_guard lock(m_currentMutex);
+    return m_snapshot;
+}
+
 std::vector<PluginManager::Candidate> PluginManager::collectCandidates() const {
     std::vector<Candidate> candidates;
     for (plugins::PluginFactory* factory : plugins::availableFactories()) {
@@ -387,11 +396,13 @@ std::vector<PluginManager::Candidate> PluginManager::collectCandidates() const {
             paths = m_cache.searchPaths(format);
         }
         for (const std::string& directory : paths) {
+            if (m_cancel.load(std::memory_order_acquire)) break;
             // Enumeration only looks at names and bundle shapes — it never
             // opens a module — so it is safe to run here rather than paying a
             // process launch per directory.
             for (std::string& candidate : factory->enumerateCandidates(directory)) {
-                candidates.push_back(Candidate{format, std::move(candidate)});
+                if (m_cancel.load(std::memory_order_acquire)) break;
+                candidates.push_back(Candidate{format, PluginCache::normalizedPath(candidate)});
             }
         }
     }
@@ -409,7 +420,7 @@ std::vector<PluginManager::Candidate> PluginManager::collectCandidates() const {
     return candidates;
 }
 
-void PluginManager::startScan(bool rescanAll) {
+void PluginManager::startScan(bool rescanAll, ScanOptions options) {
     if (m_scanning.exchange(true, std::memory_order_acq_rel)) return;
     waitForScan();   // join a previous, already-finished worker
     m_cancel.store(false, std::memory_order_release);
@@ -420,212 +431,467 @@ void PluginManager::startScan(bool rescanAll) {
         std::lock_guard<std::mutex> lock(m_currentMutex);
         m_currentPath.clear();
         m_scanError.clear();
+        m_snapshot = {};
+        m_snapshot.phase = ScanPhase::Collecting;
+        m_scanCancellation = std::stop_source{};
     }
-    m_worker = std::thread([this, rescanAll] { scanWorker(rescanAll); });
+    m_worker = std::thread([this, rescanAll, options] { scanWorker(rescanAll, options); });
 }
 
 void PluginManager::cancelScan() {
     m_cancel.store(true, std::memory_order_release);
+    std::lock_guard lock(m_currentMutex);
+    if (isScanning()) m_snapshot.phase = ScanPhase::Stopping;
+    m_scanCancellation.request_stop();
 }
 
 void PluginManager::waitForScan() {
     if (m_worker.joinable()) m_worker.join();
 }
 
-void PluginManager::scanWorker(bool rescanAll) {
-    const auto startedAt = std::chrono::steady_clock::now();
-    const std::vector<Candidate> candidates = collectCandidates();
-    m_total.store(std::uint32_t(candidates.size()), std::memory_order_relaxed);
+void PluginManager::scanWorker(bool rescanAll, ScanOptions options) {
+    using Clock = std::chrono::steady_clock;
+    using State = PluginScanState;
+    const auto startedAt = Clock::now();
+    ScanSnapshot snapshot;
+    snapshot.phase = ScanPhase::Collecting;
+    const unsigned cpus = std::thread::hardware_concurrency();
+    snapshot.maxProcesses = options.maxProcesses == 0
+        ? std::clamp(cpus ? cpus : 2u, 1u, 4u)
+        : std::clamp(options.maxProcesses, 1u, 4u);
+    const auto cancellation = m_scanCancellation.get_token();
 
-    bool scannerVerified = false;
-    std::uint32_t reused = 0;
-    std::uint32_t inspected = 0;
-    std::uint32_t unsaved = 0;
-    bool cacheWriteFailed = false;
+    struct Module { PluginCacheEntry entry; bool dirty = false; bool changed = false; };
+    struct Job {
+        std::size_t module = 0;
+        PluginDescriptor descriptor; // empty UID means discovery
+        ScanJobInfo info;
+    };
+    struct Completion { Job job; ScanProcessResult process; std::uint64_t durationMs = 0; };
+    std::vector<Module> modules;
+    std::deque<Job> ready, retries;
+    std::uint64_t nextId = 0;
+    unsigned unsaved = 0;
+    bool published = false, cacheWriteFailed = false;
     auto lastSavedAt = startedAt;
-    const auto failScan = [this](std::string error) {
-        std::lock_guard<std::mutex> lock(m_currentMutex);
-        m_scanError = std::move(error);
-        std::fprintf(stderr, "Plugin scan stopped: %s\n", m_scanError.c_str());
+
+    const auto failScan = [&](std::string error) {
+        if (snapshot.error.empty()) {
+            snapshot.error = std::move(error);
+            std::fprintf(stderr, "Plugin scan stopped: %s\n", snapshot.error.c_str());
+        }
+        m_scanCancellation.request_stop();
+    };
+    const auto publish = [&] {
+        snapshot.filesCompleted = snapshot.componentsTotal = snapshot.componentsCompleted = 0;
+        snapshot.passed = snapshot.failed = 0;
+        snapshot.discoveryComplete = true;
+        snapshot.results.clear();
+        for (const auto& module : modules) {
+            const auto& entry = module.entry;
+            if (entry.complete() || module.changed) ++snapshot.filesCompleted;
+            if (entry.discovery == State::Pending) snapshot.discoveryComplete = false;
+            if (entry.discovery == State::Failed)
+                snapshot.results.push_back({entry.format, entry.path, {}, {}, entry.failureReason,
+                    State::Failed, entry.attempts, entry.discoveryDurationMs});
+            for (const auto& component : entry.components) {
+                ++snapshot.componentsTotal;
+                if (component.state != State::Pending) ++snapshot.componentsCompleted;
+                if (component.state == State::Passed) ++snapshot.passed;
+                if (component.state == State::Failed) ++snapshot.failed;
+                snapshot.results.push_back({entry.format, entry.path, component.uid,
+                    component.descriptor.name, component.failureReason, component.state,
+                    component.attempts, component.durationMs});
+            }
+        }
+        snapshot.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - startedAt).count();
+        std::lock_guard lock(m_currentMutex);
+        m_snapshot = snapshot;
+        if (m_cancel.load(std::memory_order_acquire) &&
+            snapshot.phase != ScanPhase::Cancelled && snapshot.phase != ScanPhase::Failed)
+            m_snapshot.phase = ScanPhase::Stopping;
+        m_scanError = snapshot.error;
+        m_currentPath = snapshot.activeJobs.empty() ? std::string{} : snapshot.activeJobs.front().path;
+        m_total.store(snapshot.filesTotal, std::memory_order_relaxed);
+        m_scanned.store(snapshot.filesCompleted, std::memory_order_relaxed);
     };
     const auto checkpoint = [&] {
-        if (!save()) {
+        if (cacheWriteFailed) return false;
+        bool saved;
+        {
+            std::lock_guard lock(m_mutex);
+            for (auto& module : modules) {
+                if (!module.dirty) continue;
+                m_cache.put(module.entry);
+                module.dirty = false;
+            }
+            saved = m_cache.save(m_cachePath);
+        }
+        m_catalogueRevision.fetch_add(1, std::memory_order_release);
+        if (!saved) {
             cacheWriteFailed = true;
             failScan("Could not save the plugin cache. Check that its folder is writable.");
             return false;
         }
         unsaved = 0;
-        lastSavedAt = std::chrono::steady_clock::now();
+        lastSavedAt = Clock::now();
+        return true;
+    };
+    const auto enqueue = [&](std::size_t index, const PluginDescriptor* descriptor, bool retry) {
+        Job job;
+        job.module = index;
+        const auto& entry = modules[index].entry;
+        job.info = {++nextId, entry.format, entry.path,
+            descriptor ? descriptor->uid : std::string{},
+            descriptor ? descriptor->name : std::string{}, !descriptor, retry};
+        if (descriptor) {
+            job.descriptor = *descriptor;
+            // A prior schema is unnecessary input to create(), and can dwarf
+            // the discovery metadata in resumed scans of large instruments.
+            job.descriptor.parameterSchema.clear();
+            job.descriptor.parameterFingerprint.clear();
+        }
+        (retry ? retries : ready).push_back(std::move(job));
+    };
+    const auto validateResponse = [&](const Job& job, const ScanProcessResult& process,
+                                      std::vector<PluginDescriptor>& descriptors) {
+        if (!process.succeeded() ||
+            !plugins::scan::decodeResult(process.output, descriptors, true) || descriptors.empty())
+            return false;
+        if (!job.info.discovery && descriptors.size() != 1) return false;
+        std::set<std::string> identities;
+        for (const auto& descriptor : descriptors) {
+            if (descriptor.format != job.info.format ||
+                PluginCache::normalizedPath(descriptor.path) != job.info.path ||
+                !identities.insert(descriptor.uid).second ||
+                (!job.info.discovery && descriptor.uid != job.info.uid))
+                return false;
+            if (!job.info.discovery) {
+                try {
+                    const auto schema = nlohmann::json::parse(descriptor.parameterSchema);
+                    if (!schema.is_object() || schema.value("version", 0) != 2 ||
+                        !schema.at("parameters").is_array() || !schema.at("inputs").is_array() ||
+                        !schema.at("outputs").is_array() ||
+                        schema.at("wantsMidi").get<bool>() != descriptor.wantsMidi ||
+                        schema.at("producesMidi").get<bool>() != descriptor.producesMidi) return false;
+                    for (const auto& parameter : schema["parameters"]) {
+                        if (!parameter.at("id").is_string() || !parameter.at("unit").is_string() ||
+                            !parameter.at("minimum").is_number() || !parameter.at("maximum").is_number() ||
+                            !parameter.at("default").is_number() || !parameter.at("stepped").is_boolean() ||
+                            !parameter.at("automatable").is_boolean() || !parameter.at("bypass").is_boolean())
+                            return false;
+                    }
+                    for (const char* side : {"inputs", "outputs"})
+                        for (const auto& channels : schema[side])
+                            if (!channels.is_number_unsigned() || channels.get<std::uint64_t>() > 65535)
+                                return false;
+                } catch (const std::exception&) { return false; }
+            }
+        }
         return true;
     };
 
-    for (const Candidate& candidate : candidates) {
-        if (m_cancel.load(std::memory_order_acquire)) break;
-        {
-            std::lock_guard<std::mutex> lock(m_currentMutex);
-            m_currentPath = candidate.path;
-        }
-
-        std::uint64_t size = 0;
-        std::int64_t modified = 0;
-        statFile(candidate.path, size, modified);
-
-        if (!rescanAll) {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            const PluginCacheEntry* existing =
-                m_cache.find(candidate.format, candidate.path);
-            const bool reusableSuccess = existing && existing->ok &&
-                                         !existing->blacklisted;
-            // Old hosts interpreted a schema mismatch as a plugin failure.
-            // Repair those entries once with a verified scanner, including
-            // ones that had already exhausted the old automatic retry limit.
-            const bool legacyProtocolFailure = existing &&
-                !existing->scannerVerified &&
-                existing->failureReason == "the scanner returned nothing usable";
-            const bool reusableFailure = existing && existing->blacklisted &&
-                                         !legacyProtocolFailure;
-            if (existing && (reusableSuccess || reusableFailure) &&
-                PluginCache::isCurrent(*existing, size, modified)) {
-                ++reused;
-                m_scanned.fetch_add(1, std::memory_order_relaxed);
-                continue;   // unchanged on disk: no process launch at all
+    try {
+        const auto candidates = collectCandidates();
+        snapshot.filesTotal = std::uint32_t(candidates.size());
+        modules.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            if (cancellation.stop_requested()) break;
+            std::uint64_t size;
+            std::int64_t modified;
+            statFile(candidate.path, size, modified);
+            std::optional<PluginCacheEntry> old;
+            {
+                std::lock_guard lock(m_mutex);
+                if (const auto* cached = m_cache.find(candidate.format, candidate.path)) old = *cached;
             }
+            const bool sameFile = old && old->fileSize == size && old->fileModifiedTime == modified;
+            const bool legacyFailure = old && !old->scannerVerified &&
+                old->failureReason == "the scanner returned nothing usable";
+            Module module;
+            if (!rescanAll && old && PluginCache::isCurrent(*old, size, modified) && !legacyFailure) {
+                module.entry = *old;
+                module.entry.path = candidate.path;
+                if (old->complete()) ++snapshot.reusedFiles;
+                for (const auto& component : old->components)
+                    if (component.state != State::Pending) ++snapshot.reusedComponents;
+            } else {
+                auto& entry = module.entry;
+                entry.format = candidate.format;
+                entry.path = candidate.path;
+                entry.fileSize = size;
+                entry.fileModifiedTime = modified;
+                entry.schemaVersion = plugins::scan::kSchemaVersion;
+                entry.scannerVerified = true;
+                entry.scanStatePresent = true;
+                if (old && !legacyFailure && old->discovery == State::Failed)
+                    entry.attempts = old->attempts;
+                if (sameFile && old->ok && !old->blacklisted) {
+                    entry.plugins = old->plugins;
+                    entry.ok = !entry.plugins.empty();
+                }
+                module.dirty = true;
+            }
+            modules.push_back(std::move(module));
+            const auto index = modules.size() - 1;
+            const auto& entry = modules.back().entry;
+            if (entry.discovery == State::Pending)
+                enqueue(index, nullptr, entry.timeoutRetryPending);
+            else if (entry.discovery == State::Passed)
+                for (const auto& component : entry.components)
+                    if (component.state == State::Pending)
+                        enqueue(index, &component.descriptor, component.timeoutRetryPending);
         }
+        snapshot.phase = ScanPhase::Discovering;
+        publish();
 
-        // Lazy on purpose: a warm cache needs no helper process at all. A
-        // missing or stale helper is an installation error, never grounds to
-        // replace hundreds of healthy entries with blacklist records.
-        if (!scannerVerified) {
-            const ScanProcessResult probe = ScanProcess::run(
-                m_scannerPath, {"--protocol"},
-                std::min(m_timeout, std::chrono::milliseconds(5000)));
-            std::vector<PluginDescriptor> protocol;
-            if (!probe.succeeded() ||
-                !plugins::scan::decodeResult(probe.output, protocol)) {
+        const auto runQueue = [&] {
+            if (cancellation.stop_requested()) return;
+            if (ready.empty() && retries.empty()) {
+                // Includes writing a v1 migration; there is no helper launch.
+                published = true;
+                checkpoint();
+                return;
+            }
+            const auto probe = ScanProcess::run(m_scannerPath, {"--protocol"},
+                std::min(m_timeout, std::chrono::milliseconds(5000)), {{}, cancellation});
+            if (probe.cancelled) return;
+            if (!probe.succeeded() || !plugins::scan::decodeHandshake(probe.output)) {
                 failScan("The plugin scanner is missing or incompatible. "
-                         "Rebuild or reinstall VLTONE together with daw_scan. " +
-                         probe.failureReason);
-                break;
+                         "Rebuild or reinstall VLTONE together with daw_scan. " + probe.failureReason);
+                return;
             }
-            scannerVerified = true;
-        }
-        if (m_cancel.load(std::memory_order_acquire)) break;
+            // Do not replace the old catalogue until the helper is verified.
+            published = true;
+            if (!checkpoint()) return;
 
-        PluginCacheEntry entry;
-        entry.format = candidate.format;
-        entry.path = candidate.path;
-        entry.fileSize = size;
-        entry.fileModifiedTime = modified;
-        entry.schemaVersion = plugins::scan::kSchemaVersion;
-        entry.scannerVerified = true;
-
-        const std::vector<std::string> arguments = {
-            "--inspect",
-            "--format=" + std::string(plugins::toString(candidate.format)),
-            "--path=" + candidate.path,
-        };
-        const ScanProcessResult result =
-            ScanProcess::run(m_scannerPath, arguments, m_timeout);
-        if (m_cancel.load(std::memory_order_acquire)) break;
-        if (!result.started) {
-            failScan("Could not start the plugin scanner. " + result.failureReason);
-            break;
-        }
-        ++inspected;
-
-        if (result.succeeded() &&
-            plugins::scan::decodeResult(result.output, entry.plugins) &&
-            !entry.plugins.empty()) {
-            entry.ok = true;
-
-            // Metadata inspection is not a compatibility proof. Validate every
-            // external format in a disposable process so CLAP/AU failures are
-            // contained just like VST/VST3 failures and cached readiness means
-            // the class has instantiated, activated and processed one block.
-            if (candidate.format != Format::Internal &&
-                candidate.format != Format::Unknown) {
-                std::vector<PluginDescriptor> validated;
-                for (const PluginDescriptor& descriptor : entry.plugins) {
-                    if (m_cancel.load(std::memory_order_acquire)) break;
-                    const std::vector<std::string> validateArguments = {
-                        "--validate",
-                        "--format=" + std::string(plugins::toString(candidate.format)),
-                        "--path=" + candidate.path,
-                        "--uid=" + descriptor.uid,
-                    };
-                    const ScanProcessResult validation =
-                        ScanProcess::run(m_scannerPath, validateArguments, m_timeout);
-                    if (!validation.started) {
-                        failScan("Could not start the plugin scanner. " +
-                                 validation.failureReason);
-                        break;
+            std::mutex queueMutex;
+            std::condition_variable_any wake;
+            std::deque<Job> dispatched;
+            std::deque<Completion> completed;
+            std::vector<std::jthread> workers;
+            struct CancelBeforeJoin {
+                std::stop_source& source;
+                ~CancelBeforeJoin() { source.request_stop(); }
+            } cancelBeforeJoin{m_scanCancellation};
+            for (unsigned i = 0; i < snapshot.maxProcesses; ++i) {
+                workers.emplace_back([&](std::stop_token stop) {
+                    for (;;) {
+                        Job job;
+                        {
+                            std::unique_lock lock(queueMutex);
+                            if (!wake.wait(lock, stop, [&] { return !dispatched.empty(); })) return;
+                            job = std::move(dispatched.front());
+                            dispatched.pop_front();
+                        }
+                        const auto began = Clock::now();
+                        Completion completion;
+                        completion.job = std::move(job);
+                        try {
+                            const auto& info = completion.job.info;
+                            std::vector<std::string> arguments{
+                                info.discovery ? "--discover" : "--validate-descriptor",
+                                "--format=" + std::string(plugins::toString(info.format))};
+                            std::string request;
+                            if (info.discovery) arguments.push_back("--path=" + info.path);
+                            else request = plugins::scan::descriptorToJson(completion.job.descriptor);
+                            completion.process = ScanProcess::run(m_scannerPath, arguments, m_timeout,
+                                                                   {request, cancellation});
+                        } catch (const std::exception& error) {
+                            completion.process.transportError = true;
+                            completion.process.failureReason = error.what();
+                        }
+                        completion.durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            Clock::now() - began).count();
+                        {
+                            std::lock_guard lock(queueMutex);
+                            completed.push_back(std::move(completion));
+                        }
+                        wake.notify_all();
                     }
-                    std::vector<PluginDescriptor> confirmed;
-                    if (validation.succeeded() &&
-                        plugins::scan::decodeResult(validation.output, confirmed) &&
-                        !confirmed.empty()) {
-                        // Validation has the live answer for capabilities such
-                        // as an editor; keep it instead of accidentally putting
-                        // the inspect-time placeholder back into the cache.
-                        validated.push_back(std::move(confirmed.front()));
-                    } else if (entry.failureReason.empty()) {
-                        entry.failureReason = validation.failureReason.empty()
-                                                  ? "a plugin component failed initialization"
-                                                  : validation.failureReason;
+                });
+            }
+            bool firstResult = true;
+            for (;;) {
+                if (cancellation.stop_requested()) {
+                    ready.clear();
+                    retries.clear();
+                }
+                // Retry only after every ordinary job has left its process.
+                const bool retryActive = std::any_of(snapshot.activeJobs.begin(), snapshot.activeJobs.end(),
+                    [](const auto& info) { return info.retry; });
+                if (!retryActive && !cancellation.stop_requested()) {
+                    while (snapshot.activeJobs.size() < snapshot.maxProcesses &&
+                           (!ready.empty() || (snapshot.activeJobs.empty() && !retries.empty()))) {
+                        const bool retry = ready.empty();
+                        auto& queue = retry ? retries : ready;
+                        Job job = std::move(queue.front());
+                        queue.pop_front();
+                        job.info.startedAt = Clock::now();
+                        snapshot.activeJobs.push_back(job.info);
+                        if (job.info.retry) ++snapshot.retries;
+                        {
+                            std::lock_guard lock(queueMutex);
+                            dispatched.push_back(std::move(job));
+                        }
+                        wake.notify_all();
+                        if (retry) break;
                     }
                 }
-                entry.plugins = std::move(validated);
-                entry.ok = !entry.plugins.empty();
+                snapshot.phase = cancellation.stop_requested() ? ScanPhase::Stopping :
+                    std::any_of(snapshot.activeJobs.begin(), snapshot.activeJobs.end(),
+                        [](const auto& info) { return info.retry; }) ? ScanPhase::Retrying :
+                    std::any_of(modules.begin(), modules.end(), [](const auto& module) {
+                        return module.entry.discovery == State::Pending;
+                    }) ? ScanPhase::Discovering : ScanPhase::Validating;
+                publish();
+                if (snapshot.activeJobs.empty() && ready.empty() && retries.empty()) break;
+
+                std::deque<Completion> batch;
+                {
+                    std::unique_lock lock(queueMutex);
+                    wake.wait_for(lock, std::chrono::milliseconds(20), [&] { return !completed.empty(); });
+                    batch.swap(completed);
+                }
+                for (auto& completion : batch) {
+                    auto& job = completion.job;
+                    auto& process = completion.process;
+                    std::erase_if(snapshot.activeJobs, [&](const auto& info) { return info.id == job.info.id; });
+                    if (process.cancelled) continue;
+                    if (!process.started || process.transportError) {
+                        failScan("Could not run the plugin scanner. " + process.failureReason);
+                        continue;
+                    }
+                    auto& module = modules[job.module];
+                    auto& entry = module.entry;
+                    std::vector<PluginDescriptor> descriptors;
+                    const bool passed = validateResponse(job, process, descriptors);
+                    std::string reason;
+                    if (!passed) {
+                        reason = process.failureReason.empty()
+                            ? "the scanner returned an invalid or mismatched result" : process.failureReason;
+                        if (!process.diagnostics.empty()) {
+                            const auto tail = process.diagnostics.substr(
+                                process.diagnostics.size() > 4096 ? process.diagnostics.size() - 4096 : 0);
+                            reason += "\n" + tail;
+                        }
+                    }
+                    const bool retry = process.timedOut && !job.info.retry;
+                    if (job.info.discovery) {
+                        ++snapshot.discoveries;
+                        snapshot.discoveryMs += completion.durationMs;
+                        entry.discoveryDurationMs += completion.durationMs;
+                        ++entry.attempts;
+                        entry.timeoutRetryPending = retry;
+                        entry.discovery = passed ? State::Passed : retry ? State::Pending : State::Failed;
+                        entry.failureReason = reason;
+                        entry.blacklisted = !passed && !retry;
+                        if (passed) {
+                            entry.components.clear();
+                            std::sort(descriptors.begin(), descriptors.end(),
+                                [](const auto& a, const auto& b) { return a.uid < b.uid; });
+                            for (auto& descriptor : descriptors) {
+                                descriptor.path = entry.path;
+                                descriptor.fileSize = entry.fileSize;
+                                descriptor.fileModifiedTime = entry.fileModifiedTime;
+                                entry.components.push_back({descriptor.uid, std::move(descriptor)});
+                            }
+                            std::erase_if(entry.plugins, [&](const auto& previous) {
+                                return std::none_of(entry.components.begin(), entry.components.end(),
+                                    [&](const auto& c) { return c.uid == previous.uid; });
+                            });
+                            for (const auto& component : entry.components)
+                                enqueue(job.module, &component.descriptor, false);
+                        } else if (!retry) {
+                            entry.components.clear();
+                            entry.plugins.clear();
+                        }
+                    } else {
+                        ++snapshot.validations;
+                        snapshot.validationMs += completion.durationMs;
+                        auto component = std::find_if(entry.components.begin(), entry.components.end(),
+                            [&](const auto& c) { return c.uid == job.info.uid; });
+                        if (component == entry.components.end()) {
+                            failScan("Scanner queue lost a component identity.");
+                            continue;
+                        }
+                        ++component->attempts;
+                        component->durationMs += completion.durationMs;
+                        component->timeoutRetryPending = retry;
+                        component->state = passed ? State::Passed : retry ? State::Pending : State::Failed;
+                        component->failureReason = reason;
+                        if (!retry) {
+                            std::erase_if(entry.plugins, [&](const auto& d) { return d.uid == component->uid; });
+                            if (passed) {
+                                component->descriptor = std::move(descriptors.front());
+                                component->descriptor.path = entry.path;
+                                component->descriptor.fileSize = entry.fileSize;
+                                component->descriptor.fileModifiedTime = entry.fileModifiedTime;
+                                entry.plugins.push_back(component->descriptor);
+                            }
+                        }
+                    }
+                    if (retry) enqueue(job.module, job.info.discovery ? nullptr : &job.descriptor, true);
+                    entry.ok = !entry.plugins.empty();
+                    // A generation whose module changed is never a compatibility
+                    // verdict. Discard its successes and failures together.
+                    if (entry.complete()) {
+                        std::uint64_t size;
+                        std::int64_t modified;
+                        statFile(entry.path, size, modified);
+                        if (size != entry.fileSize || modified != entry.fileModifiedTime) {
+                            entry.discovery = State::Pending;
+                            entry.components.clear();
+                            entry.plugins.clear();
+                            entry.ok = entry.blacklisted = entry.timeoutRetryPending = false;
+                            entry.attempts = 0;
+                            entry.failureReason = "file changed during scan; pending a new scan";
+                            module.changed = true;
+                            ++snapshot.changedFiles;
+                        }
+                    }
+                    module.dirty = true;
+                    ++unsaved;
+                    if (job.info.discovery || firstResult || unsaved >= 8 ||
+                        Clock::now() - lastSavedAt >= std::chrono::seconds(2)) {
+                        checkpoint();
+                    }
+                    if (!job.info.discovery) firstResult = false;
+                }
+                if (unsaved && Clock::now() - lastSavedAt >= std::chrono::seconds(2)) checkpoint();
             }
-        } else {
-            // Anything that is not a clean, parseable success is a blacklist:
-            // a plugin that crashed the scanner would crash the DAW, and one
-            // that produced nothing usable has nothing to offer anyway.
-            entry.ok = false;
-            entry.blacklisted = true;
-            entry.failureReason = result.failureReason.empty()
-                                      ? "the scanner returned nothing usable"
-                                      : result.failureReason;
-        }
-
-        // An interrupted multi-class bundle is retried next time. Completed
-        // bundles are checkpointed; cancellation must not blacklist a class.
-        if (m_cancel.load(std::memory_order_acquire) || !lastScanError().empty()) break;
-
-        if (!entry.ok) entry.blacklisted = true;
-
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (const PluginCacheEntry* previous =
-                    m_cache.find(candidate.format, candidate.path)) {
-                entry.attempts = previous->attempts;
-            }
-            if (entry.ok) entry.attempts = 0;
-            else ++entry.attempts;
-            m_cache.put(std::move(entry));
-        }
-        m_scanned.fetch_add(1, std::memory_order_relaxed);
-        ++unsaved;
-        // Keep completed work even if startup is interrupted or the app exits
-        // unexpectedly. Bound writes during scans of many very small files.
-        if (inspected == 1 || unsaved >= 8 ||
-            std::chrono::steady_clock::now() - lastSavedAt >= std::chrono::seconds(2)) {
-            if (!checkpoint()) break;
-        }
+            for (auto& worker : workers) worker.request_stop();
+            wake.notify_all();
+            // jthread destruction joins all helpers before scan completion.
+        };
+        runQueue();
+    } catch (const std::exception& error) {
+        failScan("Plugin scan failed: " + std::string(error.what()));
+    } catch (...) {
+        failScan("Plugin scan failed with an unexpected controller error.");
     }
 
-    {
-        std::lock_guard<std::mutex> lock(m_currentMutex);
-        m_currentPath.clear();
-    }
-    if (unsaved != 0 && !cacheWriteFailed) checkpoint();
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - startedAt).count();
-    std::fprintf(stderr, "Plugin scan: %u cached, %u inspected, %lld ms%s\n",
-                 reused, inspected, static_cast<long long>(elapsed),
-                 m_cancel.load(std::memory_order_acquire) ? " (cancelled)" : "");
+    if (published && !cacheWriteFailed) checkpoint();
+    snapshot.activeJobs.clear();
+    snapshot.phase = !snapshot.error.empty() ? ScanPhase::Failed :
+        m_cancel.load(std::memory_order_acquire) ? ScanPhase::Cancelled : ScanPhase::Completed;
+    publish();
+    std::fprintf(stderr,
+        "Plugin scan: %u cached files, %u reused components, %u discoveries (%llu ms), "
+        "%u validations (%llu ms), %u retries, %llu ms total%s\n",
+        snapshot.reusedFiles, snapshot.reusedComponents, snapshot.discoveries,
+        static_cast<unsigned long long>(snapshot.discoveryMs), snapshot.validations,
+        static_cast<unsigned long long>(snapshot.validationMs), snapshot.retries,
+        static_cast<unsigned long long>(snapshot.elapsedMs),
+        snapshot.phase == ScanPhase::Cancelled ? " (cancelled)" : "");
     m_catalogueRevision.fetch_add(1, std::memory_order_release);
-    m_scanning.store(false, std::memory_order_release);
+    {
+        std::lock_guard lock(m_currentMutex);
+        if (m_cancel.load(std::memory_order_acquire) && m_snapshot.error.empty())
+            m_snapshot.phase = ScanPhase::Cancelled;
+        m_scanning.store(false, std::memory_order_release);
+    }
     m_finished.store(true, std::memory_order_release);
 }
 
@@ -654,7 +920,7 @@ std::vector<PluginDescriptor> PluginManager::plugins() const {
 
 std::vector<PluginDescriptor> PluginManager::effects() const {
     std::vector<PluginDescriptor> found = plugins();
-    std::erase_if(found, [](const PluginDescriptor& d) { return d.isInstrument; });
+    std::erase_if(found, [](const PluginDescriptor& d) { return d.isInstrument || d.uid=="daw.channel-color"; });
     return found;
 }
 
@@ -724,29 +990,59 @@ std::vector<PluginManager::BlacklistEntry> PluginManager::blacklist() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<BlacklistEntry> found;
     for (const PluginCacheEntry& entry : m_cache.entries()) {
-        if (!entry.blacklisted) continue;
-        found.push_back(BlacklistEntry{entry.format, entry.path, entry.failureReason,
-                                       entry.attempts});
+        if (entry.discovery == PluginScanState::Failed)
+            found.push_back({entry.format, entry.path, entry.failureReason, entry.attempts, {}, {}});
+        for (const auto& component : entry.components) {
+            if (component.state == PluginScanState::Failed)
+                found.push_back({entry.format, entry.path, component.failureReason,
+                    component.attempts, component.uid, component.descriptor.name});
+        }
     }
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
+        if (a.format != b.format) return a.format < b.format;
+        if (a.path != b.path) return a.path < b.path;
+        return a.uid < b.uid;
+    });
     return found;
 }
 
-void PluginManager::unblacklist(Format format, const std::string& path) {
+namespace {
+void resetFailures(PluginCacheEntry& entry, const std::string& uid) {
+    if (uid.empty() && entry.discovery == PluginScanState::Failed) {
+        entry.discovery = PluginScanState::Pending;
+        entry.blacklisted = entry.timeoutRetryPending = false;
+        entry.failureReason.clear();
+        entry.attempts = 0;
+        entry.discoveryDurationMs = 0;
+    }
+    for (auto& component : entry.components) {
+        if (component.state != PluginScanState::Failed || (!uid.empty() && component.uid != uid)) continue;
+        component.state = PluginScanState::Pending;
+        component.failureReason.clear();
+        component.attempts = 0;
+        component.durationMs = 0;
+        component.timeoutRetryPending = false;
+    }
+}
+}
+
+void PluginManager::unblacklist(Format format, const std::string& path, const std::string& uid) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    // Drop the entry outright rather than clearing the flag: the next scan then
-    // treats it as never seen and tries it again from scratch.
-    m_cache.remove(format, path);
+    if (const auto* current = m_cache.find(format, path)) {
+        auto entry = *current;
+        resetFailures(entry, uid);
+        m_cache.put(std::move(entry));
+    }
     m_catalogueRevision.fetch_add(1, std::memory_order_release);
 }
 
 void PluginManager::clearBlacklist() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::vector<PluginCacheEntry> keep;
-    for (const PluginCacheEntry& entry : m_cache.entries()) {
-        if (!entry.blacklisted) keep.push_back(entry);
+    auto entries = m_cache.entries();
+    for (auto& entry : entries) {
+        resetFailures(entry, {});
+        m_cache.put(std::move(entry));
     }
-    m_cache.clear();
-    for (PluginCacheEntry& entry : keep) m_cache.put(std::move(entry));
     m_catalogueRevision.fetch_add(1, std::memory_order_release);
 }
 

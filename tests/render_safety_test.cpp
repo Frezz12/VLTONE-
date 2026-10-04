@@ -77,19 +77,23 @@ int main() {
         {
             en::RealtimeEngine::RenderGate outer(engine);
             { en::RealtimeEngine::RenderGate inner(engine); live(); }
-            live();
+            // Parking retains the last output through the device's 5 ms
+            // declick fade, but must never admit DSP while either gate lives.
+            for (int i = 0; i < 5; ++i) live();
             check(counter->blocks == before && left[0] == 0.0f,
                   "destroying an inner gate keeps the live renderer parked");
         }
-        live();
-        check(counter->blocks == before + 1 && left[0] == 0.25f,
+        for (int i = 0; i < 5; ++i) live();
+        check(counter->blocks == before + 5 && left[0] == 0.25f,
               "outer gate reopens the live renderer");
         bool refused = false;
         check(bool(engine.renderOffline(0, 128, 64, [&](const auto&, auto) {
             refused = !engine.commitGraph() && !engine.prepare(96000, 64, 2);
             en::RealtimeEngine::RenderGate nested(engine);
-            live();
-            check(left[0] == 0, "nested offline callback cannot admit live DSP");
+            const int offlineBlocks = counter->blocks;
+            for (int i = 0; i < 5; ++i) live();
+            check(counter->blocks == offlineBlocks && left[0] == 0,
+                  "nested offline callback cannot admit live DSP");
             return false;
         })), "offline pass completes");
         check(refused && engine.sampleRate() == 48000, "reentrant reconfiguration is refused");
@@ -98,8 +102,10 @@ int main() {
         try { engine.renderOffline(0, 128, 64, [](const auto&, auto) { return true; }); }
         catch (const std::exception&) { threw = true; }
         counter->failOffline = false;
-        live();
-        check(threw && left[0] == 0.25f, "offline prepare exceptions restore live DSP and release the gate");
+        const int afterFailure = counter->blocks;
+        for (int i = 0; i < 5; ++i) live();
+        check(threw && counter->blocks == afterFailure + 5 && left[0] == 0.25f,
+              "offline prepare exceptions restore live DSP and release the gate");
     }
     const auto sourcePath = (dir / "source.wav").string();
     {

@@ -161,6 +161,8 @@ std::string pluginChainName(PluginChain chain) {
         case PluginChain::Instrument: return "instrument";
         case PluginChain::SamplerFx: return "samplerFx";
         case PluginChain::Clip: return "clip";
+        case PluginChain::ChannelColor: return "channelColor";
+        case PluginChain::MiniModules: return "miniModules";
     }
     return "track";
 }
@@ -171,6 +173,8 @@ bool pluginChainFromName(const std::string& name, PluginChain& out) {
     else if (name == "instrument") out = PluginChain::Instrument;
     else if (name == "samplerFx") out = PluginChain::SamplerFx;
     else if (name == "clip") out = PluginChain::Clip;
+    else if (name == "channelColor") out = PluginChain::ChannelColor;
+    else if (name == "miniModules") out = PluginChain::MiniModules;
     else return false;
     return true;
 }
@@ -395,12 +399,17 @@ bool commandHasValidIds(const ProjectCommand& command, std::string* error) {
         return requireUuid(asset.assetId, label);
     };
     const auto requireLocationIds = [&](const PluginLocation& location) {
+        if (location.chain==PluginChain::ChannelColor && command.meta.schemaVersion<6)
+            return fail("COLOR requires protocol 6");
+        if (location.chain==PluginChain::MiniModules)
+            return fail("Mini modules are local-only in this version");
         switch (location.chain) {
             case PluginChain::Master:
                 return (location.trackId.empty() && location.clipId.empty()) ||
                        fail("master plugin location must not carry entity ids");
             case PluginChain::Track:
             case PluginChain::Instrument:
+            case PluginChain::ChannelColor:
             case PluginChain::SamplerFx:
                 return requireUuid(location.trackId, "location.trackId") &&
                        (location.clipId.empty() ||

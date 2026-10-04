@@ -1,3 +1,4 @@
+#include "model/MiniModules.hpp"
 #include "ChannelStripPreset.hpp"
 
 #include "serialization/InsertJson.hpp"
@@ -103,6 +104,11 @@ audio::Result ChannelStripPreset::save(
         {"pan", snapshot.pan},
         {"plugins", std::move(plugins)},
     };
+    root["miniModules"]=json::array();
+    for(const auto& module:snapshot.miniModules) {
+        auto model=module.model;makePortable(model);
+        root["miniModules"].push_back(serialization::insertToJson(model));
+    }
     return writeAtomically(json::to_cbor(root), platform::pathFromUtf8(filePath));
 }
 
@@ -142,6 +148,30 @@ audio::Result ChannelStripPreset::load(EngineController::ChannelSnapshot& out,
         loaded.hasSettings = true;
         loaded.volume = root.value("volume", 1.0f);
         loaded.pan = root.value("pan", 0.0f);
+        if(root.contains("channelColor")) {
+            const auto& entry=root.at("channelColor");
+            if(!entry.is_object() || !entry.contains("plugin") || !entry["plugin"].is_object())
+                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"VLTS preset contains invalid COLOR");
+            EngineController::ChainSlotSnapshot color; color.model=serialization::insertFromJson(entry["plugin"]);
+            if(color.model.format!=PluginFormat::Internal || color.model.uid!="daw.channel-color")
+                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"VLTS COLOR has an invalid plugin");
+            makePortable(color.model);
+            if(entry.contains("state") && entry["state"].is_binary()) {
+                const auto& state=entry["state"].get_binary(); color.state.assign(state.begin(),state.end());
+            }
+            color.model=migrateColorToMiniModule(color.model);color.state.clear();
+            loaded.miniModules.push_back(std::move(color));
+        }
+        if(root.contains("miniModules")) {
+            const auto& modules=root.at("miniModules");
+            if(!modules.is_array() || modules.size()>plugins::mini::kMaxModules)
+                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"Invalid mini module rack");
+            loaded.miniModules.clear();
+            for(const auto& entry:modules) {
+                EngineController::ChainSlotSnapshot module;module.model=serialization::insertFromJson(entry);
+                makePortable(module.model);loaded.miniModules.push_back(std::move(module));
+            }
+        }
         for (const json& entry : root.at("plugins")) {
             if (!entry.is_object() || !entry.contains("plugin") ||
                 !entry.at("plugin").is_object()) {

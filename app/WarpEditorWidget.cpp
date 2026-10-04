@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "WarpEditorWidget.hpp"
 #include "EngineController.hpp"
 #include "Internal/SamplerVoice.hpp"
@@ -274,13 +275,17 @@ protected:
         if (!e->clip()) return;
         const double amount = !event->pixelDelta().isNull() ? event->pixelDelta().y() / 60. : event->angleDelta().y() / 120.;
         if (event->modifiers() & Qt::ControlModifier) {
+            ui::ScrollMotion::cancel(this);
             const double anchor = beat(event->position().x());
             const double fraction = (event->position().x() - 12) / std::max(1, width() - 24);
             e->m_view.span = std::clamp(e->m_view.span * std::pow(.8, amount), .02, 100000.);
             e->m_view.start = anchor - fraction * e->m_view.span;
         } else {
             const double dx = event->pixelDelta().x() ? event->pixelDelta().x() / 60. : amount;
-            e->m_view.start -= dx * e->m_view.span * .1;
+            const double pixels=std::max(1,width()-24);
+            ui::ScrollMotion::scroll(this,{-dx*pixels*.1,0},!event->pixelDelta().isNull(),
+                [this,pixels]{return QPointF(e->m_view.start/e->m_view.span*pixels,0);},
+                [this,pixels](QPointF p){e->m_view.start=std::max(0.,p.x()/pixels*e->m_view.span);e->redraw();});
         }
         e->m_view.start = std::max(0., e->m_view.start); e->redraw(); event->accept();
     }

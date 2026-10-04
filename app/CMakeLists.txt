@@ -60,7 +60,7 @@ add_library(vlt_gpu_scene STATIC
     graphics/VideoFrameGate.cpp graphics/VideoFrameGate.hpp
     graphics/SceneRecorder.cpp graphics/SceneRecorder.hpp graphics/SceneSnapshot.hpp
     graphics/WidgetUpdates.cpp graphics/WidgetUpdates.hpp)
-add_library(vlt_ui_frame_clock STATIC UiFrameClock.cpp UiFrameClock.hpp UiPerformance.cpp UiPerformance.hpp)
+add_library(vlt_ui_frame_clock STATIC UiFrameClock.cpp UiFrameClock.hpp UiPerformance.cpp UiPerformance.hpp ScrollMotion.cpp ScrollMotion.hpp)
 target_link_libraries(vlt_ui_frame_clock PUBLIC Qt6::Widgets)
 target_include_directories(vlt_ui_frame_clock PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(vlt_gpu_scene PUBLIC Qt6::Quick Qt6::Widgets Qt6::Multimedia vlt_graphics_preferences vlt_ui_frame_clock PRIVATE Qt6::GuiPrivate Qt6::WidgetsPrivate)
@@ -83,6 +83,26 @@ target_include_directories(web_permission_link_check PRIVATE ${CMAKE_CURRENT_SOU
 target_link_libraries(web_permission_link_check PRIVATE Qt6::Widgets Qt6::WebEngineWidgets)
 
 if(DAW_BUILD_TESTS)
+    foreach(creator_theme dark light)
+        foreach(creator_locale en ru)
+            foreach(creator_scale 1 1.5 2)
+                add_test(NAME creator_ui_${creator_theme}_${creator_locale}_${creator_scale}
+                    COMMAND $<TARGET_FILE:daw> --creator-check --theme ${creator_theme} --language ${creator_locale})
+                set_tests_properties(creator_ui_${creator_theme}_${creator_locale}_${creator_scale} PROPERTIES
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${creator_scale};DAW_CREATOR_CHECK_DIR=${PROJECT_SOURCE_DIR}/artifacts/creator-ui-${creator_theme}-${creator_locale}-${creator_scale}"
+                    TIMEOUT 60 RUN_SERIAL TRUE)
+            endforeach()
+        endforeach()
+    endforeach()
+    foreach(slicer_locale en ru)
+        foreach(slicer_scale 1 1.25 1.5 2)
+            add_test(NAME slicer_ui_${slicer_locale}_${slicer_scale}
+                COMMAND $<TARGET_FILE:daw> --slicercheck --language ${slicer_locale})
+            set_tests_properties(slicer_ui_${slicer_locale}_${slicer_scale} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${slicer_scale}"
+                TIMEOUT 60 RUN_SERIAL TRUE)
+        endforeach()
+    endforeach()
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(update_checker_test ../tests/update_checker_test.cpp
         UpdateChecker.cpp UpdateChecker.hpp LocalizationManager.cpp LocalizationManager.hpp)
@@ -215,6 +235,11 @@ if(DAW_BUILD_TESTS)
     target_link_libraries(waveform_gpu_test PRIVATE daw_controller vlt_gpu_scene)
     add_test(NAME waveform_gpu_test COMMAND waveform_gpu_test)
     set_tests_properties(waveform_gpu_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    qt_add_executable(scroll_motion_test ../tests/scroll_motion_test.cpp)
+    target_link_libraries(scroll_motion_test PRIVATE vlt_ui_frame_clock)
+    add_test(NAME scroll_motion_test COMMAND scroll_motion_test)
+    set_tests_properties(scroll_motion_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
     qt_add_executable(ui_frame_clock_test
         ../tests/ui_frame_clock_test.cpp)
     target_include_directories(ui_frame_clock_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -247,6 +272,23 @@ if(DAW_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 90)
     if(WIN32)
         set_tests_properties(modulation_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
+    qt_add_executable(cla2a_ui_test
+        ../tests/cla2a_ui_test.cpp Cla2aPanel.cpp Cla2aPanel.hpp
+        Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(cla2a_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(cla2a_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
+    if(APPLE)
+        target_link_libraries(cla2a_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME cla2a_ui_test COMMAND cla2a_ui_test)
+    set_tests_properties(cla2a_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(cla2a_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
@@ -317,12 +359,13 @@ file(GLOB DAW_APP_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
 list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/UiFrameClock.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiFrameClock.hpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ScrollMotion.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ScrollMotion.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
 # A targeted app build must not leave an older scanner beside the new host.
 # They share a wire protocol and the plugin compatibility checks.
-add_dependencies(daw daw_scan)
+add_dependencies(daw daw_scan creator_tools)
 foreach(modulation_target daw modulation_ui_test)
     if(TARGET ${modulation_target})
         qt_add_resources(${modulation_target} "${modulation_target}_modulation_ui"
@@ -380,6 +423,11 @@ endif()
 
 if(TARGET pitch_corrector_ui_test)
     qt_add_resources(pitch_corrector_ui_test "pitch_test_fonts"
+        PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
+        FILES ${VLTONE_UI_FONTS})
+endif()
+if(TARGET cla2a_ui_test)
+    qt_add_resources(cla2a_ui_test "cla2a_test_fonts"
         PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
         FILES ${VLTONE_UI_FONTS})
 endif()
@@ -452,7 +500,24 @@ if(DAW_BUILD_TESTS)
     add_test(NAME plugin_batch_ui_test COMMAND $<TARGET_FILE:daw> --pluginbatchcheck)
     add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
     add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
+    foreach(color_scale 1 1.5 2)
+        add_test(NAME channel_color_ui_${color_scale} COMMAND $<TARGET_FILE:daw> --channel-color-check)
+        set_tests_properties(channel_color_ui_${color_scale} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${color_scale}"
+            TIMEOUT 60 RUN_SERIAL TRUE)
+    endforeach()
     add_test(NAME clip_library_ui_test COMMAND $<TARGET_FILE:daw> --cliplibrarycheck)
+    foreach(mini_theme dark light)
+        foreach(mini_language en ru)
+            foreach(mini_scale 1 1.5 2)
+                add_test(NAME mini_module_ui_${mini_theme}_${mini_language}_${mini_scale}
+                    COMMAND $<TARGET_FILE:daw> --channel-color-check --theme ${mini_theme} --language ${mini_language})
+                set_tests_properties(mini_module_ui_${mini_theme}_${mini_language}_${mini_scale} PROPERTIES
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${mini_scale};DAW_COLOR_SCREENSHOTS=${CMAKE_SOURCE_DIR}/artifacts/mini-ui-${mini_theme}-${mini_language}-${mini_scale}"
+                    TIMEOUT 60 RUN_SERIAL TRUE)
+            endforeach()
+        endforeach()
+    endforeach()
     set_tests_properties(clip_library_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60 RUN_SERIAL TRUE)
     add_test(NAME midi_input_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
@@ -460,6 +525,14 @@ if(DAW_BUILD_TESTS)
     set_tests_properties(recording_context_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RECORD_CONTEXT_ONLY=1"
         TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME folder_recording_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(folder_recording_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_FOLDER_RECORD_ONLY=1"
+        TIMEOUT 60 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(folder_recording_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     if(DAW_ENABLE_VST)
         add_dependencies(daw daw_test_vst_shell)
         add_test(NAME plugin_editor_idle_ui_test COMMAND $<TARGET_FILE:daw> --selftest)

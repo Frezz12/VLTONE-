@@ -1,0 +1,79 @@
+{
+  "sdk": 1,
+  "examples": [
+    {
+      "name": "Gain",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "LocalHelpers",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "OnePole",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "MultiOutput",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "Delay",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "Chorus",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "ControlLFO",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "SeededNoise",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "CallSaturate",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "TwoFilters",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "NestedCall",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    },
+    {
+      "name": "CallMultiOutput",
+      "analysis": true,
+      "wasm": true,
+      "runtime": "passed at 48000 Hz, stereo"
+    }
+  ],
+  "extraction": true,
+  "platform": "nt"
+}

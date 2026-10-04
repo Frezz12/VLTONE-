@@ -227,7 +227,6 @@ void SamplerInstance::clearSample() {
         m_completedPrecomputeGeneration.store(generation,
                                                std::memory_order_release);
     }
-    for (Voice& voice : m_voices) voice.kill();
     m_bakeChanged.notify_all();
 }
 
@@ -462,6 +461,10 @@ bool SamplerInstance::loadProjectState(
     json document = json::parse(state.begin(), state.end(), nullptr, false);
     if (document.is_discarded() || !document.is_object()) return false;
 
+    // Old states do not contain Fine Tune. Loading one into an already-used
+    // instance must not retain a correction from the previous sample/preset.
+    m_values[kFineTuneIndex].store(0.0, std::memory_order_relaxed);
+
     if (document.contains("params") && document["params"].is_object()) {
         for (const auto& [id, value] : document["params"].items()) {
             if (!value.is_number()) continue;
@@ -516,7 +519,8 @@ SamplerSettings SamplerInstance::snapshot() const noexcept {
     s.volume = value(Param::Volume);
     s.pan = value(Param::Pan);
     s.pitchRange = value(Param::PitchRange);
-    s.pitchSemitones = value(Param::Pitch) * s.pitchRange;
+    s.pitchSemitones = value(Param::Pitch) * s.pitchRange +
+        m_values[kFineTuneIndex].load(std::memory_order_relaxed) / 100.0;
     s.modX = value(Param::ModX);
     s.modY = value(Param::ModY);
     s.rootNote = int(std::lround(value(Param::RootNote)));
@@ -707,6 +711,10 @@ void SamplerInstance::applyEvent(const PluginEvent& event, std::uint32_t) noexce
             }
             break;
         case PluginEvent::Kind::NoteChoke:
+            for (auto& held : m_heldNotes)
+                if ((event.channel < 0 || held.channel == event.channel) &&
+                    (event.noteId >= 0 ? held.id == event.noteId : held.key == int(event.key)))
+                    held.stamp = 0;
             for (Voice& voice : m_voices) {
                 if (voice.active() && (event.channel < 0 || voice.channel()==event.channel) &&
                     (event.noteId>=0 ? voice.noteId()==event.noteId : voice.key()==int(event.key))) voice.choke();
@@ -738,7 +746,15 @@ void SamplerInstance::renderSlice(const PluginProcessContext& context,
                                   std::uint32_t frames) noexcept {
     if (frames == 0) return;
     auto sample = m_sample.read();
-    if (!sample || !sample->audio) return;
+    const auto* audio = sample ? sample->audio.get() : nullptr;
+    if (audio != m_renderAudio) {
+        if (!context.offline && m_sourceOutputInitialized) m_sourceTransition.begin(m_sampleRate);
+        // Source removal is consumed here; the control thread never mutates
+        // voices which may still be rendering the previous source.
+        if (!audio) for (auto& voice : m_voices) voice.kill();
+    }
+    m_renderAudio = audio;
+    m_sourceOutputInitialized = true;
 
     float* slice[engine::kMaxChannels];
     const std::uint16_t channels =
@@ -747,6 +763,11 @@ void SamplerInstance::renderSlice(const PluginProcessContext& context,
         slice[ch] = context.outputs[ch] + offset;
     }
 
+    if (!audio) {
+        if (!context.offline)
+            m_sourceTransition.process(engine::AudioBlock(slice, channels, frames), frames);
+        return;
+    }
     const double tempo = context.transport.tempo > 0.0 ? context.transport.tempo : 120.0;
     auto stretchBank = m_stretchBanks[std::clamp(settings.stretchMode, 1, 4) - 1].read();
     for (std::size_t index = 0; index < kMaxVoices; ++index) {
@@ -755,6 +776,9 @@ void SamplerInstance::renderSlice(const PluginProcessContext& context,
         voice.render(*sample, settings, slice, channels, frames, m_sampleRate, tempo,
                      m_globalPhase, stretchBank ? stretchBank->voices[index].get() : nullptr);
     }
+
+    if (!context.offline)
+        m_sourceTransition.process(engine::AudioBlock(slice, channels, frames), frames);
 
     // The free-running phases the Global switch reads. Advanced per slice so a
     // block split by events still moves them exactly once per frame.
@@ -799,6 +823,9 @@ PluginProcessDisposition SamplerInstance::process(
 }
 
 void SamplerInstance::reset() noexcept {
+    m_sourceTransition.reset();
+    m_renderAudio = nullptr;
+    m_sourceOutputInitialized = false;
     for (Voice& voice : m_voices) voice.kill();
     m_heldNotes = {};
     std::fill(std::begin(m_channelBend), std::end(m_channelBend), 0.0);

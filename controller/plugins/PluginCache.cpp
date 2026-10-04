@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -22,11 +23,27 @@ using plugins::Format;
 
 namespace {
 
-constexpr int kCacheVersion = 1;
+constexpr int kCacheVersion = 2;
+std::mutex cacheWriteMutex;
+
+const char* stateName(PluginScanState state) {
+    switch (state) {
+        case PluginScanState::Passed: return "passed";
+        case PluginScanState::Failed: return "failed";
+        default: return "pending";
+    }
+}
+
+PluginScanState readState(const json& value, const char* key) {
+    const auto name = value.value(key, std::string("pending"));
+    if (name == "passed") return PluginScanState::Passed;
+    if (name == "failed") return PluginScanState::Failed;
+    if (name != "pending") throw std::runtime_error("invalid scan state");
+    return PluginScanState::Pending;
+}
 
 bool sameModulePath(const std::string& left, const std::string& right) {
-    return platform::pathFromUtf8(left).lexically_normal() ==
-           platform::pathFromUtf8(right).lexically_normal();
+    return PluginCache::normalizedPath(left) == PluginCache::normalizedPath(right);
 }
 
 json descriptorToJson(const plugins::PluginDescriptor& descriptor) {
@@ -59,6 +76,26 @@ std::vector<std::string> pathsFromJson(const json& parent, const char* key) {
 }
 
 } // namespace
+
+bool PluginCacheEntry::complete() const noexcept {
+    if (discovery == PluginScanState::Pending) return false;
+    if (discovery == PluginScanState::Failed) return true;
+    return std::none_of(components.begin(), components.end(), [](const auto& component) {
+        return component.state == PluginScanState::Pending;
+    });
+}
+
+std::string PluginCache::normalizedPath(const std::string& path) {
+    std::error_code error;
+    auto native = fs::absolute(platform::pathFromUtf8(path), error).lexically_normal();
+    if (error) native = platform::pathFromUtf8(path).lexically_normal();
+#if defined(_WIN32)
+    auto text = native.wstring();
+    ::CharLowerBuffW(text.data(), DWORD(text.size()));
+    native = text;
+#endif
+    return platform::pathToUtf8(native);
+}
 
 std::string PluginCache::defaultPath() {
     fs::path dir = platform::knownFolderPath(platform::KnownFolder::RoamingAppData);
@@ -101,6 +138,20 @@ void PluginCache::setSearchPaths(Format format, std::vector<std::string> paths) 
 }
 
 void PluginCache::put(PluginCacheEntry entry) {
+    if (!entry.scanStatePresent) {
+        // Migration also supports callers that still populate the v1 fields.
+        entry.discovery = entry.blacklisted ? PluginScanState::Failed :
+                          entry.ok ? PluginScanState::Passed : PluginScanState::Pending;
+        if (entry.ok && !entry.blacklisted) {
+            for (const auto& descriptor : entry.plugins)
+                entry.components.push_back({descriptor.uid, descriptor, PluginScanState::Passed});
+        }
+        entry.scanStatePresent = true;
+    }
+    std::sort(entry.components.begin(), entry.components.end(),
+        [](const auto& a, const auto& b) { return a.uid < b.uid; });
+    std::sort(entry.plugins.begin(), entry.plugins.end(),
+        [](const auto& a, const auto& b) { return a.uid < b.uid; });
     for (PluginCacheEntry& existing : m_entries) {
         if (existing.format == entry.format && sameModulePath(existing.path, entry.path)) {
             existing = std::move(entry);
@@ -134,6 +185,11 @@ std::vector<plugins::PluginDescriptor> PluginCache::allPlugins() const {
         if (!entry.ok || entry.blacklisted) continue;
         found.insert(found.end(), entry.plugins.begin(), entry.plugins.end());
     }
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
+        if (a.format != b.format) return a.format < b.format;
+        if (a.path != b.path) return a.path < b.path;
+        return a.uid < b.uid;
+    });
     return found;
 }
 
@@ -141,6 +197,7 @@ bool PluginCache::load(const std::string& path) {
     m_entries.clear();
     m_searchPathsInitialized = false;
     m_vstPathsPresent = false;
+    m_clapPaths.clear(); m_vst3Paths.clear(); m_vstPaths.clear(); m_auPaths.clear();
     std::ifstream is(platform::pathFromUtf8(path));
     if (!is) return false;
 
@@ -152,114 +209,167 @@ bool PluginCache::load(const std::string& path) {
         // start. There is nothing here that cannot be regenerated.
         return false;
     }
-    if (!root.is_object() || root.value("version", 0) != kCacheVersion) return false;
-    m_searchPathsInitialized = root.value("searchPathsInitialized", false);
+    try {
+        if (!root.is_object()) return false;
+        const int version = root.value("version", 0);
+        if (version != 1 && version != kCacheVersion) return false;
+        m_searchPathsInitialized = root.value("searchPathsInitialized", false);
 
-    if (root.contains("searchPaths") && root["searchPaths"].is_object()) {
-        const json& paths = root["searchPaths"];
-        m_clapPaths = pathsFromJson(paths, "clap");
-        m_vst3Paths = pathsFromJson(paths, "vst3");
-        m_vstPaths = pathsFromJson(paths, "vst");
-        m_vstPathsPresent = paths.contains("vst");
-        m_auPaths = pathsFromJson(paths, "au");
-    }
-
-    if (!root.contains("entries") || !root["entries"].is_array()) return true;
-    for (const json& value : root["entries"]) {
-        if (!value.is_object()) continue;
-        PluginCacheEntry entry;
-        entry.format = plugins::formatFromString(value.value("format", std::string()));
-        entry.path = value.value("path", std::string());
-        entry.fileSize = value.value("fileSize", std::uint64_t(0));
-        entry.fileModifiedTime = value.value("fileModifiedTime", std::int64_t(0));
-        entry.schemaVersion = value.value("schema", 0);
-        entry.ok = value.value("ok", false);
-        entry.blacklisted = value.value("blacklisted", false);
-        entry.scannerVerified = value.value("scannerVerified", false);
-        entry.failureReason = value.value("reason", std::string());
-        entry.attempts = value.value("attempts", 0);
-        if (entry.format == Format::Unknown || entry.path.empty()) continue;
-
-        if (value.contains("plugins") && value["plugins"].is_array()) {
-            for (const json& descriptor : value["plugins"]) {
-                entry.plugins.push_back(descriptorFromJson(descriptor));
-            }
+        if (root.contains("searchPaths") && root["searchPaths"].is_object()) {
+            const json& paths = root["searchPaths"];
+            m_clapPaths = pathsFromJson(paths, "clap");
+            m_vst3Paths = pathsFromJson(paths, "vst3");
+            m_vstPaths = pathsFromJson(paths, "vst");
+            m_vstPathsPresent = paths.contains("vst");
+            m_auPaths = pathsFromJson(paths, "au");
         }
-        m_entries.push_back(std::move(entry));
-    }
-    return true;
+
+        if (!root.contains("entries") || !root["entries"].is_array()) return true;
+        for (const json& value : root["entries"]) {
+            if (!value.is_object()) continue;
+            try {
+                PluginCacheEntry entry;
+                entry.format = plugins::formatFromString(value.value("format", std::string()));
+                entry.path = value.value("path", std::string());
+                entry.fileSize = value.value("fileSize", std::uint64_t(0));
+                entry.fileModifiedTime = value.value("fileModifiedTime", std::int64_t(0));
+                entry.schemaVersion = value.value("schema", 0);
+                entry.ok = value.value("ok", false);
+                entry.blacklisted = value.value("blacklisted", false);
+                entry.scannerVerified = value.value("scannerVerified", false);
+                entry.failureReason = value.value("reason", std::string());
+                entry.attempts = value.value("attempts", 0);
+                if (entry.format == Format::Unknown || entry.path.empty()) continue;
+
+                if (value.contains("plugins") && value["plugins"].is_array()) {
+                    for (const json& descriptor : value["plugins"]) {
+                        auto parsed = descriptorFromJson(descriptor);
+                        if (parsed.format == entry.format && !parsed.uid.empty() &&
+                            sameModulePath(parsed.path, entry.path))
+                            entry.plugins.push_back(std::move(parsed));
+                    }
+                }
+                if (version == 2) {
+                    entry.scanStatePresent = true;
+                    entry.discovery = readState(value, "discovery");
+                    entry.discoveryDurationMs = value.value("discoveryMs", std::uint64_t(0));
+                    entry.timeoutRetryPending = value.value("timeoutRetryPending", false);
+                    if (!value.contains("components") || !value["components"].is_array()) continue;
+                    for (const auto& item : value["components"]) {
+                        PluginComponentResult component;
+                        component.uid = item.at("uid").get<std::string>();
+                        component.descriptor = descriptorFromJson(item.at("descriptor"));
+                        if (component.uid.empty() || component.uid != component.descriptor.uid ||
+                            component.descriptor.format != entry.format ||
+                            !sameModulePath(component.descriptor.path, entry.path))
+                            throw std::runtime_error("invalid cached component");
+                        component.state = readState(item, "state");
+                        component.failureReason = item.value("reason", std::string());
+                        component.attempts = std::max(0, item.value("attempts", 0));
+                        component.durationMs = item.value("durationMs", std::uint64_t(0));
+                        component.timeoutRetryPending = item.value("timeoutRetryPending", false);
+                        if (std::any_of(entry.components.begin(), entry.components.end(),
+                            [&](const auto& c) { return c.uid == component.uid; }))
+                            throw std::runtime_error("duplicate cached UID");
+                        entry.components.push_back(std::move(component));
+                    }
+                }
+                put(std::move(entry));
+            } catch (const std::exception&) { /* A malformed module needs a new scan. */ }
+        }
+        return true;
+    } catch (const std::exception&) { return false; }
 }
 
 bool PluginCache::save(const std::string& path) const {
-    std::error_code ec;
-    const fs::path target = platform::pathFromUtf8(path);
-    fs::create_directories(target.parent_path(), ec);
+    std::lock_guard writeLock(cacheWriteMutex);
+    try {
+        std::error_code ec;
+        const fs::path target = platform::pathFromUtf8(path);
+        if (!target.parent_path().empty()) fs::create_directories(target.parent_path(), ec);
+        if (ec) return false;
 
-    json entries = json::array();
-    for (const PluginCacheEntry& entry : m_entries) {
-        json descriptors = json::array();
-        for (const plugins::PluginDescriptor& descriptor : entry.plugins) {
-            descriptors.push_back(descriptorToJson(descriptor));
+        json entries = json::array();
+        for (const PluginCacheEntry& entry : m_entries) {
+            json components = json::array();
+            for (const auto& component : entry.components) {
+                components.push_back({{"uid", component.uid},
+                    {"descriptor", descriptorToJson(component.descriptor)},
+                    {"state", stateName(component.state)}, {"reason", component.failureReason},
+                    {"attempts", component.attempts}, {"durationMs", component.durationMs},
+                    {"timeoutRetryPending", component.timeoutRetryPending}});
+            }
+            json descriptors = json::array();
+            for (const plugins::PluginDescriptor& descriptor : entry.plugins) {
+                descriptors.push_back(descriptorToJson(descriptor));
+            }
+            entries.push_back(json{
+                {"format", std::string(plugins::toString(entry.format))},
+                {"path", entry.path},
+                {"fileSize", entry.fileSize},
+                {"fileModifiedTime", entry.fileModifiedTime},
+                {"schema", entry.schemaVersion},
+                {"ok", entry.ok},
+                {"blacklisted", entry.blacklisted},
+                {"scannerVerified", entry.scannerVerified},
+                {"reason", entry.failureReason},
+                {"attempts", entry.attempts},
+                {"plugins", descriptors},
+                {"discovery", stateName(entry.discovery)},
+                {"discoveryMs", entry.discoveryDurationMs},
+                {"timeoutRetryPending", entry.timeoutRetryPending},
+                {"components", components},
+            });
         }
-        entries.push_back(json{
-            {"format", std::string(plugins::toString(entry.format))},
-            {"path", entry.path},
-            {"fileSize", entry.fileSize},
-            {"fileModifiedTime", entry.fileModifiedTime},
-            {"schema", entry.schemaVersion},
-            {"ok", entry.ok},
-            {"blacklisted", entry.blacklisted},
-            {"scannerVerified", entry.scannerVerified},
-            {"reason", entry.failureReason},
-            {"attempts", entry.attempts},
-            {"plugins", descriptors},
-        });
-    }
 
-    json root{
-        {"version", kCacheVersion},
-        {"searchPathsInitialized", m_searchPathsInitialized},
-        {"searchPaths",
-         json{{"clap", pathsToJson(m_clapPaths)},
-              {"vst3", pathsToJson(m_vst3Paths)},
-              {"vst", pathsToJson(m_vstPaths)},
-              {"au", pathsToJson(m_auPaths)}}},
-        {"entries", entries},
-    };
+        json root{
+            {"version", kCacheVersion},
+            {"searchPathsInitialized", m_searchPathsInitialized},
+            {"searchPaths",
+             json{{"clap", pathsToJson(m_clapPaths)},
+                  {"vst3", pathsToJson(m_vst3Paths)},
+                  {"vst", pathsToJson(m_vstPaths)},
+                  {"au", pathsToJson(m_auPaths)}}},
+            {"entries", entries},
+        };
 
-    fs::path temporary = target;
-    temporary += ".tmp";
-    fs::remove(temporary, ec);
-    ec.clear();
-    std::ofstream os(temporary, std::ios::trunc);
-    if (!os) return false;
-    // Pretty-printed, unlike the wire format: this one a user may well open to
-    // find out why their plugin is not showing up.
-    os << root.dump(2);
-    os.flush();
-    if (!os.good()) {
+        fs::path temporary = target;
+        temporary += ".tmp";
+        fs::remove(temporary, ec);
+        ec.clear();
+        std::ofstream os(temporary, std::ios::trunc);
+        if (!os) return false;
+        // Pretty-printed, unlike the wire format: this one a user may well open to
+        // find out why their plugin is not showing up.
+        // Plugin stderr may contain locale-encoded or binary bytes. Diagnostic
+        // text must never turn a plugin failure into a cache-write failure.
+        os << root.dump(2, ' ', false, json::error_handler_t::replace);
+        os.flush();
+        if (!os.good()) {
+            os.close();
+            fs::remove(temporary, ec);
+            return false;
+        }
         os.close();
-        fs::remove(temporary, ec);
-        return false;
-    }
-    os.close();
-#if defined(_WIN32)
-    const bool replaced = ::MoveFileExW(temporary.wstring().c_str(),
-                                        target.wstring().c_str(),
-                                        MOVEFILE_REPLACE_EXISTING |
-                                            MOVEFILE_WRITE_THROUGH) != FALSE;
-    if (!replaced) {
-        fs::remove(temporary, ec);
-        return false;
-    }
-#else
-    fs::rename(temporary, target, ec);
-    if (ec) {
-        fs::remove(temporary, ec);
-        return false;
-    }
-#endif
-    return true;
+        if (os.fail()) { fs::remove(temporary, ec); return false; }
+    #if defined(_WIN32)
+        const bool replaced = ::MoveFileExW(temporary.wstring().c_str(),
+                                            target.wstring().c_str(),
+                                            MOVEFILE_REPLACE_EXISTING |
+                                                MOVEFILE_WRITE_THROUGH) != FALSE;
+        if (!replaced) {
+            fs::remove(temporary, ec);
+            return false;
+        }
+    #else
+        fs::rename(temporary, target, ec);
+        if (ec) {
+            fs::remove(temporary, ec);
+            return false;
+        }
+    #endif
+        return true;
+    } catch (const std::exception&) { return false; }
 }
 
 } // namespace daw

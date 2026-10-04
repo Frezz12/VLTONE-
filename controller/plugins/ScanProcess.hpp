@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <stop_token>
 #include <vector>
 
 namespace daw {
@@ -12,16 +14,30 @@ struct ScanProcessResult {
     bool started = false;     ///< false when the executable could not be run
     bool timedOut = false;
     bool crashed = false;     ///< killed by a signal, or a non-zero exit
+    bool cancelled = false;
+    bool transportError = false;
+    bool outputLimitExceeded = false;
     int exitCode = -1;
     std::string output;       ///< everything the child wrote to stdout
+    std::string diagnostics;  ///< bounded tail of stderr, including plugin logs
     /// Human-readable, and shown next to a blacklisted plugin. "crashed
     /// (signal 11)" tells a user far more than a bare failure.
     std::string failureReason;
 
     bool succeeded() const noexcept {
-        return started && !timedOut && !crashed && exitCode == 0;
+        return started && !timedOut && !crashed && !cancelled &&
+               !transportError && !outputLimitExceeded && exitCode == 0;
     }
 };
+
+struct ScanProcessOptions {
+    std::string_view input;
+    std::stop_token cancellation;
+};
+
+inline constexpr std::size_t kScanRequestLimit = 1024 * 1024;
+inline constexpr std::size_t kScanResponseLimit = 64 * 1024 * 1024;
+inline constexpr std::size_t kScanDiagnosticLimit = 256 * 1024;
 
 /// The descriptor a detached child inherits the parent-death pipe on. Fixed by
 /// convention so the child needs no argument for it. 3 is the first free
@@ -32,7 +48,7 @@ inline constexpr int kParentPipeFd = 3;
 ///
 /// Deliberately not QProcess: `daw_controller` is framework-agnostic by charter
 /// and the Qt dependency stops at `app/`. This is `posix_spawn` plus a polled
-/// read on POSIX and `CreateProcess` plus a reader thread on Windows.
+/// I/O on POSIX and `CreateProcess` with private, polled pipes on Windows.
 class ScanProcess {
 public:
     /// Blocking; the caller is the scan worker thread, never the audio thread.
@@ -40,7 +56,8 @@ public:
     /// a hung plugin must not hold the scan up forever.
     static ScanProcessResult run(const std::string& executable,
                                  const std::vector<std::string>& arguments,
-                                 std::chrono::milliseconds timeout);
+                                 std::chrono::milliseconds timeout,
+                                 ScanProcessOptions options = {});
 
     /// Start a process and do not wait for it. Returns its pid, or 0 on
     /// failure. Used for the crash watchdog, which has to outlive the call that

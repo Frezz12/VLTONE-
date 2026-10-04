@@ -24,6 +24,7 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
     bool canFuseTask() const noexcept override { return true; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void process(const ProcessContext& context) override {
         dsp::sumInto(context.output, context.inputs);
@@ -70,6 +71,7 @@ inline double levelAt(const LevelCurve& curve, double beats,
     if (beats >= points.back().first) return points.back().second;
 
     std::size_t i = std::min(cursor, points.size() - 1);
+    while (i > 0 && points[i].first > beats) --i;
     while (i + 1 < points.size() && points[i + 1].first <= beats) ++i;
     cursor = i;
     if (i + 1 >= points.size()) return points[i].second;
@@ -89,6 +91,7 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
     bool canFuseTask() const noexcept override { return true; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     /// Control thread; the audio thread reads the target atomically.
     void setGain(float gain) noexcept { m_targetGain.store(gain, std::memory_order_relaxed); }
@@ -123,6 +126,7 @@ public:
                             ? 0.0f
                             : m_targetGain.load(std::memory_order_relaxed);
         m_currentPan = m_targetPan.load(std::memory_order_relaxed);
+        m_gateInitialized = false;
     }
 
     void process(const ProcessContext& context) override {
@@ -131,59 +135,68 @@ public:
         const bool mono = m_mono.load(std::memory_order_relaxed);
         const ChannelCount outChannels = context.output.numChannels();
 
-        // ── Automation ──
-        //
-        // The node already ramps from where it was to where it is going across
-        // the block. Automation simply supplies both ends instead of one, so a
-        // curve is played at block-rate interpolation with no new machinery —
-        // and with better resolution than a value that only changes on block
-        // boundaries.
         auto reader = m_automation.read();
-        if (const LevelAutomation* automation = reader.get()) {
-            if (automation != m_automationFor ||
-                context.transport.ppqPosition < m_lastBlockBeats) {
-                // A new snapshot, or the playhead went backwards — a seek or a
-                // cycle wrap. The forward-only cursors are meaningless now.
-                m_gainCursor = m_panCursor = m_muteCursor = 0;
-                m_automationFor = automation;
-            }
-            const double startBeats = context.transport.ppqPosition;
-            const double endBeats =
-                startBeats + beatsIn(context.frames, context);
-            m_lastBlockBeats = startBeats;
-
-            if (automation->gain.active) {
-                m_currentGain = float(levelAt(automation->gain, startBeats,
-                                              m_gainCursor));
-                std::size_t cursor = m_gainCursor;
-                targetGain = float(levelAt(automation->gain, endBeats, cursor));
-            }
-            if (automation->pan.active) {
-                m_currentPan = float(levelAt(automation->pan, startBeats,
-                                             m_panCursor));
-                std::size_t cursor = m_panCursor;
-                targetPan = float(levelAt(automation->pan, endBeats, cursor));
-            }
-            if (automation->mute.active) {
-                // A switch: the block is muted or it is not. Ramping between
-                // the two would put the fader through levels the user never
-                // drew, and the mute curve is stepped for exactly that reason.
-                const double muted =
-                    levelAt(automation->mute, startBeats, m_muteCursor);
-                if (muted >= 0.5) {
-                    m_currentGain = 0.0f;
-                    targetGain = 0.0f;
-                }
-            }
+        const auto* automation = reader.get();
+        if (automation != m_automationFor ||
+            context.transport.ppqPosition < m_lastBlockBeats) {
+            m_gainCursor = m_panCursor = m_muteCursor = 0;
+            m_automationFor = automation;
         }
+        m_lastBlockBeats = context.transport.ppqPosition;
+        const bool automated = automation && (automation->gain.active ||
+            automation->pan.active || automation->mute.active);
+        const bool silent = m_silent.load(std::memory_order_relaxed);
+        const auto gateAt = [&](double beat) {
+            return silent || (automation && automation->mute.active &&
+                levelAt(automation->mute, beat, m_muteCursor) >= 0.5) ? 0.0f : 1.0f;
+        };
+        const float targetGate = gateAt(context.transport.ppqPosition);
+        if (!m_gateInitialized) { m_gate = targetGate; m_gateInitialized = true; }
 
-        // Manual mute and solo stay a gate over the top: a soloed-away track
-        // is silent whatever its curve says. This cannot be inferred from a
-        // zero static gain — zero is a legitimate fader position automation
-        // must be able to leave.
-        if (m_silent.load(std::memory_order_relaxed)) {
-            m_currentGain = 0.0f;
-            targetGain = 0.0f;
+        // Read every drawn corner at its sample. Interpolating just the block
+        // endpoints erases short dips and changes the curve with buffer size.
+        if (automated || m_gate != targetGate) {
+            if (mono && outChannels >= 2 && context.frames <= m_monoScratch.size()) {
+                const std::span<float> folded(m_monoScratch.data(), context.frames);
+                dsp::clear(folded);
+                for (const auto& input : context.inputs) {
+                    if (!input.numChannels()) continue;
+                    for (ChannelCount ch = 0; ch < input.numChannels(); ++ch)
+                        dsp::addScaled(folded, input.channel(ch), 1.0f / input.numChannels());
+                }
+                for (ChannelCount ch = 0; ch < outChannels; ++ch)
+                    dsp::copy(context.output.channel(ch), folded);
+            } else {
+                dsp::sumInto(context.output, context.inputs);
+            }
+            const double beatStep = beatsIn(1, context);
+            const float inverseFrames = context.frames ? 1.0f / context.frames : 0.0f;
+            for (FrameCount frame = 0; frame < context.frames; ++frame) {
+                double beat = context.transport.ppqPosition + frame * beatStep;
+                if (!context.offline && context.playing && context.transport.looping &&
+                    context.transport.loopEndPpq > context.transport.loopStartPpq &&
+                    beat >= context.transport.loopEndPpq)
+                    beat = context.transport.loopStartPpq + std::fmod(
+                        beat - context.transport.loopStartPpq,
+                        context.transport.loopEndPpq - context.transport.loopStartPpq);
+                const float gain = automation && automation->gain.active
+                    ? float(levelAt(automation->gain, beat, m_gainCursor))
+                    : m_currentGain + (targetGain - m_currentGain) * (frame * inverseFrames);
+                const float pan = automation && automation->pan.active
+                    ? float(levelAt(automation->pan, beat, m_panCursor))
+                    : m_currentPan + (targetPan - m_currentPan) * (frame * inverseFrames);
+                for (ChannelCount ch = 0; ch < outChannels; ++ch)
+                    context.output.data(ch)[frame] *= gain * panGain(ch, pan) * m_gate;
+                // Only switches are de-clicked. Drawn gain/pan curves retain
+                // their exact sample values, including deliberately sharp edits.
+                m_gate += std::clamp(gateAt(beat) - m_gate, -1.0f / 64, 1.0f / 64);
+            }
+            const double end = context.transport.ppqPosition + beatsIn(context.frames, context);
+            m_currentGain = automation && automation->gain.active
+                ? float(levelAt(automation->gain, end, m_gainCursor)) : targetGain;
+            m_currentPan = automation && automation->pan.active
+                ? float(levelAt(automation->pan, end, m_panCursor)) : targetPan;
+            return;
         }
 
         if (mono && outChannels >= 2 && context.frames <= m_monoScratch.size()) {
@@ -202,8 +215,8 @@ public:
                 }
             }
             for (ChannelCount ch = 0; ch < outChannels; ++ch) {
-                const float startGain = m_currentGain * panGain(ch, m_currentPan);
-                const float endGain = targetGain * panGain(ch, targetPan);
+                const float startGain = m_currentGain * panGain(ch, m_currentPan) * m_gate;
+                const float endGain = targetGain * panGain(ch, targetPan) * m_gate;
                 if (startGain == endGain) {
                     dsp::copyScaled(context.output.channel(ch), folded, endGain);
                 } else {
@@ -220,8 +233,8 @@ public:
         // instead of once per input, and the destination stays in cache while
         // its contributors are summed into it.
         for (ChannelCount ch = 0; ch < outChannels; ++ch) {
-            const float startGain = m_currentGain * panGain(ch, m_currentPan);
-            const float endGain = targetGain * panGain(ch, targetPan);
+            const float startGain = m_currentGain * panGain(ch, m_currentPan) * m_gate;
+            const float endGain = targetGain * panGain(ch, targetPan) * m_gate;
             const std::span<float> destination = context.output.channel(ch);
             const bool ramping = startGain != endGain;
             bool written = false;
@@ -269,6 +282,8 @@ private:
     std::atomic<bool> m_mono{false};
     float m_currentGain = 1.0f;
     float m_currentPan = 0.0f;
+    float m_gate = 1.0f;
+    bool m_gateInitialized = false;
     std::vector<float> m_monoScratch;
 
     RealtimeSnapshot<LevelAutomation> m_automation;
@@ -287,6 +302,7 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
     bool canFuseTask() const noexcept override { return true; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void setLevel(float level) noexcept { m_level.store(level, std::memory_order_relaxed); }
     void setEnabled(bool enabled) noexcept {
@@ -297,48 +313,53 @@ public:
         m_automation.publish(std::move(curve));
     }
 
+    void reset() override { m_initialized = false; }
+
     void process(const ProcessContext& context) override {
-        float level = m_level.load(std::memory_order_relaxed);
+        const float knob = m_level.load(std::memory_order_relaxed);
+        const float enabled = m_enabled.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
         auto reader = m_automation.read();
-        if (!m_enabled.load(std::memory_order_relaxed)) {
-            level = 0.0f;
-        } else if (const LevelCurve* curve = reader.get();
-                   curve && curve->active) {
-            if (curve != m_automationFor ||
-                context.transport.ppqPosition < m_lastBlockBeats) {
-                m_cursor = 0;
-                m_automationFor = curve;
-            }
-            m_lastBlockBeats = context.transport.ppqPosition;
-            // One value for the block. A send is a tap, not the signal path —
-            // its own ramp would only smooth what the destination bus already
-            // smooths. Enabled is separate from level so automation can raise
-            // a send whose stored knob happens to be at zero.
-            level = float(levelAt(*curve, context.transport.ppqPosition,
-                                  m_cursor));
+        const auto* curve = reader.get();
+        if (curve != m_automationFor || context.transport.ppqPosition < m_lastBlockBeats) {
+            m_cursor = 0; m_automationFor = curve;
         }
-        for (ChannelCount ch = 0; ch < context.output.numChannels(); ++ch) {
-            const std::span<float> destination = context.output.channel(ch);
-            bool written = false;
-            for (const AudioBlock& input : context.inputs) {
-                if (ch >= input.numChannels()) continue;
-                if (written) {
-                    dsp::addScaled(destination, input.channel(ch), level);
-                } else {
-                    // One pass for the single-input case, which is every send
-                    // that is not fed by a group.
-                    dsp::copyScaled(destination, input.channel(ch), level);
-                    written = true;
-                }
-            }
-            if (!written) dsp::clear(destination);
+        m_lastBlockBeats = context.transport.ppqPosition;
+        const bool automated = curve && curve->active;
+        if (!m_initialized) {
+            m_currentLevel = automated ? float(levelAt(*curve, context.transport.ppqPosition, m_cursor)) : knob;
+            m_levelTarget = knob; m_remaining = 0; m_gate = enabled; m_initialized = true;
         }
+        if (!automated && knob != m_levelTarget) {
+            m_levelTarget = knob; m_remaining = 64;
+            m_step = (knob - m_currentLevel) / 64.0f;
+        }
+        dsp::sumInto(context.output, context.inputs);
+        if (!automated && !m_remaining && m_gate == enabled) {
+            for (ChannelCount ch = 0; ch < context.output.numChannels(); ++ch)
+                dsp::copyScaled(context.output.channel(ch), context.output.channel(ch),
+                                m_currentLevel * m_gate);
+            return;
+        }
+        for (FrameCount frame = 0; frame < context.frames; ++frame) {
+            if (automated) m_currentLevel = float(levelAt(*curve, context.ppqAtOffset(frame), m_cursor));
+            for (ChannelCount ch = 0; ch < context.output.numChannels(); ++ch)
+                context.output.data(ch)[frame] *= m_currentLevel * m_gate;
+            m_gate += std::clamp(enabled - m_gate, -1.0f / 64, 1.0f / 64);
+            if (!automated && m_remaining) {
+                m_currentLevel += m_step;
+                if (--m_remaining == 0) m_currentLevel = m_levelTarget;
+            }
+        }
+        if (automated) { m_levelTarget = m_currentLevel; m_remaining = 0; }
     }
 
 private:
     std::string m_name;
     std::atomic<float> m_level{0.5f};
     std::atomic<bool> m_enabled{true};
+    float m_currentLevel = 0.5f, m_levelTarget = 0.5f, m_step = 0.0f, m_gate = 1.0f;
+    unsigned m_remaining = 0;
+    bool m_initialized = false;
 
     RealtimeSnapshot<LevelCurve> m_automation;
     const LevelCurve* m_automationFor = nullptr;
@@ -356,6 +377,7 @@ public:
 
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     /// Peaking EQ at `frequency` with gain in dB, applied to every section.
     void setPeaking(double frequency, double q, double gainDb) noexcept {
@@ -444,6 +466,7 @@ public:
 
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
     FrameCount latencySamples() const noexcept override { return m_latency; }
 
     void prepare(const PrepareInfo& info) override {

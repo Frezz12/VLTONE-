@@ -19,16 +19,23 @@ namespace scan {
 /// Version 2 retries entries from before the VST3 connection-order fix,
 /// including plugins blacklisted after three failed initialization attempts.
 inline constexpr int kSchemaVersion = 4;
+/// Transport capabilities evolve independently of already validated results.
+inline constexpr int kProtocolVersion = 1;
+
+std::string encodeHandshake();
+bool decodeHandshake(const std::string& text);
 
 /// Serialise one descriptor. Returns a JSON object as text.
 std::string descriptorToJson(const PluginDescriptor& descriptor);
+bool descriptorFromJson(const std::string& text, PluginDescriptor& out);
 
 /// The scanner's stdout: `{"schema":N,"plugins":[…]}` on success.
 std::string encodeResult(const std::vector<PluginDescriptor>& plugins);
 
 /// Parse what the scanner printed. Returns false on malformed input or on a
 /// schema this build does not understand.
-bool decodeResult(const std::string& text, std::vector<PluginDescriptor>& out);
+bool decodeResult(const std::string& text, std::vector<PluginDescriptor>& out,
+                  bool strict = false);
 
 } // namespace scan
 } // namespace daw::plugins

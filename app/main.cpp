@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "UiPerformanceChecks.hpp"
 #include "MainWindow.hpp"
 #include "ClipLibraryChecks.hpp"
@@ -5,12 +6,14 @@
 #include "CreateTracksDialog.hpp"
 #include "PatternWindow.hpp"
 #include "SamplerPanel.hpp"
+#include "SlicerPanel.hpp"
 #include "OfflineRenderDialog.hpp"
 #include "PluginBatchDialog.hpp"
 #include "PluginEditorWindow.hpp"
 #include "TrackIcons.hpp"
 #include "TransportBar.hpp"
 #include "ChannelStrip.hpp"
+#include "CreatorWindow.hpp"
 #include "InternalEditorFrame.hpp"
 #include "AccountService.hpp"
 #include "AssetCache.hpp"
@@ -394,10 +397,13 @@ int main(int argc, char** argv) {
     bool pluginInteractionCheck = false;
     bool patternCheck = false;
     bool samplerCheck = false;
+    bool slicerCheck = false;
     bool slideCheck = false;
     bool pianoWorkflowCheck = false;
     bool midiAuditionCheck = false;
     bool mixerContextCheck = false;
+    bool channelColorCheck = false;
+    bool creatorCheck = false;
     bool offlineCheck = false;
     bool pluginBatchCheck = false;
     bool tempoCheck = false;
@@ -434,7 +440,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--slidecheck") == 0) slideCheck = true;
         else if (std::strcmp(argv[i], "--midiauditioncheck") == 0) midiAuditionCheck = true;
         else if (std::strcmp(argv[i], "--mixercontextcheck") == 0) mixerContextCheck = true;
+        else if (std::strcmp(argv[i], "--channel-color-check") == 0) channelColorCheck = true;
+        else if (std::strcmp(argv[i], "--creator-check") == 0) creatorCheck = true;
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
+        else if (std::strcmp(argv[i], "--slicercheck") == 0) slicerCheck = true;
         else if (std::strcmp(argv[i], "--offlinecheck") == 0) offlineCheck = true;
         else if (std::strcmp(argv[i], "--pluginbatchcheck") == 0) pluginBatchCheck = true;
         else if (std::strcmp(argv[i], "--tempocheck") == 0) tempoCheck = true;
@@ -483,7 +492,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = pianoWorkflowCheck || mixerContextCheck || midiAuditionCheck || slideCheck || stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = creatorCheck || channelColorCheck || pianoWorkflowCheck || mixerContextCheck || midiAuditionCheck || slideCheck || stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || slicerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -646,6 +655,7 @@ int main(int argc, char** argv) {
         QApplication::instance()->installEventFilter(&filter);
     }
 
+    ui::ScrollMotion::install();
     ui::LocalizationManager::instance().initialize();
     if (languageLocale) {
         QString languageError;
@@ -680,9 +690,31 @@ int main(int argc, char** argv) {
     if (slideCheck) return PianoRollWindow::checkSlidesForTest(qEnvironmentVariable("DAW_SLIDE_CHECK_DIR")) ? 0 : 78;
     if (midiAuditionCheck) return PianoRollView::checkAuditionForTest() ? 0 : 79;
     if (mixerContextCheck) return ChannelStrip::checkContextMenusForTest() ? 0 : 80;
+    if (channelColorCheck) return ChannelStrip::checkColorForTest() ? 0 : 82;
+    if (creatorCheck) return ui::CreatorWindow::runCheck(qEnvironmentVariable("DAW_CREATOR_CHECK_DIR")) ? 0 : 83;
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_SIDECHAIN_ONLY")) {
         MainWindow window(/*openDevice=*/false);
         return window.checkPluginSidechainForTest() ? 0 : 76;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_FOLDER_RECORD_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.resize(1100, 720);
+        window.show();
+        return window.checkFolderRecordingForTest() ? 0 : 97;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_RECORD_CONTEXT_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.populateDemo();
+        window.resize(1280, 800);
+        window.show();
+        return window.checkRecordingContextForTest() &&
+                       window.checkTypingKeyboard() ? 0 : 75;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_SETTINGS_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.resize(1100,720);window.show();
+        window.openSettings(SettingsWindow::kInterfaceTab);
+        return window.checkSettingsViewportForTest() ? 0 : 16;
     }
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_NORMALIZE_ONLY")) {
         MainWindow window(/*openDevice=*/false);
@@ -707,6 +739,7 @@ int main(int argc, char** argv) {
     }
     if (editorCheck) return InternalEditorFrame::checkPlacementForTest() && PatternWindow::checkEditingForTest() ? 0 : 18;
     if (samplerCheck) return SamplerPanel::checkLayoutForTest() ? 0 : 19;
+    if (slicerCheck) return SlicerPanel::checkLayoutForTest() ? 0 : 96;
     if (offlineCheck) return OfflineRenderDialog::checkForTest(
         screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 68;
     if (pluginBatchCheck) return PluginBatchDialog::checkForTest(
@@ -1030,6 +1063,23 @@ int main(int argc, char** argv) {
         startupShot.showPluginScan(
             3, 8, QStringLiteral("/Library/Audio/Plug-Ins/VST3/Example.vst3"));
         const QString stage = qEnvironmentVariable("DAW_SHOT_STARTUP");
+        if (stage == QLatin1String("parallel") || stage == QLatin1String("discovering") ||
+            stage == QLatin1String("stopping") || stage == QLatin1String("cancelled")) {
+            daw::ScanSnapshot scan;
+            scan.phase = stage == QLatin1String("stopping") ? daw::ScanPhase::Stopping :
+                         stage == QLatin1String("cancelled") ? daw::ScanPhase::Cancelled :
+                         stage == QLatin1String("discovering") ? daw::ScanPhase::Discovering :
+                         daw::ScanPhase::Validating;
+            scan.componentsCompleted = 127;
+            scan.componentsTotal = 256;
+            scan.discoveryComplete = stage != QLatin1String("discovering");
+            if (scan.phase != daw::ScanPhase::Cancelled) {
+                scan.activeJobs.resize(4);
+                scan.activeJobs.front().name = "Waves Abbey Road Chambers Stereo";
+                scan.activeJobs.front().path = "/Plugins/WaveShell.vst3";
+            }
+            startupShot.showPluginScan(scan);
+        }
         if (stage == QLatin1String("loading")) startupShot.showSystemLoading();
         if (stage == QLatin1String("ready")) startupShot.showReady(128);
         if (stage == QLatin1String("long"))
@@ -1043,7 +1093,9 @@ int main(int argc, char** argv) {
         startupShot.show();
         QTimer::singleShot(250, &app, [&startupShot, screenshotPath] {
             startupShot.grab().save(QString::fromUtf8(screenshotPath));
-            QApplication::quit();
+            // A scanning window deliberately defers close until its workers
+            // stop. The screenshot harness has no workers to signal it back.
+            QCoreApplication::exit(0);
         });
         return app.exec();
     }
@@ -1183,18 +1235,16 @@ int main(int argc, char** argv) {
             startup->showPluginScan(0, 0, QString());
             plugins.startScan(/*rescanAll=*/false);
             while (plugins.isScanning()) {
-                startup->showPluginScan(
-                    plugins.scanned(), plugins.scanTotal(),
-                    QString::fromStdString(plugins.currentScanPath()));
+                startup->showPluginScan(plugins.scanSnapshot());
                 QApplication::processEvents(QEventLoop::AllEvents, 25);
                 if (startup->cancelled()) {
                     plugins.cancelScan();
-                    plugins.waitForScan();
-                    return 0;
                 }
                 QThread::msleep(12);
             }
             plugins.waitForScan();
+            startup->showPluginScan(plugins.scanSnapshot());
+            if (startup->cancelled()) return 0;
         }
         // EngineController has already loaded the saved catalogue, including
         // when automatic discovery is disabled.
@@ -1812,10 +1862,6 @@ int main(int argc, char** argv) {
                     *window.collaborationEngineController(),
                     qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())) return 12;
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
-        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_RECORD_CONTEXT_ONLY")) {
-            window.populateDemo();
-            if (!window.checkRecordingContextForTest() || !window.checkTypingKeyboard()) return 75;
-            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_RULER_ONLY")) {
             window.populateDemo();
             if (!window.checkTimelineRulersForTest()) return 74;
@@ -2012,8 +2058,8 @@ int main(int argc, char** argv) {
                          "hardware MIDI routing or Piano Roll highlighting failed\n");
             return 32;
         }
-        if (!SamplerPanel::checkLayoutForTest() || !PatternWindow::checkEditingForTest()) {
-            std::fprintf(stderr, "sampler or pattern editing invariants failed\n");
+        if (!SamplerPanel::checkLayoutForTest() || !SlicerPanel::checkLayoutForTest() || !PatternWindow::checkEditingForTest()) {
+            std::fprintf(stderr, "sampler, slicer or pattern editing invariants failed\n");
             return 19;
         }
         if (!window.checkPianoRollForTest()) {

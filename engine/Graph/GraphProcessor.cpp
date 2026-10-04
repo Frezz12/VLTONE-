@@ -163,6 +163,7 @@ ProcessContext GraphProcessor::makeContext(
     context.playing = m_playing;
     context.offline = m_offline;
     context.transport = m_transport;
+    context.compensateInputLatency(entry.inputLatency);
     context.midiInputs = std::span<const MidiBuffer* const>(
         graph.midiInputScratch.data() + first, entry.inputCount);
     context.midiOutput = midiOutput;
@@ -221,6 +222,7 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
     const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
     m_lastBlockLatency = snapshot ? snapshot->totalLatency : 0;
+    m_lastBlockGraphGeneration = snapshot ? snapshot->generation : 0;
     if (!snapshot) return fail(EngineError::NotCompiled);
     if (frames > snapshot->maxBlockSize) {
         releaseGraph();
@@ -274,20 +276,26 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
 
     m_jobs.waitForPass();
 
-    writeSink(*snapshot, output, frames);
+    const auto status = writeSink(*snapshot, output, frames);
     m_active = nullptr;
     releaseGraph();
-    return {};
+    return status;
 }
 
 Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames,
                                      SamplePos timelinePosition, bool playing,
                                      bool offline,
-                                     const TransportInfo& transport) {
+                                     const TransportInfo& transport,
+                                     std::span<double> nodeCosts) {
     const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
     m_lastBlockLatency = snapshot ? snapshot->totalLatency : 0;
+    m_lastBlockGraphGeneration = snapshot ? snapshot->generation : 0;
     if (!snapshot) return fail(EngineError::NotCompiled);
+    if (!nodeCosts.empty() && nodeCosts.size() != snapshot->nodes.size()) {
+        releaseGraph();
+        return fail(EngineError::InvalidArgument);
+    }
     if (frames > snapshot->maxBlockSize) {
         releaseGraph();
         return fail(EngineError::BlockTooLarge);
@@ -309,20 +317,21 @@ Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames
         const ProcessContext context = makeContext(*snapshot, entry);
         const PcmReadScope pcmRead(!offline);
         const bool profiling = m_jobs.profiling();
-        const auto started = profiling ? rt::nowNanos() : 0;
+        const auto started = profiling || !nodeCosts.empty() ? rt::nowNanos() : 0;
         entry.node->process(context);
+        if (!nodeCosts.empty()) nodeCosts[nodeIndex] = double(rt::nowNanos() - started);
         if (profiling) m_jobs.recordProfile(0,
             {snapshot->generation, rt::nowNanos() - started, m_position,
              entry.id, 0, rt::ProfileEvent::Kind::Node});
     }
 
-    writeSink(*snapshot, output, frames);
+    const auto status = writeSink(*snapshot, output, frames);
     m_active = nullptr;
     releaseGraph();
-    return {};
+    return status;
 }
 
-void GraphProcessor::writeSink(const CompiledGraph& graph, const AudioBlock& output,
+Status GraphProcessor::writeSink(const CompiledGraph& graph, const AudioBlock& output,
                                FrameCount frames) noexcept {
     // Every output channel is written on both branches, so a successful
     // `process` fully defines the block. That is what lets the caller skip
@@ -332,7 +341,7 @@ void GraphProcessor::writeSink(const CompiledGraph& graph, const AudioBlock& out
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
         }
-        return;
+        return {};
     }
     const AudioBlock mix =
         graph.arena.block(graph.nodes[graph.sinkNode].outputBuffer, frames);
@@ -343,6 +352,17 @@ void GraphProcessor::writeSink(const CompiledGraph& graph, const AudioBlock& out
             dsp::clear(output.channel(ch).first(frames));
         }
     }
+    if (m_offline) return {};
+    Status status;
+    for (const auto& entry : graph.nodes)
+        if (const auto result = entry.node->processStatus(); !result) status = result;
+    for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
+        const auto samples = output.channel(ch).first(frames);
+        if (!std::all_of(samples.begin(), samples.end(), [](float x) { return std::isfinite(x); })) {
+            dsp::clear(samples); status = fail(EngineError::ProcessingFailed);
+        }
+    }
+    return status;
 }
 
 } // namespace daw::engine

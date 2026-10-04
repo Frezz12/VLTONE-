@@ -23,6 +23,7 @@ type Config struct {
 	DatabaseURL          string
 	PublicOrigin         string
 	AdminOrigin          string
+	ForumOrigin          string
 	DesktopAPIOrigin     string
 	StorageRoot          string
 	SigningSeed          []byte
@@ -84,6 +85,7 @@ func Load() (Config, error) {
 		DatabaseURL:          env("DATABASE_URL", "postgres://vlt:vlt@localhost:5432/vltstudio?sslmode=disable"),
 		PublicOrigin:         strings.TrimRight(env("PUBLIC_ORIGIN", "http://localhost:3000"), "/"),
 		AdminOrigin:          strings.TrimRight(env("ADMIN_ORIGIN", "http://localhost:3001"), "/"),
+		ForumOrigin:          strings.TrimRight(env("FORUM_ORIGIN", "http://localhost:3002"), "/"),
 		DesktopAPIOrigin:     strings.TrimRight(env("DESKTOP_API_ORIGIN", "http://localhost:8080"), "/"),
 		StorageRoot:          env("STORAGE_ROOT", "./storage"),
 		ConsentVersion:       env("TELEMETRY_CONSENT_VERSION", "2026-08-23"),
@@ -171,13 +173,18 @@ func Load() (Config, error) {
 			return Config{}, errors.New("AI_CREDENTIALS_KEY must be a base64-encoded 32-byte key")
 		}
 	}
-	for _, raw := range []string{c.PublicOrigin, c.AdminOrigin, c.DesktopAPIOrigin} {
-		parsed, parseErr := url.Parse(raw)
+	for _, origin := range []struct{ name, value string }{
+		{"PUBLIC_ORIGIN", c.PublicOrigin},
+		{"ADMIN_ORIGIN", c.AdminOrigin},
+		{"FORUM_ORIGIN", c.ForumOrigin},
+		{"DESKTOP_API_ORIGIN", c.DesktopAPIOrigin},
+	} {
+		parsed, parseErr := url.Parse(origin.value)
 		if parseErr != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return Config{}, fmt.Errorf("invalid origin %q", raw)
+			return Config{}, fmt.Errorf("invalid origin %q", origin.value)
 		}
 		if c.Environment == "production" && parsed.Scheme != "https" {
-			return Config{}, fmt.Errorf("production origin must use HTTPS: %s", raw)
+			return Config{}, fmt.Errorf("%s must use HTTPS in production: %s", origin.name, origin.value)
 		}
 	}
 	if c.CollaborationEnabled {

@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "SettingsWindow.hpp"
 #include "TrackIcons.hpp"
 #include "graphics/GraphicsPreferences.hpp"
@@ -27,6 +28,7 @@
 #include "TransportSettingsPage.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -320,6 +322,8 @@ double contrastRatio(const QColor& foreground, const QColor& background) {
 QString presetDisplayName(const Theme& theme) {
     if (theme.id == QLatin1String("dark")) return QCoreApplication::translate(
         "SettingsWindow", "Dark");
+    if (theme.id == QLatin1String("dark-blue")) return QCoreApplication::translate(
+        "SettingsWindow", "Dark Blue");
     if (theme.id == QLatin1String("studio-gray")) return QCoreApplication::translate(
         "SettingsWindow", "Studio Gray");
     if (theme.id == QLatin1String("light")) return QCoreApplication::translate(
@@ -2553,6 +2557,24 @@ QWidget* SettingsWindow::buildMixerTab() {
     });
     connect(&preferences, &ui::MixerPreferences::channelWidthChanged, page, reload);
     layout->addWidget(group);
+
+    auto* colorGroup = new QGroupBox(tr("Mini modules"), page);
+    auto* colorForm = new QFormLayout(colorGroup);
+    auto* colorToggle = new QCheckBox(tr("Show mini modules on channel strips"), colorGroup);
+    colorToggle->setObjectName(QStringLiteral("MixerColorSectionToggle"));
+    colorToggle->setAccessibleName(tr("Show mini modules on channel strips"));
+    colorToggle->setChecked(preferences.colorVisible());
+    colorForm->addRow(colorToggle);
+    auto* colorHint = new QLabel(
+        tr("Each audio channel can hold three mini modules. Hiding this section "
+           "keeps its processing active. Individual cards can be collapsed "
+           "independently; faders remain aligned."),
+        colorGroup);
+    colorHint->setWordWrap(true);
+    colorForm->addRow(colorHint);
+    connect(colorToggle, &QCheckBox::toggled, &preferences,
+            &ui::MixerPreferences::setColorVisible);
+    layout->addWidget(colorGroup);
     auto* heightHint = new QLabel(tr("Drag the top edge of the mixer to change its height. "
                                     "Faders use the available height; a short mixer scrolls "
                                     "to keep every control accessible."), page);
@@ -2635,6 +2657,42 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     explanation->setWordWrap(true);
     form->addRow(explanation);
     layout->addWidget(group);
+
+    auto* motionGroup=new QGroupBox(tr("Navigation motion"),page);
+    motionGroup->setObjectName("NavigationMotionSettings");
+    auto* motionForm=new QFormLayout(motionGroup);
+    auto* smooth=new QCheckBox(tr("Smooth scrolling"),motionGroup);
+    smooth->setObjectName("SmoothScrollingEnabled");smooth->setAccessibleName(tr("Smooth scrolling"));
+    auto* speed=new QSpinBox(motionGroup);speed->setRange(50,200);speed->setSuffix(tr(" %"));
+    speed->setObjectName("ScrollMotionSpeed");speed->setAccessibleName(tr("Scroll animation speed"));
+    auto* softness=new QSlider(Qt::Horizontal,motionGroup);softness->setRange(0,100);
+    softness->setObjectName("ScrollMotionStrength");softness->setAccessibleName(tr("Scroll smoothing"));
+    auto* softnessValue=new QLabel(motionGroup);softnessValue->setMinimumWidth(42);
+    auto* softnessRow=new QWidget(motionGroup);auto* softnessLayout=new QHBoxLayout(softnessRow);
+    softnessLayout->setContentsMargins(0,0,0,0);softnessLayout->addWidget(softness);softnessLayout->addWidget(softnessValue);
+    auto* reduced=new QCheckBox(tr("Reduce motion"),motionGroup);
+    reduced->setObjectName("NavigationReduceMotion");reduced->setAccessibleName(tr("Reduce motion"));
+    auto& motion=ui::ScrollPreferences::instance();
+    const auto reloadMotion=[smooth,speed,softness,softnessValue,reduced,&motion] {
+        const QSignalBlocker a(smooth),b(speed),c(softness),d(reduced);
+        smooth->setChecked(motion.enabled());speed->setValue(motion.speed());softness->setValue(motion.strength());
+        softnessValue->setText(QString::number(motion.strength())+QLatin1Char('%'));
+        reduced->setChecked(motion.reducedMotion());
+        speed->setEnabled(motion.enabled()&&!motion.reducedMotion());
+        softness->setEnabled(motion.enabled()&&!motion.reducedMotion());
+    };
+    reloadMotion();
+    connect(smooth,&QCheckBox::toggled,page,[&motion](bool value){motion.setEnabled(value);});
+    connect(speed,&QSpinBox::valueChanged,page,[&motion](int value){motion.setSpeed(value);});
+    connect(softness,&QSlider::valueChanged,page,[&motion](int value){motion.setStrength(value);});
+    connect(reduced,&QCheckBox::toggled,page,[&motion](bool value){motion.setReducedMotion(value);});
+    connect(&motion,&ui::ScrollPreferences::changed,page,reloadMotion);
+    motionForm->addRow(smooth);motionForm->addRow(tr("Speed"),speed);
+    motionForm->addRow(tr("Smoothing"),softnessRow);motionForm->addRow(reduced);
+    auto* motionHint=new QLabel(tr("Applies immediately to scrolling in the browser, lists, mixer and editors. "
+        "Higher speed stops sooner; more smoothing gives a softer finish. "
+        "Touchpad gestures, keyboard commands and editing follow your input directly."),motionGroup);
+    motionHint->setWordWrap(true);motionForm->addRow(motionHint);layout->addWidget(motionGroup);
 
     auto* graphicsGroup = new QGroupBox(tr("Graphics quality"), page);
     auto* graphicsForm = new QFormLayout(graphicsGroup);

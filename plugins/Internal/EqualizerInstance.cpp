@@ -414,6 +414,14 @@ bool EqualizerInstance::activate(const PluginProcessInfo& info) {
                                                 double(m_linearSize));
         m_linearWindow[i] = std::sqrt(std::max(0.0, hann));
     }
+    // The hop is measured in milliseconds and need not divide the FFT size.
+    // Its overlap sum varies with phase; normalizing only by 2*hop/size adds
+    // gain ripple that changes when an upstream stage's latency is removed.
+    m_linearNormalization.assign(m_linearHop, 0.0);
+    for (std::size_t i = 0; i < m_linearSize; ++i)
+        m_linearNormalization[i % m_linearHop] += m_linearWindow[i]*m_linearWindow[i]*
+            (2.0*double(m_linearHop)/double(m_linearSize));
+    for (auto& sum : m_linearNormalization) sum = sum > 0.0 ? 1.0/sum : 1.0;
     m_analyzerWork.assign(kAnalyzerSize, {});
     m_active = true;
     resetDsp();
@@ -428,6 +436,7 @@ void EqualizerInstance::deactivate() {
     for (auto& channel : m_linearOutput) channel.clear();
     for (auto& channel : m_linearSpectrum) channel.clear();
     m_linearWindow.clear();
+    m_linearNormalization.clear();
     m_analyzerWork.clear();
 }
 
@@ -1018,8 +1027,9 @@ void EqualizerInstance::processLinearFrame(double inputLeft, double inputRight,
     }
     m_linearInput[0][m_linearInputPosition] = inputLeft;
     m_linearInput[1][m_linearInputPosition] = inputRight;
-    outputLeft = m_linearOutput[0][m_linearOutputPosition];
-    outputRight = m_linearOutput[1][m_linearOutputPosition];
+    const auto normalization = m_linearNormalization[m_linearSamples % m_linearHop];
+    outputLeft = m_linearOutput[0][m_linearOutputPosition]*normalization;
+    outputRight = m_linearOutput[1][m_linearOutputPosition]*normalization;
     m_linearOutput[0][m_linearOutputPosition] = 0.0;
     m_linearOutput[1][m_linearOutputPosition] = 0.0;
     m_linearInputPosition = (m_linearInputPosition + 1) % m_linearSize;

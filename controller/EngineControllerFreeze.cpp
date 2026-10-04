@@ -13,6 +13,17 @@ void normalizeFreezeSlot(InsertModel& slot) {
     slot.windowOpen = false;
     slot.windowX = slot.windowY = slot.windowWidth = slot.windowHeight = 0;
     slot.editorChannel = PluginEditorChannel::Left;
+    if (slot.miniModule) {
+        auto graph = plugins::mini::resolved(*slot.miniModule, slot.miniModuleMode);
+        if (graph.version < 3) graph.version = 1;
+        graph.name.clear();
+        slot.name.clear();
+        for (auto& control : graph.controls) {
+            control.style.clear(); control.name.clear(); control.unit.clear();
+        }
+        slot.miniModule = std::move(graph);
+        slot.miniModuleMode.clear();
+    }
 }
 }
 
@@ -65,8 +76,12 @@ std::string EngineController::freezeFingerprint(const TrackModel& track) const {
     TrackModel copy;
     copy.id = track.id; copy.kind = track.kind;
     copy.instrument = track.instrument; copy.inserts = track.inserts;
+    copy.channelColor = track.channelColor;
+    copy.miniModules = track.miniModules;
+    for(auto& module:copy.miniModules) normalizeFreezeSlot(module);
     copy.samplerFx = track.samplerFx; copy.clips = track.clips;
     normalizeFreezeSlot(copy.instrument);
+    if (copy.channelColor) normalizeFreezeSlot(*copy.channelColor);
     for (auto& slot : copy.inserts) normalizeFreezeSlot(slot);
     for (auto& slot : copy.samplerFx.inserts) normalizeFreezeSlot(slot);
     for (auto& clip : copy.clips) for (auto& slot : clip.inserts) normalizeFreezeSlot(slot);

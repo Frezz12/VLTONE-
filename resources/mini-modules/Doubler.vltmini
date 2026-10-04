@@ -1,0 +1,329 @@
+{
+  "format": "vltmini",
+  "version": 2,
+  "definition": {
+    "id": "doubler",
+    "name": "Doubler",
+    "version": 2,
+    "nodes": [
+      {
+        "id": "in",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "fx",
+        "type": "doubler",
+        "version": 1,
+        "parameters": {
+          "softness": 0.65
+        }
+      },
+      {
+        "id": "out",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "in",
+        "to": "fx"
+      },
+      {
+        "from": "fx",
+        "to": "out"
+      }
+    ],
+    "controls": [
+      {
+        "id": "width",
+        "name": "Width",
+        "unit": "%",
+        "min": 0,
+        "max": 1,
+        "default": 0.45,
+        "log": false,
+        "bindings": [
+          {
+            "node": "fx",
+            "parameter": "width",
+            "min": 0,
+            "max": 1,
+            "log": false,
+            "bipolarMagnitude": false
+          }
+        ],
+        "style": ""
+      },
+      {
+        "id": "humanize",
+        "name": "Humanize",
+        "unit": "%",
+        "min": 0,
+        "max": 1,
+        "default": 0.35,
+        "log": false,
+        "bindings": [
+          {
+            "node": "fx",
+            "parameter": "humanize",
+            "min": 0,
+            "max": 1,
+            "log": false,
+            "bipolarMagnitude": false
+          }
+        ],
+        "style": ""
+      }
+    ],
+    "appearance": {
+      "theme": "studio",
+      "controlStyle": "machined",
+      "backgroundColor": "",
+      "backgroundImage": ""
+    },
+    "defaultMode": "natural",
+    "modes": [
+      {
+        "id": "natural",
+        "name": "Natural",
+        "version": 1,
+        "nodes": [
+          {
+            "id": "in",
+            "type": "input",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "fx",
+            "type": "doubler",
+            "version": 1,
+            "parameters": {
+              "softness": 0.65
+            }
+          },
+          {
+            "id": "out",
+            "type": "output",
+            "version": 1,
+            "parameters": {}
+          }
+        ],
+        "connections": [
+          {
+            "from": "in",
+            "to": "fx"
+          },
+          {
+            "from": "fx",
+            "to": "out"
+          }
+        ],
+        "controls": [
+          {
+            "id": "width",
+            "name": "Width",
+            "unit": "%",
+            "min": 0,
+            "max": 1,
+            "default": 0.45,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "width",
+                "min": 0,
+                "max": 1,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          },
+          {
+            "id": "humanize",
+            "name": "Humanize",
+            "unit": "%",
+            "min": 0,
+            "max": 1,
+            "default": 0.35,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "humanize",
+                "min": 0,
+                "max": 1,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          }
+        ]
+      },
+      {
+        "id": "tight",
+        "name": "Tight",
+        "version": 1,
+        "nodes": [
+          {
+            "id": "in",
+            "type": "input",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "fx",
+            "type": "doubler",
+            "version": 1,
+            "parameters": {
+              "softness": 0.85
+            }
+          },
+          {
+            "id": "out",
+            "type": "output",
+            "version": 1,
+            "parameters": {}
+          }
+        ],
+        "connections": [
+          {
+            "from": "in",
+            "to": "fx"
+          },
+          {
+            "from": "fx",
+            "to": "out"
+          }
+        ],
+        "controls": [
+          {
+            "id": "width",
+            "name": "Width",
+            "unit": "%",
+            "min": 0,
+            "max": 1,
+            "default": 0.45,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "width",
+                "min": 0,
+                "max": 1,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          },
+          {
+            "id": "humanize",
+            "name": "Humanize",
+            "unit": "%",
+            "min": 0,
+            "max": 1,
+            "default": 0.35,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "humanize",
+                "min": 0,
+                "max": 0.35,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          }
+        ]
+      },
+      {
+        "id": "wide",
+        "name": "Wide",
+        "version": 1,
+        "nodes": [
+          {
+            "id": "in",
+            "type": "input",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "fx",
+            "type": "doubler",
+            "version": 1,
+            "parameters": {
+              "softness": 0.35
+            }
+          },
+          {
+            "id": "out",
+            "type": "output",
+            "version": 1,
+            "parameters": {}
+          }
+        ],
+        "connections": [
+          {
+            "from": "in",
+            "to": "fx"
+          },
+          {
+            "from": "fx",
+            "to": "out"
+          }
+        ],
+        "controls": [
+          {
+            "id": "width",
+            "name": "Width",
+            "unit": "%",
+            "min": 0,
+            "max": 1,
+            "default": 0.45,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "width",
+                "min": 0,
+                "max": 1,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          },
+          {
+            "id": "humanize",
+            "name": "Humanize",
+            "unit": "%",
+            "min": 0,
+            "max": 1,
+            "default": 0.35,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "humanize",
+                "min": 0.2,
+                "max": 1,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          }
+        ]
+      }
+    ]
+  }
+}

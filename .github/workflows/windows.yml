@@ -72,6 +72,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed." }
           }
 
+      - name: Restore Creator toolchain
+        uses: actions/cache@v4
+        with:
+          path: .cache/creator-tools
+          key: creator-${{ runner.os }}-x64-llvm20.1.8-wamr2.4.5-wasi27-v1
+
+      - name: Prepare bundled Creator compiler
+        shell: pwsh
+        run: ./scripts/setup-creator-tools.ps1
+
       - name: Build, test, deploy and package
         shell: pwsh
         run: |

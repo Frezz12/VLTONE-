@@ -35,6 +35,12 @@ struct SharedMutationRequest {
     std::optional<std::string> transactionId;
 };
 
+struct SharedProjectDocument;
+/// A fixed COLOR id survives removing its optional saved state. A fresh edit
+/// after Undo must explicitly restore that known tombstone before replacing it,
+/// retaining ordinary delete-wins behavior for stale or remote creation.
+void prepareFixedColorEdits(CommandBody& body, const SharedProjectDocument& document);
+
 /// Narrow controller-side seam for shared document edits already represented
 /// by the typed collaboration reducer.  Command metadata, UUIDs and transport
 /// policy belong to the application bridge, not to EngineController.

@@ -1,0 +1,321 @@
+{
+  "format": "vltmini",
+  "version": 2,
+  "definition": {
+    "id": "color",
+    "name": "Color",
+    "version": 2,
+    "nodes": [
+      {
+        "id": "in",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "fx",
+        "type": "color",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "out",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "in",
+        "to": "fx"
+      },
+      {
+        "from": "fx",
+        "to": "out"
+      }
+    ],
+    "controls": [
+      {
+        "id": "drive",
+        "name": "Drive",
+        "unit": "",
+        "min": -100,
+        "max": 100,
+        "default": -20,
+        "log": false,
+        "bindings": [
+          {
+            "node": "fx",
+            "parameter": "drive",
+            "min": -100,
+            "max": 100,
+            "log": false,
+            "bipolarMagnitude": false
+          }
+        ],
+        "style": ""
+      },
+      {
+        "id": "tone",
+        "name": "Tone",
+        "unit": "",
+        "min": -100,
+        "max": 100,
+        "default": 0,
+        "log": false,
+        "bindings": [
+          {
+            "node": "fx",
+            "parameter": "tone",
+            "min": -100,
+            "max": 100,
+            "log": false,
+            "bipolarMagnitude": false
+          }
+        ],
+        "style": ""
+      }
+    ],
+    "appearance": {
+      "theme": "studio",
+      "controlStyle": "machined",
+      "backgroundColor": "",
+      "backgroundImage": ""
+    },
+    "defaultMode": "analog",
+    "modes": [
+      {
+        "id": "analog",
+        "name": "Analog",
+        "version": 1,
+        "nodes": [
+          {
+            "id": "in",
+            "type": "input",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "fx",
+            "type": "color",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "out",
+            "type": "output",
+            "version": 1,
+            "parameters": {}
+          }
+        ],
+        "connections": [
+          {
+            "from": "in",
+            "to": "fx"
+          },
+          {
+            "from": "fx",
+            "to": "out"
+          }
+        ],
+        "controls": [
+          {
+            "id": "drive",
+            "name": "Drive",
+            "unit": "",
+            "min": -100,
+            "max": 100,
+            "default": -20,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "drive",
+                "min": -100,
+                "max": 100,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          },
+          {
+            "id": "tone",
+            "name": "Tone",
+            "unit": "",
+            "min": -100,
+            "max": 100,
+            "default": 0,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "tone",
+                "min": -100,
+                "max": 100,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          }
+        ]
+      },
+      {
+        "id": "tape",
+        "name": "Tape",
+        "version": 1,
+        "nodes": [
+          {
+            "id": "in",
+            "type": "input",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "fx",
+            "type": "color",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "out",
+            "type": "output",
+            "version": 1,
+            "parameters": {}
+          }
+        ],
+        "connections": [
+          {
+            "from": "in",
+            "to": "fx"
+          },
+          {
+            "from": "fx",
+            "to": "out"
+          }
+        ],
+        "controls": [
+          {
+            "id": "drive",
+            "name": "Drive",
+            "unit": "",
+            "min": -100,
+            "max": 100,
+            "default": -20,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "drive",
+                "min": 0,
+                "max": -100,
+                "log": false,
+                "bipolarMagnitude": true
+              }
+            ],
+            "style": ""
+          },
+          {
+            "id": "tone",
+            "name": "Tone",
+            "unit": "",
+            "min": -100,
+            "max": 100,
+            "default": 0,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "tone",
+                "min": -80,
+                "max": 60,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          }
+        ]
+      },
+      {
+        "id": "tube",
+        "name": "Tube",
+        "version": 1,
+        "nodes": [
+          {
+            "id": "in",
+            "type": "input",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "fx",
+            "type": "color",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "out",
+            "type": "output",
+            "version": 1,
+            "parameters": {}
+          }
+        ],
+        "connections": [
+          {
+            "from": "in",
+            "to": "fx"
+          },
+          {
+            "from": "fx",
+            "to": "out"
+          }
+        ],
+        "controls": [
+          {
+            "id": "drive",
+            "name": "Drive",
+            "unit": "",
+            "min": -100,
+            "max": 100,
+            "default": -20,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "drive",
+                "min": 0,
+                "max": 100,
+                "log": false,
+                "bipolarMagnitude": true
+              }
+            ],
+            "style": ""
+          },
+          {
+            "id": "tone",
+            "name": "Tone",
+            "unit": "",
+            "min": -100,
+            "max": 100,
+            "default": 0,
+            "log": false,
+            "bindings": [
+              {
+                "node": "fx",
+                "parameter": "tone",
+                "min": -100,
+                "max": 100,
+                "log": false,
+                "bipolarMagnitude": false
+              }
+            ],
+            "style": ""
+          }
+        ]
+      }
+    ]
+  }
+}

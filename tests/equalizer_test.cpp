@@ -376,6 +376,29 @@ int main() {
     }
 
     {
+        for(double rate:{44100.,48000.,96000.,192000.}) for(int resolution=0;resolution<3;++resolution) {
+            double maximumError=0;
+            for(unsigned upstreamDelay:{0u,48u}) {
+                EqualizerInstance flat;
+                set(flat,GlobalParam::ProcessingMode,double(ProcessingMode::LinearPhase));
+                set(flat,GlobalParam::LinearResolution,resolution); flat.activate({rate,kBlock,true});
+                const auto latency=flat.latencySamples(); const auto frames=latency+8192u;
+                const auto signal=[](unsigned frame) { return float(.2*std::sin(frame*.137)+.04*std::cos(frame*.19)); };
+                Block block(kBlock);
+                for(unsigned at=0;at<frames;at+=kBlock) {
+                    for(unsigned i=0;i<kBlock;++i) block.left[i]=block.right[i]=at+i<upstreamDelay?0.f:signal(at+i-upstreamDelay);
+                    process(flat,block);
+                    for(unsigned i=0;i<kBlock;++i) {
+                        const auto expected=at+i<latency+upstreamDelay?0.f:signal(at+i-latency-upstreamDelay);
+                        maximumError=std::max(maximumError,std::abs(double(block.outLeft[i])-expected));
+                    }
+                }
+            }
+            check(maximumError<1e-7,"flat Linear Phase has unity gain at every hop phase and upstream delay");
+        }
+    }
+
+    {
         EqualizerInstance maximum;
         for (std::uint32_t band = 0; band < kBandCount; ++band) {
             set(maximum, band, BandParam::Enabled, 1.0);

@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "AudioImportPreparation.hpp"
 #include "TimelineWidget.hpp"
 #include "ClipLibraryDrag.hpp"
@@ -10,6 +11,12 @@
 #include <QScopeGuard>
 #include "AutomationTools.hpp"
 #include "FileTypes.hpp"
+#include "PreviewLoader.hpp"
+#include "FileBrowserTree.hpp"
+#include "MidiPreviewLoader.hpp"
+#include "platform/AudioFileDecoder.hpp"
+#include <QPointer>
+#include <QThreadPool>
 #include "ProjectTemplates.hpp"
 #include "WaveformPaint.hpp"
 #include "CompLayout.hpp"
@@ -5250,7 +5257,9 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
         // Drop target highlight for an external file drag.
         if (m_dropActive) {
             const Theme& t = th();
-            if (m_dropLane >= 0) {
+            if (!m_dropFile.isEmpty()) {
+                drawFileDropPreview(p);
+            } else if (m_dropLane >= 0) {
                 const int y = laneTop(m_dropLane);
                 const int h = laneHeightAt(m_dropLane);
                 p.fillRect(0, y, width(), h,
@@ -7255,6 +7264,7 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
     ui::perf::Scope timing("timeline.wheel.ms");
     if (ev->phase() == Qt::ScrollBegin) m_wheelScrollRemainder = 0.0;
     if (ev->modifiers() & Qt::ControlModifier) {
+        ui::ScrollMotion::cancel(this);
         const std::optional<double> pointerX =
             ev->position().y() >= rulerHeight()
                 ? std::optional<double>(ev->position().x())
@@ -7267,18 +7277,18 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
             (!ev->pixelDelta().isNull() ? delta.y() : delta.y() / 2.0);
         if (horizontal != 0.0) {
             noteManualNavigation();
-            setHorizontalScroll(m_scrollSeconds - horizontal / m_pixelsPerSecond);
+            ui::ScrollMotion::scroll(this,{-horizontal,0},!ev->pixelDelta().isNull(),
+                [this]{return QPointF(m_scrollSeconds*m_pixelsPerSecond,m_scrollY);},
+                [this](QPointF p){setHorizontalScroll(p.x()/m_pixelsPerSecond);setVerticalScroll(int(std::lround(p.y())));});
         }
     } else {
         // Trackpad diagonals keep both axes; never switch axes according to
         // which component happens to be larger in this individual event.
         const QPointF delta = ui::scrollPixels(*ev);
-        if (delta.x() != 0.0) {
-            noteManualNavigation();
-            setHorizontalScroll(m_scrollSeconds - delta.x() / m_pixelsPerSecond);
-        }
-        const int vertical = ui::wholeScrollPixels(-delta.y(), m_wheelScrollRemainder);
-        if (vertical) setVerticalScroll(m_scrollY + vertical);
+        if (delta.x()!=0) noteManualNavigation();
+        ui::ScrollMotion::scroll(this,-delta,!ev->pixelDelta().isNull(),
+            [this]{return QPointF(m_scrollSeconds*m_pixelsPerSecond,m_scrollY);},
+            [this](QPointF p){setHorizontalScroll(p.x()/m_pixelsPerSecond);setVerticalScroll(int(std::lround(p.y())));});
     }
     if (ev->phase() == Qt::ScrollEnd) m_wheelScrollRemainder = 0.0;
     ev->accept();
@@ -7727,6 +7737,7 @@ std::optional<daw::plugins::PluginDescriptor> TimelineWidget::pluginFromMime(
 }
 
 void TimelineWidget::dragEnterEvent(QDragEnterEvent* ev) {
+    clearFileDropPreview();
     if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
         if (!m_controller->libraryClip(id.toStdString())) return;
         m_dropLibraryId = id;
@@ -7740,11 +7751,160 @@ void TimelineWidget::dragEnterEvent(QDragEnterEvent* ev) {
         projectTemplateFromMime(ev->mimeData()).isEmpty())
         return;
     m_dropActive = true;
+    m_dropPosition = ev->position().toPoint();
+    m_dropModifiers = ev->modifiers();
+    if (mimeHasImportable(ev->mimeData())) {
+        beginFileDropPreview(ev->mimeData());
+        if (const auto* tree = qobject_cast<FileBrowserTree*>(ev->source())) {
+            if (auto peaks = tree->dragPreview(m_dropFile)) {
+                m_dropDuration = peaks->durationSeconds;
+                m_dropPeaks = std::move(peaks);
+                // Supersede the metadata request; the browser already decoded it.
+                ++m_dropGeneration;
+            }
+        }
+    }
     m_dropLane = projectTemplateFromMime(ev->mimeData()).isEmpty()
                      ? laneAt(ev->position().toPoint().y())
                      : -1;
     ev->acceptProposedAction();
     update();
+}
+
+void TimelineWidget::clearFileDropPreview() {
+    ++m_dropGeneration;
+    if (m_dropLoader) m_dropLoader->cancel();
+    if (m_dropMidiLoader) m_dropMidiLoader->cancel();
+    m_dropFile.clear();
+    m_dropPeaks.reset();
+    m_dropDuration = m_dropMidiBeats = 0.0;
+}
+
+void TimelineWidget::beginFileDropPreview(const QMimeData* mime) {
+    for (const QUrl& url : mime->urls()) {
+        if (ui::isImportableFile(url.toLocalFile())) {
+            m_dropFile = url.toLocalFile();
+            break;
+        }
+    }
+    if (m_dropFile.isEmpty()) return;
+    if (!m_dropLoader) {
+        m_dropLoader = new PreviewLoader(this);
+        connect(m_dropLoader, &PreviewLoader::loaded, this,
+            [this](const QString& path, std::shared_ptr<const daw::engine::SampleBuffer>,
+                   daw::WaveformPeaks peaks) {
+                if (!m_dropActive || path != m_dropFile) return;
+                m_dropDuration = peaks.durationSeconds;
+                m_dropPeaks = std::make_shared<daw::WaveformPeaks>(std::move(peaks));
+                update();
+            });
+        m_dropMidiLoader = new MidiPreviewLoader(this);
+        connect(m_dropMidiLoader, &MidiPreviewLoader::loaded, this,
+            [this](const QString& path, std::shared_ptr<const daw::midifile::File> file) {
+                if (!m_dropActive || path != m_dropFile || !file) return;
+                // MIDI import rounds the file length to a whole project bar.
+                const auto& project = m_controller->project();
+                const double bar = double(project.timeSigNumerator) * 4.0 /
+                                   std::max(1, project.timeSigDenominator);
+                m_dropMidiBeats = std::max(1.0, std::ceil(file->lengthBeats / bar) * bar);
+                update();
+            });
+    }
+    if (ui::isMidiFile(m_dropFile)) {
+        m_dropMidiLoader->request(m_dropFile);
+        return;
+    }
+    if (const auto* cached = m_controller->waveforms().cached(m_dropFile.toStdString())) {
+        m_dropDuration = cached->durationSeconds;
+        m_dropPeaks = std::make_shared<daw::WaveformPeaks>(*cached);
+        return;
+    }
+    // Metadata arrives before the waveform. Neither disk I/O nor decoding runs
+    // in a dragMove/paint handler, and cancelled sessions cannot publish a result.
+    const QString path = m_dropFile;
+    const quint64 generation = m_dropGeneration;
+    const QPointer<TimelineWidget> self(this);
+    QThreadPool::globalInstance()->start([self, path, generation] {
+        audio::platform::AudioFileInfo info;
+        if (!audio::platform::probeAudioFile(path.toStdString(), info)) return;
+        const double duration = info.durationSeconds();
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, path, generation, duration] {
+            if (!self || !self->m_dropActive || self->m_dropGeneration != generation ||
+                self->m_dropFile != path) return;
+            self->m_dropDuration = duration;
+            // Same ceiling as browser audition: a long recording gets exact
+            // placement feedback without allocating its entire decoded audio.
+            if (duration > 0.0 && duration <= 600.0) self->m_dropLoader->request(path);
+            self->update();
+        }, Qt::QueuedConnection);
+    });
+}
+
+double TimelineWidget::fileDropStart(const QPoint& pos, Qt::KeyboardModifiers modifiers) const {
+    return snap(std::max(0.0, xToSeconds(pos.x())),
+                m_snapEnabled && !(modifiers & Qt::AltModifier));
+}
+
+QRectF TimelineWidget::fileDropRect() const {
+    const auto* target = m_controller->project().findTrack(trackIdForLane(m_dropLane).toStdString());
+    const bool midi = ui::isMidiFile(m_dropFile);
+    const bool fits = target && (midi ? daw::trackAccepts(target->kind, daw::ClipKind::Midi)
+                                    : target->kind == daw::TrackKind::Audio ||
+                                      target->kind == daw::TrackKind::Pattern);
+    double duration = midi ? m_dropMidiBeats * 60.0 /
+                            std::max(1.0, m_controller->project().tempo) : m_dropDuration;
+    const double at = fileDropStart(m_dropPosition, m_dropModifiers);
+    if (!midi && target && target->kind == daw::TrackKind::Pattern) {
+        duration = std::max(1, m_controller->project().timeSigNumerator) * 60.0 /
+                   std::max(1.0, m_controller->project().tempo);
+        for (const auto& clip : target->clips) {
+            const double end = clip.startSeconds + clip.durationSeconds;
+            if (clip.kind == daw::ClipKind::Pattern && at + 1e-9 >= clip.startSeconds && at < end) {
+                duration = std::max(0.001, end - at);
+                break;
+            }
+        }
+    }
+    return QRectF(secondsToX(at),
+                  (fits ? laneTop(m_dropLane) : lanesBottom()) + kClipVerticalInset,
+                  std::max(2.0, duration * m_pixelsPerSecond),
+                  std::max(2, (fits ? laneBodyHeightAt(m_dropLane) : ui::laneHeightFor(0.0)) -
+                              2 * kClipVerticalInset));
+}
+
+void TimelineWidget::drawFileDropPreview(QPainter& p) {
+    const QRectF ghost = fileDropRect();
+    const QRectF visible = ghost.intersected(QRectF(0, rulerHeight(), width(), visibleLaneHeight()));
+    if (visible.isEmpty()) return;
+    const QColor accent = ui::isMidiFile(m_dropFile) ? Theme::midiAccent() : Theme::audioAccent();
+    QColor fill = accent; fill.setAlpha(60);
+    p.save();
+    p.setClipRect(QRect(0, rulerHeight(), width(), visibleLaneHeight()), Qt::IntersectClip);
+    p.setBrush(fill);
+    p.setPen(QPen(accent, 1.4, Qt::DashLine));
+    p.drawRoundedRect(ghost, Theme::cornerRadius, Theme::cornerRadius);
+    // A solid leading edge makes the precise insertion point legible even for
+    // a one-shot narrower than its filename. Unknown lengths show only this edge.
+    p.setPen(QPen(accent, 2.0));
+    p.drawLine(QPointF(ghost.left(), ghost.top()), QPointF(ghost.left(), ghost.bottom()));
+    if (m_dropPeaks && ghost.height() > 26) {
+        ui::PeakPaint how;
+        how.secondsPerPixel = 1.0 / m_pixelsPerSecond;
+        how.clipLeft = 0; how.clipRight = width();
+        how.color = accent;
+        p.setOpacity(0.65);
+        ui::paintPeaks(p, m_dropPeaks.get(), ghost.adjusted(0, 22, 0, -4), how);
+        p.setOpacity(1.0);
+    }
+    if (visible.width() > 28) {
+        const QRectF title = visible.adjusted(7, 1, -7, 0);
+        p.setPen(th().textPrimary);
+        p.drawText(QRectF(title.left(), title.top(), title.width(), 20),
+                   Qt::AlignVCenter | Qt::AlignLeft,
+                   QFontMetrics(p.font()).elidedText(QFileInfo(m_dropFile).fileName(),
+                                                    Qt::ElideMiddle, int(title.width())));
+    }
+    p.restore();
 }
 
 void TimelineWidget::dragMoveEvent(QDragMoveEvent* ev) {
@@ -7783,12 +7943,15 @@ void TimelineWidget::dragMoveEvent(QDragMoveEvent* ev) {
         return;
     }
     if (!mimeHasImportable(ev->mimeData())) return;
+    m_dropPosition = ev->position().toPoint();
+    m_dropModifiers = ev->modifiers();
     m_dropLane = laneAt(ev->position().toPoint().y());
     ev->acceptProposedAction();
     update();
 }
 
 void TimelineWidget::dragLeaveEvent(QDragLeaveEvent*) {
+    clearFileDropPreview();
     m_dropActive = false;
     m_dropLibraryId.clear();
     m_dropClip = {};
@@ -7796,6 +7959,7 @@ void TimelineWidget::dragLeaveEvent(QDragLeaveEvent*) {
 }
 
 void TimelineWidget::dropEvent(QDropEvent* ev) {
+    clearFileDropPreview();
     m_dropActive = false;
     m_dropLibraryId.clear();
     const ClipRef overClip = m_dropClip;
@@ -7919,9 +8083,7 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
     if (files.isEmpty()) { update(); return; }
 
     const QPoint pos = ev->position().toPoint();
-    const bool snapOn =
-        m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
-    const double start = snap(std::max(0.0, xToSeconds(pos.x())), snapOn);
+    const double start = fileDropStart(pos, ev->modifiers());
 
     // The first file drops onto the lane under the cursor when that lane can
     // hold it; every other file (and a drop onto empty space or the wrong kind

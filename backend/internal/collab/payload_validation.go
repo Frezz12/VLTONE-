@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"math/big"
@@ -40,6 +41,32 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 	body, err := commandPayloadObject(payload)
 	if err != nil {
 		return err
+	}
+	// COLOR's stage identity is derived from its track on every replica.
+	if raw, exists := body["location"]; exists {
+		location, locationErr := validatePluginLocation(raw)
+		if locationErr == nil && location.Chain == "channelColor" {
+			if schemaVersion < CollaborationCommandSchemaV6 {
+				return invalidf("COLOR requires protocol 6")
+			}
+			expected := channelColorSlotID(location.TrackID)
+			if rawID, exists := body["insertId"]; exists {
+				var id string
+				if json.Unmarshal(rawID, &id) == nil && id != expected {
+					return invalidf("COLOR stage id must derive from its track")
+				}
+			}
+			for _, key := range []string{"insert", "replacement"} {
+				if rawInsert, exists := body[key]; exists {
+					var insert struct {
+						ID string `json:"id"`
+					}
+					if json.Unmarshal(rawInsert, &insert) == nil && insert.ID != expected {
+						return invalidf("COLOR stage id must derive from its track")
+					}
+				}
+			}
+		}
 	}
 	requireIDs := func(names ...string) error {
 		for _, name := range names {
@@ -420,6 +447,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err != nil {
 			return err
 		}
+		if (location.Chain == "channelColor") != (format == "internal" && uid == "daw.channel-color") {
+			return invalidf("COLOR is a fixed channel stage")
+		}
 		if format == "internal" &&
 			(location.Chain == "instrument") != (uid == "daw.sampler") {
 			return invalidf("command payload plugin kind is unsupported for its chain")
@@ -427,7 +457,7 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := optionalPayloadUUID(body, "afterId"); err != nil {
 			return err
 		}
-		if location.Chain == "instrument" {
+		if location.Chain == "instrument" || location.Chain == "channelColor" {
 			afterID, _ := optionalPayloadUUIDValue(body, "afterId")
 			if afterID != "" {
 				return invalidf("command payload instrument chain cannot have an anchor")
@@ -457,6 +487,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err != nil || replacementID != insertID {
 			return invalidf("command payload replacement must preserve insertId")
 		}
+		if (location.Chain == "channelColor") != (format == "internal" && uid == "daw.channel-color") {
+			return invalidf("COLOR is a fixed channel stage")
+		}
 		if format == "internal" &&
 			(location.Chain == "instrument") != (uid == "daw.sampler") {
 			return invalidf("command payload plugin kind is unsupported for its chain")
@@ -466,7 +499,8 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "property", "value"}, nil); err != nil {
 			return err
 		}
-		if _, err := validatePluginLocation(body["location"]); err != nil {
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
 			return err
 		}
 		if err := requireIDs("insertId"); err != nil {
@@ -478,6 +512,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		}
 		if strings.HasPrefix(property, "slide") && schemaVersion < 5 {
 			return invalidf("slide settings require protocol 5")
+		}
+		if location.Chain == "channelColor" && property != "name" && property != "bypassed" {
+			return invalidf("COLOR routing is fixed")
 		}
 		return validatePluginPropertyValue(body, property)
 	case "plugin.setState":
@@ -514,16 +551,44 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := validatePluginParameters(body["rightParameters"], 4096); err != nil {
 			return err
 		}
+		if location.Chain == "channelColor" {
+			if err := validateColorParameters(body["parameters"]); err != nil {
+				return err
+			}
+			if !rawJSONNull(body["rightStateAsset"]) {
+				return invalidf("COLOR has one state asset")
+			}
+			for _, key := range []string{"rightParameters", "assetBindings"} {
+				var entries []json.RawMessage
+				if json.Unmarshal(body[key], &entries) != nil || len(entries) != 0 {
+					return invalidf("COLOR has no secondary parameters or bindings")
+				}
+			}
+		}
 		return validatePluginBindings(body["assetBindings"], location.Chain == "instrument")
 	case "plugin.setParameter":
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "parameterId", "value", "rightChannel"}, nil); err != nil {
 			return err
 		}
-		if _, err := validatePluginLocation(body["location"]); err != nil {
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
 			return err
 		}
 		if err := requireIDs("insertId"); err != nil {
 			return err
+		}
+		parameter, paramErr := payloadString(body, "parameterId", maximumPluginParameterIDBytes, false)
+		if paramErr != nil {
+			return paramErr
+		}
+		if location.Chain == "channelColor" {
+			right, rightErr := payloadBool(body, "rightChannel")
+			if rightErr != nil || right || (parameter != "drive" && parameter != "tone") {
+				return invalidf("invalid COLOR parameter")
+			}
+			if _, err := payloadNumber(body, "value", -100, 100, false); err != nil {
+				return err
+			}
 		}
 		if _, err := payloadString(body, "parameterId", maximumPluginParameterIDBytes, false); err != nil {
 			return err
@@ -537,16 +602,27 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "parameterId", "rightChannel"}, nil); err != nil {
 			return err
 		}
-		if _, err := validatePluginLocation(body["location"]); err != nil {
+		location, err := validatePluginLocation(body["location"])
+		if err != nil {
 			return err
 		}
 		if err := requireIDs("insertId"); err != nil {
 			return err
 		}
+		parameter, paramErr := payloadString(body, "parameterId", maximumPluginParameterIDBytes, false)
+		if paramErr != nil {
+			return paramErr
+		}
+		if location.Chain == "channelColor" {
+			right, rightErr := payloadBool(body, "rightChannel")
+			if rightErr != nil || right || (parameter != "drive" && parameter != "tone") {
+				return invalidf("invalid COLOR parameter")
+			}
+		}
 		if _, err := payloadString(body, "parameterId", maximumPluginParameterIDBytes, false); err != nil {
 			return err
 		}
-		_, err := payloadBool(body, "rightChannel")
+		_, err = payloadBool(body, "rightChannel")
 		return err
 	case "plugin.setAssetBinding":
 		if err := exactPayloadKeys(body, []string{"location", "insertId", "binding"}, nil); err != nil {
@@ -558,6 +634,9 @@ func validateCommandPayloadShapeForSchema(kind string, payload json.RawMessage,
 		}
 		if err := requireIDs("insertId"); err != nil {
 			return err
+		}
+		if location.Chain == "channelColor" {
+			return invalidf("COLOR has no resource bindings")
 		}
 		key, required, err := validatedPluginBinding(body["binding"])
 		if err != nil {
@@ -1155,7 +1234,7 @@ func validatePluginLocation(raw json.RawMessage) (validatedPluginLocation, error
 	if err := exactPayloadKeys(body, []string{"chain", "trackId", "clipId"}, nil); err != nil {
 		return validatedPluginLocation{}, err
 	}
-	chain, err := payloadEnum(body, "chain", "master", "track", "instrument", "samplerFx", "clip")
+	chain, err := payloadEnum(body, "chain", "master", "track", "instrument", "samplerFx", "clip", "channelColor")
 	if err != nil {
 		return validatedPluginLocation{}, err
 	}
@@ -1171,7 +1250,7 @@ func validatePluginLocation(raw json.RawMessage) (validatedPluginLocation, error
 	switch chain {
 	case "master":
 		valid = trackID == "" && clipID == ""
-	case "track", "instrument", "samplerFx":
+	case "track", "instrument", "samplerFx", "channelColor":
 		valid = trackID != "" && clipID == ""
 	case "clip":
 		valid = trackID != "" && clipID != ""
@@ -1210,8 +1289,8 @@ func validatePluginReferencePayload(body map[string]json.RawMessage, restore, mo
 		if err := optionalPayloadUUID(body, "afterId"); err != nil {
 			return err
 		}
-		if location.Chain == "instrument" {
-			return invalidf("command payload instrument chain cannot be reordered")
+		if location.Chain == "instrument" || (location.Chain == "channelColor" && string(body["afterId"]) != `""`) {
+			return invalidf("command payload fixed chain cannot be reordered")
 		}
 		return rejectSelfReferences(body, insertID, "afterId")
 	}
@@ -1299,7 +1378,7 @@ func validateSharedInsert(raw json.RawMessage,
 		return "", "", "", invalidf("command payload insert must be an object")
 	}
 	required := []string{"id", "name", "bypassed", "format", "uid", "vendor", "pluginVersion", "stateSchemaVersion", "mix", "channelMode", "sidechainTrackId", "stateAsset", "rightStateAsset", "parameters", "rightParameters", "assetBindings"}
-	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds", "slideDelivery", "slideBendRange", "slideReleaseReserve", "parameterFingerprint"}); err != nil {
+	if err := exactPayloadKeys(body, required, []string{"sidechainTrackIds", "slideDelivery", "slideBendRange", "slideReleaseReserve", "parameterFingerprint", "profileSeed"}); err != nil {
 		return "", "", "", err
 	}
 	if _, exists := body["parameterFingerprint"]; exists {
@@ -1334,10 +1413,36 @@ func validateSharedInsert(raw json.RawMessage,
 		return "", "", "", invalidf("modulation plugin requires protocol 6")
 	}
 	if format == "internal" && uid != "daw.delay" && uid != "daw.sampler" && uid != "daw.equalizer" &&
-		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" &&
+		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" && uid != "daw.cla2a" && uid != "daw.channel-color" &&
 		uid != "daw.doubler" && uid != "daw.doubler-pro" && uid != "daw.chorus" &&
 		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.modulation" && uid != "daw.pitch-corrector" {
 		return "", "", "", invalidf("command payload built-in plugin uid is unsupported")
+	}
+	if uid == "daw.channel-color" {
+		seed, err := payloadString(body, "profileSeed", 16, false)
+		if err != nil || schemaVersion < CollaborationCommandSchemaV6 || !validLowerHex(seed, 16) {
+			return "", "", "", invalidf("invalid COLOR component profile")
+		}
+		mix, mixErr := payloadNumber(body, "mix", 1, 1, false)
+		mode, modeErr := payloadString(body, "channelMode", 16, false)
+		sources, sourceErr := sharedInsertSidechainIDs(body)
+		if mixErr != nil || mix != 1 || modeErr != nil || mode != "auto" || sourceErr != nil || len(sources) != 0 {
+			return "", "", "", invalidf("COLOR routing is fixed")
+		}
+		if !rawJSONNull(body["rightStateAsset"]) {
+			return "", "", "", invalidf("COLOR has one state asset")
+		}
+		if err := validateColorParameters(body["parameters"]); err != nil {
+			return "", "", "", err
+		}
+		for _, key := range []string{"rightParameters", "assetBindings"} {
+			var entries []json.RawMessage
+			if json.Unmarshal(body[key], &entries) != nil || len(entries) != 0 {
+				return "", "", "", invalidf("COLOR has no secondary parameters or bindings")
+			}
+		}
+	} else if _, exists := body["profileSeed"]; exists {
+		return "", "", "", invalidf("component profiles belong to COLOR")
 	}
 	vendor, err := payloadString(body, "vendor", 4096, format == "internal")
 	if err != nil || (format != "internal" && !safePluginContractText(vendor, 200)) {
@@ -2175,4 +2280,40 @@ func rejectSelfReferences(body map[string]json.RawMessage, entityID string, name
 		}
 	}
 	return nil
+}
+
+func validateColorParameters(raw json.RawMessage) error {
+	if err := validatePluginParameters(raw, 4096); err != nil {
+		return err
+	}
+	var values []struct {
+		ID    string  `json:"id"`
+		Value float64 `json:"value"`
+	}
+	if json.Unmarshal(raw, &values) != nil {
+		return invalidf("invalid COLOR parameters")
+	}
+	for _, value := range values {
+		if (value.ID != "drive" && value.ID != "tone") || value.Value < -100 || value.Value > 100 {
+			return invalidf("invalid COLOR parameter range")
+		}
+	}
+	return nil
+}
+
+// Keep in sync with model/ChannelColor.cpp. These are entity keys, not hashes
+// used for authentication or asset content addressing.
+func channelColorSlotID(trackID string) string {
+	hash := func(basis uint64) uint64 {
+		value := basis
+		for _, b := range []byte(trackID) {
+			value ^= uint64(b)
+			value *= 1099511628211
+		}
+		return value
+	}
+	digits := []byte(fmt.Sprintf("%016x%016x", hash(14695981039346656037), hash(0x434f4c4f522d5631)))
+	digits[12] = '4'
+	digits[16] = '8'
+	return string(digits[:8]) + "-" + string(digits[8:12]) + "-" + string(digits[12:16]) + "-" + string(digits[16:20]) + "-" + string(digits[20:])
 }

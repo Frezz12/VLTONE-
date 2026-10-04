@@ -745,6 +745,11 @@ void WorkspaceSurface::updateHover(QWidget* target, const QPointF& globalPositio
 }
 bool WorkspaceSurface::forwardInput(QEvent* event) {
     if (!m_source) return false;
+    // Focusing a QWidget through the proxy can activate its HWND and deactivate
+    // the native Quick child. The workspace is still active: keep the first
+    // pointer gesture instead of sending a spurious UngrabMouse to the control.
+    if (event->type() == QEvent::WindowDeactivate && m_source->window()->isActiveWindow())
+        return false;
     if (event->type() == QEvent::DragEnter || event->type() == QEvent::UngrabMouse ||
         event->type() == QEvent::WindowDeactivate) {
         // Native QDrag takes over the gesture and consumes the release. The

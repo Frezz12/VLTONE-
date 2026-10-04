@@ -8,6 +8,7 @@
 #include "DSP/WarpPlayback.hpp"
 #include "Recording/RecordingEngine.hpp"
 #include "platform/AudioFileDecoder.hpp"
+#include <nlohmann/json.hpp>
 #include <filesystem>
 #include <cstdio>
 #include <numbers>
@@ -74,6 +75,13 @@ int main() {
     check(!validWarp(broken), "nonfinite Warp coordinates are rejected");
     auto slice = sliceWarp(map, 1, 3);
     check(validWarp(slice) && near(warpSourceAt(slice, .5), .5) && near(slice.markers.back().targetBeats, 2), "trim inserts mapped boundary anchors");
+    auto boundary = map;
+    boundary.markers = {{"start", .1, 0, true}, {"end", 1, .6180038246658313, true}};
+    const auto expanded = sliceWarp(boundary, warpBeatAt(boundary, 0), .5);
+    check(expanded.markers.front().sourceSeconds == 0 && validWarp(expanded),
+          "extending a trimmed Warp clip to source zero does not create negative roundoff");
+    check(warpSourceAt(boundary, -1) < -1e-9,
+          "Warp mapping preserves genuinely negative extrapolation for caller bounds checks");
 
     auto tone = std::make_shared<engine::SampleBuffer>(2, 96000, 48000);
     for (unsigned i = 0; i < tone->frames(); ++i) {
@@ -179,6 +187,26 @@ int main() {
     std::string encoded; ProjectModel decoded;
     check(ProjectSerializer::serializeDocument(controller.project(), encoded).isOk() &&
           ProjectSerializer::deserializeDocument(decoded, encoded).isOk() && decoded.tracks[0].clips[0].warp == map, "Warp project serialization round-trip");
+    auto roundedDocument = nlohmann::json::parse(encoded);
+    auto& roundedWarp = roundedDocument["tracks"][0]["clips"][0]["warp"];
+    roundedWarp["markers"][0]["sourceSeconds"] = -2.7755575615628914e-17;
+    check(ProjectSerializer::deserializeDocument(decoded, roundedDocument.dump()).isOk() &&
+          decoded.tracks[0].clips[0].warp == map,
+          "legacy projects with negative Warp roundoff load with an exact zero source anchor");
+    roundedWarp["enabled"] = false;
+    auto disabledMap = map; disabledMap.enabled = false;
+    check(ProjectSerializer::deserializeDocument(decoded, roundedDocument.dump()).isOk() &&
+          decoded.tracks[0].clips[0].warp == disabledMap,
+          "disabled Warp maps also recover source-zero roundoff");
+    roundedWarp["markers"][0]["sourceSeconds"] = -1e-6;
+    check(!ProjectSerializer::deserializeDocument(decoded, roundedDocument.dump()).isOk(),
+          "project recovery still rejects genuinely negative Warp coordinates");
+    auto roundedProject = controller.project();
+    roundedProject.tracks[0].clips[0].warp.markers[0].sourceSeconds = -2.7755575615628914e-17;
+    std::string normalizedDocument;
+    check(ProjectSerializer::serializeDocument(roundedProject, normalizedDocument).isOk() &&
+          nlohmann::json::parse(normalizedDocument)["tracks"][0]["clips"][0]["warp"]["markers"][0]["sourceSeconds"] == 0,
+          "saving a Warp map never persists negative source-zero roundoff");
     check(cloud::inspectForPublishV1(controller.project()).canPublish(),
           "cloud publication accepts supported Warp data");
     check(cloud::projectForCloudSnapshotV1(controller.project()).document.tracks[0].clips[0].warp == map,

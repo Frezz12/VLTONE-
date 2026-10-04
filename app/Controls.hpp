@@ -626,6 +626,10 @@ public:
 
     double value() const { return m_value; }
     void setValue(double value);
+    double minimumValue() const { return m_min; }
+    double maximumValue() const { return m_max; }
+    void editValue(double value);
+    void finishEditing();
     /// True while a drag is in flight. A panel that polls its plugin for
     /// automation must not fight the knob the user is holding.
     bool isEditing() const { return m_dragging; }
@@ -673,7 +677,7 @@ private:
     int m_bare = 0;
     std::function<QString(double)> m_formatter;
     double m_dragStartFraction = 0.0;
-    int m_dragStartY = 0;
+    double m_dragStartY = 0;
     bool m_dragging = false;
     bool m_automatable = false;
     Fade m_hoverFade{this};

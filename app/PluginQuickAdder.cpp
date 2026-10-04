@@ -402,7 +402,7 @@ void PluginQuickAdder::rebuildEntries() {
         });
         m_all.reserve(plugins.size());
         for (const auto& descriptor : plugins) {
-            if (!m_clipId.isEmpty() && descriptor.isInstrument) continue;
+            if (descriptor.uid=="daw.channel-color" || (!m_clipId.isEmpty() && descriptor.isInstrument)) continue;
             Entry entry;
             entry.descriptor = descriptor;
             entry.section = baseSection(descriptor);

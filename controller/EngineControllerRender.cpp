@@ -1,6 +1,7 @@
 #include "EngineController.hpp"
 #include "RenderOutput.hpp"
 #include "platform/PathUtils.hpp"
+#include "Internal/ChannelColorInstance.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -181,6 +182,12 @@ audio::Result EngineController::renderProject(
             const auto collectSlot = [&](const std::string& channelId,
                                          InsertModel& slot) {
                 if (!slot.isLoaded() || slot.bypassed || slot.mix == 0.f) return;
+                // COLOR's complete configuration is inline: static controls
+                // and the saved component seed. Its live parameter mirror may
+                // contain the last automation value from a previous playback.
+                if (slot.uid == plugins::channel_color::ChannelColorInstance::uid() || slot.uid == plugins::mini::kUid) {
+                    slot.stateFile.clear(); return;
+                }
                 InsertSlot* live = liveInsertSlot(channelId, slot.id);
                 if (!live || !live->node || !live->node->instance())
                     throw std::runtime_error("cannot capture unavailable render plugin: " + slot.name);
@@ -196,6 +203,7 @@ audio::Result EngineController::renderProject(
                 if (!spec.independentTrackId.empty() && track.id != spec.independentTrackId) continue;
                 if (trackAccepts(track.kind, ClipKind::Midi))
                     collectSlot(track.id, track.instrument);
+                for(auto& module:track.miniModules) collectSlot(track.id,module);
                 for (auto& slot : track.inserts)
                     collectSlot(track.id, slot);
                 if (track.samplerFx.isOwnedBy(track.instrument))
@@ -208,6 +216,7 @@ audio::Result EngineController::renderProject(
                 }
             }
             if (spec.independentTrackId.empty())
+                for(auto& module:snapshot.project.masterMiniModules) collectSlot(kMasterChannelId,module);
                 for (auto& slot : snapshot.project.masterInserts)
                     collectSlot(kMasterChannelId, slot);
         }
@@ -237,10 +246,13 @@ audio::Result EngineController::renderProject(
                 return audio::Result::fail(audio::EngineError::TrackNotFound, "freeze source no longer exists");
             auto& track = scratch.m_project.tracks.front();
             track.freeze = {}; track.parentId.clear(); track.outputBusId.clear(); track.sends.clear();
-            track.volume = 1.f; track.pan = 0.f; track.mono = false;
+            // The pre-fader stem bypasses pan/fader processing, but native
+            // processors must keep the source channel's original mono layout.
+            track.volume = 1.f; track.pan = 0.f;
             track.muted = track.soloed = track.armed = track.monitor = false;
             std::erase_if(track.clips, [](const ClipModel& clip) { return clip.kind == ClipKind::Automation; });
             scratch.m_project.masterInserts.clear();
+            scratch.m_project.masterMiniModules.clear();
             scratch.m_project.masterVolume = 1.f; scratch.m_project.masterPan = 0.f;
             scratch.m_project.invalidateTrackIndex();
         }
@@ -279,6 +291,9 @@ audio::Result EngineController::renderProject(
                 if (auto* sampler = dynamic_cast<plugins::sampler::SamplerInstance*>(node->instance());
                     sampler && !sampler->samplePath().empty() && !sampler->rawSample())
                     throw std::runtime_error("cannot load render sampler source: " + sampler->samplePath());
+                if (auto* slicer=dynamic_cast<plugins::slicer::SlicerInstance*>(node->instance());
+                    slicer && !slicer->samplePath().empty() && !slicer->rawSample())
+                    throw std::runtime_error("cannot load render slicer source: "+slicer->samplePath());
                 node->discardPendingEvents();
                 const auto pending = pendingParameterOverrides.find(pendingKey);
                 if (!restored) {
@@ -294,11 +309,13 @@ audio::Result EngineController::renderProject(
         };
         for (const TrackModel& track : scratch.m_project.tracks) {
             if (track.instrument.isLoaded()) restoreSlot(track.id, track.instrument);
+            for(const auto& module:track.miniModules) restoreSlot(track.id,module);
             for (const auto& slot : track.inserts) restoreSlot(track.id, slot);
             for (const auto& slot : track.samplerFx.inserts) restoreSlot(track.id, slot);
             for (const auto& clip : track.clips)
                 for (const auto& slot : clip.inserts) restoreSlot(track.id, slot);
         }
+        for(const auto& module:scratch.m_project.masterMiniModules) restoreSlot(kMasterChannelId,module);
         for (const auto& slot : scratch.m_project.masterInserts)
             restoreSlot(kMasterChannelId, slot);
         if (cancelled) { out.cancelled = true; return audio::Result::ok(); }
@@ -335,6 +352,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
     };
     if (spec.bypassChannelInserts) {
         for (TrackModel& track : project.tracks) {
+            for(auto& module:track.miniModules) module.bypassed=true;
             bypassSlots(track.inserts);
             bypassSlots(track.samplerFx.inserts);
             for (ClipModel& clip : track.clips) bypassSlots(clip.inserts);
@@ -360,6 +378,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
             }
             bypassSlots(track.inserts);
             bypassSlots(track.samplerFx.inserts);
+            for(auto& module:track.miniModules) module.bypassed=true;
         }
     }
     if (spec.bypassSummingInserts && !spec.bypassChannelInserts) {
@@ -370,6 +389,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
                 continue;
             }
             bypassSlots(track.inserts);
+            bypassSlots(track.miniModules);
         }
     }
     if (spec.bypassSends) {
@@ -381,6 +401,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
     }
     if (spec.bypassMasterChain) {
         bypassSlots(project.masterInserts);
+        bypassSlots(project.masterMiniModules);
     }
 
     // Isolate the requested musical material without touching automation
@@ -565,8 +586,13 @@ audio::Result EngineController::renderProjectPass(
             m_engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
                                            : m_engine.offlineError());
     const auto graph = m_engine.compiledGraph();
-    const auto requireSlot = [&](const std::string& channelId, const InsertModel& model) {
-        if (!model.isLoaded() || model.bypassed || model.mix == 0.f) return;
+    const auto requireSlot = [&](const std::string& channelId, const InsertModel& model, bool frozen = false) {
+        if(model.uid==plugins::mini::kUid && !spec.bypassTrackInserts && !spec.bypassChannelInserts && !spec.stemsAtSource &&
+           !(channelId==kMasterChannelId && spec.bypassMasterChain)) {
+            const auto error=model.miniModule?plugins::mini::validate(*model.miniModule,model.miniModuleMode):"Missing module definition";
+            if(!error.empty()) throw std::runtime_error("Mini module unavailable: "+model.name+" — "+error);
+        }
+        if (frozen || !model.isLoaded() || model.bypassed || model.mix == 0.f) return;
         auto* slot = liveInsertSlot(channelId, model.id);
         if (!slot || !slot->node || !slot->node->isReady() ||
             (model.channelMode == PluginChannelMode::DualMono &&
@@ -575,7 +601,9 @@ audio::Result EngineController::renderProjectPass(
                                      " (channel " + channelId + ", slot " + model.id + ")");
     };
     for (const auto& track : m_project.tracks) {
-        if (!carriesAudio(track) || track.freeze.active()) continue;
+        if (!carriesAudio(track)) continue;
+        for(const auto& module:track.miniModules) requireSlot(track.id,module,track.freeze.active());
+        if(track.freeze.active()) continue;
         if (trackAccepts(track.kind, ClipKind::Midi)) requireSlot(track.id, track.instrument);
         for (const auto& slot : track.inserts) requireSlot(track.id, slot);
         if (track.samplerFx.isOwnedBy(track.instrument))
@@ -585,6 +613,7 @@ audio::Result EngineController::renderProjectPass(
                 for (const auto& slot : clip.inserts) requireSlot(track.id, slot);
     }
     for (const auto& slot : m_project.masterInserts) requireSlot(kMasterChannelId, slot);
+    for (const auto& slot : m_project.masterMiniModules) requireSlot(kMasterChannelId, slot);
 
     // ── Files ──
     const engine::SamplePos from = toSamples(startSeconds);
@@ -804,7 +833,9 @@ audio::Result EngineController::renderProjectPass(
             }
             return true;
         },
-        engine::OfflineOptions{.sourcesEndSample = rangeEnd});
+        engine::OfflineOptions{.sourcesEndSample = rangeEnd, .pipeline = spec.pipeline,
+                               .forcePipeline = spec.forcePipeline});
+    out.usedPipeline = m_engine.lastOfflineUsedPipeline();
 
     if (!renderStatus || !ioStatus || cancelled) {
         discard();

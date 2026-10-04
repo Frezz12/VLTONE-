@@ -1,0 +1,204 @@
+{
+  "definition": {
+    "appearance": {
+      "backgroundColor": "",
+      "backgroundImage": "",
+      "controlStyle": "machined",
+      "theme": "studio"
+    },
+    "code": {
+      "abi": 1,
+      "sourceHash": "ee4eb4471f26d49334e04d06954df602284c98e4af78e3c18fcce72f60768b71",
+      "wasm": "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A5J/IAUQBgPeAFgFBgaeA6J/PAUMBgPgAGYFCT0FDQaeBQkGIQYDnn8IZgUMBgPmAFgFASgGA5J/IAUQBgPoAHQFBgY8A5h/PAUIBgPpAIIGA5d/PAUOBgPqAFgFCQY8BQtYBQM8A5Z/LgUMBgPsACAFCQZ0BRFmA5R/PAUBBgPuAJACAwABAawBAAAEAPYAAAABAQH7Dg0AAQEBAQAAAAEAAAFsaWJjLXRvcC1oYWxmL211c2wvc3JjL21hdGgAd2FzaXNkazovL3YyNy4wL2J1aWxkL3N5c3Jvb3QvaW5zdGFsbC9zaGFyZS93YXNpLXN5c3Jvb3QvaW5jbHVkZS93YXNtMzItd2FzaXAxAHdhc2lzZGs6Ly92MjcuMC9idWlsZC9zeXNyb290L2luc3RhbGwvc2hhcmUvd2FzaS1zeXNyb290L2luY2x1ZGUvd2FzbTMyLXdhc2lwMS9iaXRzAAB0YW5oZi5jAAEAAG1hdGguaAACAABhbGx0eXBlcy5oAAMAAAAFBgoABQIrBAAAAwsBBgN0ngUIBgMQggYDcDwFCQYDEp4GA248BQ0GAxRYBQoGggUDBj0GA2suBRAGAxasBQgGWANqZgUQBgMXWAUNBiAFCiADaTwFDwYDGcg+BQcGWANlZgULBgMckAUIBiAFAgY9BgNjLgUPBgMdggYDYzwFEAYDH3QFBwYgBmcFDAaeBQkgA2A8BgMmIAULA2U8BgN1WAUJBgMmLgUCBi4CAQABAQCkAQRuYW1lAAwLbW9kdWxlLndhc20BcQoAB3Jlc2VydmUBEV9fd2FzbV9jYWxsX2N0b3JzAg12bHRfaGVhcF9iYXNlAwd2bHRfYWJpBAl2bHRfdGFibGUFCHZsdF9pbml0Bgl2bHRfcmVzZXQHC3ZsdF9wcm9jZXNzCAZleHBtMWYJBXRhbmhmBxIBAA9fX3N0YWNrX3BvaW50ZXIJCAEABS5kYXRhADUJcHJvZHVjZXJzAghsYW5ndWFnZQEDQzExAAxwcm9jZXNzZWQtYnkBBWNsYW5nBjIwLjEuOACkAQ90YXJnZXRfZmVhdHVyZXMJKwtidWxrLW1lbW9yeSsPYnVsay1tZW1vcnktb3B0KxZjYWxsLWluZGlyZWN0LW92ZXJsb25nKw5leHRlbmRlZC1jb25zdCsKbXVsdGl2YWx1ZSsPbXV0YWJsZS1nbG9iYWxzKxNub250cmFwcGluZy1mcHRvaW50Kw9yZWZlcmVuY2UtdHlwZXMrCHNpZ24tZXh0"
+    },
+    "connections": [
+      {
+        "from": "in",
+        "fromPort": "out",
+        "to": "cpp",
+        "toPort": "input"
+      },
+      {
+        "from": "cpp",
+        "fromPort": "out",
+        "to": "out",
+        "toPort": "in"
+      },
+      {
+        "from": "ui",
+        "fromPort": "drive",
+        "to": "cpp",
+        "toPort": "drive"
+      },
+      {
+        "from": "saturate",
+        "fromPort": "function",
+        "to": "cpp",
+        "toPort": "p_c85694eeb548b86a8b6e"
+      }
+    ],
+    "controls": [
+      {
+        "bindings": [],
+        "default": 1.5,
+        "id": "drive",
+        "log": false,
+        "max": 6.0,
+        "min": 0.1,
+        "name": "drive",
+        "style": "",
+        "unit": ""
+      }
+    ],
+    "defaultMode": "",
+    "id": "example.cpp.Composed",
+    "modes": [],
+    "name": "Composed",
+    "nodes": [
+      {
+        "id": "in",
+        "parameters": {},
+        "type": "input",
+        "version": 1
+      },
+      {
+        "id": "out",
+        "parameters": {},
+        "type": "output",
+        "version": 1
+      },
+      {
+        "function": {
+          "aggregateReturn": false,
+          "analyzedHash": "beb1639d7165ede0472391f0da612b579c040ca7b577bb346b6fd2a7a018a4ce",
+          "arguments": [
+            "input",
+            "drive",
+            "p_c85694eeb548b86a8b6e"
+          ],
+          "context": false,
+          "entry": "process",
+          "inputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "input",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "input",
+              "signature": "",
+              "type": "audio"
+            },
+            {
+              "cppType": "float",
+              "default": 1.5,
+              "id": "drive",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "drive",
+              "signature": "",
+              "type": "number"
+            },
+            {
+              "cppType": "VltFunction_c85694eeb548",
+              "default": 0.0,
+              "id": "p_c85694eeb548b86a8b6e",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "saturate",
+              "signature": "value:number;(number;number;)",
+              "type": "function"
+            }
+          ],
+          "outputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "out",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "Output",
+              "signature": "",
+              "type": "audio"
+            }
+          ],
+          "prepare": false,
+          "reset": false,
+          "returnType": "vlt::AudioFrame",
+          "sdk": 1,
+          "source": "#include <vlt/creator.hpp>\n\n// Open this source in a function node, then Extract function > saturate.\n// Creator preserves both calls and supplies an amber Function connection.\n\n\nusing VltFunction_c85694eeb548 = vlt::Function<float(float,float)>;\nVLT_NODE vlt::AudioFrame process(VLT_PORT(\"input\") vlt::AudioFrame input,\n                                 VLT_PORT(\"drive\") float drive = 1.5f, VLT_PORT(\"p_c85694eeb548b86a8b6e\") VltFunction_c85694eeb548 saturate = {}) {\n  drive = vlt::clamp(drive, .1f, 6.f);\n  return {saturate(input.left, drive), saturate(input.right, drive)};\n}\n",
+          "stateType": ""
+        },
+        "id": "cpp",
+        "parameters": {},
+        "type": "cpp_function",
+        "version": 1
+      },
+      {
+        "id": "ui",
+        "parameters": {},
+        "type": "interface",
+        "version": 1
+      },
+      {
+        "function": {
+          "aggregateReturn": false,
+          "analyzedHash": "8e1d95ff46c798a2425341f4b810c9131669ebd48d401493b43e7d7f62fbdc89",
+          "arguments": [
+            "p_cf65cbd1de11346f975b",
+            "p_47e60511a144465fe6d4"
+          ],
+          "context": false,
+          "entry": "saturate",
+          "inputs": [
+            {
+              "cppType": "float",
+              "default": 0.0,
+              "id": "p_cf65cbd1de11346f975b",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "value",
+              "signature": "",
+              "type": "number"
+            },
+            {
+              "cppType": "float",
+              "default": 0.0,
+              "id": "p_47e60511a144465fe6d4",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "drive",
+              "signature": "",
+              "type": "number"
+            }
+          ],
+          "outputs": [
+            {
+              "cppType": "float",
+              "default": 0.0,
+              "id": "out",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "Output",
+              "signature": "",
+              "type": "number"
+            }
+          ],
+          "prepare": false,
+          "reset": false,
+          "returnType": "float",
+          "sdk": 1,
+          "source": "#include <vlt/creator.hpp>\n\nfloat saturate(VLT_PORT(\"p_cf65cbd1de11346f975b\") float value, VLT_PORT(\"p_47e60511a144465fe6d4\") float drive) {\n  return vlt::tanh(value * drive) / drive;\n}\n",
+          "stateType": ""
+        },
+        "id": "saturate",
+        "parameters": {},
+        "type": "cpp_function",
+        "version": 1
+      }
+    ],
+    "version": 4
+  },
+  "format": "vltmini",
+  "version": 4
+}

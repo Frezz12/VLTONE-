@@ -60,6 +60,34 @@ func (s *Server) webCSRF(next http.Handler) http.Handler {
 	})
 }
 
+// webAuthOptional resolves the visitor's session when a valid cookie is
+// present and otherwise serves the request anonymously. Public forum reads
+// use it so signed-in readers see their own reactions without making the
+// content itself require a session.
+func (s *Server) webAuthOptional(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie(webCookie)
+		if err == nil && cookie.Value != "" {
+			now := time.Now().UTC()
+			var session model.WebSession
+			err := s.DB.Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+				auth.HashToken(cookie.Value), now).First(&session).Error
+			if err == nil && now.Sub(session.LastSeenAt) <= 7*24*time.Hour {
+				var user model.User
+				if err := s.DB.First(&user, "id = ?", session.UserID).Error; err == nil &&
+					user.Status == model.UserActive {
+					if now.Sub(session.LastSeenAt) > 5*time.Minute {
+						s.DB.Model(&session).Update("last_seen_at", now)
+					}
+					r = contextWith(r, ctxUser, user)
+					r = contextWith(r, ctxWebSession, session)
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(adminCookie)

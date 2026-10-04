@@ -108,6 +108,7 @@ public:
           m_schedule(makeSchedule(std::make_shared<const NoteList>(), 0)) {}
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
     bool isSource() const noexcept override { return true; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::Output; }
 
@@ -465,7 +466,11 @@ private:
                 const std::size_t identity = wordIndex * 64 + bit;
                 const auto channel = std::uint8_t(identity / 128);
                 const auto key = std::uint8_t(identity % 128);
-                if (!out.push(MidiEvent::noteOff(0, channel, key))) {
+                auto release = MidiEvent::noteOff(0, channel, key);
+                // This is the overflow fallback: also terminate one-shots
+                // whose ordinary note-off would leave them sounding.
+                release.isNoteChoke = true;
+                if (!out.push(release)) {
                     m_emergencyLiveReleases[wordIndex].fetch_or(
                         releases | mask, std::memory_order_release);
                     break;

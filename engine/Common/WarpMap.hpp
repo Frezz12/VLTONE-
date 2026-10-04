@@ -29,6 +29,12 @@ struct ClipWarpModel {
     friend bool operator==(const ClipWarpModel&, const ClipWarpModel&) = default;
 };
 
+inline double normalizeWarpSourceSeconds(double seconds) noexcept {
+    // Inverting a trim boundary at source zero can leave a negative rounding
+    // residue. Recover sub-nanosecond noise without hiding invalid coordinates.
+    return seconds >= -1e-9 && seconds <= 0 ? 0.0 : seconds;
+}
+
 inline bool validWarp(const ClipWarpModel& warp) {
     if (warp.empty()) return !warp.enabled;
     if (warp.markers.size() < 2 || warp.markers.size() > 16384 ||
@@ -59,8 +65,8 @@ inline double warpSourceAt(const ClipWarpModel& warp, double beats) noexcept {
     if (warp.markers.size() < 2) return 0;
     const auto i = warpSegment(warp, beats);
     const auto& a = warp.markers[i]; const auto& b = warp.markers[i + 1];
-    return a.sourceSeconds + (beats - a.targetBeats) *
-        (b.sourceSeconds - a.sourceSeconds) / (b.targetBeats - a.targetBeats);
+    return normalizeWarpSourceSeconds(a.sourceSeconds + (beats - a.targetBeats) *
+        (b.sourceSeconds - a.sourceSeconds) / (b.targetBeats - a.targetBeats));
 }
 
 inline double warpBeatAt(const ClipWarpModel& warp, double seconds) noexcept {

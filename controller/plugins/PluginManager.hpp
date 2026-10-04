@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -28,6 +29,48 @@ std::vector<plugins::PluginDescriptor> preferredPluginVariants(
 /// The same product identity used for format de-duplication in the picker.
 bool samePluginProduct(const plugins::PluginDescriptor& a,
                        const plugins::PluginDescriptor& b);
+
+struct ScanOptions {
+    /// 0 = min(4, logical CPUs), or two if the CPU count is unknown.
+    unsigned maxProcesses = 0;
+};
+
+enum class ScanPhase {
+    Idle, Collecting, Discovering, Validating, Retrying, Stopping,
+    Completed, Cancelled, Failed
+};
+
+struct ScanJobInfo {
+    std::uint64_t id = 0;
+    plugins::Format format = plugins::Format::Unknown;
+    std::string path, uid, name;
+    bool discovery = false;
+    bool retry = false;
+    std::chrono::steady_clock::time_point startedAt{};
+};
+
+struct ScanOutcome {
+    plugins::Format format = plugins::Format::Unknown;
+    std::string path, uid, name, reason;
+    PluginScanState state = PluginScanState::Pending;
+    int attempts = 0;
+    std::uint64_t durationMs = 0;
+};
+
+struct ScanSnapshot {
+    ScanPhase phase = ScanPhase::Idle;
+    std::uint32_t filesTotal = 0, filesCompleted = 0;
+    std::uint32_t componentsTotal = 0, componentsCompleted = 0;
+    std::uint32_t passed = 0, failed = 0;
+    std::uint32_t reusedFiles = 0, reusedComponents = 0;
+    std::uint32_t discoveries = 0, validations = 0, retries = 0, changedFiles = 0;
+    std::uint64_t discoveryMs = 0, validationMs = 0, elapsedMs = 0;
+    unsigned maxProcesses = 0;
+    bool discoveryComplete = false;
+    std::vector<ScanJobInfo> activeJobs; // oldest first
+    std::vector<ScanOutcome> results;
+    std::string error;
+};
 
 /// Search paths, the scan, the cache and the blacklist.
 ///
@@ -48,7 +91,7 @@ public:
     /// which is where the install rule puts it.
     void setScannerPath(std::string path);
     const std::string& scannerPath() const noexcept { return m_scannerPath; }
-    /// How long one plugin gets before it is killed and blacklisted.
+    /// Deadline for one attempt; a timeout gets one exclusive retry.
     void setScanTimeout(std::chrono::milliseconds timeout) noexcept {
         m_timeout = timeout;
     }
@@ -74,7 +117,7 @@ public:
     /// Returns immediately; the work happens on a worker thread. With
     /// `rescanAll` every file is re-inspected, otherwise a file whose size and
     /// timestamp are unchanged is taken from the cache.
-    void startScan(bool rescanAll = false);
+    void startScan(bool rescanAll = false, ScanOptions options = {});
     void cancelScan();
     void waitForScan();
     bool isScanning() const noexcept { return m_scanning.load(std::memory_order_acquire); }
@@ -82,6 +125,7 @@ public:
     std::uint32_t scanned() const noexcept { return m_scanned.load(std::memory_order_relaxed); }
     std::uint32_t scanTotal() const noexcept { return m_total.load(std::memory_order_relaxed); }
     float scanProgress() const noexcept;
+    ScanSnapshot scanSnapshot() const;
     /// The file being inspected right now, for a status line.
     std::string currentScanPath() const;
     /// A scanner installation or cache write failure, not a plugin failure.
@@ -118,9 +162,12 @@ public:
         std::string path;
         std::string reason;
         int attempts = 0;
+        std::string uid;
+        std::string name;
     };
     std::vector<BlacklistEntry> blacklist() const;
-    void unblacklist(plugins::Format format, const std::string& path);
+    void unblacklist(plugins::Format format, const std::string& path,
+                    const std::string& uid = {});
     void clearBlacklist();
 
     /// Control thread; opens the module, so it may block for a while.
@@ -140,7 +187,7 @@ private:
         std::string path;
     };
 
-    void scanWorker(bool rescanAll);
+    void scanWorker(bool rescanAll, ScanOptions options);
     std::vector<Candidate> collectCandidates() const;
     static std::string defaultScannerPath();
 
@@ -165,6 +212,8 @@ private:
     mutable std::mutex m_currentMutex;
     std::string m_currentPath;
     std::string m_scanError;
+    ScanSnapshot m_snapshot;
+    std::stop_source m_scanCancellation;
 };
 
 } // namespace daw

@@ -1,4 +1,6 @@
 #include "ProjectSerializer.hpp"
+#include "model/ChannelColor.hpp"
+#include "model/MiniModules.hpp"
 #include "SlideJson.hpp"
 #include "collaboration/CollaborationState.hpp"
 #include "platform/PathUtils.hpp"
@@ -528,7 +530,7 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
     if (!c.warp.empty()) {
         json markers = json::array();
         for (const auto& marker : c.warp.markers)
-            markers.push_back({{"id", marker.id}, {"sourceSeconds", marker.sourceSeconds},
+            markers.push_back({{"id", marker.id}, {"sourceSeconds", normalizeWarpSourceSeconds(marker.sourceSeconds)},
                                {"targetBeats", marker.targetBeats}, {"locked", marker.locked}});
         result["warp"] = {{"enabled", c.warp.enabled}, {"preservePitch", c.warp.preservePitch},
             {"mode", c.warp.mode}, {"baselineDurationSeconds", c.warp.baselineDurationSeconds},
@@ -701,7 +703,7 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir,
         if (!markers.is_array() || markers.size() > 16384) throw std::runtime_error("Invalid Warp markers");
         for (const auto& marker : markers)
             c.warp.markers.push_back({marker.at("id").get<std::string>(),
-                marker.at("sourceSeconds").get<double>(), marker.at("targetBeats").get<double>(),
+                normalizeWarpSourceSeconds(marker.at("sourceSeconds").get<double>()), marker.at("targetBeats").get<double>(),
                 marker.at("locked").get<bool>()});
         if (!validWarp(c.warp)) throw std::runtime_error("Invalid Warp map");
     }
@@ -789,6 +791,8 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"clips", std::move(clips)},
     };
     if (!t.iconId.empty()) track["iconId"] = t.iconId;
+    track["miniModules"] = insertsToJson(t.miniModules);
+    if (t.channelColor && t.miniModules.empty()) track["miniModules"].push_back(insertToJson(migrateColorToMiniModule(*t.channelColor)));
     if (!t.samplerFx.ownerInstrumentId.empty() || !t.samplerFx.inserts.empty() ||
         std::abs(t.samplerFx.volume - 1.0f) > 1e-6f ||
         std::abs(t.samplerFx.pan) > 1e-6f) {
@@ -850,6 +854,24 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
         t.inputEnabled = true;
     t.recordMode = trackRecordModeFromString(j.value("recordMode", "global"));
     if (j.contains("instrument")) t.instrument = insertFromJson(j.at("instrument"));
+    t.miniModules = insertsFromJson(j, "miniModules");
+    if (t.miniModules.size() > plugins::mini::kMaxModules) throw std::runtime_error("too many mini modules");
+    if (supportsChannelColor(t.kind) && j.contains("channelColor") && j.at("channelColor").is_object()) {
+        auto color = insertFromJson(j.at("channelColor"));
+        if (color.uid == "daw.channel-color" && color.format == PluginFormat::Internal) {
+            const auto defaults=defaultChannelColor(t.id);
+            if(color.id.empty()) color.id=defaults.id;
+            if(color.profileSeed.size()!=16 || !std::all_of(color.profileSeed.begin(),color.profileSeed.end(),
+                [](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');})) color.profileSeed=defaults.profileSeed;
+            auto parameters=defaults.parameters;
+            for(auto& p:parameters) for(const auto& stored:color.parameters)
+                if(p.id==stored.id && std::isfinite(stored.value)) { p.value=std::clamp(stored.value,-100.0,100.0); break; }
+            color.parameters=std::move(parameters); color.rightParameters.clear(); color.assetBindings.clear();
+            color.mix = 1; color.channelMode = PluginChannelMode::Auto;
+            color.sidechainTrackIds.clear();
+            t.channelColor = std::move(color);
+        }
+    }
     if (j.contains("samplerFx") && j.at("samplerFx").is_object()) {
         const auto& fx = j.at("samplerFx");
         t.samplerFx.ownerInstrumentId = fx.value("ownerInstrumentId", "");
@@ -894,6 +916,7 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["format"] = "vlt-project";
     root["version"] = ProjectSerializer::kFormatVersion;
     root["name"] = project.name;
+    if(!project.miniModuleProjectId.empty()) root["miniModuleProjectId"] = project.miniModuleProjectId;
     if (!project.author.empty()) root["author"] = project.author;
     if (!project.coverImagePath.empty())
         root["cover"] = mediaReference(project.coverImagePath, media);
@@ -920,6 +943,7 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["masterVolume"] = project.masterVolume;
     root["masterPan"] = project.masterPan;
     root["masterInserts"] = insertsToJson(project.masterInserts);
+    root["masterMiniModules"] = insertsToJson(project.masterMiniModules);
     json tracks = reservedArray(project.tracks.size());
     for (const auto& t : project.tracks) tracks.push_back(trackToJson(t, media));
     root["tracks"] = std::move(tracks);
@@ -953,10 +977,17 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,
                                    "not a VLT project");
     }
+    if (const auto version = root.find("version"); version != root.end() &&
+        (!version->is_number_integer() || *version < 1 ||
+         *version > ProjectSerializer::kFormatVersion)) {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+                                   "unsupported project version");
+    }
 
     out = ProjectModel{};
     try {
         out.name = root.value("name", "Untitled");
+        out.miniModuleProjectId = root.value("miniModuleProjectId", std::string{});
         out.author = root.value("author", std::string());
         const std::string cover = root.value("cover", std::string());
         if (!cover.empty()) {
@@ -1003,6 +1034,8 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         out.masterVolume = root.value("masterVolume", 1.0f);
         out.masterPan = root.value("masterPan", 0.0f);
         out.masterInserts = insertsFromJson(root, "masterInserts");
+        out.masterMiniModules = insertsFromJson(root, "masterMiniModules");
+        if (out.masterMiniModules.size() > plugins::mini::kMaxModules) throw std::runtime_error("too many master mini modules");
         if (root.contains("tracks")) {
             const auto& tracks = root.at("tracks");
             if (!tracks.is_array()) {
@@ -1035,6 +1068,7 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
                                    std::string("bad project data: ") +
                                        error.what());
     }
+    migrateMiniModules(out,root.value("version",1)<12);
     collab::ensureStableCollaborationIds(out);
     return audio::Result::ok();
 }

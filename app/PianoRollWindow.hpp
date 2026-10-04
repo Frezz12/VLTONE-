@@ -206,6 +206,7 @@ public:
     bool checkSlidesForTest(const QString& imageDirectory);
     bool checkInteractionGesturesForTest();
     static bool checkAuditionForTest();
+    static bool checkVelocityRampForTest(const QString& images = {});
 
     /// Privacy-safe collaboration mapping for the application-owned note
     /// canvas. Beat/pitch/value survive different zoom, scroll and lane sizes;
@@ -394,6 +395,7 @@ private:
     void setLaneValueOf(const QString& noteId, double value);
     double laneValueAtY(double y) const;
     double laneValueToY(double value) const;
+    void updateVelocityRamp(const QPointF& pos);
     int velocityAtY(double y) const;
     /// The clip's currently selected controller curve, or null.
     const daw::ControllerLane* controllerLane() const;
@@ -590,6 +592,10 @@ private:
     std::vector<daw::NoteModel> m_noteUpdateScratch;
     double m_resizeGrabBeats = 0.0;
     bool m_laneDragging = false;
+    bool m_laneRamping = false;
+    // Logical coordinates: beat and normalised velocity, independent of zoom.
+    QPointF m_laneRampAnchor;
+    QPointF m_laneRampEnd;
     bool m_marquee = false;
     bool m_erasing = false;
     bool m_eraseChanged = false;

@@ -38,6 +38,7 @@ std::string audioMimeType(const fs::path& path) {
 
 template <typename Visitor>
 void visitInserts(const ProjectModel& project, Visitor&& visitor) {
+    for(auto& module:project.masterMiniModules) visitor(module,"masterMiniModules/"+module.id);
     for (std::size_t index = 0; index < project.masterInserts.size(); ++index) {
         visitor(project.masterInserts[index],
                 "master/insert:" + std::to_string(index));
@@ -50,6 +51,8 @@ void visitInserts(const ProjectModel& project, Visitor&& visitor) {
                                           : track.id);
         if (track.instrument.isLoaded())
             visitor(track.instrument, trackLocation + "/instrument");
+        if(track.channelColor) visitor(*track.channelColor,trackLocation+"/channelColor");
+        for(auto& module:track.miniModules) visitor(module,trackLocation+"/miniModules/"+module.id);
         for (std::size_t index = 0; index < track.samplerFx.inserts.size();
              ++index) {
             visitor(track.samplerFx.inserts[index],

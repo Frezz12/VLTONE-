@@ -88,7 +88,7 @@ bool EngineController::liveMidiInput(const std::string &trackId, int status, int
     if (!stamp.timeNs)
         stamp = midiInputStamp();
     if (origin == LiveMidiOrigin::Audition)
-        return sendLiveMidiEvent(trackId, status, d1, d2);
+        return sendLiveMidiEvent(trackId, status, d1, d2, /*audition=*/true);
 
     std::vector<std::string> targets;
     if (origin != LiveMidiOrigin::Audition) {

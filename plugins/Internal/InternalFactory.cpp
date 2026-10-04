@@ -1,5 +1,8 @@
 #include "Internal/InternalFactory.hpp"
 #include "Internal/CompressorInstance.hpp"
+#include "Internal/Cla2aInstance.hpp"
+#include "Internal/ChannelColorInstance.hpp"
+#include "Internal/MiniModuleInstance.hpp"
 #include "Internal/DelayInstance.hpp"
 
 #include "Internal/GravityInstance.hpp"
@@ -10,6 +13,7 @@
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
+#include "Internal/SlicerInstance.hpp"
 #include <mutex>
 
 namespace daw::plugins {
@@ -55,6 +59,9 @@ std::vector<std::string> InternalFactory::enumerateCandidates(const std::string&
 
 std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) const {
     std::vector<PluginDescriptor> found;
+    // Channel-owned stage: resolvable for saved state, absent from FX pickers.
+    if (path == channel_color::ChannelColorInstance::uid())
+        found.push_back(channel_color::ChannelColorInstance::staticDescriptor());
     for (const PluginDescriptor& descriptor : builtinPlugins()) {
         if (path.empty() || path == descriptor.path || path == descriptor.uid) {
             found.push_back(descriptor);
@@ -64,6 +71,8 @@ std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) 
 }
 
 std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& descriptor) {
+    if (descriptor.uid == channel_color::ChannelColorInstance::uid()) return std::make_unique<channel_color::ChannelColorInstance>();
+    if (descriptor.uid == cla2a::Cla2aInstance::uid()) return std::make_unique<cla2a::Cla2aInstance>();
     if (descriptor.uid == delay::DelayInstance::uid()) return std::make_unique<delay::DelayInstance>();
     if (descriptor.uid == compressor::CompressorInstance::uid()) {
         return std::make_unique<compressor::CompressorInstance>();
@@ -80,6 +89,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
     if (descriptor.uid == graphit::GraphitInstance::uid()) {
         return std::make_unique<graphit::GraphitInstance>();
     }
+    if (descriptor.uid == mini::kUid) return std::make_unique<mini::MiniModuleInstance>();
     if (descriptor.uid == "daw.modulation") return std::make_unique<modulation::ModulationRackInstance>();
     if (descriptor.uid == "daw.doubler") return std::make_unique<modulation::DoublerInstance>();
     if (descriptor.uid == "daw.doubler-pro") return std::make_unique<modulation::DoublerProInstance>();
@@ -89,13 +99,19 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
     if (descriptor.uid == sampler::SamplerInstance::uid()) {
         return std::make_unique<sampler::SamplerInstance>();
     }
+    if (descriptor.uid == slicer::SlicerInstance::uid()) {
+        return std::make_unique<slicer::SlicerInstance>();
+    }
     return nullptr;
 }
 
 std::vector<PluginDescriptor> builtinPlugins() {
     return {sampler::SamplerInstance::staticDescriptor(),
+            slicer::SlicerInstance::staticDescriptor(),
             delay::DelayInstance::staticDescriptor(),
             compressor::CompressorInstance::staticDescriptor(),
+            cla2a::Cla2aInstance::staticDescriptor(),
+            channel_color::ChannelColorInstance::staticDescriptor(),
             pitch::PitchCorrectorInstance::staticDescriptor(),
             equalizer::EqualizerInstance::staticDescriptor(),
             gravity::GravityInstance::staticDescriptor(),

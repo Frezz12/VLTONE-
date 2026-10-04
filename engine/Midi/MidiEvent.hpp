@@ -35,6 +35,10 @@ struct MidiEvent {
     std::int32_t noteId = -1;     ///< host voice identity, never a MIDI wire byte
     bool isPitchExpression = false;
     PitchRamp pitch;
+    /// Host-only forced release for a held preview. The wire message remains
+    /// note-off; instruments that support choke use a short fade instead of
+    /// letting a one-shot or a long envelope release keep sounding.
+    bool isNoteChoke = false;
 
     static constexpr std::uint8_t kNoteOff = 0x80;
     static constexpr std::uint8_t kNoteOn = 0x90;
@@ -88,6 +92,12 @@ inline constexpr std::size_t kMidiEventsPerBlock = 512;
 class MidiBuffer {
 public:
     void reserve(std::size_t capacity) { m_events.reserve(capacity); }
+    /// Offline control thread only. Retain the actual event payload in a
+    /// temporal slot without multiplying every node's worst-case pitch reserve.
+    void copyFrom(const MidiBuffer& source) {
+        m_events = source.m_events;
+        m_nextSortOrder = source.m_nextSortOrder;
+    }
     void clear() noexcept {
         m_events.clear();
         m_nextSortOrder = 0;

@@ -25,6 +25,7 @@ public:
     static const PluginDescriptor& staticDescriptor() noexcept;
     static std::string_view uid() noexcept { return "daw.delay"; }
     const PluginDescriptor& descriptor() const noexcept override { return staticDescriptor(); }
+    bool supportsOfflinePipelining() const noexcept override { return true; }
     void setListener(PluginListener*) noexcept override {}
     bool setBusLayout(const PluginBusLayout&, PluginBusLayout&) override;
     PluginBusLayout busLayout() const override { return m_layout; }

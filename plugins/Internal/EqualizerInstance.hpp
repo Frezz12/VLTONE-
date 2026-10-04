@@ -145,6 +145,7 @@ public:
     static std::string_view uid() noexcept;
 
     const PluginDescriptor& descriptor() const noexcept override { return m_descriptor; }
+    bool supportsOfflinePipelining() const noexcept override { return true; }
     void setListener(PluginListener* listener) noexcept override { m_listener = listener; }
 
     bool setBusLayout(const PluginBusLayout& wanted, PluginBusLayout& accepted) override;
@@ -287,6 +288,7 @@ private:
     std::array<std::vector<double>, 2> m_linearOutput;
     std::array<std::vector<std::complex<double>>, 2> m_linearSpectrum;
     std::vector<double> m_linearWindow;
+    std::vector<double> m_linearNormalization;
 
     static constexpr std::size_t kAnalyzerSize = 2048;
     std::array<std::array<double, kAnalyzerSize>, 6> m_analyzerRing{};

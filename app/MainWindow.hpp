@@ -24,6 +24,7 @@
 #include "recovery/RecoveryJournal.hpp"
 
 class QLabel;
+namespace ui { class CreatorWindow; }
 class QDialog;
 class QMenu;
 class QProgressBar;
@@ -290,6 +291,7 @@ public:
     /// teardown path for a note that outlives the window is exercised too.
     bool checkTypingKeyboard();
     bool checkRecordingContextForTest();
+    bool checkFolderRecordingForTest();
     /// Headless check for hardware-style MIDI parsing, source overlap and the
     /// Piano Roll's live-key state; no physical device is required.
     bool checkMidiInput();
@@ -662,8 +664,9 @@ private:
     /// Mirror the explicit toolbar/command choice into automatable controls.
     void updateAutomationCreationMode();
 
-    /// The tracks a recording would land on: whatever is selected, falling back
-    /// to the first recordable track.
+    /// Pins outrank selection; requests can name a leaf or a whole folder.
+    std::vector<std::string> recordRequests() const;
+    /// Resolve folder requests before a take, then keep its chosen lanes fixed.
     std::vector<std::string> recordTargets() const;
     /// Start a take on whatever is selected — after the count-in when one is
     /// switched on. Reports what it is recording onto, or why it could not.
@@ -1034,6 +1037,7 @@ private:
     QAction* m_typingKeyboardAction = nullptr;
     SettingsWindow* m_settingsWindow = nullptr;
     PluginManagerWindow* m_pluginManagerWindow = nullptr;
+    ui::CreatorWindow* m_creatorWindow = nullptr;
     /// Open editors, keyed by "<channelId>/<insertId>". Not a single instance:
     /// several plugins are routinely open side by side.
     QHash<QString, PluginEditorWindow*> m_pluginEditors;

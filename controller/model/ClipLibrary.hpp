@@ -5,6 +5,8 @@ namespace daw {
 template <class Track, class Visitor>
 void visitStoredPlugins(Track& track, Visitor visit) {
     if (track.instrument.isLoaded()) visit(track.instrument);
+    if (track.channelColor) visit(*track.channelColor);
+    for(auto& module:track.miniModules) visit(module);
     for (auto& slot : track.inserts) visit(slot);
     for (auto& slot : track.samplerFx.inserts) visit(slot);
     for (auto& clip : track.clips) {

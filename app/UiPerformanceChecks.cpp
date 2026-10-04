@@ -21,6 +21,15 @@
 #include "Job/AudioWorkerRegistration.hpp"
 #include <QTemporaryDir>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
+#include <QFileInfo>
+#include <QThread>
+#include "platform/AudioFileDecoder.hpp"
 #include <atomic>
 #include <thread>
 #include <ctime>
@@ -392,6 +401,81 @@ bool TimelineWidget::checkGestureGridStabilityForTest() {
         std::fprintf(stderr,
                      "clip gesture switched away from the stable grid tiles\n");
     return tiled;
+}
+
+bool TimelineWidget::checkFileDropPreviewForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false)) return false;
+    const std::string track = controller.addTrack(daw::TrackKind::Audio, "Drop preview");
+    TimelineWidget timeline(&controller);
+    timeline.resize(1100, 450);
+    timeline.m_pixelsPerSecond = 100;
+    timeline.m_scrollSeconds = 1;
+    timeline.m_snapEnabled = true;
+    QTemporaryDir fixture;
+    const QString path = fixture.filePath("sample.wav");
+    audio::platform::AudioFileWriter writer;
+    std::vector<float> samples(72000);
+    for (size_t i = 0; i < samples.size(); ++i)
+        samples[i] = float(0.6 * std::sin(i * 0.04) * std::exp(-double(i) / 24000));
+    const float* channel = samples.data();
+    if (!writer.open(path.toStdString(), 48000, 1) ||
+        !writer.write(&channel, samples.size()) || !writer.close()) return false;
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(path)});
+    const QPoint position(233, timeline.laneTop(0) + 15);
+    QDragEnterEvent enter(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &enter);
+    if (!enter.isAccepted() || timeline.m_dropFile != path) return false;
+    QElapsedTimer wait; wait.start();
+    while (!timeline.m_dropPeaks && wait.elapsed() < 3000) {
+        QApplication::processEvents();
+        QThread::msleep(1);
+    }
+    if (!timeline.m_dropPeaks || timeline.m_dropDuration <= 0) return false;
+    const QRectF snapped = timeline.fileDropRect();
+    if (std::abs(snapped.width() - timeline.m_dropDuration * 100) > 0.01) return false;
+    if (std::abs(snapped.left() - timeline.secondsToX(
+            timeline.fileDropStart(position, Qt::NoModifier))) > 0.01) return false;
+    const auto render = [&] {
+        QImage image(timeline.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        timeline.drawStaticFrame(painter, QRegion(timeline.rect()));
+        return image;
+    };
+    const QImage preview = render();
+    timeline.m_dropActive = false;
+    const QImage baseline = render();
+    timeline.m_dropActive = true;
+    const QPoint untouched(850, timeline.laneTop(0) + 30);
+    if (preview.pixel(untouched) != baseline.pixel(untouched) ||
+        preview.pixel(int(snapped.left()), untouched.y()) == baseline.pixel(int(snapped.left()), untouched.y()))
+        return false;
+    if (const QString shot = qEnvironmentVariable("VLT_FILE_DROP_SHOT"); !shot.isEmpty())
+        if (!preview.save(shot)) return false;
+    QDragMoveEvent move(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(&timeline, &move);
+    const QRectF free = timeline.fileDropRect();
+    if (std::abs(free.left() - position.x()) > 0.01 || free.top() != snapped.top()) return false;
+    // Reverse direction and move onto empty space; both updates are immediate.
+    const QPoint empty(131, timeline.lanesBottom() + 12);
+    QDragMoveEvent reverse(empty, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(&timeline, &reverse);
+    if (timeline.fileDropRect().left() != empty.x() ||
+        timeline.fileDropRect().top() != timeline.lanesBottom() + 2) return false;
+    QDragLeaveEvent leave;
+    QApplication::sendEvent(&timeline, &leave);
+    if (timeline.m_dropActive || !timeline.m_dropFile.isEmpty() || timeline.m_dropPeaks) return false;
+    QDragEnterEvent reenter(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(&timeline, &reenter);
+    const double expected = timeline.fileDropStart(position, Qt::AltModifier);
+    QDropEvent drop(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(&timeline, &drop);
+    const auto* landed = controller.project().findTrack(track);
+    return drop.isAccepted() && !timeline.m_dropActive && timeline.m_dropFile.isEmpty() &&
+           landed && landed->clips.size() == 1 &&
+           std::abs(landed->clips.front().startSeconds - expected) < 1e-9;
 }
 
 bool TimelineWidget::checkClipTrimPreviewForTest() {
@@ -859,6 +943,9 @@ bool checkUiScaling() {
     check(TimelineWidget::checkInterruptedPointerGestureForTest(),
           "lost mouse release stops playhead, marquee and time selection");
     if (qEnvironmentVariableIsSet("VLT_POINTER_RELEASE_CHECK_ONLY")) return ok;
+    check(TimelineWidget::checkFileDropPreviewForTest(),
+          "file drop ghost tracks duration, snap bypass, reversal, new lane, cancellation and committed position");
+    if (qEnvironmentVariableIsSet("VLT_FILE_DROP_CHECK_ONLY")) return ok;
     check(TimelineWidget::checkClipTrimPreviewForTest(),
           "live audio/MIDI/Pattern/automation trim stays visible across tile boundaries and reversals");
     if (qEnvironmentVariableIsSet("VLT_CLIP_TRIM_CHECK_ONLY")) {

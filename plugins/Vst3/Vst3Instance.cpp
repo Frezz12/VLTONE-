@@ -610,12 +610,15 @@ bool Vst3Instance::activate(const PluginProcessInfo& info) {
     // One queue per parameter is the worst case a block of automation can
     // produce; sized here so `process` never allocates.
     const std::size_t capacity = std::max<std::size_t>(m_parameters.size(), 32);
-    m_inputChanges->reserve(capacity);
+    m_inputChanges->reserve(capacity,
+        pluginBlockEventCapacity(m_descriptor, info, m_parameters.size()) + capacity);
     m_outputChanges->reserve(capacity);
     for(const auto& channel:m_midiParameterMappings) if(channel[129]>=0)
         m_inputChanges->reserveParameterPoints(m_parameterIds[channel[129]],std::size_t(m_maxBlockSize) + 128);
-    m_events->reserve(engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate));
-    m_outputEvents->reserve(engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate));
+    m_events->reserve(m_descriptor.wantsMidi || m_descriptor.isInstrument
+        ? engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate) : 0);
+    m_outputEvents->reserve(m_descriptor.producesMidi
+        ? engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate) : 0);
 
     refreshLatency();
     m_restartLatency.store(false, std::memory_order_release);
@@ -693,7 +696,8 @@ bool Vst3Instance::serviceOfflineRestart() {
     if (flags & kParamTitlesChanged) {
         readParameters();
         const auto capacity = std::max<std::size_t>(m_parameters.size(), 32);
-        m_inputChanges->reserve(capacity);
+        m_inputChanges->reserve(capacity, pluginBlockEventCapacity(m_descriptor,
+            PluginProcessInfo{m_sampleRate, m_maxBlockSize, true}, m_parameters.size()) + capacity);
         m_outputChanges->reserve(capacity);
     for(const auto& channel:m_midiParameterMappings) if(channel[129]>=0)
         m_inputChanges->reserveParameterPoints(m_parameterIds[channel[129]],std::size_t(m_maxBlockSize) + 128);
@@ -955,6 +959,19 @@ PluginProcessDisposition Vst3Instance::process(
     m_outputChanges->clear();
     m_events->clear();
     m_outputEvents->clear();
+    for (const PluginEvent& event : context.inputEvents) {
+        std::int32_t parameter = -1;
+        if (event.kind == PluginEvent::Kind::ParamValue && event.paramIndex < m_parameterIds.size())
+            parameter = std::int32_t(event.paramIndex);
+        else if (event.kind == PluginEvent::Kind::MidiController &&
+                 event.paramIndex < kCountCtrlNumber && event.channel >= 0 && event.channel < 16)
+            parameter = m_midiParameterMappings[std::size_t(event.channel)][event.paramIndex];
+        if (parameter < 0 || std::size_t(parameter) >= m_parameterIds.size()) continue;
+        auto* queue = m_inputChanges->begin(m_parameterIds[std::size_t(parameter)]);
+        if (!queue) { silence(); return PluginProcessDisposition::Error; }
+        queue->expectPoint();
+    }
+    if (!m_inputChanges->preparePoints()) { silence(); return PluginProcessDisposition::Error; }
     QueuedEdit edit;
     while (m_editorEdits.pop(edit)) {
         if (edit.parameterIndex >= m_parameterIds.size()) continue;

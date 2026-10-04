@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.24)
 project(VLTONE
     VERSION 0.3.2
     DESCRIPTION "VLTONE digital audio workstation"
-    LANGUAGES CXX)
+    LANGUAGES C CXX)
 
 set(VLTONE_BUILD_NUMBER "0" CACHE STRING
     "Numeric build revision stored in Windows file metadata")
@@ -30,7 +30,7 @@ if(NOT DAW_VCPKG_VERSION STREQUAL PROJECT_VERSION)
         "Version mismatch: CMake=${PROJECT_VERSION}, vcpkg.json=${DAW_VCPKG_VERSION}")
 endif()
 
-set(VLTONE_RELEASE_CHANNEL "" CACHE STRING
+set(VLTONE_RELEASE_CHANNEL "beta" CACHE STRING
     "Optional prerelease channel shown after the numeric application version")
 set(VLTONE_DISPLAY_VERSION "${PROJECT_VERSION}")
 if(VLTONE_BUILD_NUMBER GREATER 0)
@@ -62,7 +62,7 @@ if(WIN32)
         set(CMAKE_JOB_POOL_LINK vlt_windows_link)
         # Source files and every std::string path in the application are UTF-8.
         # Make that contract explicit instead of inheriting the machine's ACP.
-        add_compile_options(/utf-8 /Zc:preprocessor)
+        add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>" "$<$<COMPILE_LANGUAGE:C,CXX>:/Zc:preprocessor>")
     endif()
 endif()
 
@@ -140,6 +140,7 @@ enable_testing()
 add_subdirectory(third_party)  # vendored SDKs, exposed as INTERFACE targets
 add_subdirectory(engine)       # graph-based audio engine (C++23, no deps)
 add_subdirectory(core)
+add_subdirectory(creator)
 add_subdirectory(plugins)      # VST3/CLAP/AU hosting; the only user of the SDKs
 add_subdirectory(scanner)      # daw_scan: loads plugins out of process, so a crash is survivable
 add_subdirectory(guard)        # daw_guard: watches the app from outside, so a hang is visible

@@ -20,6 +20,7 @@
 
 #include <QAbstractButton>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDragEnterEvent>
@@ -32,6 +33,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
 #include <QLineF>
 #include <QMenu>
 #include <QMessageBox>
@@ -824,9 +826,18 @@ public:
         connect(&ThemeManager::instance(), &ThemeManager::changed, this,
                 QOverload<>::of(&QWidget::update));
     }
-    void setRoot(int pitch) { m_root = std::clamp(pitch, 0, 127); update(); }
+    void setRoot(int pitch) {
+        pitch = std::clamp(pitch, 0, 127);
+        if (m_root == pitch) return;
+        m_root = pitch;
+        update();
+    }
+    int root() const { return m_root; }
     void stopAudition() { releasePressed(); }
-    int xForPitch(int pitch) const { return whiteX(std::clamp(pitch, 0, 127)); }
+    int xForPitch(int pitch) const {
+        pitch = std::clamp(pitch, 0, 127);
+        return whiteX(pitch) + (black(pitch) ? 0 : kWhiteWidth / 2);
+    }
     std::function<void(int)> noteOn;
     std::function<void(int)> noteOff;
     std::function<void(int)> rootChanged;
@@ -889,7 +900,7 @@ protected:
         const int pitch = pitchAt(e->position());
         if (pitch < 0) return;
         if (e->button() == Qt::RightButton) {
-            m_root = pitch; update(); if (rootChanged) rootChanged(pitch); return;
+            setRoot(pitch); if (rootChanged) rootChanged(pitch); return;
         }
         if (e->button() != Qt::LeftButton) return;
         releasePressed(); m_pressed = pitch; update(); if (noteOn) noteOn(pitch);
@@ -987,6 +998,8 @@ void SamplerPanel::hideEvent(QHideEvent* event) {
 }
 
 SamplerPanel::~SamplerPanel() {
+    if (m_pitchCancelled) m_pitchCancelled->store(true);
+    endGesture(QStringLiteral("finepitch"));
     if (m_keyboard) m_keyboard->stopAudition();
     if (m_controller && m_context == Context::Clip) m_controller->stopPreview();
 }
@@ -1767,12 +1780,15 @@ QWidget* SamplerPanel::buildSamplerBody() {
         hint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         keyBodyLayout->addWidget(hint);
         auto* keyScroll = new QScrollArea(keyBody);
+        m_keyboardScroll = keyScroll;
+        keyScroll->setObjectName(QStringLiteral("SamplerKeyboardScroll"));
         keyScroll->setWidgetResizable(false);
         keyScroll->setFrameShape(QFrame::NoFrame);
         keyScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        keyScroll->setFixedHeight(70);
         m_keyboard = new SamplerKeyboard(keyScroll);
         keyScroll->setWidget(m_keyboard);
+        keyScroll->setFixedHeight(m_keyboard->height() +
+                                  keyScroll->horizontalScrollBar()->sizeHint().height());
         m_keyboard->noteOn = [this](int pitch) {
             if (!m_controller) return;
             if (m_context == Context::Instrument) {
@@ -1797,20 +1813,23 @@ QWidget* SamplerPanel::buildSamplerBody() {
             beginGesture(QStringLiteral("rootnote"));
             writeParameter(QStringLiteral("rootnote"), pitch);
             endGesture(QStringLiteral("rootnote"));
-            emit projectEdited();
+            refresh();
         };
         keyBodyLayout->addWidget(keyScroll);
         keyBody->hide();
         connect(toggle, &QAbstractButton::toggled, keyBody,
-                [toggle, keyBody](bool open) {
+                [this, toggle, keyBody, keyScroll](bool open) {
                     keyBody->setVisible(open);
                     toggle->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
                     toggle->setAccessibleDescription(
                         open ? QObject::tr("Expanded") : QObject::tr("Collapsed"));
+                    if (open) QTimer::singleShot(0, keyScroll, [this, keyScroll] {
+                        keyScroll->ensureVisible(m_keyboard->xForPitch(m_keyboard->root()), 0, 24, 0);
+                    });
                 });
         QTimer::singleShot(0, keyScroll, [this, keyScroll] {
             keyScroll->horizontalScrollBar()->setValue(
-                std::max(0, m_keyboard->xForPitch(60) -
+                std::max(0, m_keyboard->xForPitch(m_keyboard->root()) -
                                 keyScroll->viewport()->width() / 2));
         });
         keysLayout->addWidget(keyBody);
@@ -1951,6 +1970,8 @@ QWidget* SamplerPanel::buildToolSection() {
         playbackGrid->addWidget(group(tr("Voice"), tuning), 1, 1);
     }
     playback->addLayout(playbackGrid);
+    if (m_context == Context::Instrument)
+        playback->addWidget(buildTuningSection());
     playback->addStretch();
     addPage(tr("Playback"), playbackPage);
     if (m_context == Context::Instrument) {
@@ -2049,6 +2070,185 @@ QWidget* SamplerPanel::buildToolSection() {
     return host;
 }
 
+QWidget* SamplerPanel::buildTuningSection() {
+    auto* content = new QVBoxLayout;
+    content->setSpacing(7);
+    auto* analysis = new QHBoxLayout;
+    m_detectPitch = new QPushButton(tr("Detect note"), this);
+    m_detectPitch->setObjectName("SamplerDetectPitch");
+    m_detectPitch->setMinimumWidth(std::max(m_detectPitch->fontMetrics().horizontalAdvance(tr("Detect note")),
+        m_detectPitch->fontMetrics().horizontalAdvance(tr("Analyzing…"))) + 24);
+    m_detectPitch->setToolTip(tr("Analyze one sustained note between Start and End, before Tune, Stretch Pitch and modulation. Reference: A = 440 Hz."));
+    m_pitchResult = new QLabel(this);
+    m_pitchResult->setObjectName("SamplerPitchResult");
+    m_pitchResult->setMinimumWidth(0);
+    m_pitchResult->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_pitchResult->setAccessibleName(tr("Detected sample note"));
+    m_pitchResult->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    analysis->addWidget(m_detectPitch);
+    analysis->addWidget(m_pitchResult, 1);
+    content->addLayout(analysis);
+
+    auto* actions = new QHBoxLayout;
+    actions->setSpacing(7);
+    auto* rootLabel = new QLabel(tr("Root"), this);
+    QStringList notes;
+    for (int note = 0; note < 128; ++note)
+        notes.append(QString::fromStdString(sampler::parameterText(
+            sampler::indexOf(sampler::Param::RootNote), note)));
+    auto* root = combo(QStringLiteral("rootnote"), notes);
+    root->setFixedWidth(74);
+    root->setAccessibleName(tr("Root note"));
+    rootLabel->setBuddy(root);
+    actions->addWidget(rootLabel);
+    actions->addWidget(root);
+
+    auto* fineLabel = new QLabel(tr("Fine tune"), this);
+    m_fineTune = new QDoubleSpinBox(this);
+    m_fineTune->setObjectName("SamplerParameter.finepitch");
+    m_fineTune->setRange(-100, 100);
+    m_fineTune->setDecimals(1);
+    m_fineTune->setSingleStep(.1);
+    m_fineTune->setSuffix(tr(" ct"));
+    m_fineTune->setKeyboardTracking(false);
+    m_fineTune->setFixedWidth(100);
+    m_fineTune->setMinimumHeight(26);
+    m_fineTune->setAccessibleName(tr("Fine tune in cents"));
+    m_fineTune->setToolTip(tr("One semitone is 100 cents. Fine Tune adds to Tune independently of its Range."));
+    m_fineTune->installEventFilter(this);
+    fineLabel->setBuddy(m_fineTune);
+    actions->addWidget(fineLabel);
+    actions->addWidget(m_fineTune);
+    actions->addStretch();
+    m_applyRoot = new QPushButton(tr("Set root"), this);
+    m_applyRoot->setObjectName("SamplerApplyRoot");
+    m_applyRoot->setToolTip(tr("Assign the detected note as the key that plays the sample without transposition."));
+    m_correctTuning = new QPushButton(tr("Correct tuning"), this);
+    m_correctTuning->setObjectName("SamplerCorrectTuning");
+    m_correctTuning->setToolTip(tr("Set Fine Tune to cancel the detected cents offset. Tune and Stretch Pitch keep their values."));
+    actions->addWidget(m_applyRoot);
+    actions->addWidget(m_correctTuning);
+    content->addLayout(actions);
+    connect(m_detectPitch, &QPushButton::clicked, this, &SamplerPanel::detectPitch);
+    connect(m_applyRoot, &QPushButton::clicked, this, [this] { applyDetectedPitch(true); });
+    connect(m_correctTuning, &QPushButton::clicked, this, [this] { applyDetectedPitch(false); });
+    connect(m_fineTune, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        beginGesture(QStringLiteral("finepitch"));
+        writeParameter(QStringLiteral("finepitch"), value);
+    });
+    connect(m_fineTune, &QDoubleSpinBox::editingFinished, this, [this] {
+        endGesture(QStringLiteral("finepitch"));
+        refresh();
+    });
+    return sectionBox(tr("Note & tuning"), content, this);
+}
+
+void SamplerPanel::refreshPitchAnalysis() {
+    if (!m_detectPitch) return;
+    auto data = currentSample();
+    const double start = readParameter(QStringLiteral("startoffset"));
+    const double end = readParameter(QStringLiteral("endoffset"));
+    if (data != m_pitchSample || start != m_pitchStart || end != m_pitchEnd) {
+        if (m_pitchCancelled) m_pitchCancelled->store(true);
+        ++m_pitchGeneration;
+        m_pitchSample = data;
+        m_pitchStart = start; m_pitchEnd = end;
+        m_pitchBusy = m_pitchAnalyzed = false;
+        m_pitchEstimate = {};
+    }
+    auto* instance = sampler();
+    const bool sourceReady = instance && data && data->audio && data->baseFrames &&
+        !instance->precomputePending();
+    const bool editable = m_controller && m_controller->sharedEditingAllowed() && instance;
+    m_detectPitch->setEnabled(sourceReady && !m_pitchBusy);
+    m_detectPitch->setText(m_pitchBusy ? tr("Analyzing…") : tr("Detect note"));
+    const bool detected = sourceReady && !m_pitchBusy && m_pitchAnalyzed &&
+        m_pitchEstimate.status == daw::analysis::SamplePitchStatus::Detected;
+    m_applyRoot->setEnabled(editable && detected &&
+        readParameter(QStringLiteral("rootnote")) != m_pitchEstimate.midiNote);
+    const double correction = std::round(-m_pitchEstimate.cents * 10) / 10;
+    m_correctTuning->setEnabled(editable && detected &&
+        std::abs(readParameter(QStringLiteral("finepitch")) - correction) > .049);
+    m_fineTune->setEnabled(editable);
+    m_combos.value(QStringLiteral("rootnote"))->setEnabled(editable);
+    if (!m_fineTune->hasFocus() && !m_fineTune->isAncestorOf(QApplication::focusWidget())) {
+        const QSignalBlocker blocker(m_fineTune);
+        m_fineTune->setValue(readParameter(QStringLiteral("finepitch")));
+    }
+    QString message;
+    if (m_pitchBusy) message = tr("Analyzing the selected sample region…");
+    else if (!sourceReady) message = data ? tr("Waiting for sample processing…") : tr("Load a sample to detect its note.");
+    else if (!m_pitchAnalyzed) message = tr("Detect the note of a sustained sound.");
+    else if (detected) {
+        const QString note = QString::fromStdString(sampler::parameterText(
+            sampler::indexOf(sampler::Param::RootNote), m_pitchEstimate.midiNote));
+        const double rounded = std::round(m_pitchEstimate.cents * 10) / 10;
+        const QString cents = (rounded > 0 ? QStringLiteral("+") : QString()) + QString::number(rounded, 'f', 1);
+        message = tr("Source: %1 · %2 Hz · %3 cents").arg(note)
+            .arg(m_pitchEstimate.frequencyHz, 0, 'f', 2).arg(cents);
+    } else if (m_pitchEstimate.status == daw::analysis::SamplePitchStatus::TooShort)
+        message = tr("The region is too short. Select more of the note.");
+    else if (m_pitchEstimate.status == daw::analysis::SamplePitchStatus::Unstable)
+        message = tr("Pitch varies. Select a steady part of one note.");
+    else message = tr("No stable tone found. Try a tonal sample.");
+    m_pitchResult->setText(message);
+    m_pitchResult->setToolTip(message);
+}
+
+void SamplerPanel::detectPitch() {
+    refreshPitchAnalysis();
+    if (!m_detectPitch || !m_detectPitch->isEnabled()) return;
+    const auto sample = m_pitchSample;
+    const auto frames = std::min(sample->baseFrames, sample->audio->frames());
+    const auto first = daw::engine::FrameCount(std::clamp(m_pitchStart, 0.0, 1.0) * frames);
+    const auto end = daw::engine::FrameCount(std::clamp(m_pitchEnd, 0.0, 1.0) * frames);
+    if (m_pitchCancelled) m_pitchCancelled->store(true);
+    const auto cancelled = std::make_shared<std::atomic<bool>>(false);
+    m_pitchCancelled = cancelled;
+    const auto generation = ++m_pitchGeneration;
+    m_pitchBusy = true;
+    refreshPitchAnalysis();
+    const QPointer<SamplerPanel> guard(this);
+    static QThreadPool pool;
+    static const bool configured = [] {
+        pool.setMaxThreadCount(1); pool.setThreadPriority(QThread::LowPriority);
+        pool.setExpiryTimeout(5000); return true;
+    }();
+    Q_UNUSED(configured);
+    pool.start([sample, first, end, cancelled, generation, guard] {
+        daw::analysis::SamplePitchEstimate result;
+        try {
+            result = daw::analysis::detectSamplePitch(*sample->audio, first, end,
+                [cancelled] { return !cancelled->load(); });
+        } catch (const std::exception&) {
+            // Keep allocation/read failures on the worker from escaping into Qt.
+        }
+        QMetaObject::invokeMethod(qApp, [guard, generation, result] {
+            if (!guard) return;
+            guard->refreshPitchAnalysis(); // Validate source/region even while hidden.
+            if (guard->m_pitchGeneration != generation) return;
+            guard->m_pitchBusy = false;
+            guard->m_pitchAnalyzed = true;
+            guard->m_pitchEstimate = result;
+            guard->refreshPitchAnalysis();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void SamplerPanel::applyDetectedPitch(bool setRoot) {
+    refreshPitchAnalysis();
+    if (!(setRoot ? m_applyRoot : m_correctTuning)->isEnabled()) return;
+    const QString id = setRoot ? QStringLiteral("rootnote") : QStringLiteral("finepitch");
+    const double value = setRoot ? double(m_pitchEstimate.midiNote) :
+        std::round(-m_pitchEstimate.cents * 10) / 10;
+    const double before = readParameter(id);
+    writeParameter(id, value);
+    m_controller->commitInsertParameterEdit(m_channelId.toStdString(), m_slotId.toStdString(),
+        id.toStdString(), before, setRoot ? "Set Sampler Root Note" : "Correct Sampler Tuning");
+    emit projectEdited();
+    refresh();
+}
+
 QWidget* SamplerPanel::buildWaveformSection() {
     auto* content = new QVBoxLayout;
     content->setSpacing(6);
@@ -2132,6 +2332,7 @@ void SamplerPanel::refresh() {
     }
     sampler::SamplerInstance* instance = sampler();
     std::shared_ptr<const sampler::SampleData> data = currentSample();
+    refreshPitchAnalysis();
 
     if (instance || m_context == Context::Clip) {
         std::string path;
@@ -2215,8 +2416,11 @@ void SamplerPanel::refresh() {
         for (const QString& id : ids) m_envelope->setValue(id, readParameter(id));
     }
     if (m_keyboard) {
-        m_keyboard->setRoot(
-            int(std::lround(readParameter(QStringLiteral("rootnote")))));
+        const int root = int(std::lround(readParameter(QStringLiteral("rootnote"))));
+        if (m_keyboard->root() != root) {
+            m_keyboard->setRoot(root);
+            m_keyboardScroll->ensureVisible(m_keyboard->xForPitch(root), 0, 24, 0);
+        }
     }
 
     if (m_controller) {
@@ -2442,8 +2646,10 @@ bool SamplerPanel::checkLayoutForTest() {
         // sizes. QSS lighting must not change layout or retain stale surfaces.
         for (const Theme& preset : ThemeManager::instance().presets()) {
             ThemeManager::instance().setThemeId(preset.id, false);
-            for (const QSize size : {QSize(960, 562), QSize(860, 520)}) {
+            for (const QSize size : {QSize(1040, 722), QSize(960, 562), QSize(860, 520)}) {
                 panel.resize(size);
+                const bool fullSize = size == QSize(1040, 722);
+                keyboard->setChecked(fullSize);
                 for (int index = 0; index < tabs->count(); ++index) {
                     tabs->setCurrentIndex(index);
                     QApplication::processEvents();
@@ -2453,6 +2659,12 @@ bool SamplerPanel::checkLayoutForTest() {
                         panel.grab().save(qEnvironmentVariable("DAW_SLIDE_CHECK_DIR") + "/sampler-" + preset.id + ".png");
                     check(scroll->horizontalScrollBar()->maximum() == 0,
                           "horizontal overflow at supported editor size");
+                    if (fullSize) {
+                        check(scroll->verticalScrollBar()->maximum() == 0,
+                              "settings and expanded keyboard do not fit the default window");
+                        check(panel.m_keyboardScroll->viewport()->height() >= panel.m_keyboard->height(),
+                              "the keyboard scrollbar clips the bottom of the keys");
+                    }
                     check(fxStrip->mapTo(&panel, QPoint()).y() ==
                               panel.m_waveform->parentWidget()->mapTo(&panel, QPoint()).y(),
                           "FX strip and waveform section have different top margins");
@@ -2495,6 +2707,44 @@ bool SamplerPanel::checkLayoutForTest() {
         wheel(mode);
         check(mode->currentIndex() == modeBefore, "scrolling changes playback mode");
         if (context == Context::Instrument) {
+            panel.resize(1040, 722);
+            keyboard->setChecked(true);
+            QApplication::processEvents();
+            auto* root = panel.m_combos.value(QStringLiteral("rootnote"));
+            for (const int note : {1, 117, 127}) {
+                root->setCurrentIndex(note);
+                const QPoint key(panel.m_keyboard->xForPitch(note) -
+                    panel.m_keyboardScroll->horizontalScrollBar()->value(), 20);
+                check(panel.readParameter("rootnote") == note && panel.m_keyboard->root() == note &&
+                      panel.m_keyboardScroll->viewport()->rect().contains(key),
+                      "Root Note selection does not immediately reveal the matching keyboard key");
+            }
+            controller.undo(); panel.refresh();
+            check(root->currentIndex() == 117 && panel.m_keyboard->root() == 117,
+                  "Root Note undo does not synchronize the field and keyboard");
+            controller.undo(); controller.undo(); panel.refresh();
+            check(root->currentIndex() == 60 && panel.m_keyboard->root() == 60,
+                  "Root Note edits do not restore the original key");
+            const QPointF rootKey(panel.m_keyboard->xForPitch(61), 20);
+            QMouseEvent rootPress(QEvent::MouseButtonPress, rootKey,
+                panel.m_keyboard->mapToGlobal(rootKey.toPoint()), Qt::RightButton,
+                Qt::RightButton, Qt::NoModifier);
+            const auto rootDepth = controller.undoDepth();
+            QApplication::sendEvent(panel.m_keyboard, &rootPress);
+            check(panel.readParameter("rootnote") == 61 && root->currentIndex() == 61 &&
+                  panel.m_keyboard->root() == 61 && controller.undoDepth() == rootDepth + 1,
+                  "keyboard root assignment is delayed or creates multiple undo steps");
+            controller.undo(); panel.refresh();
+            check(!panel.m_detectPitch->isEnabled() && !panel.m_applyRoot->isEnabled() &&
+                  !panel.m_correctTuning->isEnabled(), "missing sample enables detection/application");
+            wheel(panel.m_fineTune);
+            check(panel.readParameter("finepitch") == 0, "scrolling changes Fine Tune");
+            panel.m_fineTune->setValue(12.3);
+            QMetaObject::invokeMethod(panel.m_fineTune, "editingFinished", Qt::DirectConnection);
+            check(panel.readParameter("finepitch") == 12.3, "numeric Fine Tune input is not applied");
+            controller.undo(); panel.refresh();
+            check(panel.readParameter("finepitch") == 0, "Fine Tune numeric edit does not undo once");
+
             const QPoint start(pitch->rect().center());
             const QPoint end = start - QPoint(0, 18);
             const auto mouse = [pitch](QEvent::Type type, QPoint point, Qt::MouseButton button,
@@ -2513,12 +2763,70 @@ bool SamplerPanel::checkLayoutForTest() {
             panel.refresh();
             check(panel.readParameter("stretch.pitch") == before,
                   "one drag is not restored by one undo");
+
+            auto tone = std::make_shared<daw::engine::SampleBuffer>(1, 48000, 48000);
+            const double hz = 440 * std::exp2(18.2 / 1200);
+            for (daw::engine::FrameCount i = 0; i < tone->frames(); ++i)
+                tone->writableChannel(0)[i] = float(.4 * std::sin(6.283185307179586 * hz * i / 48000));
+            auto* live = controller.samplerInstance(track, slot);
+            live->adoptSample("synthetic-tuner.wav", tone);
+            live->flushPendingPrecompute();
+            panel.refresh();
+            const auto waitForPitch = [&] {
+                QElapsedTimer timer; timer.start();
+                while (panel.m_pitchBusy && timer.elapsed() < 5000) {
+                    QApplication::processEvents(); QThread::msleep(1);
+                }
+            };
+            const auto depth = controller.undoDepth();
+            panel.m_detectPitch->click();
+            check(panel.m_pitchBusy && !panel.m_applyRoot->isEnabled(), "analysis does not expose a busy state");
+            waitForPitch();
+            check(panel.m_pitchEstimate.status == daw::analysis::SamplePitchStatus::Detected &&
+                  panel.m_pitchEstimate.midiNote == 69 && panel.m_applyRoot->isEnabled() &&
+                  panel.m_correctTuning->isEnabled() && controller.undoDepth() == depth,
+                  "background detection changes the project or loses its result");
+            panel.m_applyRoot->click();
+            check(panel.readParameter("rootnote") == 69 && panel.m_keyboard->root() == 69 &&
+                  root->currentIndex() == 69 && !panel.m_applyRoot->isEnabled(),
+                  "root assignment fails or is not idempotent");
+            controller.undo(); panel.refresh();
+            check(panel.readParameter("rootnote") == 60, "root assignment does not undo once");
+            controller.redo(); panel.refresh();
+            panel.m_correctTuning->click();
+            check(std::abs(panel.readParameter("finepitch") + 18.2) < .11 &&
+                  !panel.m_correctTuning->isEnabled(), "tuning correction has the wrong sign or is not idempotent");
+            controller.undo(); panel.refresh();
+            check(panel.readParameter("finepitch") == 0, "tuning correction does not undo once");
+            controller.redo(); panel.refresh();
+            const auto correction = panel.readParameter("finepitch");
+            if (qEnvironmentVariableIsSet("DAW_TUNING_CHECK_DIR")) {
+                const auto previousTheme = th().id;
+                for (const QString& theme : {QStringLiteral("dark"), QStringLiteral("light")}) {
+                    ThemeManager::instance().setThemeId(theme, false);
+                    QApplication::processEvents();
+                    panel.grab().save(qEnvironmentVariable("DAW_TUNING_CHECK_DIR") +
+                        "/tuning-" + theme + "-" + QLocale().name() + ".png");
+                }
+                ThemeManager::instance().setThemeId(previousTheme, false);
+            }
+            panel.m_detectPitch->click();
+            panel.writeParameter("startoffset", .2);
+            panel.refresh(); waitForPitch();
+            check(!panel.m_pitchAnalyzed && !panel.m_applyRoot->isEnabled() &&
+                  !panel.m_correctTuning->isEnabled() && panel.readParameter("finepitch") == correction,
+                  "a changed region applies a stale result");
+            panel.m_detectPitch->click();
+            live->clearSample(); panel.refresh();
+            QApplication::processEvents();
+            check(!panel.m_pitchAnalyzed && !panel.m_detectPitch->isEnabled(),
+                  "clearing a sample retains an applicable detection");
         }
         keyboard->setChecked(true);
         QApplication::processEvents();
         check(panel.m_keyboard->isVisible() && scroll->horizontalScrollBar()->maximum() == 0,
               "keyboard disclosure breaks the compact page");
     }
-    if (ok) std::fprintf(stderr, "PASS Sampler: aligned sections, compact tab heights, all tabs fit at 960/860 px, Clip shell, keyboard, wheel protection, drag and undo\n");
+    if (ok) std::fprintf(stderr, "PASS Sampler: full settings and keyboard fit at 1040 px, compact 960/860 px layouts, immediate Root Note synchronization, note detection, tuning, wheel protection, drag and undo\n");
     return ok;
 }

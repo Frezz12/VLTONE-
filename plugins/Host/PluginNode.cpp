@@ -64,6 +64,7 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_latencyChanged.store(false, std::memory_order_release);
     m_maxBlockSize = info.maxBlockSize;
     m_arenaChannels = info.channels;
+    m_bypassWarmupRemaining = 0;
     m_pluginSleeping = false;
     m_tailFramesRemaining = 0;
     m_lastProcessDisposition = PluginProcessDisposition::Continue;
@@ -103,10 +104,6 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_inputPointers.assign(inputChannels, nullptr);
     m_sidechainPointers.assign(m_pluginSidechainChannels, nullptr);
     m_outputPointers.assign(outputChannels, nullptr);
-    const auto pitchCapacity = engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate);
-    m_blockEvents.reserve(pitchCapacity);
-    m_pitchDelivery.prepare(pitchCapacity);
-    m_pitchCapabilities = m_instance ? m_instance->pitchCapabilities() : PitchCapabilities{};
     m_curveCursor.assign(2048, 0);
 
     if (!m_instance) return;
@@ -138,6 +135,14 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
         m_dryDelayPosition = 0;
         m_dryDelayStorage.clear();
     }
+    // Activation may replace a parameter table or event-bus layout.
+    const auto& descriptor = m_instance->descriptor();
+    m_wantsMidi = descriptor.wantsMidi || descriptor.isInstrument;
+    const auto eventCapacity = pluginBlockEventCapacity(
+        descriptor, processInfo, m_instance->parameters().size());
+    m_blockEvents.reserve(eventCapacity);
+    m_pitchDelivery.prepare(m_wantsMidi ? eventCapacity : 0);
+    m_pitchCapabilities = m_instance->pitchCapabilities();
 }
 
 void PluginNode::reset() {
@@ -145,12 +150,13 @@ void PluginNode::reset() {
     m_processFailed.store(false, std::memory_order_relaxed);
     // A bypassed insert may have declined activation. CLAP reset requires an
     // active instance even though that slot contributes only the dry signal.
-    if (m_instance && m_instance->isActive()) m_instance->reset();
+    if (m_instance && m_instance->isActive()) m_instance->resetForTransport();
     m_heldMidiOutput.fill(0);
     m_heldMidiOutputCount = 0;
     const bool bypassed = m_bypassed.load(std::memory_order_relaxed);
     m_wet = bypassed ? 0.0f : m_mix.load(std::memory_order_relaxed);
     m_bypassProcessorReset = bypassed;
+    m_bypassWarmupRemaining = bypassed ? m_dryDelaySamples : 0;
     m_tailFramesRemaining = 0;
     m_lastProcessDisposition = PluginProcessDisposition::Continue;
     // If the format left the processor stopped for an explicit sleep, keep it
@@ -243,6 +249,7 @@ void PluginNode::Sink::push(const PluginEvent& event) noexcept {
             midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
         } else if (event.kind == PluginEvent::Kind::NoteOff ||
                    event.kind == PluginEvent::Kind::NoteChoke) {
+            midi.isNoteChoke = event.kind == PluginEvent::Kind::NoteChoke;
             midi.status = engine::MidiEvent::kNoteOff | channel;
             midi.data1 = std::uint8_t(std::clamp<int>(event.key, 0, 127));
             midi.data2 = std::uint8_t(std::lround(std::clamp(event.value, 0.0, 1.0) * 127.0));
@@ -353,8 +360,13 @@ void PluginNode::onStateChanged() noexcept {
 }
 
 void PluginNode::process(const engine::ProcessContext& context) {
+    if (!context.offline) m_processFailed.store(false, std::memory_order_relaxed);
     const engine::ChannelCount outChannels = context.output.numChannels();
     const engine::FrameCount frames = context.frames;
+    const auto steadyTime = m_steadyTime;
+    m_steadyTime = m_steadyTime >= 0 &&
+            m_steadyTime <= std::numeric_limits<std::int64_t>::max() - frames
+        ? m_steadyTime + frames : -1;
     auto isSidechain = [&](std::size_t index) noexcept {
         return index < context.inputRoles.size() &&
                context.inputRoles[index] == engine::InputRole::Sidechain;
@@ -509,7 +521,10 @@ void PluginNode::process(const engine::ProcessContext& context) {
 
     // ── Keep the dry signal when a crossfade is in flight ──
     const bool bypassed = m_bypassed.load(std::memory_order_relaxed);
-    const float targetWet = bypassed ? 0.0f : m_mix.load(std::memory_order_relaxed);
+    // A reset processor has an empty latency line. Keep the aligned dry path
+    // audible until enough fresh input has passed through it, then crossfade.
+    const bool warming = !bypassed && m_bypassWarmupRemaining != 0;
+    const float targetWet = bypassed || warming ? 0.0f : m_mix.load(std::memory_order_relaxed);
     const bool needsDry = (m_wet != 1.0f) || (targetWet != 1.0f);
     if (!bypassed) m_bypassProcessorReset = false;
     if (needsDry || m_dryDelaySamples > 0) {
@@ -550,6 +565,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
     // Once the wet-to-dry crossfade has completed, the plugin cannot
     // contribute to either audio or MIDI. Keep feeding the host-owned dry
     // latency line, but stop calling third-party DSP until bypass is released.
+    // VST2 has no realtime reset: keep its DSP current so an old tail cannot
+    // reappear on release, and reset it only on the parked control thread.
     // A queued host edit is the one deliberate exception: PluginInstance has
     // no format-independent way to apply processor parameters without a
     // process callback, and postponing it would make saveState() capture stale
@@ -557,11 +574,12 @@ void PluginNode::process(const engine::ProcessContext& context) {
     // state; the following quiet block sleeps again. Automation needs no such
     // exception because its current value is recomputed at the wake playhead.
     if (bypassed && m_wet == 0.0f && !hostEventPending &&
-        !pluginWakeRequested) {
+        !pluginWakeRequested && m_instance->supportsRealtimeReset()) {
         m_curveCursorFor = nullptr;
         if (!m_bypassProcessorReset) {
             m_instance->reset();
             m_bypassProcessorReset = true;
+            m_bypassWarmupRemaining = m_dryDelaySamples;
         }
         m_tailFramesRemaining = 0;
         m_lastProcessDisposition = PluginProcessDisposition::Continue;
@@ -819,7 +837,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
                     converted.notePan =
                         std::clamp(double(note.notePan), -1.0, 1.0);
                 } else if (note.isNoteOff()) {
-                    converted.kind = PluginEvent::Kind::NoteOff;
+                    converted.kind = note.isNoteChoke ? PluginEvent::Kind::NoteChoke
+                                                      : PluginEvent::Kind::NoteOff;
                     converted.value = double(note.data2) / 127.0;
                 } else if (note.type() == engine::MidiEvent::kControlChange) {
                     converted.kind = PluginEvent::Kind::MidiController;
@@ -852,13 +871,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
     }
     // ── Automation: the curves, sampled against this block's playhead ──
     //
-    // One event at the block start carrying the interpolated value, plus one at
-    // every breakpoint that falls inside the block. That gives an exact value
-    // at every corner of the curve and a fresh value every block in between —
-    // 2.7 ms at 128 frames, far below what a fader move can be heard as
-    // stepping. Automation is the last thing added, so when the block's event
-    // budget runs out it is the breakpoints that are dropped — the block-start
-    // value still lands, and the parameter is never left stale.
+    // Sample the curve independently of device/export block size. Constant
+    // runs only need their first event; moving segments preserve every sample.
     if ((m_overrideWasPlaying && !context.playing) ||
         (context.playing && context.transport.ppqPosition < m_overrideLastBeat))
         m_overrideEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -871,8 +885,6 @@ void PluginNode::process(const engine::ProcessContext& context) {
             context.transport.tempo > 0.0 ? context.transport.tempo : 120.0;
         const double samplesPerBeat = context.sampleRate * 60.0 / tempo;
         const double blockStartBeats = context.transport.ppqPosition;
-        const double blockEndBeats =
-            blockStartBeats + double(frames) / std::max(samplesPerBeat, 1.0);
 
         // The per-curve cursors are only valid while the playhead moves forward
         // through the same snapshot. A seek, a loop restart, or a fresh set of
@@ -899,74 +911,49 @@ void PluginNode::process(const engine::ProcessContext& context) {
                     return entry.first == curve.parameterIndex && entry.second == overrideEpoch;
                 })) continue;
             std::size_t& cursor = m_curveCursor[ci];
+            // The preceding pass may overlap this one (a locate, or an offline
+            // probe). Per-sample evaluation advanced its cursor to that pass's
+            // end, even when the new block starts after its old start.
+            if (cursor && curve.points[cursor - 1].first > blockStartBeats)
+                cursor = std::size_t(std::upper_bound(curve.points.begin(), curve.points.end(),
+                    blockStartBeats, [](double beat, const auto& point) { return beat < point.first; })
+                    - curve.points.begin());
 
-            // A curve with no breakpoints still has a value — its default —
-            // and the block-start event must carry it, or the parameter is
-            // never set at all.
-            if (curve.points.empty()) {
-                if (m_blockEvents.size() < m_blockEvents.capacity()) {
-                    PluginEvent event;
-                    event.kind = PluginEvent::Kind::ParamValue;
-                    event.paramIndex = curve.parameterIndex;
-                    event.frameOffset = 0;
-                    event.value = curve.defaultValue;
-                    m_blockEvents.push_back(event);
+            double previous = std::numeric_limits<double>::quiet_NaN();
+            double previousBeat = blockStartBeats;
+            for (std::uint32_t frame = 0; frame < frames; ++frame) {
+                const double beat = context.ppqAtOffset(frame);
+                if (beat < previousBeat) cursor = 0;
+                previousBeat = beat;
+                // Points inside the same sample retain their final value, as
+                // in the event path. Interpolate every intervening sample too:
+                // CLAP/VST2 need actual values; VST3 receives the same curve.
+                const double sampleEnd = beat + 1.0 / std::max(samplesPerBeat, 1.0);
+                while (cursor < curve.points.size() &&
+                       curve.points[cursor].first < sampleEnd - 1e-12) ++cursor;
+                double value = curve.defaultValue;
+                if (cursor) {
+                    const auto& left = curve.points[cursor - 1];
+                    value = left.second;
+                    if (left.first <= beat && cursor < curve.points.size()) {
+                        const auto& right = curve.points[cursor];
+                        const double span = right.first - left.first;
+                        if (span > 0.0)
+                            value += (right.second - left.second) * ((beat - left.first) / span);
+                    }
                 }
-                continue;
-            }
-
-            // Advance the cursor to the first point past the block start. It
-            // only moves forward, so across blocks this is amortised O(1) per
-            // curve instead of a full scan from the start every block.
-            while (cursor < curve.points.size() &&
-                   curve.points[cursor].first <= blockStartBeats) {
-                ++cursor;
-            }
-
-            // The value at the block start, interpolated between the two points
-            // either side of the cursor. Before the first breakpoint the curve
-            // holds its default, not the first point's value: the point is
-            // where the shape *starts*.
-            double value;
-            if (cursor == 0) {
-                value = curve.points.front().first > 0.0 ? curve.defaultValue
-                                                         : curve.points.front().second;
-            } else if (cursor >= curve.points.size()) {
-                value = curve.points.back().second;
-            } else {
-                const auto& left = curve.points[cursor - 1];
-                const auto& right = curve.points[cursor];
-                const double span = right.first - left.first;
-                if (!(span > 0.0)) {
-                    value = right.second;
-                } else {
-                    const double t = (blockStartBeats - left.first) / span;
-                    value = left.second + (right.second - left.second) * t;
+                if (frame && value == previous) continue;
+                previous = value;
+                if (m_blockEvents.size() == m_blockEvents.capacity()) {
+                    m_processFailed.store(true, std::memory_order_relaxed);
+                    break; // report overload; never export a silently truncated curve
                 }
-            }
-
-            if (m_blockEvents.size() < m_blockEvents.capacity()) {
                 PluginEvent event;
                 event.kind = PluginEvent::Kind::ParamValue;
                 event.paramIndex = curve.parameterIndex;
-                event.frameOffset = 0;
+                event.frameOffset = frame;
                 event.value = value;
                 m_blockEvents.push_back(event);
-            }
-
-            // Breakpoints inside the block, starting where the cursor left off
-            // rather than from the curve's beginning.
-            for (std::size_t pi = cursor; pi < curve.points.size(); ++pi) {
-                const auto& [beats, pointValue] = curve.points[pi];
-                if (beats >= blockEndBeats) break;   // points are sorted
-                if (m_blockEvents.size() >= m_blockEvents.capacity()) break;
-                PluginEvent point;
-                point.kind = PluginEvent::Kind::ParamValue;
-                point.paramIndex = curve.parameterIndex;
-                point.frameOffset = std::uint32_t((beats - blockStartBeats) * samplesPerBeat);
-                if (point.frameOffset >= frames) point.frameOffset = frames - 1;
-                point.value = pointValue;
-                m_blockEvents.push_back(point);
             }
         }
     }
@@ -995,13 +982,15 @@ void PluginNode::process(const engine::ProcessContext& context) {
     processContext.outputs = m_outputPointers.data();
     processContext.outputChannels = outCount;
     processContext.frames = frames;
-    processContext.inputEvents = m_pitchDelivery.process(m_blockEvents, frames, context.sampleRate,
-        slideDelivery(), (m_slideMode.load()==SlideDelivery::Auto && slideDelivery()==SlideDelivery::MPE && m_slideRange.load()==2 ? 48. : m_slideRange.load()), m_slideTail.load(), m_instance->tailSamplesKnown() ? m_instance->tailSamples() : 0xffffffffu, m_pitchCapabilities.continuous);
+    processContext.inputEvents = m_wantsMidi ? m_pitchDelivery.process(m_blockEvents, frames, context.sampleRate,
+        slideDelivery(), (m_slideMode.load()==SlideDelivery::Auto && slideDelivery()==SlideDelivery::MPE && m_slideRange.load()==2 ? 48. : m_slideRange.load()), m_slideTail.load(), m_instance->tailSamplesKnown() ? m_instance->tailSamples() : 0xffffffffu, m_pitchCapabilities.continuous)
+        : std::span<const PluginEvent>(m_blockEvents);
     m_slideOverloaded.store(m_pitchDelivery.overloaded);
     m_slideClipped.store(m_pitchDelivery.clipped);
     processContext.outputEvents = &m_sink;
     processContext.transport = context.transport;
     processContext.sampleTime = context.timelinePosition;
+    processContext.steadyTime = steadyTime;
     processContext.playing = context.playing;
     processContext.offline = context.offline;
 
@@ -1016,9 +1005,16 @@ void PluginNode::process(const engine::ProcessContext& context) {
     const auto* previousProcessingPlugin=processingPlugin;
     processingPlugin=this;
     const PluginProcessDisposition disposition = m_instance->process(processContext);
+    m_bypassWarmupRemaining -= std::min(m_bypassWarmupRemaining, frames);
     processingPlugin=previousProcessingPlugin;
     m_currentMidiOutput = nullptr;
-    if (disposition == PluginProcessDisposition::Error) {
+    bool finiteOutput = true;
+    for (engine::ChannelCount ch = 0; ch < outCount; ++ch) {
+        // Surround channels can live in our scratch beyond the graph's width.
+        const auto samples = std::span<const float>(m_outputPointers[ch], frames);
+        finiteOutput &= std::all_of(samples.begin(), samples.end(), [](float x) { return std::isfinite(x); });
+    }
+    if (disposition == PluginProcessDisposition::Error || !finiteOutput) {
         m_processFailed.store(true, std::memory_order_relaxed);
         for (engine::ChannelCount ch = 0; ch < outChannels; ++ch)
             dsp::clear(context.output.channel(ch).first(frames));

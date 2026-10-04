@@ -4,6 +4,7 @@
 
 #include "Controls.hpp"
 #include "EngineController.hpp"
+#include "model/ChannelColor.hpp"
 #include "Icons.hpp"
 #include "Theme.hpp"
 
@@ -1213,6 +1214,8 @@ void AutomationEditorWindow::reloadTargetFields() {
                         .arg(QString::fromStdString(channel->instrument.name)),
                     {daw::AutomationTargetKind::PluginParameter, QString(), {}});
         }
+        for(const auto& module:channel->miniModules) addWhat(QString::fromStdString(module.name),
+            {daw::AutomationTargetKind::PluginParameter,QString::fromStdString(module.id),{}});
         for (const daw::InsertModel& insert : channel->inserts) {
             addWhat(QString::fromStdString(insert.name),
                     {daw::AutomationTargetKind::PluginParameter,
@@ -1220,6 +1223,7 @@ void AutomationEditorWindow::reloadTargetFields() {
         }
     }
     if (master) {
+        for(const auto& module:m_controller->project().masterMiniModules) addWhat(QString::fromStdString(module.name),{daw::AutomationTargetKind::PluginParameter,QString::fromStdString(module.id),{}});
         for (const auto& insert : m_controller->project().masterInserts)
             addWhat(QString::fromStdString(insert.name),
                     {daw::AutomationTargetKind::PluginParameter,

@@ -47,7 +47,10 @@ bool EngineController::submitSharedPluginSnapshotBatch(std::shared_ptr<collab::B
     return submitSharedDerivedMutation(std::move(files), AssetKind::PluginState,
         [batch, bindings, sourceCount](const auto& assets) -> collab::CommandBody {
             std::size_t next = 0;
-            for (auto& command : batch->commands) if (auto* add = std::get_if<collab::AddPluginInsert>(&command.body)) {
+            for (auto& command : batch->commands) if (auto* add = std::get_if<collab::AddPluginInsert>(&command.body);
+                add && add->location.chain != collab::PluginChain::ChannelColor) {
+                // The fixed COLOR stage has complete inline settings. It is
+                // not a copied FX slot and must not consume an FX state asset.
                 if (!sourceCount) return std::make_shared<collab::BatchCommand>();
                 const auto source = next++ % sourceCount;
                 for (std::size_t i = 0; i < bindings.size(); ++i) if (bindings[i].source == source)

@@ -39,6 +39,19 @@ public:
 
     std::string_view name() const noexcept override { return m_name; }
     bool isSource() const noexcept override { return m_isSource; }
+    engine::MidiNodeRole midiRole() const noexcept override {
+        // VST2 has no reliable output-port declaration; preserve its ability
+        // to originate events. The other formats report their event buses.
+        if (m_wantsMidi || (m_instance &&
+            (m_instance->descriptor().producesMidi || m_instance->descriptor().format == Format::Vst ||
+             m_instance->descriptor().format == Format::Unknown)))
+            return engine::MidiNodeRole::InputOutput;
+        return engine::MidiNodeRole::Passthrough;
+    }
+    engine::OfflineNodePolicy offlineNodePolicy() const noexcept override {
+        return m_instance && m_instance->supportsOfflinePipelining()
+            ? engine::OfflineNodePolicy::Ordered : engine::OfflineNodePolicy::Barrier;
+    }
     engine::FrameCount latencySamples() const noexcept override {
         return m_latency.load(std::memory_order_relaxed);
     }
@@ -59,6 +72,10 @@ public:
     void process(const engine::ProcessContext& context) override;
     engine::Status serviceOffline() override;
     engine::Status offlineStatus() const noexcept override;
+    engine::Status processStatus() const noexcept override {
+        return m_processFailed.load(std::memory_order_relaxed)
+            ? engine::Status(engine::fail(engine::EngineError::ProcessingFailed)) : engine::Status{};
+    }
 
     // ── Control thread ──
 
@@ -244,6 +261,7 @@ private:
     engine::FrameCount m_dryDelaySamples = 0;
     engine::FrameCount m_dryDelayPosition = 0;
     engine::FrameCount m_maxBlockSize = 0;
+    std::int64_t m_steadyTime = 0;
     engine::ChannelCount m_arenaChannels = 0;
     std::uint16_t m_pluginInputChannels = 0;
     std::uint16_t m_pluginSidechainChannels = 0;
@@ -291,6 +309,7 @@ private:
     /// callback is skipped. That prevents a frozen reverb/delay tail from
     /// reappearing when bypass is later released.
     bool m_bypassProcessorReset = false;
+    engine::FrameCount m_bypassWarmupRemaining = 0;
     /// Set only from an explicit format disposition (currently CLAP). The
     /// audio thread keeps enough transport/tail state to wake without polling
     /// the plugin or allocating.

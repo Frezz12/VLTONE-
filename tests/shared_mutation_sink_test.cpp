@@ -1,4 +1,6 @@
 #include "EngineController.hpp"
+#include "MiniModuleUpdate.hpp"
+#include "Internal/MiniModuleInstance.hpp"
 #include "ChannelStripPreset.hpp"
 #include "collaboration/MutationCapabilityLedger.hpp"
 #include "collaboration/CommandJson.hpp"
@@ -9,6 +11,7 @@
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "collaboration/ProjectReducer.hpp"
 #include "recovery/CloudRecordingRecovery.hpp"
+#include "model/ChannelColor.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -434,6 +437,44 @@ bool allBatches(const FakeSharedMutationSink& sink, int firstCall) {
                 std::shared_ptr<daw::collab::BatchCommand>>(&body);
             return batch && *batch && !(*batch)->commands.empty();
         });
+}
+
+void verifyGroupMoveBatch(daw::collab::SharedMutationResult result) {
+    daw::EngineController controller;
+    controller.initialize(48000.0, 512, false);
+    const auto a = controller.addTrack(daw::TrackKind::Audio, "A");
+    const auto b = controller.addTrack(daw::TrackKind::Audio, "B");
+    const auto c = controller.addTrack(daw::TrackKind::Audio, "C");
+    const auto d = controller.addTrack(daw::TrackKind::Audio, "D");
+    const auto depth = controller.undoDepth();
+    FakeSharedMutationSink sink;
+    sink.result = result;
+    controller.attachSharedMutationSink(sink);
+    const bool submitted = result == daw::collab::SharedMutationResult::Submitted;
+    check(controller.moveTracks({d, b}, 0, "") == submitted &&
+              sink.genericCalls == 1 && allBatches(sink, 0),
+          "shared group reorder submits one atomic batch");
+    std::vector<std::string> moved;
+    std::vector<std::string> anchors;
+    if (allBatches(sink, 0)) {
+        const auto batch = std::get<std::shared_ptr<daw::collab::BatchCommand>>(
+            sink.genericBodies.front());
+        for (const auto& command : batch->commands) {
+            if (const auto* move = std::get_if<daw::collab::MoveTrack>(&command.body)) {
+                moved.push_back(move->trackId);
+                anchors.push_back(move->afterId);
+            }
+        }
+    }
+    check(moved == std::vector<std::string>{b, d} &&
+              anchors == std::vector<std::string>{"", b} &&
+              controller.project().tracks[0].id == a &&
+              controller.project().tracks[1].id == b &&
+              controller.project().tracks[2].id == c &&
+              controller.project().tracks[3].id == d &&
+              controller.undoDepth() == depth,
+          "shared group reorder preserves document order and awaits projection");
+    controller.detachSharedMutationSink(sink);
 }
 
 void verifyFolderDuplicateBatch(daw::collab::SharedMutationResult result) {
@@ -1312,8 +1353,20 @@ void verifySharedChannelBatchMutators(
         sourceId, insertId, targetId, 0, false);
     completeAssets();
 
+    if (sink.genericCalls != 5 || !allBatches(sink,0)) {
+        std::printf("MEASURE shared channel batches: %d calls, %zu bodies, all batches %d\n",sink.genericCalls,sink.genericBodies.size(),allBatches(sink,0));
+        for (const auto& body:sink.genericBodies) std::printf("MEASURE shared command body index %zu\n",body.index());
+    }
     check(sink.genericCalls == 5 && allBatches(sink, 0),
           "channel paste/move gestures each submit one outer batch");
+    // New channels have an empty mini rack. Copying their strip must not
+    // synthesize the old implicit Color or publish unsupported mini modules.
+    unsigned implicitModules=0;
+    for(const auto& body:sink.genericBodies) if(const auto* batch=std::get_if<std::shared_ptr<daw::collab::BatchCommand>>(&body);batch && *batch)
+        for(const auto& child:(*batch)->commands) if(const auto* add=std::get_if<daw::collab::AddPluginInsert>(&child.body);
+            add && (add->location.chain==daw::collab::PluginChain::ChannelColor ||
+                    add->location.chain==daw::collab::PluginChain::MiniModules)) ++implicitModules;
+    check(implicitModules==0,"shared strip and preset copies do not synthesize implicit Color or mini modules");
     check(pasted && stripPasted && presetPasted && moved && filePresetApplied == submitted,
           "opaque channel batches report queued asset work and parameter-only batches report command acceptance");
     const auto* unchangedSource = controller.project().findTrack(sourceId);
@@ -2127,6 +2180,75 @@ void verifySessionControlsAndStateUpload() {
     controller.detachSharedAssetMutationSink(assets);
     controller.detachSharedMutationSink(sink);
 }
+void verifyLocalMiniModulesWithAttachedBridge() {
+    FakeSharedMutationSink sink;
+    sink.cloudBinding = false;
+    sink.result = daw::collab::SharedMutationResult::LocalFallback;
+    daw::EngineController controller;
+    if (!check(bool(controller.initialize(48000, 256, false)), "initialize mini-module bridge fixture")) return;
+    controller.attachSharedMutationSink(sink);
+    controller.setSharedEditingAllowed(false); // Offline cloud state must not lock a local document.
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Local minis");
+    const auto colorDefinition = daw::plugins::mini::builtin("color");
+    const auto chorusDefinition = daw::plugins::mini::builtin("chorus");
+    const auto color = controller.addMiniModule(track, colorDefinition);
+    const auto second = controller.addMiniModule(track, chorusDefinition);
+    const auto master = controller.addMiniModule({}, colorDefinition);
+    if (!check(!color.empty() && !second.empty() && !master.empty(),
+               "attached unbound bridge permits Track and Master mini-module insertion")) return;
+    check(controller.moveMiniModule(track, color, 1) &&
+              controller.miniModules(track).back().id == color,
+          "local mini-module reordering works with attached bridge");
+    check(controller.setMiniModulePostFx(track, color, true) &&
+              controller.setMiniModuleMode(track, color, "tube"),
+          "local module route and mode remain editable with attached bridge");
+    auto look = colorDefinition.appearance;
+    look.theme = "graphite";
+    check(controller.setMiniModuleAppearance(track, color, look),
+          "local appearance changes work with attached bridge");
+    check(controller.replaceMiniModule(track, second, daw::plugins::mini::builtin("doubler")) &&
+              controller.miniModules(track).front().id == second,
+          "local replacement retains module identity with attached bridge");
+    auto updated = colorDefinition;
+    updated.name = "Recompiled color";
+    auto plan = controller.planMiniModuleUpdate(updated);
+    std::string error;
+    const auto depth = controller.undoDepth();
+    check(plan->prepare() && controller.applyMiniModuleUpdate(plan, error) &&
+              controller.undoDepth() == depth + 1 &&
+              controller.miniModules(track).back().miniModule->name == updated.name &&
+              controller.miniModules({}).front().miniModule->name == updated.name,
+          "local compilation publishes Track and Master with one Undo while bridge is attached");
+    controller.undo();
+    check(controller.miniModules(track).back().miniModule->name == colorDefinition.name,
+          "local recompile Undo restores the previous definition");
+    controller.redo();
+    check(controller.removeMiniModule(track, second),
+          "local removal works with attached bridge");
+    controller.undo();
+    check(controller.miniModules(track).size() == 2,
+          "local removal Undo restores the module");
+    plan = controller.planMiniModuleUpdate(colorDefinition);
+    check(plan->prepare(), "prepare a module update before changing binding");
+    const auto before = controller.miniModules(track);
+    const auto cloudDepth = controller.undoDepth();
+    sink.cloudBinding = true;
+    controller.setSharedEditingAllowed(true);
+    check(controller.addMiniModule(track, chorusDefinition).empty() &&
+              !controller.removeMiniModule(track, color) &&
+              !controller.moveMiniModule(track, color, 0) &&
+              !controller.replaceMiniModule(track, color, chorusDefinition) &&
+              !controller.setMiniModulePostFx(track, color, false) &&
+              !controller.applyMiniModuleUpdate(plan, error) &&
+              std::equal(before.begin(), before.end(), controller.miniModules(track).begin(),
+                         controller.miniModules(track).end(), [](const auto& a, const auto& b) {
+                  return a.id == b.id && a.miniModule == b.miniModule &&
+                         a.miniModuleMode == b.miniModuleMode && a.miniModulePostFx == b.miniModulePostFx &&
+                         a.profileSeed == b.profileSeed && a.bypassed == b.bypassed;
+              }) && controller.undoDepth() == cloudDepth,
+          "an actual cloud binding still blocks unsupported local mini-module mutations");
+    controller.detachSharedMutationSink(sink);
+}
 } // namespace
 
 int main() {
@@ -2148,6 +2270,7 @@ int main() {
         return 1;
     }
     verifySharedShelfAndRecordingSilence();
+    verifyLocalMiniModulesWithAttachedBridge();
     verifySharedMidiComp();
     verifyDerivedRenderAssets();
     verifySessionControlsAndStateUpload();
@@ -2193,6 +2316,8 @@ int main() {
     verifySharedChannelBatchMutators(
         daw::collab::SharedMutationResult::Blocked);
     verifyTrackCreationParity();
+    verifyGroupMoveBatch(daw::collab::SharedMutationResult::Submitted);
+    verifyGroupMoveBatch(daw::collab::SharedMutationResult::Blocked);
     verifyPointerSafetyAcrossSubmit();
     verifyLocalFallback();
     verifyAtomicMuteGesture(daw::collab::SharedMutationResult::Submitted);

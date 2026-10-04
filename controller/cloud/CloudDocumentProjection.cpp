@@ -110,6 +110,7 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
     document.loopEndSeconds = 0.0;
     document.loopEnabled = false;
     projectInserts(document.masterInserts, "master", projection.blockers);
+    projectInserts(document.masterMiniModules,"masterMiniModules",projection.blockers);
 
     for (std::size_t trackIndex = 0; trackIndex < document.tracks.size();
          ++trackIndex) {
@@ -135,6 +136,8 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
 
         projectInsert(track.instrument, location + "/instrument",
                       projection.blockers);
+        if(track.channelColor) projectInsert(*track.channelColor,location+"/channelColor",projection.blockers);
+        projectInserts(track.miniModules,location+"/miniModules",projection.blockers);
         projectInserts(track.samplerFx.inserts, location + "/sampler-fx",
                        projection.blockers);
         projectInserts(track.inserts, location, projection.blockers);
@@ -218,6 +221,7 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
         if (firstLocation) *firstLocation = "project/transport";
         return true;
     }
+    if(inspectInsertsForLeak(document.masterMiniModules,"masterMiniModules",firstLocation)) return true;
     if (inspectInsertsForLeak(document.masterInserts, "master", firstLocation))
         return true;
     for (std::size_t trackIndex = 0; trackIndex < document.tracks.size();
@@ -237,6 +241,8 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
             if (firstLocation) *firstLocation = location + "/local-state";
             return true;
         }
+        if(inspectInsertsForLeak(track.miniModules,location+"/miniModules",firstLocation)) return true;
+        if (track.channelColor && inspectInsertForLeak(*track.channelColor,location+"/channelColor",firstLocation)) return true;
         if (inspectInsertForLeak(track.instrument, location + "/instrument",
                                  firstLocation) ||
             inspectInsertsForLeak(track.samplerFx.inserts,

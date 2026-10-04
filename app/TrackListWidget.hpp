@@ -118,7 +118,8 @@ public:
     /// there is a recording to be had, and lights on the tracks that will take
     /// it — targets follow the selection, so this is the window's answer, not
     /// something a row can work out for itself.
-    void setRecordState(bool engaged, const QStringList& targets);
+    void setRecordState(bool engaged, const QStringList& targets,
+                        const QStringList& pins = {});
 
 signals:
     void customTrackIconRequested(const QStringList& trackIds);
@@ -328,6 +329,7 @@ private:
 
     bool m_recordEngaged = false;
     QStringList m_recordTargets;
+    QStringList m_recordPins;
 
     GroupGesture m_gainGesture;
     GroupGesture m_panGesture;
@@ -348,7 +350,8 @@ private:
     bool m_pressing = false;
     bool m_dragging = false;
     QPoint m_pressPos;
-    int m_dragRow = -1;
+    std::vector<std::string> m_dragTrackIds;
+    QString m_clickSelectionOnRelease;
 
     // Row height resize (dragging a row's bottom edge).
     bool m_resizingHeight = false;

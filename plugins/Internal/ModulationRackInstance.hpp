@@ -20,6 +20,7 @@ public:
     static unsigned encodeOrder(Order) noexcept;
     static unsigned eqParameter(unsigned band, unsigned field) noexcept;
     const PluginDescriptor& descriptor() const noexcept override { return staticDescriptor(); }
+    bool supportsOfflinePipelining() const noexcept override { return true; }
     void setListener(PluginListener*) noexcept override {}
     bool setBusLayout(const PluginBusLayout&, PluginBusLayout&) override;
     PluginBusLayout busLayout() const override { return m_layout; }

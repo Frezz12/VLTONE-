@@ -86,8 +86,26 @@ std::size_t PcmReadCache::pin(std::uint64_t source, std::uint64_t page) noexcept
     }
     return m_count;
 }
+std::uint64_t PcmReadCache::requestKey(const Request& request) noexcept {
+    auto key = request.source * 0x9e3779b97f4a7c15ull ^
+        request.page * 0xbf58476d1ce4e5b9ull ^ request.epoch * 0x94d049bb133111ebull;
+    key ^= key >> 30; key *= 0xbf58476d1ce4e5b9ull; key ^= key >> 27;
+    return key ? key : 1;
+}
+void PcmReadCache::finishRequest(const Request& request) noexcept {
+    auto key = requestKey(request);
+    m_pendingRequests[key % m_pendingRequests.size()].compare_exchange_strong(
+        key, 0, std::memory_order_relaxed);
+}
 bool PcmReadCache::request(std::uint64_t source, std::uint64_t page) noexcept {
-    if (m_requests.push({source, page, m_epoch.load(std::memory_order_acquire)})) return true;
+    const Request request{source, page, m_epoch.load(std::memory_order_acquire)};
+    const auto key = requestKey(request);
+    // Many voices can miss the same page together. One queued request suffices;
+    // collisions merely admit a duplicate, never suppress a different page.
+    if (m_pendingRequests[key % m_pendingRequests.size()].exchange(key, std::memory_order_relaxed) == key)
+        return true;
+    if (m_requests.push(request)) return true;
+    finishRequest(request);
     m_dropped.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
@@ -150,14 +168,15 @@ void PcmReadCache::worker() {
         m_clock.fetch_add(1, std::memory_order_relaxed);
         for (unsigned n = 0; n < 256 && m_requests.pop(request); ++n) {
             worked = true;
-            if (request.epoch != m_epoch.load(std::memory_order_acquire)) { m_stale.fetch_add(1); continue; }
+            if (request.epoch != m_epoch.load(std::memory_order_acquire)) { finishRequest(request); m_stale.fetch_add(1); continue; }
             std::lock_guard lock(m_sourcesMutex);
             const auto source = m_sources.find(request.source);
-            if (source == m_sources.end()) continue;
+            if (source == m_sources.end()) { finishRequest(request); continue; }
             for (unsigned ahead = 0; ahead < 4; ++ahead) {
                 if (request.epoch != m_epoch.load(std::memory_order_acquire)) break;
                 fill(request.source, request.page + ahead, source->second);
             }
+            finishRequest(request);
         }
         if (!worked) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -199,7 +218,19 @@ std::span<const float> PcmReadScope::view(PcmReadCache& cache, std::uint64_t sou
         }
         m_last = found;
     }
+    auto& pin = m_pins[m_last];
+    if (pin.slot == cache.m_count) {
+        const auto tick = cache.m_clock.load(std::memory_order_relaxed);
+        if (tick != pin.retryTick) {
+            pin.retryTick = tick;
+            const auto slot = cache.pin(source, page);
+            if (slot < cache.m_count) {
+                pin.slot = slot;
+                pin.data = cache.m_pcm.get() + slot * PcmReadCache::kPageSamples;
+            }
+        }
+    }
     const auto offset = sample % PcmReadCache::kPageSamples;
-    return {m_pins[m_last].data + offset, std::min(count, PcmReadCache::kPageSamples - offset)};
+    return {pin.data + offset, std::min(count, PcmReadCache::kPageSamples - offset)};
 }
 } // namespace daw::engine

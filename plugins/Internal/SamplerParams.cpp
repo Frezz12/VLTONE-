@@ -171,6 +171,7 @@ const std::vector<ParameterInfo>& table() {
             {indexOf(SlideParam::BendRange), "slide.bendrange", "MIDI Bend Range", "st", 1, 96, 2}
         };
         out.insert(out.end(), std::begin(slide), std::end(slide));
+        out.push_back({kFineTuneIndex, "finepitch", "Fine Tune", "ct", -100, 100, 0});
         return out;
     }();
     return built;
@@ -199,6 +200,7 @@ bool isPrecomputed(std::uint32_t index) noexcept { return inPrecomputedRange(ind
 
 std::string parameterText(std::uint32_t index, double value) {
     if (index >= kParameterCount) return {};
+    if (index == kFineTuneIndex) return decimals(value, 1, " ct");
 
     if (index == indexOf(SlideParam::Shape)) return value >= .5 ? "S-Curve" : "Linear";
     if (index == indexOf(SlideParam::TimeMs) || index == indexOf(SlideParam::SmoothingMs)) return decimals(value, 1, " ms");

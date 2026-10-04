@@ -95,6 +95,8 @@ enum class PluginChain : std::uint8_t {
     Instrument,
     SamplerFx,
     Clip,
+    ChannelColor,
+    MiniModules,
 };
 
 struct PluginLocation {

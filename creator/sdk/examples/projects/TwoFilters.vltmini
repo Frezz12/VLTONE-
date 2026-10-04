@@ -1,0 +1,251 @@
+{
+  "format": "vltmini",
+  "version": 4,
+  "definition": {
+    "id": "creator.sdk.TwoFilters",
+    "name": "SDK TwoFilters",
+    "version": 4,
+    "nodes": [
+      {
+        "id": "in",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "out",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "cpp",
+        "type": "cpp_function",
+        "version": 1,
+        "parameters": {},
+        "function": {
+          "aggregateReturn": false,
+          "analyzedHash": "086b69798c01010b228e46fd6f60f3c65947c6e151b5372f444af8a217baec5b",
+          "arguments": [
+            "input",
+            "cutoff",
+            "mix",
+            "filter_a",
+            "filter_b"
+          ],
+          "context": false,
+          "entry": "process",
+          "inputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "input",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "input",
+              "signature": "",
+              "type": "audio"
+            },
+            {
+              "cppType": "float",
+              "default": 500.0,
+              "id": "cutoff",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "cutoff",
+              "signature": "",
+              "type": "number"
+            },
+            {
+              "cppType": "float",
+              "default": 0.5,
+              "id": "mix",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "mix",
+              "signature": "",
+              "type": "number"
+            },
+            {
+              "cppType": "vlt::Function<vlt::AudioFrame (vlt::AudioFrame, float)>",
+              "default": 0.0,
+              "id": "filter_a",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "filterA",
+              "signature": "value:audio;(audio;number;)",
+              "type": "function"
+            },
+            {
+              "cppType": "vlt::Function<vlt::AudioFrame (vlt::AudioFrame, float)>",
+              "default": 0.0,
+              "id": "filter_b",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "filterB",
+              "signature": "value:audio;(audio;number;)",
+              "type": "function"
+            }
+          ],
+          "outputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "out",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "Output",
+              "signature": "",
+              "type": "audio"
+            }
+          ],
+          "prepare": false,
+          "reset": false,
+          "returnType": "vlt::AudioFrame",
+          "sdk": 1,
+          "source": "#include <vlt/creator.hpp>\n\nVLT_NODE vlt::AudioFrame process(\n    VLT_PORT(\"input\") vlt::AudioFrame input,\n    VLT_PORT(\"cutoff\") float cutoff = 500.0f,\n    VLT_PORT(\"mix\") float mix = 0.5f,\n    VLT_PORT(\"filter_a\")\n        vlt::Function<vlt::AudioFrame(vlt::AudioFrame, float)> filterA = {},\n    VLT_PORT(\"filter_b\")\n        vlt::Function<vlt::AudioFrame(vlt::AudioFrame, float)> filterB = {})\n{\n    // Connect the SAME OnePole function output to both function inputs.\n    // Each input owns independent filter history.\n    const auto low = filterA(input, cutoff);\n    const auto high = filterB(input, cutoff * 4.0f);\n    return vlt::mix(low, high, vlt::clamp(mix, 0.0f, 1.0f));\n}\n",
+          "stateType": ""
+        }
+      },
+      {
+        "id": "ui",
+        "type": "interface",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "filter",
+        "type": "cpp_function",
+        "version": 1,
+        "parameters": {},
+        "function": {
+          "aggregateReturn": false,
+          "analyzedHash": "22e7a76e26ed5b28905f4ac05e1b4ac0a4ce1be2c049bf18766e52f4910b77e5",
+          "arguments": [
+            "$state",
+            "$context",
+            "input",
+            "cutoff"
+          ],
+          "context": true,
+          "entry": "process",
+          "inputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "input",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "input",
+              "signature": "",
+              "type": "audio"
+            },
+            {
+              "cppType": "float",
+              "default": 1500.0,
+              "id": "cutoff",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "cutoff",
+              "signature": "",
+              "type": "number"
+            }
+          ],
+          "outputs": [
+            {
+              "cppType": "vlt::AudioFrame",
+              "default": 0.0,
+              "id": "out",
+              "max": 1000000.0,
+              "min": -1000000.0,
+              "name": "Output",
+              "signature": "",
+              "type": "audio"
+            }
+          ],
+          "prepare": false,
+          "reset": true,
+          "returnType": "vlt::AudioFrame",
+          "sdk": 1,
+          "source": "#include <vlt/creator.hpp>\n\nstruct State {\n    vlt::AudioFrame history{};\n};\n\nvoid reset(State& state)\n{\n    state.history = {};\n}\n\nVLT_NODE vlt::AudioFrame process(\n    State& state, const vlt::Context& context,\n    VLT_PORT(\"input\") vlt::AudioFrame input,\n    VLT_PORT(\"cutoff\") float cutoff = 1500.0f)\n{\n    cutoff = vlt::clamp(cutoff, 20.0f, float(context.sampleRate * 0.45));\n    const float alpha = 1.0f - vlt::exp(\n        -6.28318530718f * cutoff / float(context.sampleRate));\n    state.history = state.history + (input - state.history) * alpha;\n    return state.history;\n}\n",
+          "stateType": "State"
+        }
+      }
+    ],
+    "connections": [
+      {
+        "from": "filter",
+        "to": "cpp",
+        "fromPort": "function",
+        "toPort": "filter_a"
+      },
+      {
+        "from": "filter",
+        "to": "cpp",
+        "fromPort": "function",
+        "toPort": "filter_b"
+      },
+      {
+        "from": "in",
+        "to": "cpp",
+        "fromPort": "out",
+        "toPort": "input"
+      },
+      {
+        "from": "ui",
+        "to": "cpp",
+        "fromPort": "cutoff",
+        "toPort": "cutoff"
+      },
+      {
+        "from": "ui",
+        "to": "cpp",
+        "fromPort": "mix",
+        "toPort": "mix"
+      },
+      {
+        "from": "cpp",
+        "to": "out",
+        "fromPort": "out",
+        "toPort": "in"
+      }
+    ],
+    "controls": [
+      {
+        "id": "cutoff",
+        "name": "cutoff",
+        "unit": "Hz",
+        "min": 20.0,
+        "max": 5000.0,
+        "default": 500.0,
+        "log": true,
+        "style": "",
+        "bindings": []
+      },
+      {
+        "id": "mix",
+        "name": "mix",
+        "unit": "",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "log": false,
+        "style": "",
+        "bindings": []
+      }
+    ],
+    "modes": [],
+    "defaultMode": "",
+    "appearance": {
+      "theme": "studio",
+      "controlStyle": "machined",
+      "backgroundColor": "",
+      "backgroundImage": ""
+    },
+    "code": {
+      "abi": 1,
+      "wasm": "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bHlfc2NhbGVkAHNoaWZ0X3NjYWxlZABpbnZsbjJfc2NhbGVkAGxpYmMtdG9wLWhhbGYvbXVzbC9zcmMvbWF0aC9fX21hdGhfeGZsb3dmLmMAbGliYy10b3AtaGFsZi9tdXNsL3NyYy9tYXRoL19fbWF0aF91Zmxvd2YuYwBsaWJjLXRvcC1oYWxmL211c2wvc3JjL21hdGgvX19tYXRoX29mbG93Zi5jAGxpYmMtdG9wLWhhbGYvbXVzbC9zcmMvbWF0aC9leHBmLmMAbGliYy10b3AtaGFsZi9tdXNsL3NyYy9tYXRoL2V4cDJmX2RhdGEuYwB0YWIAX19leHAyZl9kYXRhAF9fQVJSQVlfU0laRV9UWVBFX18AcjIAdG9wMTIAd2FzaXNkazovL3YyNy4wL2J1aWxkL3N5c3Jvb3Qvd2FzaS1saWJjLXdhc20zMi13YXNpcDEAY2xhbmcgdmVyc2lvbiAyMC4xLjgtd2FzaS1zZGsgKGh0dHBzOi8vZ2l0aHViLmNvbS9sbHZtL2xsdm0tcHJvamVjdCA4N2YwMjI3Y2I2MDE0N2EyNmExZWViNGZiMDZlM2I1MDVlOWM3MjYxKQAAsQoLLmRlYnVnX2xpbmXCAAAABAClAAAAAQEB+w4NAAEBAQEAAAABAAABbGliYy10b3AtaGFsZi9tdXNsL3NyYy9tYXRoAHdhc2lzZGs6Ly92MjcuMC9idWlsZC9zeXNyb290L2luc3RhbGwvc2hhcmUvd2FzaS1zeXNyb290L2luY2x1ZGUvd2FzbTMyLXdhc2lwMS9iaXRzAABfX21hdGhfeGZsb3dmLmMAAQAAYWxsdHlwZXMuaAACAAAABSMKAAUCJQMAABYFMgaeBQIgAgEAAQHqAAAABADPAAAAAQEB+w4NAAEBAQEAAAABAAABbGliYy10b3AtaGFsZi9tdXNsL3NyYy9tYXRoAGxpYmMtdG9wLWhhbGYvbXVzbC9zcmMvaW50ZXJuYWwAd2FzaXNkazovL3YyNy4wL2J1aWxkL3N5c3Jvb3QvaW5zdGFsbC9zaGFyZS93YXNpLXN5c3Jvb3QvaW5jbHVkZS93YXNtMzItd2FzaXAxL2JpdHMAAF9fbWF0aF9vZmxvd2YuYwABAABsaWJtLmgAAgAAYWxsdHlwZXMuaAADAAAAAAUCMgMAABUFCQqDBQIGZgIBAAEB6gAAAAQAzwAAAAEBAfsODQABAQEBAAAAAQAAAWxpYmMtdG9wLWhhbGYvbXVzbC9zcmMvbWF0aABsaWJjLXRvcC1oYWxmL211c2wvc3JjL2ludGVybmFsAHdhc2lzZGs6Ly92MjcuMC9idWlsZC9zeXNyb290L2luc3RhbGwvc2hhcmUvd2FzaS1zeXNyb290L2luY2x1ZGUvd2FzbTMyLXdhc2lwMS9iaXRzAABfX21hdGhfdWZsb3dmLmMAAQAAbGlibS5oAAIAAGFsbHR5cGVzLmgAAwAAAAAFAkIDAAAVBQkKgwUCBmYCAQABAbgAAAAEALIAAAABAQH7Dg0AAQEBAQAAAAEAAAF3YXNpc2RrOi8vdjI3LjAvYnVpbGQvc3lzcm9vdC9pbnN0YWxsL3NoYXJlL3dhc2ktc3lzcm9vdC9pbmNsdWRlL3dhc20zMi13YXNpcDEvYml0cwBsaWJjLXRvcC1oYWxmL211c2wvc3JjL21hdGgAAGFsbHR5cGVzLmgAAQAAZXhwMmZfZGF0YS5oAAIAAGV4cDJmX2RhdGEuYwACAAAAwwEAAAQAxgAAAAEBAfsODQABAQEBAAAAAQAAAXdhc2lzZGs6Ly92MjcuMC9idWlsZC9zeXNyb290L2luc3RhbGwvc2hhcmUvd2FzaS1zeXNyb290L2luY2x1ZGUvd2FzbTMyLXdhc2lwMS9iaXRzAGxpYmMtdG9wLWhhbGYvbXVzbC9zcmMvbWF0aABsaWJjLXRvcC1oYWxmL211c2wvc3JjL2ludGVybmFsAABhbGx0eXBlcy5oAAEAAGV4cGYuYwACAABsaWJtLmgAAwAAAAQCBQkKAAUCXAMAAAMdAQUTBpAFFAYDCkoGA1ggBQYGAylYBgNXPAURBgMr1gYDVTwFDgYDLXQFDT0FAQMiWAYDsH8gBQkGAy+eBgNRSgULBgMwLgUBAyBmBgOwfyAFCQYDMYIGA09KBQsGAzIuBQEDHmYGA7B/IAUGBgPKADwDbJAFDgaeA0ogBRoGA8AAZgUYBnQFBQY+BQhaBQ8mBREGWAUPdAUJBiEFDVoGA7N/IAUGBgPMAC4FDwZ0BQ0GyQUHA3QgBgO/fzwFCgYDyABKBQYfA2+QAxFmBQRLBQYhBQglBRchBgOxfzwFAQYD0AAgAgMAAQEAyQIKLmRlYnVnX2xvYxcAAAAZAAAABADtAgCfGQAAAOgAAAAEAO0AAZ8AAAAAAAAAAIIAAACDAAAABADtAgKfAAAAAAAAAACDAAAAhQAAAAQA7QIBn4UAAACmAAAABADtAAOfpgAAAKwAAAAEAO0CAJ8AAAAAAAAAAJgAAACZAAAABADtAgKfAAAAAAAAAACZAAAAmwAAAAQA7QIBn5sAAADkAAAABADtAAOfAAAAAAAAAACrAAAArAAAAAQA7QIBnwAAAAAAAAAAwgAAAMMAAAAEAO0CAZ/DAAAA4gAAAAQA7QIAnwAAAAAAAAAAxgAAAMgAAAAEAO0CAZ/IAAAA5AAAAAQA7QAGnwAAAAAAAAAA3gAAAN8AAAAEAO0CAp/fAAAA4AAAAAQA7QIBnwAAAAAAAAAA4AAAAOEAAAAEAO0CAZ8AAAAAAAAAAADSAQRuYW1lAAwLbW9kdWxlLndhc20BlQEMAAdyZXNlcnZlARFfX3dhc21fY2FsbF9jdG9ycwINdmx0X2hlYXBfYmFzZQMHdmx0X2FiaQQJdmx0X3RhYmxlBQh2bHRfaW5pdAYJdmx0X3Jlc2V0Bwt2bHRfcHJvY2VzcwgNX19tYXRoX3hmbG93ZgkNX19tYXRoX29mbG93ZgoNX19tYXRoX3VmbG93ZgsEZXhwZgcSAQAPX19zdGFja19wb2ludGVyCRECAAcucm9kYXRhAQUuZGF0YQA1CXByb2R1Y2VycwIIbGFuZ3VhZ2UBA0MxMQAMcHJvY2Vzc2VkLWJ5AQVjbGFuZwYyMC4xLjgApAEPdGFyZ2V0X2ZlYXR1cmVzCSsLYnVsay1tZW1vcnkrD2J1bGstbWVtb3J5LW9wdCsWY2FsbC1pbmRpcmVjdC1vdmVybG9uZysOZXh0ZW5kZWQtY29uc3QrCm11bHRpdmFsdWUrD211dGFibGUtZ2xvYmFscysTbm9udHJhcHBpbmctZnB0b2ludCsPcmVmZXJlbmNlLXR5cGVzKwhzaWduLWV4dA==",
+      "sourceHash": "346a7ce4c8b6a37902707484fe942944250b441d246e38ab4ddcf0babfaa3b40"
+    }
+  }
+}

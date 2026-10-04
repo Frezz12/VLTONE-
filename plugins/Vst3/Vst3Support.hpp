@@ -261,49 +261,57 @@ inline Vst::IHostApplication* hostApplication() {
 /// One parameter's automation points inside a block.
 class ParamValueQueue final : public U::Implements<U::Directly<Vst::IParamValueQueue>> {
 public:
-    void reserve(std::size_t count) { m_points.reserve(count); }
+    struct Point { int32 offset; Vst::ParamValue value; };
+    void reserve(std::size_t count) {
+        if (m_storage.size() < count) m_storage.resize(count);
+        m_points = m_storage; m_used = 0;
+    }
     void reset(Vst::ParamID id) {
-        m_id = id;
-        m_points.clear();
+        m_id = id; m_points = m_storage; m_used = m_expected = 0;
     }
+    void expectPoint() noexcept { ++m_expected; }
+    std::size_t expectedPoints() const noexcept { return m_expected; }
+    void useStorage(std::span<Point> storage) noexcept { m_points = storage; m_used = 0; }
     bool add(int32 offset, Vst::ParamValue value) {
-        if (m_points.size() >= m_points.capacity()) return false;
-        m_points.push_back({offset, value});
-        return true;
+        int32 index;
+        return addPoint(offset, value, index) == kResultOk;
     }
-    bool empty() const noexcept { return m_points.empty(); }
+    bool empty() const noexcept { return m_used == 0; }
 
     Vst::ParamID PLUGIN_API getParameterId() override { return m_id; }
-    int32 PLUGIN_API getPointCount() override { return int32(m_points.size()); }
+    int32 PLUGIN_API getPointCount() override { return int32(m_used); }
     tresult PLUGIN_API getPoint(int32 index, int32& sampleOffset,
                                 Vst::ParamValue& value) override {
-        if (index < 0 || std::size_t(index) >= m_points.size()) return kResultFalse;
+        if (index < 0 || std::size_t(index) >= m_used) return kResultFalse;
         sampleOffset = m_points[std::size_t(index)].offset;
         value = m_points[std::size_t(index)].value;
         return kResultOk;
     }
     tresult PLUGIN_API addPoint(int32 sampleOffset, Vst::ParamValue value,
                                 int32& index) override {
-        if (m_points.size() >= m_points.capacity()) return kResultFalse;
-        index = int32(m_points.size());
-        m_points.push_back({sampleOffset, value});
+        // Several host edits at one sample have one audible final value.
+        if (m_used && m_points[m_used - 1].offset == sampleOffset) {
+            index = int32(m_used - 1); m_points[m_used - 1].value = value;
+            return kResultOk;
+        }
+        if (m_used >= m_points.size()) { index = -1; return kResultFalse; }
+        index = int32(m_used); m_points[m_used++] = {sampleOffset, value};
         return kResultOk;
     }
 
 private:
-    struct Point {
-        int32 offset;
-        Vst::ParamValue value;
-    };
     Vst::ParamID m_id = 0;
-    std::vector<Point> m_points;
+    std::vector<Point> m_storage;
+    std::span<Point> m_points;
+    std::size_t m_used = 0, m_expected = 0;
 };
 
 /// The block's parameter changes. Pre-grown in `activate`, cleared per block —
 /// `process` must not allocate.
 class ParameterChanges final : public U::Implements<U::Directly<Vst::IParameterChanges>> {
 public:
-    void reserve(std::size_t count) {
+    void reserve(std::size_t count, std::size_t pointCapacity = 0) {
+        m_pointPool.resize(pointCapacity);
         m_queues.reserve(count);
         while (m_queues.size() < count) {
             auto queue = owned(new ParamValueQueue);
@@ -320,6 +328,19 @@ public:
         auto found=std::find_if(m_special.begin(),m_special.end(),[&](const auto& q){return q.first==id;});
         if(found==m_special.end()){auto q=owned(new ParamValueQueue);q->reserve(count);m_special.emplace_back(id,std::move(q));}
         else found->second->reserve(count);
+    }
+    // The host counts this block's input points before filling the queues.
+    // A single pool admits dense curves without reserving max-block storage
+    // separately for every parameter the plugin exposes.
+    bool preparePoints() noexcept {
+        std::size_t used = 0;
+        for (std::size_t i = 0; i < m_used; ++i) {
+            const auto count = m_active[i]->expectedPoints() + 1; // editor value at sample zero
+            if (count > m_pointPool.size() - used) return false;
+            m_active[i]->useStorage(std::span(m_pointPool).subspan(used, count));
+            used += count;
+        }
+        return true;
     }
     void clear() noexcept {
         if (!m_used) return; // Idle plugins need no table scan on each audio block.
@@ -367,6 +388,7 @@ private:
         m_active[index]->reset(id);
         return m_active[index];
     }
+    std::vector<ParamValueQueue::Point> m_pointPool;
     std::vector<IPtr<ParamValueQueue>> m_queues;
     std::vector<ParamValueQueue*> m_active;
     std::vector<std::pair<Vst::ParamID,IPtr<ParamValueQueue>>> m_special;

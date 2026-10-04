@@ -15,6 +15,7 @@ MixerPreferences::MixerPreferences(QObject* parent) : QObject(parent) {
     m_channelWidth = std::clamp(QSettings().value(kWidthSetting, kDefaultWidth).toInt(),
                               kMinimumWidth, kMaximumWidth);
     m_masterVisible = QSettings().value(kMasterVisibleSetting, true).toBool();
+    m_colorVisible = QSettings().value(kColorVisibleSetting, true).toBool();
 }
 
 void MixerPreferences::setChannelWidth(int width) {
@@ -30,6 +31,13 @@ void MixerPreferences::setMasterVisible(bool visible) {
     m_masterVisible = visible;
     QSettings().setValue(kMasterVisibleSetting, visible);
     emit masterVisibleChanged(visible);
+}
+
+void MixerPreferences::setColorVisible(bool visible) {
+    if (visible == m_colorVisible) return;
+    m_colorVisible = visible;
+    QSettings().setValue(kColorVisibleSetting, visible);
+    emit colorVisibleChanged(visible);
 }
 
 } // namespace ui

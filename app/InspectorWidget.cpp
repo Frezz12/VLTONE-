@@ -783,6 +783,7 @@ void InspectorWidget::rebuild() {
                 &InspectorWidget::automateMuteRequested);
         connect(m_strip, &ChannelStrip::automateSendRequested, this,
                 &InspectorWidget::automateSendRequested);
+        connect(m_strip, &ChannelStrip::automatePluginRequested, this, &InspectorWidget::automatePluginRequested);
         connect(m_strip, &ChannelStrip::structureChanged, this, [this] {
             emit structureChanged();
             rebuild();

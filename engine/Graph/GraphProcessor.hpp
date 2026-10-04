@@ -36,7 +36,8 @@ public:
 
     /// Render one block into `output`. Realtime-safe: no allocation, no locks.
     /// On success every channel of `output` has been written, so the caller does
-    /// not need to clear it first; on failure `output` is left untouched.
+    /// not need to clear it first. ProcessingFailed retains safe fallback audio;
+    /// setup failures leave output untouched.
     ///
     /// `offline` is passed on to every node as `ProcessContext::offline`: it
     /// says the realtime deadline is lifted (mixdown, freeze, bounce), not that
@@ -56,7 +57,8 @@ public:
     Status processSerial(const AudioBlock& output, FrameCount frames,
                          SamplePos timelinePosition, bool playing,
                          bool offline = false,
-                         const TransportInfo& transport = TransportInfo{});
+                         const TransportInfo& transport = TransportInfo{},
+                         std::span<double> nodeCosts = {});
 
     /// Baseline node-count crossover for the pool. Smaller graphs may still run
     /// in parallel when compilation found a wide enough independent frontier;
@@ -77,6 +79,7 @@ public:
     // Renderer only: latency of the snapshot actually used by the last pass.
     // Unlike latencySamples(), this does not acquire the control-side mutex.
     FrameCount lastBlockLatencySamples() const noexcept { return m_lastBlockLatency; }
+    std::uint64_t lastBlockGraphGeneration() const noexcept { return m_lastBlockGraphGeneration; }
 
 private:
     static void executeJob(void* context, std::uint32_t nodeIndex,
@@ -94,7 +97,7 @@ private:
     ProcessContext makeContext(const CompiledGraph& graph,
                                const CompiledGraph::CompiledNode& entry) const noexcept;
     /// Copy the finished mix out to the caller's block, filling every channel.
-    void writeSink(const CompiledGraph& graph, const AudioBlock& output,
+    Status writeSink(const CompiledGraph& graph, const AudioBlock& output,
                    FrameCount frames) noexcept;
     const CompiledGraph* acquireGraph() noexcept;
     void releaseGraph() noexcept;
@@ -116,6 +119,7 @@ private:
     // by every worker inside it.
     FrameCount m_frames = 0;
     FrameCount m_lastBlockLatency = 0;
+    std::uint64_t m_lastBlockGraphGeneration = 0;
     SamplePos m_position = 0;
     bool m_playing = false;
     bool m_offline = false;

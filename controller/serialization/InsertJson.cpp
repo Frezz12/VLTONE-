@@ -45,10 +45,16 @@ json insertToJson(const InsertModel& i) {
 
     j["format"] = toString(i.format);
     j["uid"] = i.uid;
+    if (i.miniModule) {
+        j["miniModule"] = plugins::mini::toJson(*i.miniModule);
+        j["miniModuleMode"] = i.miniModuleMode;
+        j["miniModulePosition"] = i.miniModulePostFx ? "postFx" : "preFx";
+    }
     j["path"] = i.path;
     j["vendor"] = i.vendor;
     if (!i.pluginVersion.empty()) j["pluginVersion"] = i.pluginVersion;
     if (!i.parameterFingerprint.empty()) j["parameterFingerprint"] = i.parameterFingerprint;
+    if (!i.profileSeed.empty()) j["profileSeed"] = i.profileSeed;
     if (i.stateSchemaVersion > 0)
         j["stateSchemaVersion"] = i.stateSchemaVersion;
     j["mix"] = i.mix;
@@ -95,10 +101,18 @@ InsertModel insertFromJson(const json& j) {
 
     i.format = pluginFormatFromString(j.value("format", std::string()));
     i.uid = j.value("uid", "");
+    if (j.contains("miniModule")) {
+        i.miniModule = plugins::mini::fromJson(j.at("miniModule"));
+        i.miniModuleMode = j.value("miniModuleMode", std::string{});
+        const auto position = j.value("miniModulePosition", std::string("preFx"));
+        if (position != "preFx" && position != "postFx") throw std::runtime_error("Unknown mini-module position");
+        i.miniModulePostFx = position == "postFx";
+    }
     i.path = j.value("path", "");
     i.vendor = j.value("vendor", "");
     i.pluginVersion = j.value("pluginVersion", "");
     i.parameterFingerprint = j.value("parameterFingerprint", "");
+    i.profileSeed = j.value("profileSeed", "");
     i.stateSchemaVersion = std::max(0, j.value("stateSchemaVersion", 0));
     i.mix = j.value("mix", 1.0f);
     i.slideDelivery = std::clamp(j.value("slideDelivery",0),0,4);

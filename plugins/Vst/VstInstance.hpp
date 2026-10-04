@@ -62,6 +62,8 @@ public:
     PluginProcessDisposition process(
         const PluginProcessContext& context) noexcept override;
     void reset() noexcept override;
+    void resetForTransport() noexcept override;
+    bool supportsRealtimeReset() const noexcept override { return false; }
 
     std::uint32_t latencySamples() const noexcept override {
         return m_latency.load(std::memory_order_relaxed);

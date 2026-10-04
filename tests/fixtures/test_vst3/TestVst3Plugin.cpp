@@ -625,9 +625,13 @@ public:
         return kResultOk;
     }
 
-    int32 PLUGIN_API countClasses() override { return 4; }
+    int32 PLUGIN_API countClasses() override {
+        if (std::getenv("DAW_TEST_FORBID_ENUMERATION")) std::abort();
+        return 4;
+    }
 
     tresult PLUGIN_API getClassInfo(int32 index, PClassInfo* info) override {
+        if (std::getenv("DAW_TEST_FORBID_ENUMERATION")) std::abort();
         if (!info) return kInvalidArgument;
         std::memset(info, 0, sizeof(*info));
         if (index == 0) {

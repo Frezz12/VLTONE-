@@ -8,6 +8,18 @@
 
 namespace daw {
 
+enum class PluginScanState { Pending, Passed, Failed };
+
+struct PluginComponentResult {
+    std::string uid;
+    plugins::PluginDescriptor descriptor;
+    PluginScanState state = PluginScanState::Pending;
+    std::string failureReason;
+    int attempts = 0;
+    std::uint64_t durationMs = 0;
+    bool timeoutRetryPending = false;
+};
+
 /// One scanned file and what came out of it.
 ///
 /// A failed entry is as valuable as a successful one: it is what stops the DAW
@@ -31,6 +43,17 @@ struct PluginCacheEntry {
     int attempts = 0;
 
     std::vector<plugins::PluginDescriptor> plugins;
+
+    /// plugins holds the last good catalogue while an explicit rescan is
+    /// pending. Components describe this scan generation, including failures.
+    PluginScanState discovery = PluginScanState::Pending;
+    std::vector<PluginComponentResult> components;
+    std::uint64_t discoveryDurationMs = 0;
+    bool timeoutRetryPending = false;
+    /// False only for entries constructed through the legacy cache API.
+    bool scanStatePresent = false;
+
+    bool complete() const noexcept;
 };
 
 /// The scan results, on disk.
@@ -45,6 +68,7 @@ public:
     /// `~/.config/VLT Studio Pro/plugins.json`, or the Windows Roaming AppData
     /// Known Folder under `VLT Studio Pro\plugins.json`.
     static std::string defaultPath();
+    static std::string normalizedPath(const std::string& path);
 
     /// Missing or corrupt reads as empty — a broken cache must cost a rescan,
     /// never a failure to start.

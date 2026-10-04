@@ -1,4 +1,5 @@
 #include "ChannelStrip.hpp"
+#include "MiniModuleRack.hpp"
 #include "ConsoleLevelWell.hpp"
 #include "LoudnessDisplay.hpp"
 #include "AudioImportPreparation.hpp"
@@ -834,10 +835,10 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     }
     auto* inserts = buildInserts();
     inserts->setObjectName(QStringLiteral("ChannelInsertsRow"));
-    const std::array<QWidget*, 4> sections{
-        buildRouting(), instrument, inserts, m_master ? nullptr : buildSends()};
-    const std::array<const char*, 4> sectionNames{
-        "ChannelRoutingRow", "ChannelInstrumentTier", "ChannelProcessingRow", "ChannelSendsRow"};
+    const std::array<QWidget*, 5> sections{
+        buildRouting(), buildColor(), instrument, inserts, m_master ? nullptr : buildSends()};
+    const std::array<const char*, 5> sectionNames{
+        "ChannelRoutingRow", "ChannelColorRow", "ChannelInstrumentTier", "ChannelProcessingRow", "ChannelSendsRow"};
     for (std::size_t i = 0; i < sections.size(); ++i) {
         auto* row = new QWidget(m_rack);
         row->setObjectName(QString::fromLatin1(sectionNames[i]));
@@ -969,6 +970,10 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     }
     m_rackNaturalHeight = m_rack->sizeHint().height();
     m_rack->setFixedHeight(m_rackNaturalHeight);
+    // The COLOR row is the one section whose height is decided by a preference
+    // rather than by what was built, so it is reconciled after the measurement
+    // above instead of inside buildColor, where the row does not exist yet.
+    refreshColorRackRow();
     updateResponsiveLayout();
 }
 
@@ -2317,9 +2322,10 @@ void ChannelStrip::setRackHeights(const RackHeights& heights) {
         auto* row = m_rackSections[i];
         // Master has no aux sends: give that height to its fader/meter instead
         // of keeping an empty well below the final processing stage.
-        const int height = m_master && i == 3 ? 0 : std::max(heights[i], m_rackNaturalHeights[i]);
+        const int height = m_master && i == 4 ? 0 : std::max(heights[i], m_rackNaturalHeights[i]);
+        if (i == 1) if (auto* rack = qobject_cast<ui::MiniModuleRack*>(m_colorWell)) rack->setRackHeight(height);
         if (row->height() == height && row->isHidden() == (height == 0)) continue;
-        if (i == 3 && !m_master) {
+        if (i == 4 && !m_master) {
             if (auto* add = row->findChild<QToolButton*>(QStringLiteral("SendAddArea")))
                 add->setFixedHeight(add->property("sendAddNaturalHeight").toInt() +
                                     height - m_rackNaturalHeights[i]);
@@ -2364,8 +2370,9 @@ void ChannelStrip::updateResponsiveLayout() {
     if (!m_readoutLayout || !m_panLayout || !m_rackNaturalHeight || m_layoutWidth == width()) return;
     m_layoutWidth = width();
     m_denseLayout = width() < 100;
-    m_mainLayout->setContentsMargins(m_denseLayout ? 2 : 5, m_inspectorCompact ? 6 : 8,
-                                     m_denseLayout ? 3 : 6, m_inspectorCompact ? 5 : 7);
+    const bool compactGutters = width() <= 110;
+    m_mainLayout->setContentsMargins(m_denseLayout ? 2 : compactGutters ? 3 : 5, m_inspectorCompact ? 6 : 8,
+                                     compactGutters ? 3 : 6, m_inspectorCompact ? 5 : 7);
     m_mainLayout->setSpacing(m_inspectorCompact ? 5 : 6);
     m_levelLayout->setContentsMargins(m_denseLayout ? 1 : 3, 4, m_denseLayout ? 1 : 3, 2);
     while (auto* item = m_panLayout->takeAt(0)) delete item;
@@ -2392,6 +2399,12 @@ void ChannelStrip::updateResponsiveLayout() {
     m_displayedGain = -1;
     updateReadouts();
     m_mainLayout->invalidate();
+    if(auto* rack=qobject_cast<ui::MiniModuleRack*>(m_colorWell)) {
+        const int previousHeight=rack->naturalHeight();
+        rack->setStripWidth(width());
+        m_rackNaturalHeights[1]=ui::MixerPreferences::instance().colorVisible()?rack->naturalHeight():0;
+        if(previousHeight!=rack->naturalHeight()) {refreshColorRackRow();return;}
+    }
     const int height = m_mainLayout->minimumSize().height();
     m_naturalHeight = std::max(kFallbackHeight, height - m_rackExtraHeight);
     if (m_inspectorCompact) setFixedHeight(std::max(360, height));
@@ -2541,6 +2554,7 @@ bool ChannelStrip::checkGroupInputsForTest() {
 }
 
 void ChannelStrip::syncFromModel() {
+    syncColor(false);
     // These controls report user edits through their value signals. A value
     // arriving from another view must not echo back into the controller (and
     // recursively rebuild/synchronise the UI again).
@@ -2611,6 +2625,7 @@ void ChannelStrip::syncFromModel() {
 }
 
 void ChannelStrip::refreshAutomationValues() {
+    syncColor(true);
     if (!m_controller) return;
     const auto* track =
         m_controller->project().findTrack(m_trackId.toStdString());
@@ -3375,6 +3390,17 @@ QLabel { color: %TEXT2%; font-size: 9px; }
 #RoutingButton::menu-indicator { image: none; width: 0; }
 #SlotWell { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %RECESS%,stop:1 %WELL_BOTTOM%);
     border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %LIGHT%; border-radius: %RADIUS%px; }
+#SlotWell #ColorControls {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %FACE_TOP%,stop:0.55 %FACE_MID%,stop:1 %FACE_BOTTOM%);
+    border: 1px solid %FACE_EDGE%; border-top-color: %FACE_LIP%; border-radius: 4px;
+}
+/* Silkscreened parameter names and printed values. Both are deliberately one
+   shade quieter than the wells around them: they label the pots, they are not
+   controls, and a label that competes with the thing it names reads as one. */
+#ColorDriveCaption, #ColorToneCaption { color: %TEXT3%; background: transparent;
+    letter-spacing: 0.6px; padding: 0; }
+#ColorDriveValue, #ColorToneValue { color: %TEXT2%; background: transparent;
+    font-weight: 500; padding: 0; }
 #SlotButton {
     background: %SLOT%; border: 1px solid transparent; border-radius: %RADIUS%px;
     color: %TEXT2%; font-size: 9px; font-weight: 400; padding: 0 5px;
@@ -3441,6 +3467,15 @@ QLabel { color: %TEXT2%; font-size: 9px; }
         .replace("%HOVER%", t.controlTop().name())
         .replace("%RACK_LINE%", mixColors(t.well(), t.textPrimary, 0.10).name())
         .replace("%RACK_HOVER%", mixColors(t.well(), t.textPrimary, 0.06).name())
+        // COLOR's faceplate sits proud of the recessed well around it, so its
+        // gradient runs the other way: lit along the top edge, falling away
+        // towards the bottom, with the near lip one step brighter than the rest.
+        .replace("%FACE_TOP%", mixColors(t.wellTop(), t.surfaceElevated, 0.38).name())
+        .replace("%FACE_MID%", mixColors(t.well(), t.surfaceElevated, 0.24).name())
+        .replace("%FACE_BOTTOM%", mixColors(t.wellBottom(), t.surfaceElevated, 0.12).name())
+        .replace("%FACE_EDGE%", t.edgeDark(t.well()).name())
+        .replace("%FACE_LIP%", t.edgeLight(t.surfaceElevated).name())
+        .replace("%TEXT3%", mixColors(t.textSecondary, t.well(), 0.22).name())
         .replace("%DIM%", mixColors(t.textSecondary, t.background, 0.35).name())
         .replace("%BYPASS%", mixColors(Theme::mute(), t.background, 0.45).name())
         .replace("%CLIP%", Theme::record().name())

@@ -1,4 +1,5 @@
 #include "Vst/VstInstance.hpp"
+#include "Vst/VstFactory.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -172,19 +173,19 @@ bool VstInstance::initialize() {
     m_effect = m_module ? m_module->create(m_host) : nullptr;
     if (!m_effect) return false;
     m_effect->dispatcher(m_effect, effOpen, 0, 0, nullptr, 0.0f);
-    if (m_host.currentId != 0 && m_effect->uniqueID != 0 &&
-        m_effect->uniqueID != m_host.currentId) {
+    if ((m_host.currentId != 0 && m_effect->uniqueID != 0 &&
+         m_effect->uniqueID != m_host.currentId) ||
+        m_effect->dispatcher(m_effect, effGetPlugCategory, 0, 0, nullptr, 0.0f) == kPlugCategShell) {
         m_effect->dispatcher(m_effect, effClose, 0, 0, nullptr, 0.0f);
         m_effect = nullptr;
         return false;
     }
-    m_descriptor.mainInputChannels = static_cast<std::uint16_t>(
-        std::clamp<VstInt32>(m_effect->numInputs, 0,
-                             std::numeric_limits<std::uint16_t>::max()));
-    m_descriptor.mainOutputChannels = static_cast<std::uint16_t>(
-        std::clamp<VstInt32>(m_effect->numOutputs, 0,
-                             std::numeric_limits<std::uint16_t>::max()));
-    m_descriptor.hasEditor = hasEditor();
+    auto fresh = vst::describeEffect(m_effect, m_descriptor.path, m_descriptor.name);
+    fresh.uid = m_descriptor.uid; // A shell's address may differ from uniqueID.
+    fresh.stateSchemaVersion = m_descriptor.stateSchemaVersion;
+    fresh.parameterSchema = m_descriptor.parameterSchema;
+    fresh.parameterFingerprint = m_descriptor.parameterFingerprint;
+    m_descriptor = std::move(fresh);
     readParameters();
     refreshLatencyAndTail();
     return true;
@@ -631,8 +632,16 @@ PluginProcessDisposition VstInstance::process(
 }
 
 void VstInstance::reset() noexcept {
-    // AEffect has no realtime-safe reset opcode. The mains/process transitions
-    // bracket graph stops and are the format-defined way to clear DSP state.
+    // No audio-thread-safe reset opcode; PluginNode keeps bypass DSP current.
+}
+
+void VstInstance::resetForTransport() noexcept {
+    if (!m_effect || !m_active) return;
+    const bool processing = m_processing;
+    if (processing) stopProcessing();
+    m_effect->dispatcher(m_effect, effMainsChanged, 0, 0, nullptr, 0.0f);
+    m_effect->dispatcher(m_effect, effMainsChanged, 0, 1, nullptr, 0.0f);
+    if (processing) startProcessing();
 }
 
 void VstInstance::receiveEvents(const VstEvents* events) noexcept {

@@ -119,7 +119,10 @@ inline constexpr std::uint32_t kLegacyParameterCount =
     kMainCount + kModTargetCount * kModParamCount;
 /// Append after the complete SMP/INS table; never move existing automation ids.
 enum class SlideParam : std::uint32_t { Legato, TimeMs, TempoSync, Beats, Shape, SmoothingMs, BendRange, Count };
-inline constexpr std::uint32_t kParameterCount = kLegacyParameterCount + std::uint32_t(SlideParam::Count);
+// New controls append after the complete legacy/slide table. Inserting into
+// Param would move every INS index in saved automation and live event streams.
+inline constexpr std::uint32_t kFineTuneIndex = kLegacyParameterCount + std::uint32_t(SlideParam::Count);
+inline constexpr std::uint32_t kParameterCount = kFineTuneIndex + 1;
 constexpr std::uint32_t indexOf(SlideParam p) noexcept { return kLegacyParameterCount + std::uint32_t(p); }
 
 /// Flat index of one INS-page control. The matrix is laid out target-major, so

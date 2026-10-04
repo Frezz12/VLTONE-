@@ -45,6 +45,7 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -88,9 +89,13 @@ void claimResultChannel() {
     // it is a diagnostic rather than a protocol violation.
 #if defined(_WIN32)
     ::_dup2(::_fileno(stderr), ::_fileno(stdout));
+    ::SetStdHandle(STD_OUTPUT_HANDLE, ::GetStdHandle(STD_ERROR_HANDLE));
+    ::SetHandleInformation(reinterpret_cast<HANDLE>(::_get_osfhandle(duplicate)),
+                           HANDLE_FLAG_INHERIT, 0);
     g_result = ::_fdopen(duplicate, "w");
 #else
     ::dup2(STDERR_FILENO, STDOUT_FILENO);
+    ::fcntl(duplicate, F_SETFD, FD_CLOEXEC);
     g_result = ::fdopen(duplicate, "w");
 #endif
     if (!g_result) g_result = stdout;
@@ -115,7 +120,7 @@ int scannerMain(const std::vector<std::string>& arguments) {
     // The host checks compatibility once before opening any plugins. Keep
     // this independent of format factories and third-party module loading.
     if (hasFlag(arguments, "--protocol")) {
-        writeResult(scan::encodeResult({}));
+        writeResult(scan::encodeHandshake());
         return 0;
     }
 
@@ -162,28 +167,47 @@ int scannerMain(const std::vector<std::string>& arguments) {
         return 0;
     }
 
-    if (hasFlag(arguments, "--inspect")) {
+    if (hasFlag(arguments, "--inspect") || hasFlag(arguments, "--discover")) {
         const std::string path = optionValue(arguments, "--path");
         if (path.empty()) return fail("--inspect needs --path");
         // Everything past this line is the plugin's code. If it takes the
         // process down, that is precisely what this process exists to absorb.
-        const std::vector<PluginDescriptor> plugins = factory->inspect(path);
+        const std::vector<PluginDescriptor> plugins = hasFlag(arguments, "--discover")
+            ? factory->discover(path) : factory->inspect(path);
         if (plugins.empty()) return fail("no plugins found in that module");
         writeResult(scan::encodeResult(plugins));
         return 0;
     }
 
-    if (hasFlag(arguments, "--validate")) {
-        const std::string path = optionValue(arguments, "--path");
-        const std::string uid = optionValue(arguments, "--uid");
-        if (path.empty() || uid.empty()) return fail("--validate needs --path and --uid");
-        const std::vector<PluginDescriptor> described = factory->inspect(path);
-        const auto found = std::find_if(described.begin(), described.end(),
-                                        [&](const PluginDescriptor& descriptor) {
-                                            return descriptor.uid == uid;
-                                        });
-        if (found == described.end()) return fail("plugin class disappeared during validation");
-        std::unique_ptr<PluginInstance> instance = factory->create(*found);
+    if (hasFlag(arguments, "--validate") || hasFlag(arguments, "--validate-descriptor")) {
+        PluginDescriptor descriptor;
+        const bool direct = hasFlag(arguments, "--validate-descriptor");
+        if (direct) {
+            if (hasFlag(arguments, "--shared-state"))
+                return fail("shared-state requires fresh --validate metadata");
+            std::string request;
+            char buffer[4096];
+            while (const auto count = std::fread(buffer, 1, sizeof(buffer), stdin)) {
+                request.append(buffer, count);
+                if (request.size() > 1024 * 1024) return fail("request exceeds 1 MiB");
+            }
+            if (std::ferror(stdin) || !scan::descriptorFromJson(request, descriptor) ||
+                descriptor.format != format || descriptor.path.empty() ||
+                !daw::platform::pathFromUtf8(descriptor.path).is_absolute())
+                return fail("invalid validation descriptor");
+        } else {
+            const std::string path = optionValue(arguments, "--path");
+            const std::string uid = optionValue(arguments, "--uid");
+            if (path.empty() || uid.empty()) return fail("--validate needs --path and --uid");
+            // Shared project probes must read current vendor/version metadata,
+            // never trust a descriptor from another machine or an old cache.
+            const auto described = factory->inspect(path);
+            const auto found = std::find_if(described.begin(), described.end(),
+                [&](const auto& item) { return item.uid == uid; });
+            if (found == described.end()) return fail("plugin class disappeared during validation");
+            descriptor = *found;
+        }
+        std::unique_ptr<PluginInstance> instance = factory->create(descriptor);
         if (!instance) return fail("plugin could not be initialized");
 
         const std::string statePath = optionValue(arguments, "--state");
@@ -257,7 +281,7 @@ int scannerMain(const std::vector<std::string>& arguments) {
         context.outputs = outputs.empty() ? nullptr : outputs.data();
         context.outputChannels = outputChannels;
         context.frames = 64;
-        context.inputEvents = found->isInstrument || found->wantsMidi
+        context.inputEvents = instance->descriptor().isInstrument || instance->descriptor().wantsMidi
                                   ? std::span<const PluginEvent>(&note, 1)
                                   : std::span<const PluginEvent>{};
         instance->process(context);
@@ -270,7 +294,14 @@ int scannerMain(const std::vector<std::string>& arguments) {
         // actually create a platform view. Validation has a live instance, so
         // persist the real answer instead of leaving every descriptor at the
         // inspect-time default (`false`).
-        PluginDescriptor validated = *found;
+        PluginDescriptor validated = descriptor;
+        // Legacy shells only knew UID/name until create(). AU fallback keeps
+        // its original AU identity and path even when a VST3 instance runs it.
+        if (descriptor.format == Format::Vst) validated = instance->descriptor();
+        validated.format = descriptor.format;
+        validated.uid = descriptor.uid;
+        validated.path = descriptor.path;
+        validated.isInstrument = instance->descriptor().isInstrument;
         validated.wantsMidi = instance->descriptor().wantsMidi;
         validated.producesMidi = instance->descriptor().producesMidi;
         validated.hasEditor = instance->hasEditor();
@@ -292,7 +323,7 @@ int scannerMain(const std::vector<std::string>& arguments) {
         return 0;
     }
 
-    return fail("nothing to do: expected --list-paths, --enumerate, --inspect or --validate");
+    return fail("expected --list-paths, --enumerate, --inspect, --discover, --validate or --validate-descriptor");
 }
 
 } // namespace

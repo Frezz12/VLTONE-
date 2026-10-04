@@ -8,6 +8,28 @@
 
 namespace daw::engine {
 
+bool AudioGraph::requiresRenderStopped(const PrepareInfo& info,
+                                       const CompiledGraph& previous) const {
+    std::unordered_map<const Node*, bool> active;
+    active.reserve(previous.nodes.size());
+    for (const auto& entry : previous.nodes) {
+        const auto first = previous.inputRoles.begin() + entry.firstInput;
+        active.emplace(entry.node,
+            std::find(first, first + entry.inputCount, InputRole::Sidechain) !=
+                first + entry.inputCount);
+    }
+    for (const auto& slot : m_nodes) {
+        if (!slot.alive) continue;
+        const auto found = active.find(slot.node.get());
+        if (found == active.end()) continue;
+        const bool sidechain = std::any_of(slot.inputs.begin(), slot.inputs.end(),
+            [](const Connection& input) { return input.role == InputRole::Sidechain; });
+        if (!slot.node->isPreparedFor(info) || sidechain != found->second)
+            return true;
+    }
+    return false;
+}
+
 // ── EdgeDelay ──────────────────────────────────────────────────────────────
 
 void EdgeDelay::prepare(ChannelCount channels, FrameCount delaySamples,
@@ -290,6 +312,7 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
         for (const Connection& input : slot.inputs) {
             latest = std::max(latest, arrival[denseIndex[input.producer]]);
         }
+        compiled->nodes[i].inputLatency = latest;
         arrival[i] = latest + slot.node->latencySamples();
         compiled->nodes[i].latency = arrival[i];
     }
@@ -327,7 +350,12 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
         // block would silently discard that output. Audio-only built-ins opt out
         // with MidiNodeRole::None, so the arena remains sparse without changing
         // the legacy contract for custom/default InputOutput nodes.
-        if (producesMidi(midiRole)) {
+        const bool upstreamMidi = std::any_of(slot.inputs.begin(), slot.inputs.end(),
+            [&](const Connection& input) {
+                return compiled->nodes[denseIndex[input.producer]].midiOutputBuffer != kInvalidNode;
+            });
+        if (producesMidi(midiRole) &&
+            (midiRole != MidiNodeRole::Passthrough || upstreamMidi)) {
             entry.midiOutputBuffer = midiBufferCount++;
         }
         entry.firstInput = std::uint32_t(compiled->inputEdges.size());

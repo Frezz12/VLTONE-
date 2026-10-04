@@ -676,7 +676,7 @@ int main() {
         check(out.storage[0] == 0.0f, "nothing plays before the clip starts");
 
         live.renderBlock(out.block(), nullptr, 0, kBlock);
-        check(std::fabs(out.storage[kBlock / 2] - 0.5f) < 1e-6f,
+        check(out.storage[0] == 0.f && std::fabs(out.storage[kBlock - 1] - 0.5f) < 1e-6f,
               "the clip plays once the playhead reaches it");
         check(std::fabs(live.masterPeakLeft() - 0.5f) < 1e-6f,
               "master metering follows the output");
@@ -961,12 +961,13 @@ int main() {
         {
             const RealtimeEngine::RenderGate gate(live);
             live.renderBlock(out.block(), nullptr, 0, kBlock);
-            check(out.storage[0] == 0.0f, "a gated renderer outputs silence");
+            check(out.storage[0] == 1.0f && out.storage[kBlock - 1] == 0.0f,
+                  "a gated renderer fades to silence without running the graph");
         }
 
         live.renderBlock(out.block(), nullptr, 0, kBlock);
-        check(std::fabs(out.storage[0] - 1.0f) < 1e-6f,
-              "audio returns once the gate is released");
+        check(out.storage[0] == 0.0f && out.storage[kBlock - 1] == 1.0f,
+              "audio fades back once the gate is released");
 
         // A gate taken while a block is running must wait for that block. Run
         // the renderer continuously and grab the gate underneath it: every
@@ -979,13 +980,14 @@ int main() {
             OutputBuffer local(2, kBlock);
             while (!stop.load()) {
                 live.renderBlock(local.block(), nullptr, 0, kBlock);
-                // The node writes 1.0 to every sample, so a block is either all
-                // ones (rendered) or all zeros (gated). Anything else means the
-                // control thread reconfigured underneath a live block.
-                const float first = local.storage[0];
-                const float last = local.storage[kBlock - 1];
-                if (first != last || (first != 0.0f && std::fabs(first - 1.0f) > 1e-6f)) {
-                    ++torn;
+                // The source is constant. The gate can only add a bounded,
+                // smooth transition, identical in both channels.
+                for (FrameCount i = 0; i < kBlock; ++i) {
+                    const float sample = local.storage[i];
+                    if (!std::isfinite(sample) || sample < 0.f || sample > 1.f ||
+                        sample != local.storage[kBlock + i] ||
+                        (i && std::abs(sample - local.storage[i - 1]) > .007f))
+                        ++torn;
                 }
                 ++rendered;
             }
@@ -1013,6 +1015,135 @@ int main() {
               "the renderer kept producing blocks across 200 gate acquisitions");
         check(torn.load() == 0,
               "no block was reconfigured while it was being rendered");
+    }
+
+    // Downstream automation follows the source audio through plugin latency.
+    // Exercise the live processor, ordinary export and the offline pipeline.
+    for (int mode = 0; mode < 3; ++mode) {
+        for (FrameCount latency : {0u, 512u}) {
+            constexpr FrameCount frames = 64;
+            RealtimeEngine engine(4);
+            ConstantSource constant;
+            auto& graph = engine.graph();
+            auto head = graph.addNode(std::make_unique<SourceNode>("one", ConstantSource::render, &constant));
+            if (latency) {
+                auto delay = graph.addNode(std::make_unique<LatencyNode>("delay", latency));
+                (void)graph.connect(head, delay); head = delay;
+            }
+            auto gain = std::make_shared<GainNode>();
+            auto automation = std::make_shared<LevelAutomation>();
+            automation->gain.active = true;
+            automation->gain.points = {{0, 1}, {1023. / 24000, 1}, {1024. / 24000, 0}, {1, 0}};
+            gain->setAutomation(automation);
+            const auto sink = graph.adoptNode(gain); (void)graph.connect(head, sink); graph.setSink(sink);
+            check(bool(engine.prepare(48000, frames, 2)), "automation/PDC engine prepares");
+            std::vector<float> samples;
+            if (mode == 0) {
+                OutputBuffer out(2, frames); engine.transport().play();
+                for (unsigned i = 0; i < (2048 + latency) / frames; ++i) {
+                    engine.renderBlock(out.block(), nullptr, 0, frames);
+                    samples.insert(samples.end(), out.pointers[0], out.pointers[0] + frames);
+                }
+            } else {
+                check(bool(engine.renderOffline(0, 2048 + latency, frames,
+                    [&](const AudioBlock& out, FrameCount count) {
+                        samples.insert(samples.end(), out.data(0), out.data(0) + count); return true;
+                    }, OfflineOptions{.pipeline = mode == 2, .forcePipeline = mode == 2})),
+                    "automation/PDC offline pass succeeds");
+            }
+            check(samples.size() > latency + 1152 && samples[latency + 600] == 1.f &&
+                      samples[latency + 1152] == 0.f,
+                  "upstream latency cannot move the fader's cutoff in the rendered audio");
+        }
+    }
+
+    // The delayed half of a live loop still uses the preceding cycle's
+    // automation, rather than falling back to values before the timeline.
+    {
+        constexpr FrameCount frames = 64;
+        RealtimeEngine engine(1);
+        ConstantSource constant;
+        auto& graph = engine.graph();
+        const auto source = graph.addNode(std::make_unique<SourceNode>("one", ConstantSource::render, &constant));
+        const auto delay = graph.addNode(std::make_unique<LatencyNode>("delay", frames));
+        auto gain = std::make_shared<GainNode>();
+        auto automation = std::make_shared<LevelAutomation>();
+        automation->gain.active = true;
+        automation->gain.points = {{0, 1}, {63. / 24000, 1}, {64. / 24000, .25}, {128. / 24000, .25}};
+        gain->setAutomation(automation);
+        const auto fader = graph.adoptNode(gain);
+        struct OutputProbe : Node {
+            float first = 0;
+            std::string_view name() const noexcept override { return "automation output"; }
+            void process(const ProcessContext& c) override {
+                first = c.inputs.front().data(0)[0];
+                for (ChannelCount ch=0; ch<c.output.numChannels(); ++ch)
+                    std::copy_n(c.inputs.front().data(ch),c.frames,c.output.data(ch));
+            }
+        };
+        auto probe = std::make_shared<OutputProbe>();
+        const auto sink = graph.adoptNode(probe);
+        (void)graph.connect(source, delay); (void)graph.connect(delay, fader);
+        (void)graph.connect(fader, sink); graph.setSink(sink);
+        check(bool(engine.prepare(48000, frames, 2)), "loop automation/PDC engine prepares");
+        engine.transport().setLoopRange(0, 128); engine.transport().setLoopEnabled(true);
+        engine.transport().play();
+        OutputBuffer out(2, frames);
+        bool aligned = true;
+        for (unsigned block = 0; block < 6; ++block) {
+            engine.renderBlock(out.block(), nullptr, 0, frames);
+            if (block >= 2) aligned &= std::abs(probe->first - (block % 2 ? 1.f : .25f)) < 1e-6f;
+        }
+        check(aligned, "PDC automation wraps with the delayed audio at a live loop boundary");
+    }
+
+    // A normal routing commit can change a live plugin's sidechain activation.
+    // Its preparation must wait for the old process call, even when the caller
+    // did not explicitly ask commitGraph to reconfigure nodes.
+    {
+        struct SidechainProbe : CountingNode {
+            bool connected = false;
+            std::atomic<bool> processing{false}, release{false}, overlap{false};
+            void setSidechainConnected(bool value) override {
+                if (connected != value) { connected = value; invalidatePrepare(); }
+            }
+            void prepare(const PrepareInfo& info) override {
+                if (processing.load()) overlap.store(true);
+                CountingNode::prepare(info);
+            }
+            void process(const ProcessContext& context) override {
+                processing.store(true);
+                while (!release.load()) std::this_thread::yield();
+                CountingNode::process(context);
+                processing.store(false);
+            }
+        };
+        RealtimeEngine live(1);
+        auto probe = std::make_shared<SidechainProbe>();
+        const auto key = live.graph().addNode(std::make_unique<CountingNode>());
+        const auto effect = live.graph().adoptNode(probe);
+        live.graph().setSink(effect);
+        check(bool(live.prepare(48000, kBlock, 2)), "sidechain race engine prepares");
+        OutputBuffer output(2, kBlock);
+        for (int change = 0; change < 3; ++change) {
+            probe->release.store(false);
+            std::thread renderer([&] { live.renderBlock(output.block(), nullptr, 0, kBlock); });
+            while (!probe->processing.load()) std::this_thread::yield();
+            if (change == 0) (void)live.graph().connect(key, effect, InputRole::Sidechain);
+            else if (change == 1) (void)live.graph().disconnect(key, effect);
+            else probe->invalidatePrepare();
+            std::thread release([&] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+                while (!probe->overlap.load() && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                probe->release.store(true);
+            });
+            const auto committed = live.commitGraph();
+            release.join(); renderer.join();
+            check(bool(committed) && !probe->overlap.load(),
+                  "sidechain and invalidated-node commits prepare only after the live block finishes");
+        }
+        check(probe->prepareCalls == 4, "all three changes reprepare the existing node");
     }
 
     // ── Musical time: sample ↔ quarter note, and the bar it falls in ──
@@ -1337,13 +1468,81 @@ int main() {
               "a file at another rate is read with a step and ends cleanly");
 
         // Seeking, and the gain the browser's level control writes.
+        preview.reset();
         preview.setGain(0.5f);
         preview.start(source);
-        preview.seekFrames(900);
+        preview.seekFrames(400);
         render();
         check(peak() > 0.2f && peak() < 0.3f, "the preview gain scales the audition");
+        check(preview.positionFrames() == 912, "seek applies in the next callback");
+        preview.seekFrames(900);
+        render();
         check(!preview.playing(),
               "and a seek near the end still ends where the file does");
+    }
+
+
+    // Curves retain intra-block corners; switches crossfade from the last sample.
+    {
+        OutputBuffer input(2, 64), output(2, 64);
+        std::fill(input.storage.begin(), input.storage.end(), 1.f);
+        const AudioBlock source = input.block();
+        ProcessContext c; c.inputs = {&source, 1}; c.output = output.block();
+        c.frames = 64; c.sampleRate = 48000; c.playing = true;
+        GainNode gain; gain.prepare({48000,64,2}); gain.reset();
+        auto curves = std::make_shared<LevelAutomation>();
+        curves->gain.active = true;
+        curves->gain.points = {{0,1},{16./24000,0},{32./24000,1},{64./24000,1}};
+        gain.setAutomation(curves); gain.process(c);
+        check(std::abs(output.storage[16]) < 1e-6f && std::abs(output.storage[32]-1) < 1e-6f,
+              "gain automation preserves a complete dip inside one block");
+        auto sendCurve = std::make_shared<LevelCurve>(curves->gain);
+        SendNode send; send.setAutomation(sendCurve); send.process(c);
+        check(std::abs(output.storage[16]) < 1e-6f && std::abs(output.storage[32]-1) < 1e-6f,
+              "send automation preserves intra-block corners");
+        gain.setAutomation({}); gain.process(c); gain.setSilent(true); gain.process(c);
+        check(output.storage.front() == 1.f && output.storage[63] < .02f,
+              "manual mute fades out without an abrupt block boundary");
+        gain.process(c); gain.setSilent(false); gain.process(c);
+        check(output.storage.front() == 0.f && output.storage[63] > .98f,
+              "manual unmute fades in");
+        send.setAutomation({}); send.setLevel(1.f); send.process(c); send.process(c);
+        send.setEnabled(false); send.process(c);
+        check(output.storage.front() == 1.f && output.storage[63] < .02f,
+              "send disable fades out");
+    }
+    {
+        struct Positions {
+            std::array<SamplePos, 64> seen{};
+            unsigned written = 0;
+            static void render(void* user, const AudioBlock& output, FrameCount frames, SamplePos position) {
+                auto& self = *static_cast<Positions*>(user);
+                for (FrameCount i = 0; i < frames && self.written < self.seen.size(); ++i)
+                    self.seen[self.written++] = position + i;
+                RampSource::render(nullptr, output, frames, position);
+            }
+        } positions;
+        RealtimeEngine loop(1);
+        const auto source = loop.graph().addNode(
+            std::make_unique<SourceNode>("loop ramp", Positions::render, &positions));
+        loop.graph().setSink(source);
+        check(bool(loop.prepare(48000,64,2)), "prepare split-loop graph");
+        loop.transport().setLoopEnabled(true);
+        OutputBuffer output(2,64);
+        for (const SamplePos length : {100,7}) {
+            const SamplePos start = length - 2;
+            loop.transport().setLoopRange(0,length); loop.transport().seek(start);
+            positions.written = 0;
+            loop.transport().play(); loop.renderBlock(output.block(),nullptr,0,64);
+            bool exact = positions.written == 64;
+            for (unsigned i=0;i<64;++i)
+                exact &= positions.seen[i] == (start+i)%length;
+            check(std::all_of(output.storage.begin(), output.storage.end(),
+                             [](float sample) { return std::isfinite(sample); }),
+                  "smoothing a loop seam keeps every output finite");
+            check(exact && loop.transport().position() == (start+64)%length,
+                  "loop wraps audio at the exact sample, including multiple wraps per callback");
+        }
     }
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");

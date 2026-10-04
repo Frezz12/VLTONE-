@@ -25,6 +25,15 @@ set(DAW_PLUGINHOST_SOURCES
     Host/PluginNode.cpp
     Internal/EqualizerInstance.cpp
     Internal/CompressorInstance.cpp
+    Internal/Cla2aInstance.cpp
+    Internal/ChannelColorInstance.cpp
+    Creator/FunctionDefinition.cpp
+    Internal/MiniModuleDefinition.cpp
+    Internal/MiniNodeRegistry.cpp
+    Internal/CreatorDspRuntime.cpp
+    Creator/CreatorCompilerClient.cpp
+    Creator/WasmProgram.cpp
+    Internal/MiniModuleInstance.cpp
     Internal/DelayInstance.cpp
     Internal/PitchCorrectorInstance.cpp
     Internal/PitchCorrectorDSP.cpp
@@ -37,6 +46,9 @@ set(DAW_PLUGINHOST_SOURCES
     Internal/SamplerParams.cpp
     Internal/SamplerPrecompute.cpp
     Internal/SamplerVoice.cpp
+    Internal/SlicerInstance.cpp
+    Internal/SlicerParams.cpp
+    Internal/SlicerVoice.cpp
     Scan/ScanProtocol.cpp)
 
 if(DAW_ENABLE_CLAP)
@@ -74,7 +86,7 @@ add_library(daw_pluginhost STATIC ${DAW_PLUGINHOST_SOURCES})
 
 target_include_directories(daw_pluginhost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(daw_pluginhost PUBLIC cxx_std_23)
-target_link_libraries(daw_pluginhost PUBLIC daw_engine daw_platform_paths daw_json)
+target_link_libraries(daw_pluginhost PUBLIC daw_engine daw_platform_paths daw_json daw_creator_model daw_creator_wamr)
 
 if(DAW_ENABLE_CLAP)
     target_link_libraries(daw_pluginhost PUBLIC daw_clap_headers)

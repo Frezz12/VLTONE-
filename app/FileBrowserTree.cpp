@@ -5,6 +5,9 @@
 #include "BrowserPrefs.hpp"
 #include "FileSearchWorker.hpp"
 #include "FileTypes.hpp"
+#include "WaveformPaint.hpp"
+#include "UiFrameClock.hpp"
+#include <QEasingCurve>
 #include "ProjectTemplates.hpp"
 
 #include <algorithm>
@@ -13,6 +16,8 @@
 #include "Theme.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QSettings>
 #include <QColorDialog>
 #include <QPersistentModelIndex>
 #include <QPointer>
@@ -147,6 +152,51 @@ bool draggable(FileBrowserTree::Kind kind) {
            kind == FileBrowserTree::Kind::ProjectTemplate ||
            kind == FileBrowserTree::Kind::Plugin;
 }
+
+// The native drag owns pointer capture; this visual never receives input. Its
+// position tracks the cursor directly, with motion only on the initial lift.
+class SampleDragCard final : public QWidget {
+public:
+    SampleDragCard(const QPixmap& image, QWidget* source)
+        : QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint |
+                           Qt::WindowTransparentForInput | Qt::WindowDoesNotAcceptFocus),
+          m_image(image), m_reduced(QSettings().value("ui/reduceMotion", false).toBool()) {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setFont(source->font());
+        const QSize size = image.deviceIndependentSize().toSize();
+        resize(size + QSize(12, 12));
+        m_elapsed.start();
+        auto* timer = new ui::FrameTimer(source, this);
+        connect(timer, &ui::FrameTimer::timeout, this, [this] {
+            move(QCursor::pos() + QPoint(10, 18));
+            if (m_animating) {
+                update();
+                if (m_elapsed.elapsed() >= 140) m_animating = false;
+            }
+        });
+        move(QCursor::pos() + QPoint(10, 18));
+        timer->start();
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        const double t = m_reduced ? 1.0 : std::clamp(m_elapsed.elapsed() / 140.0, 0.0, 1.0);
+        const double lift = QEasingCurve(QEasingCurve::OutCubic).valueForProgress(t);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.setOpacity(0.65 + 0.35 * lift);
+        p.translate(4, 4 + 4 * (1.0 - lift));
+        const double scale = 0.96 + 0.04 * lift;
+        p.scale(scale, scale);
+        p.drawPixmap(QPointF(0, 0), m_image);
+    }
+private:
+    QPixmap m_image;
+    QElapsedTimer m_elapsed;
+    bool m_reduced;
+    bool m_animating = true;
+};
 
 /// A row that holds other rows rather than something to drag.
 bool isContainer(FileBrowserTree::Kind kind) {
@@ -1157,6 +1207,11 @@ QMimeData* FileBrowserTree::dragPayload() const {
     return mime;
 }
 
+void FileBrowserTree::setDragPreview(const QString& path, const daw::WaveformPeaks& peaks) {
+    m_dragPreviewPath = path;
+    m_dragPreview = std::make_shared<daw::WaveformPeaks>(peaks);
+}
+
 void FileBrowserTree::startDrag(Qt::DropActions supportedActions) {
     QMimeData* mime = dragPayload();
     if (!mime) return;
@@ -1171,27 +1226,51 @@ void FileBrowserTree::startDrag(Qt::DropActions supportedActions) {
                               : QFileInfo(path).fileName();
     const QFontMetrics metrics(font());
     const int textWidth = metrics.horizontalAdvance(label);
-    const QSize size(std::min(textWidth + 34, 260), metrics.height() + 12);
+    const bool sample = kind == Kind::Audio || kind == Kind::Midi;
+    const QSize size(std::min(textWidth + 34, 260), metrics.height() + (sample ? 32 : 12));
     QPixmap pixmap(size * devicePixelRatioF());
     pixmap.setDevicePixelRatio(devicePixelRatioF());
     pixmap.fill(Qt::transparent);
     {
         QPainter p(&pixmap);
+        p.setFont(font());
         p.setRenderHint(QPainter::Antialiasing, true);
         const QRectF plate(0.5, 0.5, size.width() - 1.0, size.height() - 1.0);
-        p.setBrush(th().surfaceElevated);
-        p.setPen(QPen(th().accent, 1.0));
+        const QColor accent = tintFor(kind);
+        p.setBrush(mixColors(accent, th().surfaceElevated, 0.88));
+        p.setPen(QPen(accent, 1.0));
         p.drawRoundedRect(plate, 5.0, 5.0);
-        icons::paint(p, glyphFor(kind), QRectF(4, 2, 18, plate.height() - 4),
-                     th().accent);
+        icons::paint(p, glyphFor(kind), QRectF(4, 4, 18, metrics.height() + 4), accent);
         p.setPen(th().textPrimary);
-        p.drawText(plate.adjusted(24, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft,
+        p.drawText(QRectF(24, 4, size.width() - 30, metrics.height() + 4), Qt::AlignVCenter | Qt::AlignLeft,
                    metrics.elidedText(label, Qt::ElideMiddle, size.width() - 32));
+        if (sample) {
+            const QRectF wave(10, metrics.height() + 12, size.width() - 20, 14);
+            if (const auto peaks = dragPreview(path)) {
+                ui::PeakPaint how;
+                how.secondsPerPixel = peaks->durationSeconds / wave.width();
+                how.clipLeft = wave.left(); how.clipRight = wave.right();
+                how.color = accent;
+                ui::paintPeaks(p, peaks.get(), wave, how);
+            } else {
+                icons::paint(p, glyphFor(kind), wave, accent);
+            }
+        }
     }
 
-    auto* drag = new QDrag(this);
+    QPointer<QDrag> drag = new QDrag(this);
     drag->setMimeData(mime);
-    drag->setPixmap(pixmap);
-    drag->setHotSpot(QPoint(12, size.height() / 2));
-    drag->exec(supportedActions & ~Qt::MoveAction, Qt::CopyAction);
+    if (sample) {
+        QPixmap transparent(1, 1);
+        transparent.fill(Qt::transparent);
+        drag->setPixmap(transparent);
+        SampleDragCard card(pixmap, this);
+        card.show();
+        drag->exec(supportedActions & ~Qt::MoveAction, Qt::CopyAction);
+    } else {
+        drag->setPixmap(pixmap);
+        drag->setHotSpot(QPoint(12, size.height() / 2));
+        drag->exec(supportedActions & ~Qt::MoveAction, Qt::CopyAction);
+    }
+    if (drag) drag->deleteLater();
 }

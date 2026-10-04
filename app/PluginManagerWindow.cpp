@@ -118,6 +118,7 @@ PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
     connect(m_rescanAllButton, &QPushButton::clicked, this, [this] { startScan(true); });
     connect(m_cancelButton, &QPushButton::clicked, this, [this] {
         if (m_controller) m_controller->pluginManager().cancelScan();
+        refreshScanState();
     });
 
     m_progress = new QProgressBar(this);
@@ -497,7 +498,8 @@ QWidget* PluginManagerWindow::buildBlacklistTab() {
     blacklistHeader->setSectionResizeMode(2, QHeaderView::Stretch);
     blacklistHeader->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     connect(m_blacklistTable, &QTableWidget::itemSelectionChanged, this, [this] {
-        m_unblacklistButton->setEnabled(m_blacklistTable->currentRow() >= 0);
+        m_unblacklistButton->setEnabled(m_blacklistTable->currentRow() >= 0 &&
+            m_controller && !m_controller->pluginManager().isScanning());
     });
     layout->addWidget(m_blacklistTable, 1);
 
@@ -513,7 +515,7 @@ QWidget* PluginManagerWindow::buildBlacklistTab() {
             return;
         }
         const auto& entry = m_blacklistRows[static_cast<std::size_t>(row)];
-        m_controller->pluginManager().unblacklist(entry.format, entry.path);
+        m_controller->pluginManager().unblacklist(entry.format, entry.path, entry.uid);
         m_controller->pluginManager().save();
         refreshBlacklist();
     });
@@ -547,8 +549,10 @@ void PluginManagerWindow::refreshBlacklist() {
         const int row = m_blacklistTable->rowCount();
         m_blacklistTable->insertRow(row);
         const QString path = QString::fromStdString(entry.path);
-        auto* nameItem = readOnlyItem(QFileInfo(path).fileName());
-        nameItem->setToolTip(path);
+        auto* nameItem = readOnlyItem(entry.name.empty() ? QFileInfo(path).fileName()
+                                                        : QString::fromStdString(entry.name));
+        nameItem->setToolTip(path + (entry.uid.empty() ? QString() :
+            QStringLiteral("\nUID: ") + QString::fromStdString(entry.uid)));
         m_blacklistTable->setItem(row, 0, nameItem);
         m_blacklistTable->setItem(row, 1, readOnlyItem(formatLabel(entry.format)));
         m_blacklistTable->setItem(row, 2,
@@ -574,26 +578,40 @@ void PluginManagerWindow::refreshScanState() {
     if (!m_controller) return;
     daw::PluginManager& manager = m_controller->pluginManager();
     const bool scanning = manager.isScanning();
+    const auto snapshot = manager.scanSnapshot();
 
     m_rescanButton->setEnabled(!scanning);
     m_rescanAllButton->setEnabled(!scanning);
-    m_cancelButton->setEnabled(scanning);
+    m_cancelButton->setEnabled(scanning && snapshot.phase != daw::ScanPhase::Stopping);
+    m_clearBlacklistButton->setEnabled(!scanning && !m_blacklistRows.empty());
+    m_unblacklistButton->setEnabled(!scanning && m_blacklistTable->currentRow() >= 0);
     m_progress->setVisible(scanning);
 
     if (scanning) {
-        const std::uint32_t total = manager.scanTotal();
-        const std::uint32_t done = manager.scanned();
+        const std::uint32_t total = snapshot.componentsTotal;
+        const std::uint32_t done = snapshot.componentsCompleted;
         // A scan that has not counted its candidates yet gets a busy bar rather
         // than a bar sitting at zero, which reads as "stuck".
-        m_progress->setRange(0, total == 0 ? 0 : static_cast<int>(total));
-        if (total != 0) m_progress->setValue(static_cast<int>(done));
+        m_progress->setRange(0, snapshot.discoveryComplete ? std::max(1, int(total)) : 0);
+        if (snapshot.discoveryComplete) m_progress->setValue(static_cast<int>(done));
 
-        const QString path = QString::fromStdString(manager.currentScanPath());
-        const QString name = path.isEmpty() ? QString() : QFileInfo(path).fileName();
-        m_status->setText(total == 0
-                              ? tr("Collecting plugins…")
-                              : tr("Scanning %1 of %2 — %3").arg(done).arg(total).arg(name));
+        QString path, name;
+        if (!snapshot.activeJobs.empty()) {
+            const auto& active = snapshot.activeJobs.front();
+            path = QString::fromStdString(active.path);
+            name = active.name.empty() ? QFileInfo(path).fileName() : QString::fromStdString(active.name);
+            if (active.retry) name = tr("Retrying: %1").arg(name);
+            if (snapshot.activeJobs.size() > 1)
+                name = tr("%1 (+%2 active)").arg(name).arg(snapshot.activeJobs.size() - 1);
+        }
+        QString status = snapshot.phase == daw::ScanPhase::Stopping ? tr("Stopping…") :
+            snapshot.discoveryComplete ? tr("Checked %1 of %2").arg(done).arg(total) :
+            tr("Discovering plugins — %1 components checked").arg(done);
+        if (!name.isEmpty()) status += QStringLiteral(" — ") + name;
+        m_status->setText(status);
         m_status->setToolTip(path);
+        m_status->setAccessibleDescription(status);
+        m_progress->setAccessibleDescription(status);
         m_wasScanning = true;
         return;
     }
@@ -608,7 +626,7 @@ void PluginManagerWindow::refreshScanState() {
         refreshBlacklist();
         emit pluginsChanged();
     }
-    const QString error = QString::fromStdString(manager.lastScanError());
+    const QString error = QString::fromStdString(snapshot.error);
     if (!error.isEmpty()) {
         m_wasScanning = false;
         m_status->setText(tr("Scan stopped. Hover for details."));
@@ -617,6 +635,13 @@ void PluginManagerWindow::refreshScanState() {
         return;
     }
     m_status->setAccessibleDescription(QString());
+    if (snapshot.phase == daw::ScanPhase::Cancelled) {
+        m_wasScanning = false;
+        m_status->setText(tr("Scan cancelled — %1 components checked.").arg(snapshot.componentsCompleted));
+        m_status->setToolTip(QString());
+        m_status->setAccessibleDescription(m_status->text());
+        return;
+    }
     if (m_wasScanning) {
         m_wasScanning = false;
         const int found = static_cast<int>(m_plugins.size());

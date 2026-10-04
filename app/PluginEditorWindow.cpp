@@ -3,6 +3,7 @@
 #include "Controls.hpp"
 #include "EqualizerPanel.hpp"
 #include "CompressorPanel.hpp"
+#include "Cla2aPanel.hpp"
 #include "DelayPanel.hpp"
 #include "GraphitPanel.hpp"
 #include "PitchCorrectorPanel.hpp"
@@ -11,6 +12,7 @@
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
 #include "SamplerPanel.hpp"
+#include "SlicerPanel.hpp"
 #include "Theme.hpp"
 #include "graphics/ScenePaintSource.hpp"
 #if defined(Q_OS_MACOS)
@@ -18,6 +20,7 @@
 #endif
 
 #include "Internal/SamplerInstance.hpp"
+#include "Internal/SlicerInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/GraphitInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
@@ -871,6 +874,18 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(960, 459);
         m_fallbackContentSize = QSize(1100, 499);
         resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.cla2a" &&
+               dynamic_cast<daw::plugins::cla2a::Cla2aInstance*>(plugin)) {
+        auto* panel = new Cla2aPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &Cla2aPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &Cla2aPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("cla2a"));
+        setMinimumSize(688, 325);
+        m_fallbackContentSize = QSize(820, 349);
+        resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.compressor" &&
                dynamic_cast<daw::plugins::compressor::CompressorInstance*>(plugin)) {
         auto* panel = new CompressorPanel(m_controller, m_channelId, m_insertId, this);
@@ -946,7 +961,22 @@ void PluginEditorWindow::rebuildEditorContent() {
         m_contentRow->insertWidget(0, m_generic, 1);
         emit builtInPanelReady(samplerPanel, QStringLiteral("sampler"));
         setMinimumSize(860, 558);
-        m_fallbackContentSize = QSize(960, 600);
+        m_fallbackContentSize = QSize(1040, 760);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.slicer" &&
+               dynamic_cast<daw::plugins::slicer::SlicerInstance*>(plugin)) {
+        auto* slicerPanel = new SlicerPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = slicerPanel;
+        connect(slicerPanel, &SlicerPanel::projectEdited, this,
+                &PluginEditorWindow::projectEdited);
+        connect(slicerPanel, &SlicerPanel::automationRequested, this,
+                [this](const QString& parameterId) {
+                    emit automationRequested(m_channelId, m_insertId, parameterId);
+                });
+        m_contentRow->insertWidget(0, m_generic, 1);
+        emit builtInPanelReady(slicerPanel, QStringLiteral("slicer"));
+        setMinimumSize(780, 426);
+        m_fallbackContentSize = QSize(980, 450);
         resize(m_fallbackContentSize);
     } else {
         buildGenericEditor();

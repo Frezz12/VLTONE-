@@ -7,6 +7,7 @@
 // number, which a sine would hide behind its own shape.
 #include "EngineController.hpp"
 #include "Internal/InternalFactory.hpp"
+#include "Host/PluginNode.hpp"
 #include "Internal/SampleDecoder.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SamplerParams.hpp"
@@ -15,6 +16,7 @@
 #include "platform/AudioFileDecoder.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -362,6 +364,77 @@ int main() {
                                       {noteOn(60, 1.0), noteOff(60, 100)});
         check(soundingFrames(stopped.left) < 1000,
               "releasing a looping note stops it, envelope or no envelope");
+    }
+
+    // A held piano-roll preview carries a choke through the same host MIDI
+    // path as playback. It must stop even when ordinary one-shots ignore off.
+    for (bool envelope : {false, true}) {
+        auto instance = makeSampler();
+        set(*instance, Param::AmpEnvOn, envelope ? 1.0 : 0.0);
+        set(*instance, Param::AmpAttack, 0.0);
+        set(*instance, Param::AmpHold, 0.0);
+        set(*instance, Param::AmpDecay, 0.0);
+        set(*instance, Param::AmpSustain, 1.0);
+        set(*instance, Param::AmpRelease, 0.0);
+        PluginNode node("held-preview", std::move(instance));
+        engine::PrepareInfo info;
+        info.sampleRate = kRate; info.maxBlockSize = kBlock; info.channels = 2;
+        node.prepare(info);
+        Output out(kBlock);
+        engine::MidiBuffer midi; midi.reserve(engine::kMidiEventsPerBlock);
+        std::array<const engine::MidiBuffer*, 1> inputs{&midi};
+        engine::ProcessContext context;
+        context.output = engine::AudioBlock(out.pointers, 2, kBlock);
+        context.frames = kBlock; context.sampleRate = kRate;
+        context.midiInputs = inputs; context.playing = false;
+        midi.push(engine::MidiEvent::noteOn(0, 0, 60, 127, 0.0f, 101));
+        node.process(context);
+        check(peakOf(out.left) > 0.2f, "a stopped-transport preview reaches the sampler");
+        midi.clear();
+        for (int block = 0; block < 3; ++block) node.process(context);
+        const float held = out.left.back();
+        check(held > 0.2f, "a held preview is independent of written note duration");
+        auto off = engine::MidiEvent::noteOff(0, 0, 60, 0, 101);
+        off.isNoteChoke = true; midi.push(off);
+        node.process(context);
+        check(std::abs(out.left.front() - held) < 0.01f &&
+                  largestStep(out.left) < 0.02f && soundingFrames(out.left) <= 250,
+              "preview release ends within five milliseconds without a click");
+        midi.clear(); node.process(context);
+        check(peakOf(out.left) < 1e-6f, "preview release leaves no one-shot or envelope tail");
+
+        // Press and release can reach the audio callback together. Preserve
+        // their order, and never choke another voice of the same MIDI pitch.
+        midi.push(engine::MidiEvent::noteOn(0, 0, 60, 127, 0.0f, 202));
+        midi.push(engine::MidiEvent::noteOn(0, 0, 60, 127, 0.0f, 203));
+        off.noteId = 202; off.frameOffset = 32; midi.push(off);
+        node.process(context);
+        check(out.left.back() > 0.2f && out.left.back() < 0.6f,
+              "a preview choke preserves another voice with the same pitch");
+        midi.clear(); off.noteId = 203; off.frameOffset = 0; midi.push(off);
+        node.process(context);
+        midi.clear(); node.process(context);
+        check(peakOf(out.left) < 1e-6f, "the second identified preview can also be released");
+    }
+    {
+        auto instance = makeSampler();
+        set(*instance, Param::AmpEnvOn, 1);
+        set(*instance, Param::AmpAttack, 0);
+        set(*instance, Param::AmpDecay, 0);
+        set(*instance, Param::AmpSustain, 1);
+        set(*instance, Param::AmpRelease, 0);
+        instance->setParameter(sampler::indexOf(sampler::SlideParam::Legato), 1);
+        auto on = noteOn(60, 1); on.noteId = 301;
+        render(*instance, 128, {on});
+        PluginEvent choke; choke.kind = PluginEvent::Kind::NoteChoke;
+        choke.key = 60; choke.noteId = 301;
+        render(*instance, 512, {choke});
+        on.key = 72; on.noteId = 302;
+        render(*instance, 128, {on});
+        auto off = noteOff(72); off.noteId = 302;
+        const auto released = render(*instance, 512, {off});
+        check(peakOf(released.left) < 1e-6f,
+              "a choked preview cannot become a stale legato return target");
     }
 
     // ── The amplitude envelope ──
@@ -1021,6 +1094,41 @@ int main() {
             }
         }
         fs::remove_all(dir);
+    }
+
+
+    {
+        sampler::Voice voice;
+        sampler::SampleData sample; sample.audio=makeDcSample(); sample.baseFrames=kSampleFrames;
+        sampler::SamplerSettings settings;
+        double phases[sampler::kModTargetCount]{};
+        Output before(64), after(512);
+        voice.start(60,0,1.f,0.f,settings,sample,kRate);
+        voice.render(sample,settings,before.pointers,2,64,kRate,120,phases);
+        voice.start(60,0,.25f,0.f,settings,sample,kRate);
+        voice.render(sample,settings,after.pointers,2,512,kRate,120,phases);
+        check(std::abs(after.left.front()-before.left.back())<1e-6f &&
+              std::abs(after.left.back()-.125f)<1e-6f,
+              "stealing an active sampler voice preserves boundary continuity and reaches new level");
+    }
+
+    {
+        auto instance = makeSampler(false);
+        instance->adoptSample("/positive.wav", makeDcSample(.8f,48000));
+        render(*instance,kBlock,{noteOn(60,1.0)});
+        const auto before=render(*instance,kBlock);
+        instance->adoptSample("/negative.wav",makeDcSample(-.8f,48000));
+        const auto changed=render(*instance,kBlock);
+        bool smooth=std::abs(changed.left.front()-before.left.back())<1e-6f;
+        for(std::size_t i=1;i<changed.left.size();++i)
+            smooth &= std::isfinite(changed.left[i]) && std::abs(changed.left[i]-changed.left[i-1])<.025f;
+        check(smooth && changed.left.back()<-.1f,
+              "changing a held sampler source crossfades to the new signal");
+        instance->clearSample();
+        const auto cleared=render(*instance,kBlock);
+        check(std::abs(cleared.left.front()-changed.left.back())<1e-6f &&
+              std::all_of(cleared.left.begin()+240,cleared.left.end(),[](float v){return v==0.f;}),
+              "clearing a sampler source drains a finite tail on the audio thread");
     }
 
     std::printf(failures == 0 ? "\nALL PASSED\n" : "\n%d FAILURES PRESENT\n", failures);

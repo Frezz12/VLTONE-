@@ -19,6 +19,7 @@
 #include "Host/PluginNode.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SamplerPrecompute.hpp"
+#include "Internal/SlicerInstance.hpp"
 #include "Job/BackgroundExecutor.hpp"
 
 #include "Engine/RealtimeEngine.hpp"
@@ -52,6 +53,7 @@
 #include <vector>
 
 namespace daw {
+struct MiniModuleUpdate;
 
 namespace recovery { struct CloudRecordingRecoveryRun; }
 
@@ -199,6 +201,7 @@ public:
         engine::NodeId clips = engine::kInvalidNode;
         engine::NodeId midiClips = engine::kInvalidNode;
         engine::NodeId instrument = engine::kInvalidNode;
+        engine::NodeId channelColor = engine::kInvalidNode;
         /// FX owned by the built-in sampler. These nodes only hear the
         /// instrument output; routed and monitored audio joins later.
         std::vector<engine::NodeId> samplerInserts;
@@ -583,6 +586,10 @@ public:
     // ── Order and folders ──
     bool moveTrack(const std::string& trackId, size_t targetIndex,
                    const std::string& newParentId);
+    /// Move selected hierarchy roots in document order as one undoable action.
+    /// targetIndex is an insertion boundary in the document before the move.
+    bool moveTracks(const std::vector<std::string>& trackIds, size_t targetIndex,
+                    const std::string& newParentId);
     void setFolderExpanded(const std::string& folderId, bool expanded);
     void setAutomationExpanded(const std::string& trackId, bool expanded);
     /// Create an empty folder. A summing folder owns a bus: anything filed
@@ -728,6 +735,8 @@ public:
     /// A channel's FX chain, and — when it was copied whole — everything else
     /// the strip holds.
     struct ChannelSnapshot {
+        std::vector<ChainSlotSnapshot> miniModules;
+        std::optional<ChainSlotSnapshot> channelColor;
         std::string sourceName;       ///< what it came from, for the paste menu
         std::vector<ChainSlotSnapshot> inserts;
         bool hasSettings = false;     ///< fader, pan, flags, routing and sends
@@ -896,6 +905,28 @@ public:
                                    const std::string& insertId,
                                    const std::string& parameterId,
                                    double beforeValue, const std::string& label);
+    InsertModel channelColorSettings(const std::string& trackId) const;
+    const std::vector<InsertModel>& miniModules(const std::string& channelId) const;
+    std::string addMiniModule(const std::string& channelId, const plugins::mini::MiniModuleDefinition&);
+    bool setMiniModulePostFx(const std::string& channelId, const std::string& moduleId, bool postFx);
+    bool setMiniModuleMode(const std::string& channelId, const std::string& moduleId, const std::string& mode);
+    bool setMiniModuleAppearance(const std::string& channelId, const std::string& moduleId, const plugins::mini::Appearance&);
+    bool removeMiniModule(const std::string& channelId, const std::string& moduleId);
+    bool moveMiniModule(const std::string& channelId, const std::string& moduleId, int position);
+    bool replaceMiniModule(const std::string& channelId, const std::string& moduleId,
+                           const plugins::mini::MiniModuleDefinition&);
+    std::shared_ptr<MiniModuleUpdate> planMiniModuleUpdate(const plugins::mini::MiniModuleDefinition&) const;
+    bool miniModuleUpdateCurrent(const MiniModuleUpdate&) const;
+    void fadeMiniModuleUpdate(const MiniModuleUpdate&);
+    void cancelMiniModuleUpdateFade(const MiniModuleUpdate&);
+    bool miniModuleUpdateFaded(const MiniModuleUpdate&) const;
+    bool applyMiniModuleUpdate(const std::shared_ptr<MiniModuleUpdate>&, std::string& error);
+    bool updateMiniModuleDefinition(const plugins::mini::MiniModuleDefinition&, std::string& error);
+    void setChannelColorEnabled(const std::string& trackId, bool enabled);
+    void setChannelColorParameter(const std::string& trackId, const std::string& parameterId, double value);
+    void commitChannelColorEdit(const std::string& trackId,
+                               const std::optional<InsertModel>& before,
+                               const std::string& label);
 
     /// The live instance behind a slot, for an editor window. Null when the
     /// slot is empty or the plugin failed to load.
@@ -998,6 +1029,38 @@ public:
     /// bytes from a previous projection cannot continue sounding.
     void clearSamplerSampleSilently(const std::string& channelId,
                                     const std::string& slotId);
+
+    // ── The built-in slicer ──
+    //
+    // The same split as the sampler above: the nine knobs are ordinary insert
+    // parameters, and only the sample and the chop table — neither of which is
+    // a value an automation lane could carry — get their own calls.
+
+    /// The slicer in a slot, or null when the slot holds something else.
+    plugins::slicer::SlicerInstance* slicerInstance(const std::string& channelId,
+                                                    const std::string& slotId);
+    /// Decode `filePath` into a slicer slot. Undoable, and false when the slot
+    /// is not a slicer or the file will not read.
+    bool loadSlicerSample(const std::string& channelId, const std::string& slotId,
+                          const std::string& filePath);
+    /// Drop the sample and the chops that pointed into it, keeping the knobs.
+    void clearSlicerSample(const std::string& channelId, const std::string& slotId);
+    /// The same load without an undo entry — what undo and redo call, so
+    /// replaying a step cannot push another step.
+    void loadSlicerSampleSilently(const std::string& channelId,
+                                  const std::string& slotId,
+                                  const std::string& filePath);
+    /// Publish a freshly cut chop table. A null or empty table is what a
+    /// cancelled cut reports, and leaves the current one playing.
+    void publishSlicerTable(const std::string& channelId, const std::string& slotId,
+                            std::shared_ptr<const plugins::slicer::SliceTable> table);
+    bool beginSlicerEdit(const std::string& channelId, const std::string& slotId);
+    bool updateSlicerEdit(std::shared_ptr<const plugins::slicer::SliceTable> table,
+                         const plugins::slicer::AnalysisSettings& settings);
+    bool commitSlicerEdit(const std::string& label = "Edit Slicer");
+    void cancelSlicerEdit();
+    bool applySlicerState(const std::string& channelId, const std::string& slotId,
+                         const plugins::slicer::ControlState&, const std::string& label);
 
     /// Put the built-in sampler in the track's instrument slot and load
     /// `filePath` into it — what dropping a sample on the slot means.
@@ -1856,6 +1919,11 @@ public:
     /// Start recording onto one or more tracks, right now. Each target is armed
     /// if it is not already, and smart monitoring decides whether to open its
     /// monitor. For a counted-in start use `armCountIn`.
+    /// Resolve folder requests to their first existing free recordable child.
+    /// Explicit leaf requests retain ordinary overwrite/layer behaviour.
+    /// This is a control-thread query; it never creates or arms a track.
+    std::vector<std::string> resolveRecordingTargets(
+        const std::vector<std::string>& requestedIds) const;
     bool startRecording(const std::string& trackId);
     bool startRecordingTracks(const std::vector<std::string>& trackIds);
     /// Strict seam for cloud recording: every id must be unique, exist, and be
@@ -1903,6 +1971,10 @@ public:
     void cancelCountIn();
     /// True between arming a count-in and the take starting.
     bool isCountingIn() const;
+    /// Targets already chosen for the pending take, unaffected by selection.
+    const std::vector<std::string>& countInTracks() const {
+        return m_countInTracks;
+    }
     /// Seconds left of the count-in, or 0 when none is running.
     double countInRemainingSeconds() const;
     /// Beats left of the count-in: 3, 2, 1 — the number to show.
@@ -2312,6 +2384,15 @@ private:
     bool m_sessionAuditionEnabled = false;
     bool m_sessionAuditionWritable = true;
     std::function<void(const std::vector<TrackAuditionState>&)> m_auditionChanged;
+    struct SlicerEdit {
+        std::string channelId, slotId;
+        plugins::slicer::SlicerInstance* instance = nullptr;
+        plugins::slicer::ControlState before;
+    };
+    std::optional<SlicerEdit> m_slicerEdit;
+    void restoreSlicerStateSilently(const std::string&, const std::string&,
+                                   const plugins::slicer::ControlState&);
+
     struct PluginStateSyncEntry {
         std::string channelId;
         std::string insertId;
@@ -2407,6 +2488,7 @@ private:
         /// applies — the instrument is a plugin slot like any other, it just
         /// sits ahead of them and is the only one fed MIDI.
         std::vector<InsertSlot> instrument;
+        std::vector<InsertSlot> miniModules;
         /// A private post-instrument chain used only while the instrument is
         /// the built-in sampler instance named by TrackModel::samplerFx.
         std::vector<InsertSlot> samplerInserts;
@@ -2452,6 +2534,7 @@ private:
     bool m_isRenderClone = false;
     mutable std::unordered_map<std::string, std::string> m_clipDisplayPaths;
     bool m_exportInProgress = false;
+    std::unordered_map<std::string, std::shared_ptr<plugins::PluginNode>> m_preparedMiniModules;
     std::function<bool()> m_sampleLoadContinue;
     audio::Result renderProjectPass(const rendering::Spec& spec,
         const std::function<bool(const rendering::Progress&)>& onProgress,
@@ -2485,10 +2568,15 @@ private:
     engine::NodeId connectInsertChain(engine::AudioGraph& graph,
                                       TrackChannel& channel, engine::NodeId head);
     engine::NodeId connectSlots(engine::AudioGraph& graph,
-                                std::vector<InsertSlot>& live,
+                                std::span<InsertSlot> live,
                                 std::vector<engine::NodeId>& ids,
                                 engine::NodeId head);
     TrackChannel* findChannel(const std::string& channelId);
+    void applyChannelColorState(const std::string& trackId, const std::optional<InsertModel>& state);
+    void applyMiniModules(const std::string& channelId, const std::vector<InsertModel>&, bool affectsAudio = true);
+    bool updateMiniModule(const std::string& channelId, const InsertModel&, const std::string& label, bool affectsAudio = true);
+    engine::NodeId connectMiniModules(engine::AudioGraph&, TrackChannel&, const std::vector<InsertModel>&,
+                                     bool postFx, engine::NodeId head, engine::NodeId* first = nullptr);
     /// Write each loaded plugin's state chunk into the package's `State/`
     /// folder and record the filename in the document. Called from
     /// `saveProject`, because only this class holds the live instances.
@@ -2741,7 +2829,8 @@ private:
     void landMidiCapture(TrackModel& track, const FinalizedRecordingTrack& recording);
     void captureMidiEvent(const std::string& trackId, int status, int d1, int d2,
                          std::uint64_t source, MidiInputStamp stamp, LiveMidiOrigin origin);
-    bool sendLiveMidiEvent(const std::string& trackId, int status, int data1, int data2);
+    bool sendLiveMidiEvent(const std::string& trackId, int status, int data1, int data2,
+                           bool audition = false);
     void captureMidiParameter(const std::string& trackId, const std::string& slotId,
                               const std::string& parameterId, double plain,
                               MidiInputStamp stamp, bool retrospective);

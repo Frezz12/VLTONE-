@@ -39,7 +39,7 @@ IDENTIFIER="com.vltstudio.pro"
 # The project's own version, not the `cmake_minimum_required` line above it.
 VERSION="${1:-$(sed -n 's/^[[:space:]]*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid or missing project version: $VERSION" >&2; exit 1; }
-CHANNEL="${2:-}"
+CHANNEL="${2-beta}"
 [[ -z "$CHANNEL" || "$CHANNEL" =~ ^[A-Za-z0-9]+([.\ -][A-Za-z0-9]+)*$ ]] || { echo "Invalid release channel: $CHANNEL" >&2; exit 1; }
 ARTIFACT_CHANNEL="${CHANNEL// /-}"
 ARTIFACT_VERSION="$VERSION${ARTIFACT_CHANNEL:+-$ARTIFACT_CHANNEL}"

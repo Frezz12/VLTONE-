@@ -1,3 +1,4 @@
+#include "ScrollMotion.hpp"
 #include "ContextPanelPage.hpp"
 
 #include "ContextPanel.hpp"
@@ -12,6 +13,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include <QString>
@@ -88,8 +90,12 @@ ContextPanelPage::ContextPanelPage(QWidget* parent) : QWidget(parent) {
         tr("Open and close the plugin search immediately and disable its idle glow."));
     reduceMotion->setChecked(settings.value("ui/reduceMotion", false).toBool());
     connect(reduceMotion, &QCheckBox::toggled, this, [this](bool on) {
-        QSettings().setValue("ui/reduceMotion", on);
+        ui::ScrollPreferences::instance().setReducedMotion(on);
         emit changed();
+    });
+    connect(&ui::ScrollPreferences::instance(),&ui::ScrollPreferences::changed,this,[reduceMotion] {
+        const QSignalBlocker blocker(reduceMotion);
+        reduceMotion->setChecked(ui::ScrollPreferences::instance().reducedMotion());
     });
     column->addWidget(reduceMotion);
 

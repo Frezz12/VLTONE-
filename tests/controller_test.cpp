@@ -1350,6 +1350,75 @@ int main() {
               "undo puts the track back into the folder");
     }
 
+    // A reorder carries the whole selection, including non-adjacent tracks,
+    // and restores both their gaps and their hierarchy in one undo.
+    {
+        daw::EngineController f;
+        f.initialize(48000, 512, false);
+        const auto a = f.addTrack(daw::TrackKind::Audio, "A");
+        const auto b = f.addTrack(daw::TrackKind::Audio, "B");
+        const auto c = f.addTrack(daw::TrackKind::Audio, "C");
+        const auto d = f.addTrack(daw::TrackKind::Audio, "D");
+        const auto e = f.addTrack(daw::TrackKind::Audio, "E");
+        const auto order = [&] {
+            std::vector<std::string> ids;
+            for (const auto& track : f.project().tracks) ids.push_back(track.id);
+            return ids;
+        };
+        const std::vector<std::string> original{a, b, c, d, e};
+        const auto depth = f.undoDepth();
+        check(f.moveTracks({d, b, b, "missing"}, 0, "") &&
+                  order() == std::vector<std::string>{b, d, a, c, e} &&
+                  f.undoDepth() == depth + 1,
+              "non-adjacent tracks move upward in document order with one undo");
+        f.undo();
+        check(order() == original && f.undoDepth() == depth,
+              "group move undo restores the gaps in the original selection");
+        f.redo();
+        check(order() == std::vector<std::string>{b, d, a, c, e},
+              "group move redo restores the whole selection");
+        f.undo();
+        check(f.moveTracks({d, b}, f.project().tracks.size(), "") &&
+                  order() == std::vector<std::string>{a, c, e, b, d},
+              "non-adjacent tracks move downward without reversing");
+        f.undo();
+        check(order() == original, "downward group move restores exact positions");
+        check(!f.moveTracks({b, c}, 1, "") && f.undoDepth() == depth &&
+                  order() == original,
+              "dropping a group in its own position creates no undo entry");
+
+        const auto inner = f.packIntoFolder({c}, "Inner", false);
+        const auto folder = f.packIntoFolder({b, inner}, "Outer", true);
+        const auto destination = f.addFolder(true, "Destination");
+        const auto hierarchyOrder = order();
+        const auto hierarchyDepth = f.undoDepth();
+        check(!f.moveTracks({folder, d}, 0, inner) &&
+                  order() == hierarchyOrder && f.undoDepth() == hierarchyDepth,
+              "a cyclic target rejects the entire selected group");
+        check(f.moveTracks({c, d, inner, folder}, f.project().tracks.size(),
+                           destination) &&
+                  daw::subtreeOf(f.project(), folder) ==
+                      std::vector<std::string>{b, inner, c} &&
+                  f.project().findTrack(c)->parentId == inner &&
+                  f.project().findTrack(inner)->parentId == folder &&
+                  f.project().findTrack(folder)->parentId == destination &&
+                  f.project().findTrack(d)->parentId == destination &&
+                  f.project().findTrack(d)->outputBusId == destination &&
+                  f.undoDepth() == hierarchyDepth + 1,
+              "selected folders carry nested children once and preserve routing");
+        f.undo();
+        check(order() == hierarchyOrder &&
+                  f.project().findTrack(folder)->parentId.empty() &&
+                  f.project().findTrack(d)->parentId.empty() &&
+                  f.project().findTrack(d)->outputBusId.empty() &&
+                  f.project().findTrack(c)->parentId == inner,
+              "one undo restores group order, parents and folder routing");
+        f.redo();
+        check(f.project().findTrack(folder)->parentId == destination &&
+                  f.project().findTrack(d)->parentId == destination,
+              "redo reparents the complete group");
+    }
+
     // ── Mono / stereo per-track fold ──
     // A stereo source with signal only on the left: in stereo the render keeps
     // the left/right imbalance; folded to mono both channels carry it equally.
@@ -5022,6 +5091,109 @@ int main() {
         c = findClip(m, tr, cl);
         check(c && c->takes.empty() && c->filePath == first,
               "undo returns the clip to a single unlayered take");
+    }
+
+    // Folder recording resolves an existing lane before capture, without
+    // touching clips or creating tracks. Direct leaf recording still overwrites.
+    {
+        daw::EngineController m;
+        m.initialize(48000, 512, /*openDevice=*/false);
+        const auto folder = m.addTrack(daw::TrackKind::Folder, "Takes");
+        m.setFolderSumming(folder, true);
+        const auto first = m.addTrack(daw::TrackKind::Audio, "Overlapping");
+        const auto second = m.addTrack(daw::TrackKind::Midi, "Future");
+        const auto nested = m.addTrack(daw::TrackKind::Folder, "Nested");
+        const auto lower = m.addTrack(daw::TrackKind::Instrument, "Lower");
+        const auto deep = m.addTrack(daw::TrackKind::Midi, "Nested take");
+        const auto outside = m.addTrack(daw::TrackKind::Audio, "Outside");
+        const auto other = m.addTrack(daw::TrackKind::Folder, "Other folder");
+        const auto otherLeaf = m.addTrack(daw::TrackKind::Midi, "Other take");
+        for (const auto& id : {first, second, nested, lower})
+            m.moveTrackToFolder(id, folder);
+        m.moveTrackToFolder(deep, nested);
+        m.moveTrackToFolder(otherLeaf, other);
+        auto& project = const_cast<daw::ProjectModel&>(m.project());
+        project.findTrack(nested)->expanded = false;
+        project.invalidateStructure();
+        const auto clips = [&](const std::string& id,
+                               std::initializer_list<std::pair<double, double>> ranges) {
+            auto* track = project.findTrack(id);
+            track->clips.clear();
+            for (const auto& [start, duration] : ranges) {
+                daw::ClipModel clip;
+                clip.id = "occupied-" + std::to_string(track->clips.size());
+                clip.startSeconds = start;
+                clip.durationSeconds = duration;
+                track->clips.push_back(std::move(clip));
+            }
+        };
+        const auto targets = [&](std::initializer_list<std::string> ids) {
+            return m.resolveRecordingTargets(std::vector<std::string>(ids));
+        };
+        const auto only = [](const std::string& id) {
+            return std::vector<std::string>{id};
+        };
+        m.seekSeconds(10.0);
+        clips(first, {{9.0, 2.0}});
+        clips(second, {{20.0, 1.0}});
+        clips(deep, {{1.0, 1.0}, {12.0, 0.0}});
+        const auto count = project.tracks.size();
+        const auto undo = m.undoDepth();
+        check(targets({folder}) == only(deep),
+              "folder recording skips overlapping and future clips, including collapsed nested lanes");
+        check(targets({folder, folder, nested, lower, deep}) == only(deep),
+              "folder requests deduplicate IDs and descendants into one destination");
+        check(targets({folder, other}) == std::vector<std::string>{deep, otherLeaf},
+              "two selected folders each choose one existing lane");
+        check(targets({first, first}) == only(first),
+              "explicit leaf requests keep overwrite behaviour and unique destinations");
+        check(project.tracks.size() == count && m.undoDepth() == undo,
+              "resolving a recording lane creates no tracks and no undo entry");
+
+        clips(deep, {{11.0, 1.0}});
+        check(targets({folder}) == only(lower),
+              "an occupied nested lane yields to the next lane in tree order");
+        clips(lower, {{12.0, 1.0}});
+        check(targets({folder}).empty() && project.tracks.size() == count,
+              "an occupied folder never falls back outside it or creates a new lane");
+        clips(first, {{8.0, 2.0}});
+        check(targets({folder}) == only(first),
+              "a clip ending exactly at recording start is safe");
+
+        clips(first, {{9.0, 2.0}});
+        clips(second, {{20.0, 1.0}});
+        clips(deep, {{1.0, 1.0}});
+        m.setLoopRangeSeconds(8.0, 16.0);
+        m.setLoopEnabled(true);
+        check(targets({folder}) == only(second),
+              "a clip beyond loop end does not obstruct folder recording");
+        clips(second, {{8.0, 0.5}});
+        check(targets({folder}) == only(deep),
+              "loop recording checks earlier material reached on the next pass");
+        clips(first, {{16.0, 1.0}});
+        check(targets({folder}) == only(first),
+              "the exclusive loop-end boundary does not intersect a clip");
+        m.seekSeconds(7.0);
+        clips(first, {{7.5, 0.25}});
+        clips(second, {{6.0, 1.0}});
+        check(targets({folder}) == only(second),
+              "recording before the loop also protects the lead-in");
+        m.setLoopEnabled(false);
+
+        m.seekSeconds(10.0);
+        clips(first, {{9.0, 2.0}});
+        clips(second, {{20.0, 1.0}});
+        m.play();
+        m.seekSeconds(12.0);
+        check(targets({folder}) == only(first),
+              "Resume resolves the folder at the current playback cursor");
+        m.setPlaybackMode(daw::EngineController::PlaybackMode::Restart);
+        check(targets({folder}) == only(deep),
+              "Restart resolves at the same run anchor used to start capture");
+        m.stop();
+        m.removeTrack(otherLeaf);
+        check(targets({other}).empty() && targets({"deleted-folder"}).empty(),
+              "empty folders and deleted requests have no recording destination");
     }
 
     // ── Count-in ──

@@ -150,6 +150,17 @@ struct PluginProcessInfo {
     bool sidechainConnected = false;
 };
 
+/// MIDI pitch conversion needs its full polyphonic budget. Audio effects need
+/// host edits plus at most one automation value per parameter and sample.
+inline std::size_t pluginBlockEventCapacity(const PluginDescriptor& descriptor,
+                                            const PluginProcessInfo& info,
+                                            std::size_t parameters) noexcept {
+    const auto pitch = engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate);
+    if (descriptor.wantsMidi || descriptor.isInstrument) return pitch;
+    return std::min(pitch, 2048 + std::size_t(info.maxBlockSize) *
+                                    std::max(std::size_t{1}, parameters));
+}
+
 /// What the format says after a process call. Only an explicit
 /// format contract may return Sleep/Tail; output silence by itself is not
 /// permission for a host to stop calling an arbitrary plugin.
@@ -191,6 +202,8 @@ struct PluginProcessContext {
 
     engine::TransportInfo transport;
     std::int64_t sampleTime = 0;
+    /// Monotonic processing clock, including skipped/sleeping blocks; -1 if unavailable.
+    std::int64_t steadyTime = -1;
     bool playing = false;
     bool offline = false;
 };

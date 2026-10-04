@@ -1,5 +1,7 @@
+#include "model/MiniModules.hpp"
 #include "SlideNotes.hpp"
 #include "collaboration/ProjectReducer.hpp"
+#include "model/ChannelColor.hpp"
 #include "collaboration/MidiContentJson.hpp"
 #include <nlohmann/json.hpp>
 #include "collaboration/CommandJson.hpp"
@@ -591,6 +593,8 @@ bool samePluginLocation(const PluginLocation& a, const PluginLocation& b) {
 std::vector<InsertModel>* pluginList(ProjectModel& project,
                                      const PluginLocation& location) {
     switch (location.chain) {
+        case PluginChain::MiniModules:
+            return location.clipId.empty()?miniModulesFor(project,location.trackId):nullptr;
         case PluginChain::Master:
             return location.trackId.empty() && location.clipId.empty()
                        ? &project.masterInserts
@@ -613,6 +617,7 @@ std::vector<InsertModel>* pluginList(ProjectModel& project,
                        : nullptr;
         }
         case PluginChain::Instrument:
+        case PluginChain::ChannelColor:
             return nullptr;
     }
     return nullptr;
@@ -620,6 +625,11 @@ std::vector<InsertModel>* pluginList(ProjectModel& project,
 
 InsertModel* pluginAt(ProjectModel& project, const PluginLocation& location,
                       const std::string& insertId) {
+    if (location.chain == PluginChain::ChannelColor) {
+        auto* track=project.findTrack(location.trackId);
+        return track && location.clipId.empty() && track->channelColor && track->channelColor->id==insertId
+            ? &*track->channelColor : nullptr;
+    }
     if (location.chain == PluginChain::Instrument) {
         TrackModel* track = project.findTrack(location.trackId);
         if (!track || !location.clipId.empty() ||
@@ -645,9 +655,12 @@ bool pluginLocationParentDeleted(const SharedProjectDocument& state,
 
 template <typename Callback>
 void forEachLivePlugin(const ProjectModel& project, Callback&& callback) {
+    for (const InsertModel& insert : project.masterMiniModules) callback(insert);
     for (const InsertModel& insert : project.masterInserts) callback(insert);
     for (const TrackModel& track : project.tracks) {
         if (!track.instrument.id.empty()) callback(track.instrument);
+        if (track.channelColor) callback(*track.channelColor);
+        for(const auto& module:track.miniModules) callback(module);
         for (const InsertModel& insert : track.samplerFx.inserts)
             callback(insert);
         for (const InsertModel& insert : track.inserts) callback(insert);
@@ -668,7 +681,8 @@ bool pluginIsDeleted(const SharedProjectDocument& state,
                      const std::string& insertId) {
     if (state.deletedPluginInserts.contains(insertId)) return true;
     const auto contains = [&](const TrackModel& track) {
-        if (track.instrument.id == insertId) return true;
+        if (track.instrument.id == insertId || entityIndexOf(track.miniModules,insertId)!=std::string::npos) return true;
+        if (track.channelColor && track.channelColor->id == insertId) return true;
         if (entityIndexOf(track.samplerFx.inserts, insertId) !=
                 std::string::npos ||
             entityIndexOf(track.inserts, insertId) != std::string::npos) {
@@ -691,7 +705,7 @@ bool pluginIsDeleted(const SharedProjectDocument& state,
 bool supportedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" ||
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.channel-color" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
             insert.uid == "daw.pitch-corrector");
@@ -742,6 +756,18 @@ bool validBindings(const std::vector<PluginAssetBinding>& bindings,
 
 bool validSharedInsert(const InsertModel& insert,
                        std::uint32_t schemaVersion) {
+    if (insert.uid=="daw.mini-module") {
+        if(schemaVersion<7 || !validMiniModule(insert)) return false;
+    } else if (insert.miniModule) return false;
+    else if (insert.uid=="daw.channel-color") {
+        if (schemaVersion<6 || insert.profileSeed.size()!=16 ||
+            !std::all_of(insert.profileSeed.begin(),insert.profileSeed.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}) ||
+            insert.mix!=1 || insert.channelMode!=PluginChannelMode::Auto || !insert.sidechainTrackIds.empty() ||
+            !insert.rightStateAsset.empty() || !insert.rightParameters.empty() || !insert.assetBindings.empty() ||
+            std::any_of(insert.parameters.begin(),insert.parameters.end(),[](const auto& p) {
+                return (p.id!="drive" && p.id!="tone") || !std::isfinite(p.value) || p.value < -100 || p.value > 100;
+            })) return false;
+    } else if (!insert.profileSeed.empty()) return false;
     const bool external = supportedExternal(insert);
     const bool allowed = supportedBuiltin(insert) ||
                          (schemaVersion >= kProjectCommandSchemaVersionV3 &&
@@ -785,6 +811,7 @@ bool sharedInsertEqual(const InsertModel& a, const InsertModel& b) {
            a.format == b.format && a.uid == b.uid && a.vendor == b.vendor &&
            a.pluginVersion == b.pluginVersion &&
            a.parameterFingerprint == b.parameterFingerprint &&
+           a.profileSeed == b.profileSeed && a.miniModule == b.miniModule &&
            a.stateSchemaVersion == b.stateSchemaVersion && a.mix == b.mix &&
            a.channelMode == b.channelMode &&
            a.sidechainTrackIds == b.sidechainTrackIds &&
@@ -2391,6 +2418,11 @@ ApplyResult applySetClipMusicalAnalysis(
 
 bool pluginKindMatchesLocation(const PluginLocation& location,
                                const InsertModel& insert) {
+    if(location.chain==PluginChain::MiniModules || insert.uid=="daw.mini-module")
+        return location.chain==PluginChain::MiniModules && validMiniModule(insert);
+    if (location.chain==PluginChain::ChannelColor || insert.uid=="daw.channel-color")
+        return location.chain==PluginChain::ChannelColor && insert.uid=="daw.channel-color" &&
+            insert.format==PluginFormat::Internal && insert.id==channelColorSlotId(location.trackId);
     if (supportedExternal(insert)) return true;
     const bool instrument = insert.uid == "daw.sampler";
     return location.chain == PluginChain::Instrument ? instrument : !instrument;
@@ -2429,7 +2461,14 @@ ApplyResult applyAddPlugin(SharedProjectDocument& state,
     if (livePluginExists(state.project, body.insert.id))
         return reject(ApplyCode::InvalidCommand, "plugin id already exists");
 
-    if (body.location.chain == PluginChain::Instrument) {
+    if (body.location.chain == PluginChain::ChannelColor) {
+        auto* track=state.project.findTrack(body.location.trackId);
+        if (!track || !supportsChannelColor(track->kind) || !body.location.clipId.empty())
+            return reject(ApplyCode::MissingEntity,"COLOR source track does not exist");
+        if (track->channelColor || !body.afterId.empty())
+            return reject(ApplyCode::InvalidCommand,"COLOR has one unanchored slot");
+        track->channelColor=body.insert;
+    } else if (body.location.chain == PluginChain::Instrument) {
         TrackModel* track = state.project.findTrack(body.location.trackId);
         if (!track || !body.location.clipId.empty())
             return reject(ApplyCode::MissingEntity,
@@ -2449,6 +2488,8 @@ ApplyResult applyAddPlugin(SharedProjectDocument& state,
         if (!validEntityAnchor(*inserts, body.afterId))
             return reject(ApplyCode::MissingAnchor,
                           "plugin anchor does not exist");
+        if(body.location.chain==PluginChain::MiniModules && inserts->size()>=plugins::mini::kMaxModules)
+            return reject(ApplyCode::InvalidCommand,"A channel supports at most three mini modules");
         insertEntityAfter(*inserts, body.insert, body.afterId, false);
     }
     ApplyResult result;
@@ -2496,7 +2537,9 @@ ApplyResult applyDeletePlugin(SharedProjectDocument& state,
     tombstone.insert = *insert;
     tombstone.deleteOperationId = command.meta.operationId;
     tombstone.deleteServerSequence = command.meta.serverSequence;
-    if (body.location.chain == PluginChain::Instrument) {
+    if (body.location.chain == PluginChain::ChannelColor) {
+        state.project.findTrack(body.location.trackId)->channelColor.reset();
+    } else if (body.location.chain == PluginChain::Instrument) {
         TrackModel* track = state.project.findTrack(body.location.trackId);
         if (!track) return reject(ApplyCode::MissingEntity, "track does not exist");
         tombstone.afterId.clear();
@@ -2548,7 +2591,12 @@ ApplyResult applyRestorePlugin(SharedProjectDocument& state,
     if (livePluginExists(state.project, body.insertId))
         return reject(ApplyCode::InvalidCommand, "plugin id already exists");
     PluginInsertTombstone tombstone = found->second;
-    if (body.location.chain == PluginChain::Instrument) {
+    if (body.location.chain == PluginChain::ChannelColor) {
+        auto* track=state.project.findTrack(body.location.trackId);
+        if (!track || !supportsChannelColor(track->kind)) return reject(ApplyCode::MissingEntity,"COLOR track does not exist");
+        if (track->channelColor) return reject(ApplyCode::PreconditionsFailed,"COLOR slot is no longer empty");
+        track->channelColor=tombstone.insert;
+    } else if (body.location.chain == PluginChain::Instrument) {
         TrackModel* track = state.project.findTrack(body.location.trackId);
         if (!track)
             return reject(ApplyCode::MissingEntity,
@@ -2565,6 +2613,8 @@ ApplyResult applyRestorePlugin(SharedProjectDocument& state,
         if (!inserts)
             return reject(ApplyCode::MissingEntity,
                           "plugin chain does not exist");
+        if(body.location.chain==PluginChain::MiniModules && inserts->size()>=plugins::mini::kMaxModules)
+            return reject(ApplyCode::InvalidCommand,"A channel supports at most three mini modules");
         insertEntityAfter(*inserts, tombstone.insert, tombstone.afterId, true);
     }
     state.deletedPluginInserts.erase(found);
@@ -2596,7 +2646,7 @@ ApplyResult applyMovePlugin(SharedProjectDocument& state,
         pluginIsDeleted(state, body.insertId)) {
         return reject(ApplyCode::DeletedEntity, "delete wins over plugin move");
     }
-    if (body.location.chain == PluginChain::Instrument) {
+    if (body.location.chain == PluginChain::Instrument || body.location.chain == PluginChain::ChannelColor) {
         if (!pluginAt(state.project, body.location, body.insertId))
             return reject(ApplyCode::MissingEntity,
                           "instrument does not exist");
@@ -2710,6 +2760,8 @@ ApplyResult applySetPluginProperty(SharedProjectDocument& state,
     InsertModel* insert = pluginAt(state.project, body.location, body.insertId);
     if (!insert)
         return reject(ApplyCode::MissingEntity, "plugin does not exist");
+    if ((body.location.chain==PluginChain::ChannelColor || body.location.chain==PluginChain::MiniModules) && body.property!=PluginProperty::Bypassed && body.property!=PluginProperty::Name)
+        return reject(ApplyCode::InvalidCommand,"COLOR is a fixed channel stage");
     PluginPropertyValue before;
     PluginProperty inverseProperty = body.property;
     bool same = false;
@@ -2906,6 +2958,16 @@ ApplyResult applySetPluginParameter(SharedProjectDocument& state,
     InsertModel* insert = pluginAt(state.project, body.location, body.insertId);
     if (!insert)
         return reject(ApplyCode::MissingEntity, "plugin does not exist");
+    if(body.location.chain==PluginChain::MiniModules) {
+        if(!insert->miniModule || body.rightChannel) return reject(ApplyCode::InvalidCommand,"Invalid mini module parameter");
+        const auto& controls=insert->miniModule->controls;
+        const auto control=std::find_if(controls.begin(),controls.end(),[&](const auto& c){return c.id==body.parameterId;});
+        if(control==controls.end() || body.value<control->minimum || body.value>control->maximum)
+            return reject(ApplyCode::InvalidCommand,"Invalid mini module parameter");
+    }
+    if (body.location.chain==PluginChain::ChannelColor &&
+        (body.rightChannel || (body.parameterId!="drive" && body.parameterId!="tone") || body.value < -100 || body.value > 100))
+        return reject(ApplyCode::InvalidCommand,"invalid COLOR parameter");
     if (body.parameterId.empty() ||
         body.parameterId.size() > kMaxPluginParameterIdBytes ||
         !std::isfinite(body.value)) {
@@ -2971,6 +3033,9 @@ ApplyResult applyRemovePluginParameter(SharedProjectDocument& state,
     InsertModel* insert = pluginAt(state.project, body.location, body.insertId);
     if (!insert)
         return reject(ApplyCode::MissingEntity, "plugin does not exist");
+    if (body.location.chain==PluginChain::ChannelColor &&
+        (body.rightChannel || (body.parameterId!="drive" && body.parameterId!="tone")))
+        return reject(ApplyCode::InvalidCommand,"invalid COLOR parameter");
     if (body.parameterId.empty() ||
         body.parameterId.size() > kMaxPluginParameterIdBytes) {
         return reject(ApplyCode::InvalidCommand, "invalid plugin parameter");
@@ -3034,6 +3099,8 @@ ApplyResult applySetPluginBinding(SharedProjectDocument& state,
     InsertModel* insert = pluginAt(state.project, body.location, body.insertId);
     if (!insert)
         return reject(ApplyCode::MissingEntity, "plugin does not exist");
+    if (body.location.chain==PluginChain::ChannelColor)
+        return reject(ApplyCode::InvalidCommand,"COLOR has no resource bindings");
     const AssetKind expected = body.binding.key == "sample"
                                    ? AssetKind::Audio
                                    : body.binding.asset.kind;

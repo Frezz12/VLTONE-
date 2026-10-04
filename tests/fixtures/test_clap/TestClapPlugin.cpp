@@ -77,6 +77,7 @@ struct TestPlugin {
     bool active = false;
     bool processing = false;
     std::uint64_t processCalls = 0;
+    std::int64_t nextSteadyTime = 0;
     std::uint64_t mainThreadCalls = 0;
     std::uint32_t channels = 0;
     /// One ring per channel, kLatency long, so the reported latency is real.
@@ -289,6 +290,10 @@ clap_process_status pluginProcess(const clap_plugin_t* plugin,
     if (!self->processing || !process || process->audio_outputs_count == 0) {
         return CLAP_PROCESS_ERROR;
     }
+    if (std::getenv("DAW_TEST_CLAP_VALIDATE_STEADY_TIME")) {
+        if (process->steady_time < self->nextSteadyTime) return CLAP_PROCESS_ERROR;
+        self->nextSteadyTime = process->steady_time + process->frames_count;
+    }
     ++self->processCalls;
 
     // Parameter events are applied at their frame offset, which is what makes
@@ -419,10 +424,14 @@ void pluginOnMainThread(const clap_plugin_t* plugin) {
 
 // ── factory ──
 
-std::uint32_t factoryCount(const clap_plugin_factory*) { return 2; }
+std::uint32_t factoryCount(const clap_plugin_factory*) {
+    if (std::getenv("DAW_TEST_FORBID_ENUMERATION")) std::abort();
+    return 2;
+}
 
 const clap_plugin_descriptor_t* factoryDescriptor(const clap_plugin_factory*,
                                                   std::uint32_t index) {
+    if (std::getenv("DAW_TEST_FORBID_ENUMERATION")) std::abort();
     if (index == 0) return &kDescriptor;
     if (index == 1) return &kInstrumentDescriptor;
     return nullptr;

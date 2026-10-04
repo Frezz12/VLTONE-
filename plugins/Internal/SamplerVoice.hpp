@@ -91,6 +91,11 @@ public:
     /// sample — the coefficients cost a tan() each.
     void setCoefficients(double cutoffHz, double resonance, double sampleRate) noexcept;
     float processLowpass(int channel, float input) noexcept;
+    /// The same one-pole-free core the sampler uses, reading its other two taps.
+    /// The slicer needs a filter per chop, and a second copy of this topology
+    /// would be a second answer to "how does this filter behave".
+    float processHighpass(int channel, float input) noexcept;
+    float processBandpass(int channel, float input) noexcept;
 
 private:
     double m_g = 0.0;
@@ -124,7 +129,7 @@ struct ModSettings {
 struct SamplerSettings {
     double volume = 1.0;
     double pan = 0.0;
-    double pitchSemitones = 0.0;   ///< the Pitch knob already scaled by Range
+    double pitchSemitones = 0.0;   ///< Pitch scaled by Range, plus Fine Tune
     /// The Range knob itself. It also scales the INS pitch envelope and LFO —
     /// the same thing FL does, and the reason a pitch modulation with Range at
     /// zero is deliberately silent rather than secretly an octave.
@@ -239,6 +244,9 @@ private:
                     double position) const noexcept;
 
     bool m_active = false;
+    float m_lastOutput[2]{}, m_stealCorrection[2]{};
+    int m_stealRemaining = 0, m_stealLength = 1;
+    bool m_beginSteal = false;
     int m_key = 60;
     std::int32_t m_noteId = -1;
     engine::PitchRamp m_pitch, m_bend;

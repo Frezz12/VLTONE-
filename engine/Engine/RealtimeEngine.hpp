@@ -6,6 +6,7 @@
 #include "Transport/Transport.hpp"
 #include "RealtimeMetrics.hpp"
 #include "DSP/PeakHold.hpp"
+#include "DSP/DeClick.hpp"
 #include "DSP/LoudnessMeter.hpp"
 
 #include <array>
@@ -29,6 +30,11 @@ struct OfflineOptions {
     /// arrangement stops, the decay does not. The default keeps sources playing
     /// for the whole pass.
     SamplePos sourcesEndSample = std::numeric_limits<SamplePos>::max();
+    /// Disable to compare with the block-synchronous reference. Unsupported
+    /// nodes and graphs exceeding the bounded workspace fall back automatically.
+    bool pipeline = true;
+    /// Test/benchmark override of the cost crossover, never of compatibility.
+    bool forcePipeline = false;
 };
 
 /// The engine's public face: owns the graph, the scheduler and the transport,
@@ -99,6 +105,9 @@ public:
     std::shared_ptr<const CompiledGraph> compiledGraph() const {
         return m_processor.graph();
     }
+
+    /// Control-thread diagnostic for the most recent offline pass.
+    bool lastOfflineUsedPipeline() const noexcept { return m_lastOfflinePipeline; }
 
     /// Where live input arrives from. Valid only during `renderBlock`.
     const InputBus* inputBus() const noexcept { return &m_inputBus; }
@@ -220,6 +229,13 @@ private:
     std::atomic<std::uint64_t> m_failedBlocks{0};
     std::atomic<int> m_lastRenderError{-1};
     SamplePos m_lastBlockPosition = 0;
+    /// Callback-owned even while RenderGate is open: control-thread prepare()
+    /// must not touch the small tail that a gated callback is still draining.
+    dsp::DeClick m_outputTransition;
+    SamplePos m_expectedOutputPosition = 0;
+    std::uint64_t m_outputTransportGeneration = 0;
+    std::uint64_t m_outputGraphGeneration = 0;
+    bool m_outputValid = false, m_outputPlaying = false, m_outputGated = false;
     std::atomic<BlockResult> m_lastBlockResult{BlockResult::Complete};
 
     // RenderGate handshake. Both sides are seq_cst on purpose: the control
@@ -234,6 +250,7 @@ private:
     std::recursive_mutex m_controlMutex;
     unsigned m_gateDepth = 0;
     bool m_offlineActive = false;
+    bool m_lastOfflinePipeline = false;
 
     // Offline rendering borrows this instead of the device's output buffer.
     std::vector<float> m_offlineStorage;

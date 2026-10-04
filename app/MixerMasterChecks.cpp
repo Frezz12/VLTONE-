@@ -146,11 +146,17 @@ bool MixerWidget::checkMasterDockForTest() {
     }
     mixer.resize(780, 640); settle();
     for (auto& track : project.tracks) track.inserts.clear();
+    mixer.rebuild(); settle();
+    // The mini-module well may already need some scrolling at this height.
+    // A Master edit must preserve the ordinary strips' measured baseline.
+    const int trackScrollBeforeMaster = mixer.m_scroll->verticalScrollBar()->maximum();
+    const int trackHeightBeforeMaster = mixer.m_stripsHost->minimumHeight();
     addEffects(project.masterInserts, 22);
     mixer.rebuild(); settle();
     check(mixer.m_insertSlotCount == 2 && master()->insertSlotCount() == 23 &&
           mixer.m_masterScroll->verticalScrollBar()->maximum() > 0 &&
-          mixer.m_scroll->verticalScrollBar()->maximum() == 0,
+          mixer.m_scroll->verticalScrollBar()->maximum() == trackScrollBeforeMaster &&
+          mixer.m_stripsHost->minimumHeight() == trackHeightBeforeMaster,
           "a long Master chain only expands its own slots and scroll range");
     mixer.m_masterScroll->verticalScrollBar()->setValue(mixer.m_masterScroll->verticalScrollBar()->maximum()); settle();
     check(mixer.m_scroll->verticalScrollBar()->value() == 0 &&

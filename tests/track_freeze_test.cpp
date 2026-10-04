@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <thread>
 namespace fs = std::filesystem;
 static int failures = 0;
@@ -65,6 +66,20 @@ int main() {
         auto after = render("after");
         float error = 0;
         if (before.size() == after.size()) for (std::size_t i = 0; i < before.size(); ++i) error = std::max(error, std::abs(before[i] - after[i]));
+        std::printf("MEASURE frozen playback maximum error %.9g\n",error);
+        if (error >= 1e-6f) {
+            std::printf("MEASURE freeze comparison directory %s\n",temp.string().c_str());
+            for (std::size_t i=0; i<std::min(before.size(),after.size()); ++i)
+                if (std::abs(before[i]-after[i])==error) {
+                    std::printf("MEASURE largest freeze difference at frame %zu: %.9g / %.9g\n",i/2,before[i],after[i]); break;
+                }
+            if(const auto* artifacts=std::getenv("DAW_FREEZE_ARTIFACTS")) {
+                const fs::path directory(artifacts); fs::create_directories(directory);
+                for(const auto* name:{"before.wav","after.wav"})
+                    fs::copy_file(temp/name,directory/name,fs::copy_options::overwrite_existing);
+                if(!frozen.files.empty()) fs::copy_file(frozen.files.front(),directory/"frozen.wav",fs::copy_options::overwrite_existing);
+            }
+        }
         check(!before.empty() && before.size() == after.size() && error < 1e-6f, "frozen pre-fader playback matches original render");
         controller.setTrackVolume(id, .25f); controller.setTrackPan(id, -.25f);
         check(controller.isTrackFrozen(id), "fader and pan remain editable without thawing");

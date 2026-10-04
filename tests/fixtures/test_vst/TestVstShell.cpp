@@ -128,8 +128,10 @@ VstIntPtr dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return 1;
         }
         case effSetSampleRate:
-        case effSetBlockSize:
-        case effMainsChanged: return 1;
+        case effSetBlockSize: return 1;
+        case effMainsChanged:
+            if (!value) self.noteOn = false;
+            return 1;
         case effStartProcess:
             self.processing = true;
             return 1;
@@ -249,6 +251,8 @@ VST_EXPORT AEffect* VSTPluginMain(audioMasterCallback host) {
         return nullptr;
     const VstInt32 requested =
         static_cast<VstInt32>(host(nullptr, audioMasterCurrentId, 0, 0, nullptr, 0.0f));
+    if (requested != 0 && std::getenv("DAW_TEST_FORBID_CHILD_CREATION")) std::abort();
+    if (requested == 0 && std::getenv("DAW_TEST_FORBID_ENUMERATION")) std::abort();
     if (requested == kEffectId) return makeEffect(host, Kind::Effect);
     if (requested == kInstrumentId) return makeEffect(host, Kind::Instrument);
     return makeEffect(host, Kind::Shell);

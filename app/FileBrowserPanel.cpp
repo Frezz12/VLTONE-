@@ -246,6 +246,7 @@ FileBrowserPanel::FileBrowserPanel(daw::EngineController* controller,
                    daw::WaveformPeaks peaks) {
                 if (path != m_selectedPath) return;
                 m_strip->setPeaks(peaks);
+                m_tree->setDragPreview(path, peaks);
                 if (!m_controller) return;
                 // The decode is wanted for the waveform whether or not the
                 // sound was asked for; only a decode that a *play* started
@@ -1247,6 +1248,7 @@ void FileBrowserPanel::reloadPlugins() {
     if (!m_tree || !m_controller) return;
     QVector<FileBrowserTree::PluginEntry> entries;
     for (const auto& descriptor : m_controller->pluginManager().plugins()) {
+        if (descriptor.uid=="daw.channel-color") continue;
         FileBrowserTree::PluginEntry entry;
         entry.name = QString::fromStdString(descriptor.name);
         entry.vendor = QString::fromStdString(descriptor.vendor);

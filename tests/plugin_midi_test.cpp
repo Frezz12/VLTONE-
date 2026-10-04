@@ -14,6 +14,7 @@
 #include "Nodes/BasicNodes.hpp"
 #include "Nodes/MidiClipPlayerNode.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -506,6 +507,11 @@ int main() {
         }
         check(!key71Held,
               "the full live queue preserves on-before-off ordering for the key");
+        check(std::any_of(recorder->received.begin(), recorder->received.end(),
+                         [](const MidiEvent& event) {
+                             return event.isNoteOff() && event.data1 == 71 && event.isNoteChoke;
+                         }),
+              "an emergency release also ends a preview one-shot");
 
         // If live input fills a block entirely with releases, the transport's
         // own stop release has no legal victim to evict. It must remain pending

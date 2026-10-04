@@ -40,11 +40,12 @@ class ChannelStrip : public QWidget {
     Q_OBJECT
 public:
     static constexpr int kWidth = ui::MixerPreferences::kDefaultWidth;
-    /// Routing, instrument/LUFS, FX and sends occupy separate shared mixer rows.
-    using RackHeights = std::array<int, 4>;
+    /// Routing, COLOR, instrument/LUFS, FX and sends share mixer rows.
+    using RackHeights = std::array<int, 5>;
     ChannelStrip(daw::EngineController* controller, const QString& trackId,
                  bool master, QWidget* parent = nullptr,
                  bool insertsOnly = false, int insertSlots = 0);
+    ~ChannelStrip() override;
 
     const QString& trackId() const { return m_trackId; }
     bool isMaster() const { return m_master; }
@@ -76,6 +77,7 @@ public:
     static bool checkFaderInputForTest();
     static bool checkGroupInputsForTest();
     static bool checkContextMenusForTest();
+    static bool checkColorForTest();
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
     bool hasActiveGesture() const;
@@ -103,6 +105,8 @@ signals:
     void automateControlRequested(const QString& trackId, bool pan);
     void automateMuteRequested(const QString& trackId);
     void automateSendRequested(const QString& trackId, const QString& sendId);
+    void automatePluginRequested(const QString& trackId, const QString& slotId, const QString& parameterId);
+    void rackLayoutChanged();
 
 protected:
     bool eventFilter(QObject*, QEvent*) override;
@@ -129,6 +133,13 @@ private:
 
     QWidget* buildHeader();
     QWidget* buildRouting();
+QWidget* buildColor();
+    void syncColor(bool automation);
+    /// Re-measure the COLOR section and push its height into the shared rack.
+    /// Expanding, collapsing and hiding all change what sits above the faders,
+    /// so all three come through here rather than through three copies of the
+    /// same arithmetic.
+    void refreshColorRackRow();
     QWidget* buildInserts();
     /// Right-click menu for a loaded insert: bypass, replace, reorder, remove.
     QMenu* buildInsertMenu(QWidget* parent, const QString& insertId,
@@ -244,7 +255,12 @@ private:
     int m_layoutWidth = 0;
     bool m_denseLayout = false;
     QWidget* m_rack = nullptr;
-    std::array<QWidget*, 4> m_rackSections{};
+std::array<QWidget*, 5> m_rackSections{};
+    QWidget* m_colorWell = nullptr;
+    ui::IconButton* m_colorPower = nullptr;
+    ui::Knob* m_colorDrive = nullptr;
+    ui::Knob* m_colorTone = nullptr;
+    std::vector<std::function<void()>> m_finishColorEdits;
     LoudnessDisplay* m_loudness = nullptr;
     RackHeights m_rackNaturalHeights{};
     int m_rackNaturalHeight = 0;

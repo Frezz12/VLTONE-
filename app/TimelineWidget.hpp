@@ -39,6 +39,8 @@ namespace daw::engine { class SampleBuffer; }
 namespace daw { struct RecordingSpan; struct RecordingPreview; }
 namespace ui { class SelectionModel; class ThemeMediaBackground; }
 class QScrollBar;
+class PreviewLoader;
+class MidiPreviewLoader;
 
 /// Local-only geometry for a closed cloud recording that is durable on this
 /// device but has not reached recording.commit yet. It is intentionally not a
@@ -263,6 +265,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// column is in step with the lanes.
     bool checkClipIndexForTest() const;
     static bool checkClipTrimPreviewForTest();
+    static bool checkFileDropPreviewForTest();
     bool checkAdaptiveGridForTest();
     bool checkGridAppearanceForTest();
     bool checkGestureGridStabilityForTest();
@@ -1028,6 +1031,18 @@ private:
     QString m_dropLibraryId;
     QPoint m_dropPosition;
     Qt::KeyboardModifiers m_dropModifiers = Qt::NoModifier;
+    void beginFileDropPreview(const QMimeData* mime);
+    void clearFileDropPreview();
+    double fileDropStart(const QPoint& pos, Qt::KeyboardModifiers modifiers) const;
+    QRectF fileDropRect() const;
+    void drawFileDropPreview(QPainter& p);
+    QString m_dropFile;
+    double m_dropDuration = 0.0;
+    double m_dropMidiBeats = 0.0;
+    std::shared_ptr<const daw::WaveformPeaks> m_dropPeaks;
+    PreviewLoader* m_dropLoader = nullptr;
+    MidiPreviewLoader* m_dropMidiLoader = nullptr;
+    quint64 m_dropGeneration = 0;
 
     // Eraser drag from the dedicated toolbar tool.
     bool m_erasing = false;

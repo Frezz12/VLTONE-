@@ -31,6 +31,7 @@ public:
     std::vector<std::string> defaultSearchPaths() const override;
     std::vector<std::string> enumerateCandidates(const std::string& directory) const override;
     std::vector<PluginDescriptor> inspect(const std::string& path) const override;
+    std::vector<PluginDescriptor> discover(const std::string& path) const override;
     std::unique_ptr<PluginInstance> create(const PluginDescriptor& descriptor) override;
 };
 

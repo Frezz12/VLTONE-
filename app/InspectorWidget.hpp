@@ -65,6 +65,7 @@ signals:
     void automateControlRequested(const QString& trackId, bool pan);
     void automateMuteRequested(const QString& trackId);
     void automateSendRequested(const QString& trackId, const QString& sendId);
+    void automatePluginRequested(const QString& trackId, const QString& slotId, const QString& parameterId);
     void stretchToolRequested();
 
 protected:

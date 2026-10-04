@@ -162,6 +162,18 @@ int main() {
             PcmReadScope scope(true); ready = scope.view(cache, source, 24 * PcmReadCache::kPageSamples, 1).front() == .375f;
         }
         check(ready && cache.counters().misses > 0, "background read resolves a measured PCM miss");
+        {
+            PcmReadScope scope(true);
+            const auto first = 16 * PcmReadCache::kPageSamples;
+            (void)scope.view(cache, source, first, 1);
+            cache.warm(source, first, PcmReadCache::kPageSamples);
+            bool recovered = false;
+            for (int i=0;i<100 && !recovered;++i) {
+                std::this_thread::sleep_for(1ms);
+                recovered = scope.view(cache, source, first, 1).front() == .375f;
+            }
+            check(recovered,"a PCM miss can recover within the same node block");
+        }
         const auto budget = cache.counters().capacityBytes;
         for (unsigned page = 0; page < 32; ++page) cache.warm(source, page * PcmReadCache::kPageSamples, PcmReadCache::kPageSamples);
         check(cache.counters().capacityBytes == budget, "PCM cache capacity stays fixed under eviction");
@@ -299,7 +311,9 @@ int main() {
                 player->preparePlayback(0);
                 Output realtime(frames), offline(frames);
                 for (SamplePos position = 0; position < 100; position += frames) {
-                    correct &= bool(processor.process(realtime.block(), frames, position, true));
+                    // This checks raw clip arithmetic, before live discontinuity
+                    // protection. Prepared realtime page reads are tested below.
+                    correct &= bool(processor.process(realtime.block(), frames, position, true, true));
                     correct &= bool(processor.processSerial(offline.block(), frames, position, true, true));
                     correct &= realtime.l == offline.l && realtime.r == offline.r;
                     for (unsigned ch = 0; ch < 2; ++ch) for (unsigned i = 0; i < frames; ++i) {
@@ -327,7 +341,7 @@ int main() {
         for (int i = 0; i < 100000; ++i) { ClipPlacement c; c.audio = sample; c.startSample = i * 512; c.lengthSamples = 256; clips->push_back(c); }
         for (int i = 0; i < 3000; ++i) { ClipPlacement c; c.audio = sample; c.startSample = 60000000; c.lengthSamples = 256; clips->push_back(c); }
         player.setClips(clips);
-        Output output(256); ProcessContext c; c.output = output.block(); c.frames = 256; c.playing = true;
+        Output output(256); ProcessContext c; c.output = output.block(); c.frames = 256; c.playing = true; c.offline = true;
         c.timelinePosition = 99999 * 512; player.process(c);
         check(output.l.front() == .001f, "seek through 100k past clips finds only intersecting material");
         c.timelinePosition = 60000000; player.process(c);

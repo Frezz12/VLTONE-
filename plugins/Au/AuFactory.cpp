@@ -320,7 +320,7 @@ std::vector<std::string> AuFactory::enumerateCandidates(
     return found;
 }
 
-std::vector<PluginDescriptor> AuFactory::inspect(const std::string& path) const {
+static std::vector<PluginDescriptor> readComponents(const std::string& path, bool validate) {
     std::vector<PluginDescriptor> found;
 
     // Everything a browser needs is declared in the bundle's Info.plist, so the
@@ -377,6 +377,11 @@ std::vector<PluginDescriptor> AuFactory::inspect(const std::string& path) const 
         const auto written = fs::last_write_time(path, ec);
         descriptor.fileModifiedTime = ec ? 0 : written.time_since_epoch().count();
 
+        if (!validate) {
+            found.push_back(std::move(descriptor));
+            continue;
+        }
+
         // Registration is checked for every component — it is a lookup, not a
         // load — but only the first few are actually opened.
         //
@@ -411,6 +416,14 @@ std::vector<PluginDescriptor> AuFactory::inspect(const std::string& path) const 
     }
     CFRelease(info);
     return found;
+}
+
+std::vector<PluginDescriptor> AuFactory::inspect(const std::string& path) const {
+    return readComponents(path, true);
+}
+
+std::vector<PluginDescriptor> AuFactory::discover(const std::string& path) const {
+    return readComponents(path, false);
 }
 
 std::unique_ptr<PluginInstance> AuFactory::create(const PluginDescriptor& descriptor) {

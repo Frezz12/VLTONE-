@@ -117,7 +117,7 @@ bool TimelineWidget::checkTrackPresentationForTest() {
     QObject::connect(&timeline, &TimelineWidget::verticalScrollChanged, &tracks,
                      &TrackListWidget::setVerticalScroll);
     tracks.rebuild(); tracks.setSelectedTrack("lead"); timeline.setSelectedTrack("lead");
-    host.resize(1260, 640); host.show(); settle();
+    host.resize(1260, 640);
     std::unique_ptr<ui::graphics::WorkspaceSurface> surface;
     if (ui::graphics::gpuWorkspaceEnabled()) {
         surface = std::make_unique<ui::graphics::WorkspaceSurface>(&host);
@@ -125,9 +125,14 @@ bool TimelineWidget::checkTrackPresentationForTest() {
                          &host, [&](const QString& reason) {
             std::fprintf(stderr, "GPU presentation failed: %s\n", qPrintable(reason)); ok = false;
         });
-        settle(220);
-        check(surface->quickWindow()->isExposed(), "track presentation uses an exposed GPU window");
     }
+    // Create the native child before showing its parent, just like the actual
+    // workspace and other native UI checks. A late container can stay hidden.
+    host.show(); host.activateWindow();
+    if (surface) surface->quickWindow()->requestActivate();
+    settle(220);
+    if (surface)
+        check(surface->quickWindow()->isExposed(), "track presentation uses an exposed GPU window");
     const auto image = [&] {
         settle();
         return surface ? surface->quickWindow()->grabWindow() : host.grab().toImage();
@@ -325,6 +330,86 @@ bool TimelineWidget::checkTrackPresentationForTest() {
           "nested folder disclosure preserves alignment and controls");
     screenshot("-expanded");
     controller.setFolderExpanded("drums", false); tracks.rebuild(); timeline.update(); settle();
+    // Exercise real header input, through the native Quick window when used.
+    const auto order = [&] {
+        std::vector<std::string> ids;
+        for (const auto& track : project.tracks) ids.push_back(track.id);
+        return ids;
+    };
+    const auto originalOrder = order();
+    const auto pointer = [&](QWidget* target, QEvent::Type type,
+                             const QPoint& global, Qt::KeyboardModifiers mods) {
+        const QPointF position = surface
+            ? surface->quickWindow()->mapFromGlobal(global)
+            : target->mapFromGlobal(global);
+        QMouseEvent event(type, position, QPointF(global),
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+            mods);
+        QApplication::sendEvent(surface
+            ? static_cast<QObject*>(surface->quickWindow()) : target, &event);
+        settle(35);
+    };
+    const auto clickName = [&](const QString& id, Qt::KeyboardModifiers mods) {
+        auto* row = rowFor(id);
+        auto* target = row ? row->findChild<ui::InlineNameEdit*>() : nullptr;
+        if (!target) return false;
+        const QPoint global = target->mapToGlobal(target->rect().center());
+        pointer(target, QEvent::MouseButtonPress, global, mods);
+        pointer(target, QEvent::MouseButtonRelease, global, mods);
+        return true;
+    };
+    const auto dragHeader = [&](const QString& id, const QPoint& drop,
+                                bool onName = true) {
+        auto* row = rowFor(id);
+        auto* target = onName && row
+            ? static_cast<QWidget*>(row->findChild<ui::InlineNameEdit*>()) : row;
+        if (!target) return false;
+        const QPoint from = target->mapToGlobal(
+            onName ? target->rect().center() : QPoint(2, row->height() / 2));
+        const QPoint to = tracks.mapToGlobal(drop);
+        const auto selected = tracks.selectedTrackIds();
+        const auto before = order();
+        pointer(target, QEvent::MouseButtonPress, from, Qt::NoModifier);
+        check(tracks.selectedTrackIds() == selected,
+              "pressing a selected header preserves the entire group");
+        pointer(target, QEvent::MouseMove, to, Qt::NoModifier);
+        check(order() == before, "reorder is committed only on pointer release");
+        pointer(target, QEvent::MouseButtonRelease, to, Qt::NoModifier);
+        return true;
+    };
+    check(clickName("bass", Qt::NoModifier) &&
+          clickName("lead", Qt::ControlModifier) &&
+          tracks.selectedTrackIds() == QStringList{"bass", "lead"},
+          "Ctrl-clicking names selects several tracks without losing the anchor");
+    const auto moveDepth = controller.undoDepth();
+    auto upward = originalOrder;
+    std::erase(upward, std::string("bass")); std::erase(upward, std::string("lead"));
+    upward.insert(upward.begin(), {"bass", "lead"});
+    check(dragHeader("lead", QPoint(2, tracks.rowRectForTrack("drums").top() + 2)) &&
+          order() == upward && controller.undoDepth() == moveDepth + 1 &&
+          tracks.selectedTrackIds() == QStringList{"bass", "lead"} && aligned(),
+          "dragging a selected name moves the group upward with one undo");
+    controller.undo(); tracks.rebuild(); timeline.update(); settle();
+    check(order() == originalOrder && aligned(), "one undo restores every moved lane");
+    controller.redo(); tracks.rebuild(); timeline.update(); settle();
+    check(order() == upward && aligned(), "redo restores every moved lane");
+    controller.undo(); tracks.rebuild(); timeline.update(); settle();
+
+    auto downward = originalOrder;
+    std::erase(downward, std::string("bass")); std::erase(downward, std::string("lead"));
+    downward.insert(downward.end(), {"bass", "lead"});
+    check(dragHeader("bass", QPoint(2, tracks.rowRectForTrack("empty").bottom() - 2), false) &&
+          order() == downward && tracks.selectedTrackId() == "bass" &&
+          tracks.selectedTrackIds() == QStringList{"bass", "lead"} && aligned(),
+          "dragging another selected row downward keeps the group order");
+    controller.undo(); tracks.rebuild(); timeline.update(); settle();
+    check(order() == originalOrder && controller.undoDepth() == moveDepth,
+          "downward group undo restores both rows in one action");
+    check(clickName("lead", Qt::NoModifier) &&
+          tracks.selectedTrackIds() == QStringList{"lead"},
+          "a plain click without a drag still selects only one track");
+
     // Expanded takes must not defeat minimizing the parent track.
     auto* bass = project.findTrack("bass");
     bass->clips.front().expanded = true;

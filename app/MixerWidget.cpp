@@ -1,3 +1,4 @@
+#include "MiniModuleRack.hpp"
 #include "UiPerformance.hpp"
 #include "UiFrameClock.hpp"
 #include <QElapsedTimer>
@@ -426,6 +427,11 @@ void MixerWidget::syncFromModel(const QStringList& trackIds) {
     }
     for (ChannelStrip* strip : m_strips)
         if (trackIds.isEmpty() || affected.contains(strip->trackId())) strip->syncFromModel();
+    // An inspector can edit a strip that has not been materialized by the
+    // mixer yet. Reserve its new rack height before it scrolls into view.
+    if(trackIds.isEmpty() || std::any_of(trackIds.begin(),trackIds.end(),[&](const auto& id) {
+        return std::none_of(m_strips.begin(),m_strips.end(),[&](const auto* strip){return strip->trackId()==id;});
+    })) syncVisibleStrips();
 }
 
 void MixerWidget::refreshAutomationValues() {
@@ -883,6 +889,8 @@ void MixerWidget::wireStrip(ChannelStrip* strip) {
                 &MixerWidget::automateMuteRequested);
         connect(strip, &ChannelStrip::automateSendRequested, this,
                 &MixerWidget::automateSendRequested);
+        connect(strip, &ChannelStrip::automatePluginRequested, this, &MixerWidget::automatePluginRequested);
+        connect(strip, &ChannelStrip::rackLayoutChanged, this, [this] { m_rackHeights[1]=0; syncVisibleStrips(); });
         connect(strip, &ChannelStrip::structureChanged, this, [this] {
             emit structureChanged();
             rebuild();
@@ -1082,10 +1090,17 @@ void MixerWidget::syncVisibleStrips() {
         for (std::size_t i = 0; i < heights.size(); ++i)
             m_rackHeights[i] = std::max(m_rackHeights[i], heights[i]);
     };
+    m_rackHeights[1]=0;
+    if(ui::MixerPreferences::instance().colorVisible()) {
+        for(const auto& track:m_controller->project().tracks) if(daw::carriesAudio(track))
+            m_rackHeights[1]=std::max(m_rackHeights[1],ui::MiniModuleRack::naturalHeight(m_controller->project(),track.miniModules,m_channelWidth));
+        m_rackHeights[1]=std::max(m_rackHeights[1],ui::MiniModuleRack::naturalHeight(m_controller->project(),m_controller->project().masterMiniModules,m_channelWidth));
+    }
     for (const auto* strip : m_slots) measure(strip);
     int consoleHeight = 0;
     if (master) {
-        master->setRackHeights(master->rackNaturalHeights());
+        m_rackHeights[1]=std::max(m_rackHeights[1],master->rackNaturalHeights()[1]);
+        auto masterHeights=master->rackNaturalHeights();masterHeights[1]=m_rackHeights[1];master->setRackHeights(masterHeights);
         m_masterHost->setMinimumHeight(master->naturalHeight());
     }
     for (auto* strip : m_slots) {

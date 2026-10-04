@@ -5,6 +5,7 @@
 #include <cstdint>
 
 namespace account { class Service; }
+namespace daw { struct ScanSnapshot; }
 class QFrame;
 class QEvent;
 class QMouseEvent;
@@ -32,6 +33,7 @@ public:
     void showSystemLoading();
     void showPluginScan(std::uint32_t done, std::uint32_t total,
                         const QString& currentPath);
+    void showPluginScan(const daw::ScanSnapshot& snapshot);
     void showReady(int pluginCount);
     bool cancelled() const { return m_cancelled; }
 
@@ -87,8 +89,13 @@ private:
     Stage m_stage = Stage::Preparing;
     QString m_stageDetail;
     QString m_scanPath;
+    QString m_scanName;
     std::uint32_t m_scanDone = 0;
     std::uint32_t m_scanTotal = 0;
+    std::uint32_t m_scanActive = 0;
+    bool m_scanKnown = false;
+    bool m_scanStopping = false;
+    bool m_scanCancelled = false;
     int m_pluginCount = 0;
     bool m_stageError = false;
     bool m_restoreStarted = false;

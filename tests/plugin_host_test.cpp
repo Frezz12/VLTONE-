@@ -10,6 +10,7 @@
 #include "Graph/AudioGraph.hpp"
 #include "Graph/GraphProcessor.hpp"
 #include "Host/PluginNode.hpp"
+#include "Engine/RealtimeEngine.hpp"
 #include "Nodes/BasicNodes.hpp"
 #include "Common/LockFreeQueue.hpp"
 
@@ -184,11 +185,17 @@ public:
     PluginProcessDisposition process(
         const PluginProcessContext& context) noexcept override {
         processCalls.fetch_add(1, std::memory_order_relaxed);
+        if (failureMode) {
+            for (unsigned ch=0;ch<context.outputChannels;++ch)
+                std::fill_n(context.outputs[ch],context.frames, failureMode==2 ? std::numeric_limits<float>::quiet_NaN() : 0.f);
+            return failureMode==1 ? PluginProcessDisposition::Error : PluginProcessDisposition::Continue;
+        }
         int heldKey60 = 0;
         for (const PluginEvent& event : context.inputEvents) {
             if (event.kind == PluginEvent::Kind::ParamValue &&
                 event.paramIndex == 0) {
                 seenParameterValue.store(event.value, std::memory_order_relaxed);
+                parameterEventsSeen.fetch_add(1, std::memory_order_relaxed);
             } else {
                 midiEventsSeen.fetch_add(1, std::memory_order_relaxed);
             }
@@ -261,6 +268,8 @@ public:
     std::atomic<unsigned> startCalls{0};
     std::atomic<unsigned> stopCalls{0};
     std::atomic<unsigned> midiEventsSeen{0};
+    std::atomic<unsigned> parameterEventsSeen{0};
+    int failureMode = 0;
     std::atomic<unsigned> noteOnsSeen{0};
     std::atomic<unsigned> noteOffsSeen{0};
     std::atomic<int> heldKey60AfterBlock{0};
@@ -584,6 +593,89 @@ int main() {
         check(node->latencySamples() == kPluginLatency,
               "bypass does not change the reported latency");
         node->setBypassed(false);
+    }
+
+    // A latency longer than the device block must not expose an empty wet
+    // delay line when permanent bypass wakes the processor.
+    {
+        constexpr engine::FrameCount frames = 16;
+        PluginNode node("bypass warmup", factory.create(descriptor));
+        node.prepare({48000, frames, 2});
+        node.reset();
+        OutputBuffer input(2, frames), output(2, frames);
+        std::fill(input.storage.begin(), input.storage.end(), 1.f);
+        std::array<engine::AudioBlock, 1> inputs{input.block()};
+        engine::ProcessContext context;
+        context.output = output.block(); context.inputs = inputs;
+        context.frames = frames; context.sampleRate = 48000; context.playing = true;
+        for (int block = 0; block < 8; ++block) node.process(context);
+        node.setBypassed(true);
+        for (int block = 0; block < 8; ++block) node.process(context);
+        node.setBypassed(false);
+        bool continuous = true;
+        for (int block = 0; block < 8; ++block) {
+            node.process(context);
+            for (float sample : output.storage) continuous &= std::abs(sample - 1.f) < 1e-6f;
+        }
+        check(continuous, "releasing bypass preserves every sample while a long plugin delay warms");
+    }
+
+    // Audio effects without event ports do not allocate polyphonic MIDI
+    // buffers until a MIDI-producing predecessor is connected.
+    {
+        engine::AudioGraph graph;
+        auto effect = std::make_shared<PluginNode>("audio only",
+            std::make_unique<SilentOnStoppedInstance>());
+        const auto id = graph.adoptNode(effect); graph.setSink(id);
+        const auto first = graph.compile({48000, 1024, 2});
+        check(first && (*first)->midiBuffers.empty(),
+              "an audio-only hosted effect allocates no graph MIDI output");
+        struct MidiSource : engine::Node {
+            std::string_view name() const noexcept override { return "note"; }
+            void process(const engine::ProcessContext& c) override {
+                for (unsigned ch = 0; ch < c.output.numChannels(); ++ch)
+                    std::fill_n(c.output.data(ch), c.frames, 0.f);
+                (void)c.midiOutput->push(engine::MidiEvent::noteOn(7, 0, 60, 100));
+            }
+        };
+        const auto source = graph.addNode(std::make_unique<MidiSource>());
+        (void)graph.connect(source, id);
+        const auto next = graph.compile({48000, 1024, 2});
+        check(next && (*next)->midiBuffers.size() == 2,
+              "connecting MIDI restores transparent event storage through an audio effect");
+        if (next) {
+            engine::GraphProcessor processor(1); processor.setGraph(*next);
+            OutputBuffer out(2, 1024);
+            (void)processor.process(out.block(), 1024, 0, true);
+            const auto buffer = (*next)->nodes[(*next)->sinkNode].midiOutputBuffer;
+            const auto& notes = (*next)->midiBuffers[buffer];
+            check(notes.size() == 1 && notes.events()[0].frameOffset == 7,
+                  "an audio effect still forwards the note at its original sample");
+        }
+    }
+
+    // Several breakpoints at each sample must keep the final value without
+    // consuming a polyphonic event budget in a one-parameter audio effect.
+    {
+        constexpr engine::FrameCount frames = 8192;
+        auto instance = std::make_unique<SilentOnStoppedInstance>();
+        auto* probe = instance.get();
+        PluginNode node("dense audio automation", std::move(instance));
+        node.prepare({48000, frames, 2});
+        auto curves = std::make_shared<PluginNode::AutomationCurves>();
+        PluginNode::AutomationCurve curve;
+        for (unsigned i = 0; i < frames * 4; ++i)
+            curve.points.emplace_back((double(i) + .25) / (4 * 24000),
+                                      double(i) / (frames * 4 - 1));
+        curves->push_back(std::move(curve)); node.setAutomation(curves);
+        OutputBuffer out(2, frames);
+        engine::ProcessContext context;
+        context.output = out.block(); context.frames = frames;
+        context.sampleRate = 48000; context.playing = true;
+        node.process(context);
+        check(probe->parameterEventsSeen.load() == frames &&
+                  probe->seenParameterValue.load() == 1.0,
+              "dense audio automation retains the final value at every sample");
     }
 
     // Multiple independent auxiliary edges sum once, share PDC, and remain
@@ -1324,6 +1416,54 @@ int main() {
             instance->stopProcessing();
             instance->deactivate();
         }
+    }
+
+
+    {
+        constexpr unsigned frames = 1024;
+        auto instance = std::make_unique<SilentOnStoppedInstance>();
+        auto* observer = instance.get();
+        PluginNode node("continuous automation", std::move(instance));
+        node.prepare({48000,frames,2});
+        auto curves = std::make_shared<PluginNode::AutomationCurves>();
+        PluginNode::AutomationCurve curve; curve.points = {{0,0},{frames/24000.0,1}};
+        curves->push_back(curve); node.setAutomation(curves);
+        OutputBuffer output(2,frames);
+        engine::ProcessContext c; c.output=output.block(); c.frames=frames;
+        c.sampleRate=48000; c.playing=true; node.process(c);
+        check(observer->parameterEventsSeen.load() == frames &&
+              std::abs(observer->seenParameterValue.load() - (frames-1.)/frames) < 1e-9,
+              "continuous plugin automation delivers intermediate sample values");
+    }
+    {
+        engine::RealtimeEngine engine(2);
+        auto instance = std::make_unique<SilentOnStoppedInstance>();
+        auto* observer = instance.get();
+        auto node = std::make_shared<PluginNode>("failure probe", std::move(instance));
+        const auto source = engine.graph().addNode(std::make_unique<engine::SourceNode>("healthy",
+            [](void*,const engine::AudioBlock& out,engine::FrameCount frames,engine::SamplePos) {
+                for(unsigned ch=0;ch<out.numChannels();++ch) std::fill_n(out.data(ch),frames,.25f);
+            },nullptr));
+        const auto plugin = engine.graph().adoptNode(node);
+        const auto sum = engine.graph().addNode(std::make_unique<engine::SumNode>());
+        engine.graph().connect(source,plugin); engine.graph().connect(plugin,sum);
+        engine.graph().connect(source,sum); engine.graph().setSink(sum);
+        check(bool(engine.prepare(48000,128,2)), "prepare failure diagnostics graph");
+        engine.transport().play();
+        OutputBuffer output(2,128);
+        for(int mode : {1,2}) {
+            observer->failureMode = mode;
+            engine.renderBlock(output.block(),nullptr,0,128);
+            check(engine.failedBlocks() == unsigned(mode) &&
+                  engine.lastRenderError() == int(engine::EngineError::ProcessingFailed) &&
+                  std::all_of(output.storage.begin(),output.storage.end(),[](float x){return x == .25f;}),
+                  mode == 1 ? "DSP error is counted without silencing healthy tracks"
+                            : "NaN is contained before downstream DSP and counted");
+        }
+        observer->failureMode=0;
+        engine.renderBlock(output.block(),nullptr,0,128);
+        check(engine.lastBlockResult() == engine::RealtimeEngine::BlockResult::Complete,
+              "a recovered live processor is not permanently marked failed");
     }
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");

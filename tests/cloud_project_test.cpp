@@ -135,7 +135,8 @@ int main() {
                  {"10000000-0000-4000-8000-000000000007", "daw.phaser"},
                  {"10000000-0000-4000-8000-000000000008", "daw.pitch-corrector"},
                  {"10000000-0000-4000-8000-000000000009", "daw.delay"},
-                 {"10000000-0000-4000-8000-00000000000a", "daw.compressor"}}) {
+                 {"10000000-0000-4000-8000-00000000000a", "daw.compressor"},
+                 {"10000000-0000-4000-8000-00000000000b", "daw.cla2a"}}) {
             project.masterInserts.push_back(builtin(id, uid));
         }
         daw::TrackModel track;

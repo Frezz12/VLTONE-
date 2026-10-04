@@ -1,4 +1,5 @@
 #include "Engine/RealtimeEngine.hpp"
+#include "Graph/OfflineGraphRenderer.hpp"
 #include "DSP/Simd.hpp"
 #include "ScopedNoDenormals.hpp"
 
@@ -125,11 +126,13 @@ Status RealtimeEngine::commitGraph(bool reconfigureNodes) {
     // Invalidated nodes may be deactivated and have their scratch reallocated
     // during compile. In that case the complete compile must be inside the
     // gate, not merely the final atomic publication.
-    std::unique_ptr<RenderGate> reconfigurationGate;
-    if (reconfigureNodes) reconfigurationGate = std::make_unique<RenderGate>(*this);
     // Hand the published snapshot over so compensation delay lines that did not
     // change survive the rebuild with their contents.
     const std::shared_ptr<const CompiledGraph> previous = m_processor.graph();
+    std::unique_ptr<RenderGate> reconfigurationGate;
+    if (reconfigureNodes ||
+        (previous && m_graph.requiresRenderStopped(m_prepareInfo, *previous)))
+        reconfigurationGate = std::make_unique<RenderGate>(*this);
     auto compiled = m_graph.compile(m_prepareInfo, previous.get());
     if (!compiled) return fail(compiled.error());
 
@@ -219,6 +222,9 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
         }
+        if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
+        m_outputTransition.process(output, frames);
+        m_outputGated = true;
         return;
     }
     m_rendering.store(true);
@@ -229,6 +235,9 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
         for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
             dsp::clear(output.channel(ch).first(frames));
         }
+        if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
+        m_outputTransition.process(output, frames);
+        m_outputGated = true;
         return;
     }
 
@@ -239,6 +248,7 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     m_inputBus.frames = frames;
 
     const bool playing = m_transport.isPlaying();
+    const auto transportGeneration = m_transport.presentationGeneration();
     // Read the playhead for this block, then advance — every node in the graph
     // sees exactly the same timeline position.
     const SamplePos position = playing ? m_transport.advance(frames, /*deferPresentation=*/true)
@@ -255,13 +265,79 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     // that needs silencing.
     const auto graphStarted = rt::nowNanos();
     m_lastBlockResult.store(BlockResult::Complete, std::memory_order_relaxed);
-    const auto processed = m_processor.process(output, frames, position, playing, /*offline=*/false, transport);
+    Status processed;
+    bool dspFailed = false;
+    FrameCount offset = 0;
+    SamplePos segmentPosition = position;
+    std::array<float*, kMaxChannels> outputPointers{};
+    std::array<const float*, kMaxChannels> inputPointers{};
+    if (frames > m_prepareInfo.maxBlockSize) processed = fail(EngineError::BlockTooLarge);
+    else if (output.numChannels() > kMaxChannels || inputChannels > kMaxChannels)
+        processed = fail(EngineError::ChannelMismatch);
+    while (processed && offset < frames) {
+        FrameCount count = frames - offset;
+        if (playing && transport.looping) {
+            const auto begin = m_transport.loopStart(), end = m_transport.loopEnd();
+            if (end > begin) {
+                if (segmentPosition >= end)
+                    segmentPosition = begin + (segmentPosition - begin) % (end - begin);
+                if (segmentPosition < end)
+                    count = FrameCount(std::min<SamplePos>(count, end - segmentPosition));
+            }
+        }
+        for (ChannelCount ch = 0; ch < output.numChannels(); ++ch)
+            outputPointers[ch] = output.data(ch) + offset;
+        for (ChannelCount ch = 0; ch < inputChannels; ++ch)
+            inputPointers[ch] = input && input[ch] ? input[ch] + offset : nullptr;
+        m_inputBus.channels = input ? inputPointers.data() : nullptr;
+        m_inputBus.frames = count;
+        auto segmentTransport = transport;
+        const double beatsPerSample = transport.tempo / (60.0 * m_prepareInfo.sampleRate);
+        segmentTransport.ppqPosition = segmentPosition * beatsPerSample;
+        const double bar = 4.0 * transport.timeSigNumerator / transport.timeSigDenominator;
+        segmentTransport.barStartPpq = bar > 0.0
+            ? std::floor(segmentTransport.ppqPosition / bar) * bar : 0.0;
+        processed = m_processor.process(AudioBlock(outputPointers.data(), output.numChannels(), count),
+            count, segmentPosition, playing, false, segmentTransport);
+        if (!processed && processed.error() == EngineError::ProcessingFailed) {
+            dspFailed = true; processed = {};
+        }
+        if (processed) {
+            FrameCount fadeLimit = kMaxBlockSize;
+            if (playing && transport.looping &&
+                m_transport.loopEnd() > m_transport.loopStart())
+                fadeLimit = FrameCount(std::clamp<SamplePos>(
+                    (m_transport.loopEnd() - m_transport.loopStart()) / 2,
+                    1, kMaxBlockSize));
+            if (m_outputGated || (m_outputValid &&
+                (playing != m_outputPlaying ||
+                 transportGeneration != m_outputTransportGeneration ||
+                 m_processor.lastBlockGraphGeneration() != m_outputGraphGeneration ||
+                 (playing && segmentPosition != m_expectedOutputPosition))))
+                m_outputTransition.begin(m_transport.sampleRate(), fadeLimit);
+            m_outputTransition.process(output, count, offset);
+            m_outputValid = true;
+            m_outputGated = false;
+            m_outputPlaying = playing;
+            m_outputTransportGeneration = transportGeneration;
+            m_outputGraphGeneration = m_processor.lastBlockGraphGeneration();
+            m_expectedOutputPosition = segmentPosition + (playing ? count : 0);
+        }
+        offset += count;
+        segmentPosition += count;
+    }
+    if (processed && dspFailed) processed = fail(EngineError::ProcessingFailed);
     m_lastRenderError.store(processed ? -1 : int(processed.error()), std::memory_order_relaxed);
     if (!processed) {
         m_lastBlockResult.store(BlockResult::Failed, std::memory_order_relaxed);
         m_failedBlocks.fetch_add(1, std::memory_order_relaxed);
-        for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
-            dsp::clear(output.channel(ch).first(frames));
+        // DSP failures already contain safe fallback audio; retain healthy tracks.
+        if (processed.error() != EngineError::ProcessingFailed) {
+            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch)
+                dsp::clear(output.channel(ch).first(frames));
+            m_outputTransition.begin(m_transport.sampleRate());
+            m_outputTransition.process(output, frames);
+            m_outputGated = true;
         }
     }
 
@@ -348,6 +424,7 @@ Status RealtimeEngine::renderOffline(
     m_offlineError.clear();
 
     PrepareInfo offlineInfo = m_prepareInfo;
+    m_lastOfflinePipeline = false;
     offlineInfo.offline = true;
     const auto clearDelays = [](const CompiledGraph& graph) {
         for (const auto& delay : graph.delays) delay->reset();
@@ -374,24 +451,60 @@ Status RealtimeEngine::renderOffline(
             const auto snapshot = m_processor.graph();
             for (const auto& entry : snapshot->nodes) entry.node->reset();
             clearDelays(*snapshot);
+            const auto serviceNode = [&](std::uint32_t node, SamplePos position) -> Status {
+                const auto& entry = snapshot->nodes[node];
+                if (const auto status = entry.node->serviceOffline(); !status)
+                    return offlineFailure(entry, status.error(), position);
+                if (!entry.node->isPreparedFor(offlineInfo))
+                    return offlineFailure(entry, EngineError::RenderRestartRequired, position);
+                if (const auto status = entry.node->offlineStatus(); !status)
+                    return offlineFailure(entry, status.error(), position);
+                return {};
+            };
             const auto service = [&](SamplePos position) -> Status {
-                for (const auto& entry : snapshot->nodes) {
-                    if (const auto status = entry.node->serviceOffline(); !status)
-                        return offlineFailure(entry, status.error(), position);
-                    if (!entry.node->isPreparedFor(offlineInfo))
-                        return offlineFailure(entry, EngineError::RenderRestartRequired, position);
-                    if (const auto status = entry.node->offlineStatus(); !status)
-                        return offlineFailure(entry, status.error(), position);
-                }
+                for (std::uint32_t node = 0; node < snapshot->nodes.size(); ++node)
+                    if (auto status = serviceNode(node, position); !status) return status;
                 return {};
             };
             result = service(startSample);
-            for (SamplePos position = startSample; result && position < endSample;) {
-                FrameCount frames = FrameCount(std::min<SamplePos>(block, endSample - position));
-                // Split the last source block exactly at the requested end;
-                // a long clip must not feed another partial block into a tail.
-                if (position < options.sourcesEndSample)
-                    frames = FrameCount(std::min<SamplePos>(frames, options.sourcesEndSample - position));
+            SamplePos position = startSample;
+            const auto framesAt = [&](SamplePos at) {
+                auto frames = FrameCount(std::min<SamplePos>(block, endSample - at));
+                if (at < options.sourcesEndSample)
+                    frames = FrameCount(std::min<SamplePos>(frames, options.sourcesEndSample - at));
+                return frames;
+            };
+            bool stopped = false;
+            std::vector<double> costs;
+            if (result && options.pipeline && !options.forcePipeline &&
+                offlinePipelineWindow(*snapshot, m_processor.workerCount()) != 0) {
+                costs.assign(snapshot->nodes.size(), 0.0);
+                std::vector<double> observation(costs.size());
+                unsigned measured = 0;
+                // These are real output blocks, with the same boundaries and
+                // events as the reference, not a speculative/reset trial pass.
+                for (; measured < 3 && result && position < endSample; ++measured) {
+                    const auto frames = framesAt(position);
+                    result = m_processor.processSerial(output, frames, position,
+                        position < options.sourcesEndSample, true, m_transport.infoAt(position), observation);
+                    if (!result) break;
+                    result = service(position);
+                    if (!result) break;
+                    if (!sink(output, frames)) { stopped = true; break; }
+                    for (std::size_t node = 0; node < costs.size(); ++node) costs[node] += observation[node];
+                    position += frames;
+                }
+                if (measured != 0) for (auto& cost : costs) cost /= measured;
+            }
+            if (result && !stopped && position < endSample && options.pipeline) {
+                if (auto pipelined = renderOfflinePipelined(*snapshot, m_processor.workerCount(),
+                    position, endSample, block, options.sourcesEndSample, m_transport, sink, serviceNode, costs)) {
+                    m_lastOfflinePipeline = true;
+                    result = *pipelined;
+                }
+            }
+            for (; !m_lastOfflinePipeline && !stopped && result && position < endSample;) {
+                const auto frames = framesAt(position);
                 const TransportInfo transport = m_transport.infoAt(position);
                 result = m_processor.process(output, frames, position,
                     position < options.sourcesEndSample, true, transport);

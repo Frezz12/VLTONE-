@@ -97,6 +97,11 @@ public:
     virtual void setListener(PluginListener* listener) noexcept = 0;
     virtual PitchCapabilities pitchCapabilities() const noexcept { return {}; }
 
+    /// Opt-in for ordered offline blocks overlapping other instances. No
+    /// process-global coordination or dependence on another instance's clock.
+    /// Main-thread work is still serviced between this instance's blocks.
+    virtual bool supportsOfflinePipelining() const noexcept { return false; }
+
     // ── Control thread ──
 
     /// Ask for a layout; the plugin reports back what it actually accepted.
@@ -174,6 +179,9 @@ public:
     virtual PluginProcessDisposition process(
         const PluginProcessContext& context) noexcept = 0;
     virtual void reset() noexcept = 0;
+    /// Control thread with processing parked; legacy formats may need mains transitions.
+    virtual void resetForTransport() noexcept { reset(); }
+    virtual bool supportsRealtimeReset() const noexcept { return true; }
 
     /// Audio-thread sleep transition. CLAP brackets a sleeping interval with
     /// stop_processing/start_processing; formats without such a contract keep
@@ -204,6 +212,10 @@ public:
     /// Expensive and able to crash: this opens third-party code. Only the
     /// out-of-process scanner is meant to call it.
     virtual std::vector<PluginDescriptor> inspect(const std::string& path) const = 0;
+    /// Enumerate identities without smoke-testing every component in a shell.
+    virtual std::vector<PluginDescriptor> discover(const std::string& path) const {
+        return inspect(path);
+    }
 
     virtual std::unique_ptr<PluginInstance> create(const PluginDescriptor& descriptor) = 0;
 };

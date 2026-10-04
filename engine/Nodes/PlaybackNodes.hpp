@@ -2,6 +2,7 @@
 
 #include "Audio/SampleBuffer.hpp"
 #include "DSP/Simd.hpp"
+#include "DSP/DeClick.hpp"
 #include "DSP/TimeStretch.hpp"
 #include "DSP/WarpPlayback.hpp"
 #include "Graph/Node.hpp"
@@ -68,6 +69,8 @@ private:
     struct ClipSchedule {
         std::shared_ptr<const ClipList> clips = std::make_shared<const ClipList>();
         std::vector<SamplePos> subtreeMaxEnd;
+        std::vector<SamplePos> boundaries;
+        std::uint64_t revision = 0;
     };
 public:
 
@@ -76,6 +79,7 @@ public:
           m_clips(std::make_shared<const ClipSchedule>()) {}
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
     bool isSource() const noexcept override { return true; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
 
@@ -120,6 +124,7 @@ public:
             return a.startSample < b.startSample;
         });
         auto schedule = std::make_shared<ClipSchedule>();
+        schedule->revision = ++m_nextScheduleRevision;
         schedule->clips = std::move(prepared);
         schedule->subtreeMaxEnd.resize(schedule->clips->size());
         auto build = [&](auto&& self, std::size_t first, std::size_t last) -> SamplePos {
@@ -129,6 +134,14 @@ public:
                 self(self, first, mid), self(self, mid + 1, last)});
         };
         build(build, 0, schedule->clips->size());
+        for (const auto& clip : *schedule->clips) {
+            if (!clip.audio || clip.muted) continue;
+            schedule->boundaries.push_back(clip.startSample);
+            schedule->boundaries.push_back(clipEnd(clip));
+        }
+        std::sort(schedule->boundaries.begin(), schedule->boundaries.end());
+        schedule->boundaries.erase(std::unique(schedule->boundaries.begin(),
+            schedule->boundaries.end()), schedule->boundaries.end());
         m_clips.publish(std::move(schedule));
         preparePlayback(0);
     }
@@ -183,7 +196,8 @@ private:
 public:
 
     void reset() override {
-
+        m_declick.reset();
+        m_hasOutput = false;
         auto schedule = m_clips.read();
         if (schedule) for (const auto& clip : *schedule->clips) {
             if (clip.stretcher) clip.stretcher->reset();
@@ -196,10 +210,27 @@ public:
         for (ChannelCount ch = 0; ch < channels; ++ch) {
             dsp::clear(context.output.channel(ch));
         }
-        if (!context.playing) return;
-
         auto schedule = m_clips.read();
-        if (!schedule) return;
+        const double loopFrames = context.transport.tempo > 0.0
+            ? (context.transport.loopEndPpq - context.transport.loopStartPpq) *
+                60.0 * context.sampleRate / context.transport.tempo : 0.0;
+        const FrameCount fadeLimit = context.transport.looping && loopFrames > 0.0
+            ? FrameCount(std::clamp(loopFrames * 0.5, 1.0, double(kMaxBlockSize)))
+            : kMaxBlockSize;
+        if (!context.offline) {
+            if (m_hasOutput && (m_wasPlaying != context.playing ||
+                (context.playing && m_expectedPosition != context.timelinePosition) ||
+                m_outputRevision != (schedule ? schedule->revision : 0)))
+                m_declick.begin(context.sampleRate, fadeLimit);
+            m_hasOutput = true;
+            m_wasPlaying = context.playing;
+            m_expectedPosition = context.timelinePosition + context.frames;
+            m_outputRevision = schedule ? schedule->revision : 0;
+        }
+        if (!context.playing || !schedule) {
+            if (!context.offline) m_declick.process(context.output, context.frames);
+            return;
+        }
         const auto* clips = schedule->clips.get();
 
         const SamplePos blockStart = context.timelinePosition;
@@ -514,6 +545,21 @@ public:
             self(self, mid + 1, last);
         };
         visit(visit, 0, clips->size());
+        if (!context.offline) {
+            // Clip edges can occur inside a callback. Apply the transition at
+            // that exact sample; the prepared boundary list never grows in DSP.
+            FrameCount offset = 0;
+            auto boundary = std::lower_bound(schedule->boundaries.begin(),
+                schedule->boundaries.end(), blockStart);
+            for (; boundary != schedule->boundaries.end() && *boundary < blockEnd;
+                 ++boundary) {
+                const auto at = FrameCount(*boundary - blockStart);
+                m_declick.process(context.output, at - offset, offset);
+                m_declick.begin(context.sampleRate, fadeLimit);
+                offset = at;
+            }
+            m_declick.process(context.output, context.frames - offset, offset);
+        }
     }
 
 private:
@@ -537,7 +583,10 @@ private:
     SampleRate m_sampleRate = 48000.0;
     std::vector<float> m_fadeBuffer;
     std::array<float, 256> m_stretchLeft{}, m_stretchRight{};
-
+    dsp::DeClick m_declick;
+    std::uint64_t m_nextScheduleRevision = 0, m_outputRevision = 0;
+    SamplePos m_expectedPosition = 0;
+    bool m_hasOutput = false, m_wasPlaying = false;
 };
 
 /// Live hardware input, for monitoring and for feeding record-armed tracks.
@@ -558,6 +607,9 @@ public:
     }
 
     std::string_view name() const noexcept override { return m_name; }
+    OfflineNodePolicy offlineNodePolicy() const noexcept override {
+        return !m_bus || !m_bus->channels ? OfflineNodePolicy::Ordered : OfflineNodePolicy::Barrier;
+    }
     bool isSource() const noexcept override { return true; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
 
@@ -573,14 +625,24 @@ public:
             ((channelMask & 3u) << 16), std::memory_order_relaxed);
     }
 
+    void reset() override {
+        m_declick.reset();
+        m_routingInitialized = false;
+    }
+
     void process(const ProcessContext& context) override {
         const ChannelCount outChannels = context.output.numChannels();
         const auto routing = m_routing.load(std::memory_order_relaxed);
+        if (!context.offline && m_routingInitialized && routing != m_previousRouting)
+            m_declick.begin(context.sampleRate);
+        m_previousRouting = routing;
+        m_routingInitialized = true;
         if (!(routing & 0x100) || !m_bus ||
             !m_bus->channels) {
             for (ChannelCount ch = 0; ch < outChannels; ++ch) {
                 dsp::clear(context.output.channel(ch));
             }
+            if (!context.offline) m_declick.process(context.output, context.frames);
             return;
         }
         const FrameCount frames = std::min(context.frames, m_bus->frames);
@@ -606,9 +668,13 @@ public:
                 dsp::clear(destination.subspan(frames));
             }
         }
+        if (!context.offline) m_declick.process(context.output, context.frames);
     }
 
 private:
+    dsp::DeClick m_declick;
+    std::uint64_t m_previousRouting = 0;
+    bool m_routingInitialized = false;
     std::string m_name;
     const InputBus* m_bus = nullptr;
     std::atomic<std::uint64_t> m_routing{0};
