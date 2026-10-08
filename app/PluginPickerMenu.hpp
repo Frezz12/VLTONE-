@@ -4,6 +4,7 @@
 #include <functional>
 
 class QMenu;
+class QAction;
 class QWidget;
 
 namespace daw {
@@ -12,6 +13,11 @@ namespace plugins { struct PluginDescriptor; }
 } // namespace daw
 
 namespace ui {
+
+/// Explicit host controls reuse the app's parameter/routing panel; ordinary
+/// editor requests continue to show only the isolated plugin window.
+QAction* addPluginControlsAction(QMenu* menu, daw::EngineController* controller,
+                                const QString& channelId, const QString& slotId);
 
 /// Optional target of a replacement picker. Empty targets are add-only.
 /// IDs are resolved at activation time, never pointers into a mutable chain.

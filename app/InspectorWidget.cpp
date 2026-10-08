@@ -949,7 +949,7 @@ void InspectorWidget::applyTheme() {
                              border: 1px solid transparent; text-align: left; padding: 1px 2px;
                              min-height: 22px; font-size: 11px; }
 #InspectorMoreClipSettings:hover, #InspectorMoreClipSettings:focus {
-    color: %TEXT%; background: %HOVER%; border-color: %SEP%;
+    color: %TEXT%; background: %HOVER%;
 }
 #InspectorClipSection QComboBox, #InspectorClipSection QDoubleSpinBox {
     min-height: 20px; padding: 1px 4px; border-radius: %RADIUS%px;
@@ -961,10 +961,6 @@ void InspectorWidget::applyTheme() {
 }
 #InspectorTrackName:hover, #InspectorClipSection QComboBox:hover,
 #InspectorClipSection QDoubleSpinBox:hover { border-color: %SECTION%; }
-#InspectorTrackName:focus, #InspectorClipSection QComboBox:focus,
-#InspectorClipSection QComboBox:on, #InspectorClipSection QDoubleSpinBox:focus {
-    border-color: %ACCENT%;
-}
 #InspectorClipSection QComboBox::drop-down { width: 16px; }
 #InspectorClipSection QDoubleSpinBox QLineEdit {
     background: transparent; border: none; padding: 0; min-height: 0;

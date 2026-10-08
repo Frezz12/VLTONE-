@@ -2,7 +2,8 @@
 #include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 
-#include "Internal/EqualizerInstance.hpp"
+#include "PluginReadout.hpp"
+#include <optional>
 
 #include <QColor>
 #include <QHash>
@@ -33,7 +34,7 @@ public:
     /// Samples per band curve. Each enabled band draws its own filled shape, so
     /// this is walked once per band per repaint — dense enough that a 96 dB/oct
     /// cut has no visible corners, cheap enough at twenty-four of them.
-    static constexpr int kCurvePoints = 240;
+    static constexpr int kCurvePoints = daw::EqualizerResponse::curvePoints;
     using Curve = std::array<float, kCurvePoints>;
     using CurveSet = std::array<Curve, daw::plugins::equalizer::kBandCount>;
 
@@ -127,7 +128,7 @@ private:
     using Values = std::array<double, daw::plugins::equalizer::kParameterCount>;
     struct UserPreset { QString name; Values values{}; };
 
-    daw::plugins::equalizer::EqualizerInstance* equalizerInstance() const;
+    std::optional<daw::EqualizerSnapshot> equalizerSnapshot(bool consumeMeters = false) const;
     double readParameter(const QString& id) const;
     void writeParameter(const QString& id, double value);
     ui::Knob* makeKnob(const QString& id, const QString& caption, int size = 52);

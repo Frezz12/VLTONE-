@@ -3,6 +3,7 @@
 #include "EngineController.hpp"
 
 #include <algorithm>
+#include <set>
 
 using json = nlohmann::json;
 
@@ -50,8 +51,8 @@ constexpr const char* kStaleProject =
     "the project changed while this request was being planned; inspect the "
     "fresh CURRENT PROJECT and retry against its current ids and selection";
 
-bool isToolName(const std::string& name) {
-    for (const ToolSpec& spec : toolSpecs())
+bool isToolName(const std::string& name, const std::vector<ToolSpec>& tools) {
+    for (const ToolSpec& spec : tools)
         if (spec.name == name) return true;
     return false;
 }
@@ -59,6 +60,9 @@ bool isToolName(const std::string& name) {
 } // namespace
 
 std::vector<ToolCall> toolCallsInText(std::string& text) {
+    return toolCallsInText(text, toolSpecs());
+}
+std::vector<ToolCall> toolCallsInText(std::string& text, const std::vector<ToolSpec>& tools) {
     std::vector<ToolCall> calls;
     std::string kept;
     std::size_t cursor = 0;
@@ -74,7 +78,7 @@ std::vector<ToolCall> toolCallsInText(std::string& text) {
         const std::string name =
             parsed.is_object() ? parsed.value("name", std::string()) : std::string();
 
-        if (!name.empty() && isToolName(name)) {
+        if (!name.empty() && isToolName(name, tools)) {
             // The argument object has been seen under all three names, so all
             // three are accepted rather than guessing which model is talking.
             json args = json::object();
@@ -100,14 +104,61 @@ std::vector<ToolCall> toolCallsInText(std::string& text) {
     return calls;
 }
 
-AiSession::AiSession(EngineController& controller) : m_controller(controller) {}
+namespace {
+class DawWorkspace final : public AiWorkspace {
+public:
+    explicit DawWorkspace(EngineController& c) : controller(c) {}
+    std::uint64_t revision() const override { return controller.projectRevision(); }
+    std::string systemPrompt(const ToolContext& c) const override { return ai::systemPrompt(controller, c); }
+    std::vector<ToolSpec> tools(InteractionMode mode) const override { return toolSpecsForMode(mode); }
+    std::optional<ToolResult> execute(const ToolCall& call, const ToolContext& c, std::uint64_t) override {
+        return callTool(controller, call.name, call.args, c);
+    }
+    void begin(std::uint64_t, const std::string& prompt, std::size_t index) override {
+        group = controller.beginUndoGroup(); label = labelFor(prompt);
+        pending = {index, prompt, controller.project()};
+    }
+    void finish(bool changed, bool interleaved) override {
+        if (interleaved) controller.releaseUndoGroup(group);
+        else controller.collapseUndo(group, label);
+        group = {};
+        if (changed && !interleaved) {
+            points.push_back(std::move(pending));
+            if (points.size() > kMaxCheckpoints) points.erase(points.begin());
+        }
+        pending = {};
+    }
+    const std::vector<Checkpoint>& checkpoints() const override { return points; }
+    bool revertTo(std::size_t index) override {
+        for (const auto& p : points) if (p.messageIndex == index) {
+            controller.restoreProject(p.before, labelFor(p.prompt) + " (reverted)"); return true;
+        }
+        return false;
+    }
+    void clear() override { points.clear(); }
+private:
+    EngineController& controller;
+    UndoStack::Group group;
+    std::string label;
+    Checkpoint pending;
+    std::vector<Checkpoint> points;
+};
+}
+const std::vector<Checkpoint>& AiWorkspace::checkpoints() const {
+    static const std::vector<Checkpoint> empty;
+    return empty;
+}
+AiSession::AiSession(EngineController& controller)
+    : m_ownedWorkspace(std::make_unique<DawWorkspace>(controller)), m_workspace(m_ownedWorkspace.get()) {}
+AiSession::AiSession(AiWorkspace& workspace) : m_workspace(&workspace) {}
+AiSession::~AiSession() { if (m_running) { cancel(); if (m_running) finish(); } }
 
 void AiSession::setMaxIterations(int iterations) {
     m_maxIterations = std::clamp(iterations, 1, 200);
 }
 
 std::string AiSession::systemPrompt() const {
-    return ai::systemPrompt(m_controller, m_context);
+    return m_workspace->systemPrompt(m_context);
 }
 
 bool AiSession::begin(const std::string& prompt) {
@@ -120,18 +171,17 @@ bool AiSession::begin(const std::string& prompt) {
     m_runStartMessage = m_messages.size();
     // A stable undo group survives a full history stack. It is collapsed only
     // if revision tracking proves no user edit landed during the network waits.
-    m_undoGroup = m_controller.beginUndoGroup();
-    m_expectedRevision = m_controller.projectRevision();
+    ++m_runId;
+    m_pendingCalls.clear(); m_pendingResults = {}; m_waitingId.clear();
+    m_workspace->begin(m_runId, prompt, m_messages.size());
+    m_expectedRevision = m_workspace->revision();
     m_interleaved = false;
     m_hadAiEdits = false;
-    m_undoLabel = labelFor(prompt);
 
     m_messages.push_back(Message{Role::User, prompt, {}, {}});
 
     // Snapshotted before anything runs. Kept only if the run turns out to have
     // changed something, so a conversation of questions costs nothing.
-    m_pendingCheckpoint =
-        Checkpoint{m_messages.size() - 1, prompt, m_controller.project()};
     return true;
 }
 
@@ -147,6 +197,7 @@ bool AiSession::resume() {
 
 AiSession::Step AiSession::applyReply(const ModelReply& reply) {
     if (!m_running) return Step::Finished;
+    if (waitingForTool()) return Step::WaitingForTool;
 
     if (!reply.error.empty()) {
         // Keep partial prose visible, but never recover or execute commands
@@ -165,7 +216,12 @@ AiSession::Step AiSession::applyReply(const ModelReply& reply) {
     std::vector<ToolCall> calls = reply.calls;
     if (calls.empty() && m_context.mode != InteractionMode::Help &&
         m_context.mode != InteractionMode::Teach)
-        calls = toolCallsInText(text);
+        calls = toolCallsInText(text, availableTools());
+    std::set<std::string> ids;
+    for (const auto& call : calls) if (call.id.empty() || !ids.insert(call.id).second) {
+        m_lastError = "Provider returned missing or duplicate tool call IDs";
+        finish(); return Step::Failed;
+    }
 
     m_messages.push_back(Message{Role::Assistant, text, calls, {}});
 
@@ -174,13 +230,25 @@ AiSession::Step AiSession::applyReply(const ModelReply& reply) {
     // now-mis-targeted call; the next request receives the fresh project and
     // can re-plan. History remains separate for the rest of this run.
     const bool staleAtReply =
-        m_controller.projectRevision() != m_expectedRevision;
+        m_workspace->revision() != m_expectedRevision;
     if (staleAtReply) {
         m_interleaved = true;
-        m_expectedRevision = m_controller.projectRevision();
+        m_expectedRevision = m_workspace->revision();
     }
 
     if (calls.empty()) {
+        const auto incomplete = !m_cancelled ? m_workspace->completionIssue() : std::string{};
+        if (!incomplete.empty() && !staleAtReply) {
+            m_messages.back().text.clear();
+            if (++m_iterations > m_maxIterations) {
+                m_lastError = "Iteration limit reached. Draft saved; continue to finish compilation and installation.";
+                finish(); return Step::Failed;
+            }
+            Message update; update.role = Role::Tool;
+            update.outcomes.push_back({"workspace-incomplete", "workspace_state", false,
+                {{"ok", false}, {"error", incomplete}}, true});
+            m_messages.push_back(std::move(update)); return Step::NeedsRequest;
+        }
         if (staleAtReply && !m_cancelled) {
             ++m_iterations;
             if (m_iterations > m_maxIterations) {
@@ -220,38 +288,68 @@ AiSession::Step AiSession::applyReply(const ModelReply& reply) {
         return Step::Failed;
     }
 
-    Message results;
-    results.role = Role::Tool;
-    results.outcomes.reserve(calls.size());
-    bool staleBatch = staleAtReply;
-    for (const ToolCall& call : calls) {
-        if (m_controller.projectRevision() != m_expectedRevision) {
+    m_pendingCalls = std::move(calls);
+    m_nextCall = 0;
+    m_pendingResults = {};
+    m_pendingResults.role = Role::Tool;
+    m_staleBatch = staleAtReply;
+    return executePending();
+}
+AiSession::Step AiSession::executePending() {
+    while (m_nextCall < m_pendingCalls.size()) {
+        const auto& call = m_pendingCalls[m_nextCall];
+        if (m_workspace->revision() != m_expectedRevision) {
             m_interleaved = true;
-            m_expectedRevision = m_controller.projectRevision();
-            staleBatch = true;
+            m_expectedRevision = m_workspace->revision();
+            m_staleBatch = true;
         }
-        if (staleBatch) {
-            ToolResult stale;
-            stale.error = kStaleProject;
-            results.outcomes.push_back(ToolOutcome{
-                call.id, call.name, false, stale.toJson(), call.fromText});
-            continue;
+        ToolResult result;
+        if (m_staleBatch) result.error = kStaleProject;
+        else if (!isToolName(call.name, availableTools())) result.error = "Tool is unavailable in this workspace or interaction mode";
+        else {
+            const auto before = m_workspace->revision();
+            std::optional<ToolResult> answer;
+            try { answer = m_workspace->execute(call, m_context, m_runId); }
+            catch (const std::exception& e) { answer = ToolResult{false, {}, e.what()}; }
+            if (m_workspace->revision() != before) m_hadAiEdits = true;
+            m_expectedRevision = m_workspace->revision();
+            if (!answer) { m_waitingId = call.id; return Step::WaitingForTool; }
+            result = std::move(*answer);
         }
-        const std::uint64_t before = m_controller.projectRevision();
-        const ToolResult result =
-            callTool(m_controller, call.name, call.args, m_context);
-        const std::uint64_t after = m_controller.projectRevision();
-        if (after != before) m_hadAiEdits = true;
-        m_expectedRevision = after;
-        results.outcomes.push_back(ToolOutcome{call.id, call.name, result.ok,
+        m_pendingResults.outcomes.push_back(ToolOutcome{call.id, call.name, result.ok,
                                                result.toJson(), call.fromText});
+        ++m_nextCall;
     }
-    m_messages.push_back(std::move(results));
+    m_messages.push_back(std::move(m_pendingResults));
+    m_pendingCalls.clear();
     return Step::NeedsRequest;
+}
+AiSession::Step AiSession::completeTool(std::uint64_t run, const std::string& callId, const ToolResult& result) {
+    if (!m_running) return Step::Finished;
+    if (run != m_runId || m_waitingId.empty() || callId != m_waitingId)
+        return waitingForTool() ? Step::WaitingForTool : Step::NeedsRequest;
+    const auto& call = m_pendingCalls[m_nextCall++];
+    m_pendingResults.outcomes.push_back({call.id, call.name, result.ok, result.toJson(), call.fromText});
+    m_waitingId.clear();
+    if (m_expectedRevision != m_workspace->revision()) m_hadAiEdits = true;
+    m_expectedRevision = m_workspace->revision();
+    return executePending();
 }
 
 void AiSession::cancel() {
-    if (m_running) m_cancelled = true;
+    if (!m_running) return;
+    m_cancelled = true;
+    m_workspace->cancel();
+    if (waitingForTool()) {
+        ToolResult stopped{false, {}, "Stopped. You can continue this request."};
+        for (; m_nextCall < m_pendingCalls.size(); ++m_nextCall) {
+            const auto& c = m_pendingCalls[m_nextCall];
+            m_pendingResults.outcomes.push_back({c.id, c.name, false, stopped.toJson(), c.fromText});
+        }
+        m_messages.push_back(std::move(m_pendingResults));
+        m_waitingId.clear(); m_pendingCalls.clear(); m_lastError = stopped.error;
+        finish();
+    }
 }
 
 std::vector<Message> AiSession::wireMessages() const {
@@ -284,13 +382,7 @@ void AiSession::addUsage(const Usage& usage) {
 
 bool AiSession::revertTo(std::size_t messageIndex) {
     if (m_running) return false;
-    for (const Checkpoint& point : m_checkpoints) {
-        if (point.messageIndex != messageIndex) continue;
-        m_controller.restoreProject(point.before, labelFor(point.prompt) +
-                                                      " (reverted)");
-        return true;
-    }
-    return false;
+    return m_workspace->revertTo(messageIndex);
 }
 
 void AiSession::finish() {
@@ -298,26 +390,26 @@ void AiSession::finish() {
     // A non-interleaved run becomes one entry, including when it was stopped.
     // Once the user edited during a wait, release the group instead: folding
     // it would silently absorb their work into the assistant's undo.
-    if (m_interleaved)
-        m_controller.releaseUndoGroup(m_undoGroup);
-    else
-        m_controller.collapseUndo(m_undoGroup, m_undoLabel);
-    m_undoGroup = {};
-
-    if (m_hadAiEdits && !m_interleaved) {
-        m_checkpoints.push_back(std::move(m_pendingCheckpoint));
-        // A snapshot of a large project is megabytes; ten deep is enough to
-        // undo a session's worth of assistant work without holding the lot.
-        if (m_checkpoints.size() > kMaxCheckpoints)
-            m_checkpoints.erase(m_checkpoints.begin());
+    m_workspace->finish(m_hadAiEdits, m_interleaved);
+}
+void AiSession::restoreMessages(std::vector<Message> messages, std::string error, InteractionMode mode) {
+    if (m_running) return;
+    clear(); m_messages = std::move(messages); m_lastError = std::move(error); m_context.mode = mode;
+    // Recover a local transcript saved during an interrupted tool batch.
+    for (std::size_t i = 0; i < m_messages.size(); ++i) {
+        if (m_messages[i].role != Role::Assistant || m_messages[i].calls.empty()) continue;
+        if (i + 1 < m_messages.size() && m_messages[i + 1].role == Role::Tool) continue;
+        Message interrupted; interrupted.role = Role::Tool;
+        for (const auto& c : m_messages[i].calls)
+            interrupted.outcomes.push_back({c.id, c.name, false, {{"error", "Previous run was interrupted; inspect current state before retrying."}}, c.fromText});
+        m_messages.insert(m_messages.begin() + std::ptrdiff_t(++i), std::move(interrupted));
     }
-    m_pendingCheckpoint = {};
 }
 
 void AiSession::clear() {
     if (m_running) return;
     m_messages.clear();
-    m_checkpoints.clear();
+    m_workspace->clear();
     m_usage = {};
     m_runStartMessage = 0;
     m_lastError.clear();

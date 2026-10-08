@@ -654,9 +654,7 @@ public:
             engine->loadSamplerSampleSilently(sampler.channelId,
                                               sampler.slotId,
                                               sampler.localPath);
-            const auto* instance =
-                engine->samplerInstance(sampler.channelId, sampler.slotId);
-            if (!instance || !instance->rawSample()) {
+            if (!engine->samplerSnapshot(sampler.channelId, sampler.slotId).hasSource) {
                 engine->clearSamplerSampleSilently(sampler.channelId,
                                                    sampler.slotId);
                 addMissing(nextMissing, sampler.asset, sampler.location,
@@ -955,7 +953,7 @@ bool checkEngineProjectProjectionForTest(QString* error) {
     asset.originalName = "tone.wav";
 
     AssetCache cache(temporary.filePath(QStringLiteral("cache")));
-    daw::EngineController engine;
+    daw::EngineController engine{daw::EngineController::TestRuntime{}};
     if (!engine.initialize(48000.0, 128, /*openDevice=*/false))
         return fail(QStringLiteral("cannot initialize projection engine"));
 

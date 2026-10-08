@@ -2,10 +2,12 @@
 
 #include "DSP/Simd.hpp"
 #include "Common/RealtimeSort.hpp"
+#include "RealtimeMetrics.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <cmath>
+#include <thread>
 
 namespace daw::plugins {
 
@@ -14,9 +16,11 @@ namespace daw::plugins {
 namespace dsp = engine::dsp;
 // Synchronous notifications from processing describe playback, not a hand on a control.
 static thread_local const PluginNode* processingPlugin=nullptr;
+static std::atomic<std::uint64_t> nextInstanceId{1};
 
 PluginNode::PluginNode(std::string name, std::unique_ptr<PluginInstance> instance)
-    : m_name(std::move(name)), m_instance(std::move(instance)), m_sink(*this) {
+    : m_instanceId(nextInstanceId.fetch_add(1, std::memory_order_relaxed)),
+      m_name(std::move(name)), m_instance(std::move(instance)), m_sink(*this) {
     if (m_instance) {
         m_instance->setListener(this);
         const PluginDescriptor& descriptor = m_instance->descriptor();
@@ -38,20 +42,26 @@ PluginNode::~PluginNode() {
 }
 
 std::vector<PluginEvent> PluginNode::pendingParameterEvents() {
+    if (m_instance && m_instance->hasFailed()) return {};
     auto events = m_instance ? m_instance->pendingParameterEvents()
                              : std::vector<PluginEvent>{};
-    if (m_inbound.empty()) return events;
-    const auto formatEvents = events.size();
-    // Allocate before touching the queue: even an allocation failure must
-    // leave the live session's parameters and MIDI exactly as they were.
-    events.reserve(formatEvents + kEventQueueCapacity);
-    PluginEvent event;
-    while (m_inbound.pop(event)) events.push_back(event);
-    for (std::size_t i = formatEvents; i < events.size(); ++i)
-        (void)m_inbound.push(events[i]);
+    auto hostEvents = pendingHostEvents();
+    events.insert(events.end(), hostEvents.begin(), hostEvents.end());
     std::erase_if(events, [](const PluginEvent& pending) {
         return pending.kind != PluginEvent::Kind::ParamValue;
     });
+    return events;
+}
+
+std::vector<PluginEvent> PluginNode::pendingHostEvents() {
+    std::vector<PluginEvent> events;
+    if (m_inbound.empty()) return events;
+    // Allocate before touching the queue: even an allocation failure must
+    // leave the live session's parameters and MIDI exactly as they were.
+    events.reserve(kEventQueueCapacity);
+    PluginEvent event;
+    while (m_inbound.pop(event)) events.push_back(event);
+    for (const auto& pending : events) (void)m_inbound.push(pending);
     return events;
 }
 
@@ -360,6 +370,30 @@ void PluginNode::onStateChanged() noexcept {
 }
 
 void PluginNode::process(const engine::ProcessContext& context) {
+    // Direct/offline callers retain a bounded compatibility path. The graph
+    // uses begin/finish and executes independent nodes while DSP is pending.
+    auto timed = context;
+    if (!timed.deadlineNanos && m_instance && m_instance->hasDeferredProcess())
+        timed.deadlineNanos = rt::nowNanos() + (context.offline ? 10'000'000'000ull
+            : std::uint64_t(double(context.frames) * 800'000'000.0 / std::max(context.sampleRate, 1.0)));
+    if (beginProcess(timed)) return;
+    while (!finishProcess(rt::nowNanos() >= timed.deadlineNanos)) std::this_thread::yield();
+}
+
+void PluginNode::forwardMidi(const engine::ProcessContext& context) noexcept {
+    if (!context.midiOutput) return;
+    // Returning to the dry route changes note identity. Release transformed
+    // voices before forwarding original notes and their releases downstream.
+    releaseHeldMidi(context.midiOutput);
+    for (std::size_t i = 0; i < context.midiInputs.size(); ++i) {
+        if (i < context.inputRoles.size() && context.inputRoles[i] == engine::InputRole::Sidechain) continue;
+        const auto* midi = context.midiInputs[i];
+        if (!midi) continue;
+        for (const auto& event : midi->events()) (void)context.midiOutput->push(event);
+    }
+}
+
+bool PluginNode::beginProcess(const engine::ProcessContext& context) {
     if (!context.offline) m_processFailed.store(false, std::memory_order_relaxed);
     const engine::ChannelCount outChannels = context.output.numChannels();
     const engine::FrameCount frames = context.frames;
@@ -371,24 +405,6 @@ void PluginNode::process(const engine::ProcessContext& context) {
         return index < context.inputRoles.size() &&
                context.inputRoles[index] == engine::InputRole::Sidechain;
     };
-    auto forwardMidi = [&] noexcept {
-        if (!context.midiOutput) return;
-        // Switching a transformer out of the route changes note identity back to
-        // the dry stream. Release what the plugin actually emitted first; an
-        // incoming off for the original key cannot stop a transposed/arpeggiated
-        // voice downstream.
-        releaseHeldMidi(context.midiOutput);
-        for (std::size_t midiIndex = 0; midiIndex < context.midiInputs.size();
-             ++midiIndex) {
-            if (isSidechain(midiIndex)) continue;
-            const engine::MidiBuffer* midi = context.midiInputs[midiIndex];
-            if (!midi) continue;
-            for (const engine::MidiEvent& event : midi->events()) {
-                (void)context.midiOutput->push(event);
-            }
-        }
-    };
-
     // Whatever happens below, this block must be fully defined: the arena
     // recycles buffers and hands them over holding the previous owner's audio.
     auto passThrough = [&] {
@@ -417,8 +433,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
         // A missing/unprepared audio insert is still a transparent part of the
         // MIDI route. Otherwise opening a project while a plugin is unavailable
         // can leave the downstream instrument silent or holding notes.
-        forwardMidi();
-        return;
+        forwardMidi(context);
+        return true;
     }
 
     // ── Sum the main input bus ──
@@ -510,14 +526,6 @@ void PluginNode::process(const engine::ProcessContext& context) {
 
     const bool hostEventPending = !m_inbound.empty();
     const bool pluginWakeRequested = m_instance->takeProcessWakeRequest();
-    auto rememberTransport = [&] noexcept {
-        m_sleepTimelinePosition = context.timelinePosition;
-        m_sleepBlockFrames = frames;
-        m_sleepPlaying = context.playing;
-        m_sleepOffline = context.offline;
-        m_sleepTransport = context.transport;
-        m_sleepTransportValid = true;
-    };
 
     // ── Keep the dry signal when a crossfade is in flight ──
     const bool bypassed = m_bypassed.load(std::memory_order_relaxed);
@@ -573,15 +581,17 @@ void PluginNode::process(const engine::ProcessContext& context) {
     // opaque state for a bypassed insert. One event-bearing block updates that
     // state; the following quiet block sleeps again. Automation needs no such
     // exception because its current value is recomputed at the wake playhead.
-    if (bypassed && m_wet == 0.0f && !hostEventPending &&
-        !pluginWakeRequested && m_instance->supportsRealtimeReset()) {
+    const bool processorUnavailable = !m_instance->isActive();
+    if (bypassed && (processorUnavailable || (m_wet == 0.0f && !hostEventPending &&
+        !pluginWakeRequested && m_instance->supportsRealtimeReset()))) {
         m_curveCursorFor = nullptr;
-        if (!m_bypassProcessorReset) {
+        if (!m_bypassProcessorReset && !processorUnavailable) {
             m_instance->reset();
             m_bypassProcessorReset = true;
             m_bypassWarmupRemaining = m_dryDelaySamples;
         }
         m_tailFramesRemaining = 0;
+        m_wet = 0.0f;
         m_lastProcessDisposition = PluginProcessDisposition::Continue;
         for (engine::ChannelCount ch = 0; ch < outChannels; ++ch) {
             dsp::copyScaled(
@@ -591,9 +601,19 @@ void PluginNode::process(const engine::ProcessContext& context) {
                     frames),
                 1.0f);
         }
-        forwardMidi();
-        rememberTransport();
-        return;
+        forwardMidi(context);
+        rememberTransport(context);
+        return true;
+    }
+
+    if (m_instance->hasDeferredProcess() && context.deadlineNanos &&
+        rt::nowNanos() >= context.deadlineNanos) {
+        // A preceding node may have consumed the shared deadline. Do not
+        // submit this healthy child only to expire it immediately. Host edits
+        // remain queued for the next block, and this slot retains its process.
+        if (m_instance->supportsRealtimeReset()) m_instance->reset();
+        failProcess(context, bypassed);
+        return true;
     }
 
     // Exact, contract-grade silence information. This is deliberately not a
@@ -679,7 +699,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
                     dryGain);
             }
         }
-        if (!m_wantsMidi || forceMidiPassthrough) forwardMidi();
+        if (!m_wantsMidi || forceMidiPassthrough) forwardMidi(context);
     };
     const bool mixTransition = m_wet != targetWet;
     if (m_pluginSleeping) {
@@ -689,8 +709,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
                               mixTransition;
         if (!mustWake) {
             renderSleepingOutput(false);
-            rememberTransport();
-            return;
+            rememberTransport(context);
+            return true;
         }
         if (!m_instance->wakeProcessing()) {
             m_processFailed.store(true, std::memory_order_relaxed);
@@ -698,8 +718,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
             // Define audio and preserve MIDI rather than invoking process while
             // the format says the instance is stopped.
             renderSleepingOutput(true);
-            rememberTransport();
-            return;
+            rememberTransport(context);
+            return true;
         }
         m_pluginSleeping = false;
         m_tailFramesRemaining = 0;
@@ -991,23 +1011,75 @@ void PluginNode::process(const engine::ProcessContext& context) {
     processContext.transport = context.transport;
     processContext.sampleTime = context.timelinePosition;
     processContext.steadyTime = steadyTime;
+    processContext.deadlineNanos = context.deadlineNanos;
     processContext.playing = context.playing;
     processContext.offline = context.offline;
 
     // Ordinary audio effects are transparent to the MIDI stream. A plugin that
     // explicitly declares MIDI/event input owns the stream and must emit what
     // it wants downstream, which is how MIDI transformers avoid duplicates.
-    if (!m_wantsMidi || bypassed) forwardMidi();
+    if (!m_wantsMidi || bypassed) forwardMidi(context);
     // While bypass is crossing over, the plugin still renders its audible wet
     // tail but no longer owns the MIDI path: forwarding both its transformed
     // events and the transparent dry stream would duplicate notes downstream.
     m_currentMidiOutput = bypassed ? nullptr : context.midiOutput;
+    m_block = {context, processContext, targetWet, bypassed, needsDry,
+        !anyNonZeroInput && !automationActive,
+        anyNonZeroInput || hasMainMidiInput || hostEventPending || automationActive ||
+        transportChanged || pluginWakeRequested || mixTransition};
     const auto* previousProcessingPlugin=processingPlugin;
     processingPlugin=this;
-    const PluginProcessDisposition disposition = m_instance->process(processContext);
-    m_bypassWarmupRemaining -= std::min(m_bypassWarmupRemaining, frames);
+    PluginProcessDisposition disposition = PluginProcessDisposition::Error;
+    const bool complete = m_instance->beginProcess(processContext, disposition);
     processingPlugin=previousProcessingPlugin;
     m_currentMidiOutput = nullptr;
+    m_processing = !complete;
+    if (complete) finishAudio(disposition);
+    return complete;
+}
+
+bool PluginNode::finishProcess(bool expired) noexcept {
+    if (!m_processing) return true;
+    m_currentMidiOutput = m_block.bypassed ? nullptr : m_block.context.midiOutput;
+    const auto* previous = processingPlugin;
+    processingPlugin = this;
+    PluginProcessDisposition disposition = PluginProcessDisposition::Error;
+    const bool complete = m_instance->finishProcess(m_block.plugin, disposition, expired);
+    processingPlugin = previous;
+    m_currentMidiOutput = nullptr;
+    if (complete) { m_processing = false; finishAudio(disposition); }
+    return complete;
+}
+
+void PluginNode::rememberTransport(const engine::ProcessContext& context) noexcept {
+    m_sleepTimelinePosition = context.timelinePosition;
+    m_sleepBlockFrames = context.frames;
+    m_sleepPlaying = context.playing;
+    m_sleepOffline = context.offline;
+    m_sleepTransport = context.transport;
+    m_sleepTransportValid = true;
+}
+
+void PluginNode::failProcess(const engine::ProcessContext& context, bool bypassed) noexcept {
+    m_processFailed.store(true, std::memory_order_relaxed);
+    for (engine::ChannelCount ch = 0; ch < context.output.numChannels(); ++ch)
+        dsp::clear(context.output.channel(ch).first(context.frames));
+    // Discard foreign output, release transformed voices and preserve trusted
+    // dry MIDI. Dropping an audio effect's note-off would strand a later synth.
+    if (context.midiOutput) context.midiOutput->clear();
+    if (!m_wantsMidi || bypassed) forwardMidi(context);
+    else releaseHeldMidi(context.midiOutput);
+    rememberTransport(context);
+}
+
+void PluginNode::finishAudio(PluginProcessDisposition disposition) noexcept {
+    const auto& context = m_block.context;
+    const auto frames = context.frames;
+    const auto outChannels = context.output.numChannels();
+    const auto outCount = m_block.plugin.outputChannels;
+    const bool bypassed = m_block.bypassed, needsDry = m_block.needsDry;
+    const float targetWet = m_block.targetWet;
+    m_bypassWarmupRemaining -= std::min(m_bypassWarmupRemaining, frames);
     bool finiteOutput = true;
     for (engine::ChannelCount ch = 0; ch < outCount; ++ch) {
         // Surround channels can live in our scratch beyond the graph's width.
@@ -1015,9 +1087,8 @@ void PluginNode::process(const engine::ProcessContext& context) {
         finiteOutput &= std::all_of(samples.begin(), samples.end(), [](float x) { return std::isfinite(x); });
     }
     if (disposition == PluginProcessDisposition::Error || !finiteOutput) {
-        m_processFailed.store(true, std::memory_order_relaxed);
-        for (engine::ChannelCount ch = 0; ch < outChannels; ++ch)
-            dsp::clear(context.output.channel(ch).first(frames));
+        failProcess(context, bypassed);
+        return;
     }
     if (bypassed) m_bypassProcessorReset = false;
 
@@ -1056,16 +1127,13 @@ void PluginNode::process(const engine::ProcessContext& context) {
     bool enterSleep = false;
     if (disposition == PluginProcessDisposition::Sleep) {
         m_tailFramesRemaining = 0;
-        enterSleep = !anyNonZeroInput && !automationActive;
+        enterSleep = m_block.canSleep;
     } else if (disposition == PluginProcessDisposition::Tail) {
         const std::uint64_t tail = m_instance->tailSamples();
         if (tail >= std::uint64_t(std::numeric_limits<std::int32_t>::max())) {
             m_tailFramesRemaining = tail;
         } else {
-            const bool tailStimulus = anyNonZeroInput || hasMainMidiInput ||
-                                      hostEventPending || automationActive ||
-                                      transportChanged || pluginWakeRequested ||
-                                      mixTransition;
+            const bool tailStimulus = m_block.tailStimulus;
             if (tailStimulus ||
                 m_lastProcessDisposition != PluginProcessDisposition::Tail) {
                 m_tailFramesRemaining = tail;
@@ -1083,7 +1151,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
         m_tailFramesRemaining = 0;
     }
     m_lastProcessDisposition = disposition;
-    rememberTransport();
+    rememberTransport(context);
     if (enterSleep) {
         m_instance->sleepProcessing();
         m_pluginSleeping = true;

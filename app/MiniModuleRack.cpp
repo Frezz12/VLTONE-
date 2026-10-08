@@ -187,11 +187,6 @@ protected:
       p.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap));
       p.drawLine(QPointF(18, 18) + 4 * dir, QPointF(18, 18) + 9 * dir);
     }
-    if (hasFocus()) {
-      p.setPen(QPen(t.accent, 1.5));
-      p.setBrush(Qt::NoBrush);
-      p.drawRoundedRect(QRectF(.75, .75, 34.5, 34.5), 4, 4);
-    }
   }
 
 private:
@@ -230,11 +225,6 @@ protected:
     p.setPen(QPen(lamp, 1.5, Qt::SolidLine, Qt::RoundCap));
     p.drawArc(QRectF(7.5, 7.5, 9, 9), 130 * 16, 280 * 16);
     p.drawLine(QPointF(12, 6.5), QPointF(12, 11));
-    if (hasFocus()) {
-      p.setPen(QPen(t.accent, 1.3));
-      p.setBrush(Qt::NoBrush);
-      p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 4, 4);
-    }
   }
 
 private:
@@ -263,10 +253,6 @@ protected:
     p.setPen(m_ink);
     p.drawText(rect(), Qt::AlignCenter,
                fontMetrics().elidedText(text(), Qt::ElideRight, width()));
-    if (hasFocus()) {
-      p.setPen(ThemeManager::instance().theme().accent);
-      p.drawRect(rect().adjusted(0, 0, -1, -1));
-    }
   }
   void mousePressEvent(QMouseEvent *e) override {
     m_start = e->pos();
@@ -509,9 +495,7 @@ public:
         "QComboBox:hover{border-color:" +
         mixColors(faceColor(m_look), ink, .32).name() +
         ";}"
-        "QComboBox:focus{border-color:" +
-        ThemeManager::instance().theme().accent.name() +
-        ";} QComboBox::drop-down{width:13px;border:0;}";
+        "QComboBox::drop-down{width:13px;border:0;}";
     m_route->setStyleSheet(comboStyle);
     if (m_mode)
       m_mode->setStyleSheet(comboStyle);

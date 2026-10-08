@@ -72,7 +72,7 @@ public:
   void reset() noexcept override;
   std::uint32_t latencySamples() const noexcept override { return m_latency; }
   std::uint32_t tailSamples() const noexcept override { return m_tail; }
-  bool tailSamplesKnown() const noexcept override { return true; }
+  bool tailSamplesKnown() const noexcept override { return m_tailKnown; }
 
 private:
   struct Runtime;
@@ -96,6 +96,7 @@ private:
   std::uint64_t m_seed = 0;
   std::uint32_t m_latency = 0, m_tail = 0;
   bool m_active = false, m_processing = false;
+  bool m_tailKnown = true;
   std::shared_ptr<engine::Node> m_previousOwner;
   std::shared_ptr<engine::Node> m_pendingPredecessor;
   MiniModuleInstance *m_previous = nullptr;

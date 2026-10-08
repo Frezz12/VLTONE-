@@ -34,7 +34,7 @@ bool TimelineWidget::checkTrackPresentationForTest() {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
     ThemeManager::instance().apply();
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     controller.initialize(48000, 512, false);
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear();

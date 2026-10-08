@@ -171,6 +171,7 @@ int main(int argc, char **argv) {
         "typed graph file round trip");
   bool catalogue = true, rt = true, finite = true, deterministic = true;
   for (const auto &type : nodeRegistry()) {
+    if (type.operation >= Operation::Wire) continue; // v5 operations have dedicated typed/state tests.
     if (type.id == "input" || type.id == "output" || type.id == "interface" || type.id == "cpp_function")
       continue;
     auto graph = initial();

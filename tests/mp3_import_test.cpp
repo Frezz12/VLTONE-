@@ -96,7 +96,7 @@ int main() {
 
     const auto package = (directory / "mp3-project.vlt").string();
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         checkResult(controller.initialize(48000, 512, false), "initialize offline import controller");
         daw::EngineController::PreparedAudio prepared;
         checkResult(daw::EngineController::prepareAudio(path, 48000, prepared), "prepare MP3 import and waveform");
@@ -111,7 +111,7 @@ int main() {
         check(prepared.failedPaths.empty() && prepared.audio.size() == 1 &&
               prepared.audio[0].source->frames() == frames,
               "project's MP3 is restored with full audio and no missing-media entry");
-        daw::EngineController reopened;
+        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
         checkResult(reopened.initialize(48000, 512, false), "initialize offline reopen controller");
         checkResult(reopened.openPreparedProject(std::move(prepared)), "open the MP3 project");
     }

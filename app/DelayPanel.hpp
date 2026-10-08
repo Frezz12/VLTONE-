@@ -8,14 +8,13 @@
 class QTimer;
 class DelayPanel;
 namespace daw { class EngineController; }
-namespace ui::graphics { class BrowserSurface; class BrowserProfile; }
-class DelayWebBridge final : public QObject {
+class NativePluginView;
+class DelayControls final : public QObject {
     Q_OBJECT
 public:
-    explicit DelayWebBridge(DelayPanel*);
+    explicit DelayControls(DelayPanel*);
 public slots:
-    void ready();
-    void edit(int index, double value, bool finished, int revision);
+    void edit(int index, double value, bool finished);
     void finish(int index);
     void automate(int index);
 signals:
@@ -35,8 +34,8 @@ protected:
     void showEvent(QShowEvent*) override;
     void hideEvent(QHideEvent*) override;
 private:
-    friend class DelayWebBridge;
-    daw::plugins::delay::DelayInstance* instance() const;
+    friend class DelayControls;
+    bool available() const;
     double read(unsigned) const;
     void write(unsigned, double);
     void finish(unsigned);
@@ -44,12 +43,9 @@ private:
     void refresh(bool meters = false);
     daw::EngineController* m_controller;
     std::string m_channel, m_insert;
-    ui::graphics::BrowserProfile* m_profile;
-    ui::graphics::BrowserSurface* m_view;
-    DelayWebBridge* m_bridge;
+    NativePluginView* m_view;
+    DelayControls* m_bridge;
     QTimer* m_timer;
     std::array<std::optional<double>, daw::plugins::delay::kParameterCount> m_gestures{};
     std::array<double, 3> m_meters{};
-    int m_revision = 0;
-    bool m_ready = false;
 };

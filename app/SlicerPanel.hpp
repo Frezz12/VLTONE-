@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Internal/SlicerInstance.hpp"
+#include "PluginReadout.hpp"
 #include "SlicerTools.hpp"
 #include "UiFrameClock.hpp"
 #include "graphics/ScenePaintSource.hpp"
@@ -159,7 +159,7 @@ private:
         std::string error;
         bool ok = false;
     };
-    daw::plugins::slicer::SlicerInstance* slicer() const;
+    std::optional<daw::SlicerSnapshot> slicer(bool includeActivity = false) const;
     QWidget* buildAnalysis();
     QWidget* buildSliceInspector();
     QWidget* buildPlayback();
@@ -243,7 +243,7 @@ private:
     std::optional<Slice> m_copied;
     std::shared_ptr<const Table> m_seenTable;
     std::shared_ptr<const daw::engine::SampleBuffer> m_seenAudio;
-    daw::plugins::slicer::SlicerInstance* m_seenInstance = nullptr;
+    daw::PluginIdentity m_seenInstance;
     quint64 m_seenSource = 0, m_workGeneration = 0;
     std::shared_ptr<std::atomic<bool>> m_cancelled;
     QStringList m_dragFiles;

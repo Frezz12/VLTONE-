@@ -44,7 +44,7 @@ test("registration works with an incomplete legal profile but still requires sep
   await page.addInitScript(() => localStorage.setItem("vlt-cookie-preference-v1", "necessary"));
   let submitted = false;
   await page.route("**/api/v1/**", route => {
-    if (route.request().url().endsWith("/meta")) return route.fulfill({ json: { registration_enabled: true, registration_legal: { ready: false, version: "2026-09-26" } } });
+    if (route.request().url().endsWith("/meta")) return route.fulfill({ json: { registration_enabled: true, registration_captcha: { provider: "turnstile", required: false, configured: false, site_key: "" }, registration_legal: { ready: false, version: "2026-09-26" } } });
     submitted = true;
     expect(route.request().postDataJSON()).toMatchObject({ consent_accepted: true, terms_accepted: true, diagnostics_accepted: false });
     return route.fulfill({ status: 422, json: { message: "test request" } });

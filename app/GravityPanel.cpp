@@ -1,3 +1,5 @@
+#include <QDir>
+#include "PluginStyle.hpp"
 #include "GravityPanel.hpp"
 #include "Theme.hpp"
 
@@ -46,10 +48,6 @@ namespace gravity = daw::plugins::gravity;
 
 namespace {
 
-constexpr QColor kWell(0x09, 0x0A, 0x0C);
-constexpr QColor kMuted(0x8B, 0x8E, 0x94);
-constexpr QColor kRed(0xE8, 0x10, 0x48);
-constexpr QColor kMagenta(0xFF, 0x26, 0xB5);
 constexpr auto kUserPresetKey = "gravity/userPresets.v1";
 
 const daw::plugins::ParameterInfo* parameterInfo(const QString& id) {
@@ -309,13 +307,7 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF bounds = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
-    QLinearGradient shell(bounds.topLeft(), bounds.bottomLeft());
-    shell.setColorAt(0.0, QColor(0x0D, 0x0E, 0x10));
-    shell.setColorAt(0.63, kWell);
-    shell.setColorAt(1.0, QColor(0x17, 0x08, 0x10));
-    painter.setPen(QPen(QColor(0x35, 0x37, 0x3B), 1.0));
-    painter.setBrush(shell);
-    painter.drawRoundedRect(bounds, 25.0, 25.0);
+    pluginStyle::surface(painter,bounds,true);
 
     painter.save();
     QPainterPath clip;
@@ -323,8 +315,8 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
     painter.setClipPath(clip);
     QRadialGradient glow(QPointF(width() * 0.66, height() * 0.86),
                          std::max(width(), height()) * 0.64);
-    glow.setColorAt(0.0, QColor(0xA2, 0x08, 0x45, 58));
-    glow.setColorAt(0.50, QColor(0x52, 0x05, 0x24, 28));
+    glow.setColorAt(0.0, mixColors(th().well(),pluginStyle::accent(),.1));
+    glow.setColorAt(0.50, th().well());
     glow.setColorAt(1.0, QColor(0x00, 0x00, 0x00, 0));
     painter.fillRect(bounds, glow);
     painter.restore();
@@ -357,7 +349,7 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
             ? (particle.mass < 0.0f ? attractorA : attractorB)
             : attractor;
         const QPointF point = orbitPoint * (1.0 - attraction) + target * attraction;
-        QColor ink = particle.tint < 0.52 ? kRed : kMagenta;
+        QColor ink = particle.tint < 0.52 ? pluginStyle::accent() : th().accentHighlight;
         ink.setAlpha(std::clamp(int((42.0 + energy * 150.0 +
                                     m_telemetry.transientPulse * 70.0) * particle.life),
                                 18, 225));
@@ -369,7 +361,7 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
 
     // The attractor remains visible in reduced-motion mode and is the keyboard
     // focus affordance for the two-dimensional control.
-    QColor attractorInk = m_telemetry.frozen ? QColor(0x9C, 0x72, 0xFF) : kMagenta;
+    QColor attractorInk = m_telemetry.frozen ? pluginStyle::accent() : th().accentHighlight;
     attractorInk.setAlpha(hasFocus() ? 245 : 185);
     painter.setBrush(QColor(0x05, 0x05, 0x08, 185));
     QFont attractorFont = painter.font();
@@ -382,10 +374,8 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
         painter.drawLine(attractorA, attractorB);
     }
     auto drawAttractor = [&](const QPointF& point, const QString& label) {
-        painter.setPen(QPen(attractorInk, hasFocus() ? 2.0 : 1.25,
-                            hasFocus() ? Qt::DashLine : Qt::SolidLine));
-        painter.drawEllipse(point, hasFocus() ? 19.0 : 15.0,
-                            hasFocus() ? 19.0 : 15.0);
+        painter.setPen(QPen(attractorInk, 1.25, Qt::SolidLine));
+        painter.drawEllipse(point, 15.0, 15.0);
         painter.setPen(QPen(attractorInk, 1.0));
         painter.drawLine(point + QPointF(-5, 0), point + QPointF(5, 0));
         painter.drawLine(point + QPointF(0, -5), point + QPointF(0, 5));
@@ -405,7 +395,7 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
     font.setBold(true);
     font.setLetterSpacing(QFont::PercentageSpacing, 112);
     painter.setFont(font);
-    painter.setPen(kMuted);
+    painter.setPen(th().textSecondary);
     painter.drawText(QRectF(0, 15, width(), 18), Qt::AlignCenter,
                      QStringLiteral("GRAVITY · %1%").arg(int(std::lround(m_gravity * 100.0))));
 
@@ -418,20 +408,20 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
         painter.setPen(Qt::NoPen);
         for (int channel = 0; channel < 2; ++channel) {
             const QRectF rail(x + channel * 8.0, top, 3.0, heightAvailable);
-            painter.setBrush(QColor(0x2F, 0x31, 0x35));
+            painter.setBrush(th().separator());
             painter.drawRoundedRect(rail, 1.5, 1.5);
             const double filled = heightAvailable * meterFraction(peaks[channel]);
             QLinearGradient level(0, bottom, 0, top);
-            level.setColorAt(0.0, kRed);
-            level.setColorAt(0.72, kMagenta);
-            level.setColorAt(1.0, QColor(0xF4, 0xD7, 0xEA));
+            level.setColorAt(0.0, pluginStyle::accent());
+            level.setColorAt(0.72, th().accentHighlight);
+            level.setColorAt(1.0, th().textPrimary);
             painter.setBrush(level);
             painter.drawRoundedRect(QRectF(rail.left(), bottom - filled,
                                            rail.width(), filled), 1.5, 1.5);
         }
         font.setPixelSize(8);
         painter.setFont(font);
-        painter.setPen(kMuted);
+        painter.setPen(th().textSecondary);
         const QRectF textRect(alignRight ? x - 78.0 : x - 2.0,
                               height() - 57.0, 90.0, 14.0);
         painter.drawText(textRect, alignRight ? Qt::AlignRight : Qt::AlignLeft,
@@ -446,7 +436,7 @@ void GravityField::paintScene(QPainter& painter, const QRegion&) {
 
     font.setPixelSize(8);
     painter.setFont(font);
-    painter.setPen(QColor(0xA4, 0xA7, 0xAD));
+    painter.setPen(th().textSecondary);
     const QString status =
         QStringLiteral("%1 PITCH   %2 DECAY   %3 FEEDBACK   %4 SIZE   %5 GRAINS   DUCK %6")
             .arg(gravity::parameterText(std::uint32_t(gravity::Param::Pitch),
@@ -485,7 +475,7 @@ GravityPanel::GravityPanel(daw::EngineController* controller, QString channelId,
     railLayout->setContentsMargins(22, 18, 22, 16);
     railLayout->setSpacing(12);
 
-    auto* brand = new QLabel(QStringLiteral("⠿  GRAVITY"), rail);
+    auto* brand = new QLabel(QStringLiteral("GRAVITY"), rail);
     brand->setObjectName(QStringLiteral("GravityBrand"));
     brand->setAccessibleName(tr("Gravity effect"));
     railLayout->addWidget(brand);
@@ -538,7 +528,7 @@ GravityPanel::GravityPanel(daw::EngineController* controller, QString channelId,
                                   tr("Freeze Gravity tail"), rail);
     m_freeze->setAccessibleName(tr("Freeze tail"));
     m_freeze->setCheckable(true);
-    m_freeze->setActiveColor(QColor(0xA4, 0x79, 0xFF));
+    m_freeze->setActiveColor(pluginStyle::accent());
     m_freeze->setButtonSize(42, 42);
     auto* clear = new ui::IconButton(icons::Glyph::Restart,
                                      tr("Clear Gravity tail"), rail);
@@ -680,34 +670,40 @@ GravityPanel::GravityPanel(daw::EngineController* controller, QString channelId,
     stageLayout->addWidget(m_drawer);
     root->addWidget(stage, 1);
 
+    pluginStyle::bind(this);
+    const auto restyle = [this] {
     setStyleSheet(QStringLiteral(R"(
-#GravityPanel { background: #101113; }
-#GravityRail { background: #222325; border-right: 1px solid #34363A; }
-#GravityStage { background: #101113; }
-#GravityBrand { color: #B3B5BA; font-size: 17px; font-weight: 600; letter-spacing: 1px; }
+#GravityPanel { background: %BG%; }
+#GravityRail { background: %FACE%; border-right: 1px solid %EDGE%; }
+#GravityStage { background: %BG%; }
+#GravityBrand { color: %TEXT%; font-size: 17px; font-weight: 600; letter-spacing: 1px; }
 #GravityKnobCaption, #GravitySectionLabel, #GravityReadout {
-    color: #9A9DA3; font-size: 9px; font-weight: 600; letter-spacing: 1px;
+    color: %DIM%; font-size: 9px; font-weight: 600; letter-spacing: 1px;
 }
-#GravityReadout { color: #AEB0B5; padding-bottom: 1px; }
+#GravityReadout { color: %TEXT%; padding-bottom: 1px; }
 #GravityAlgorithm, #GravityPresetName, #GravityDrawer QComboBox {
-    color: #D1D3D7; background: #121315; border: 1px solid #44474C;
+    color: %TEXT%; background: %WELL%; border: 1px solid %EDGE%;
     border-radius: %RADIUS%px; min-height: 28px; padding: 0 9px;
     font-size: 10px; font-weight: 600;
 }
 #GravityPresetName { letter-spacing: 1px; }
-#GravityAlgorithm:hover, #GravityPresetName:hover, #GravityDrawer QComboBox:hover { border-color: #8A2356; }
-#GravityAlgorithm:focus, #GravityPresetName:focus, #GravityDrawer QComboBox:focus { border: 1px solid #44474C; }
-QSpinBox { color: #D1D3D7; background: #111214; border: 1px solid #55585E;
+QSpinBox { color: %TEXT%; background: %WELL%; border: 1px solid %EDGE%;
            border-radius: %RADIUS%px; padding: 3px; }
-#GravityDrawer { background: #17181B; border: 1px solid #34363A; border-radius: %RADIUS%px; }
+#GravityDrawer { background: %BG%; border: 1px solid %EDGE%; border-radius: %RADIUS%px; }
 #GravityDrawerTabs::pane { border: none; background: transparent; }
 #GravityDrawerTabs QTabBar::tab {
-    color: #9A9DA3; background: transparent; padding: 6px 13px;
+    color: %DIM%; background: transparent; padding: 6px 13px;
     border-bottom: 2px solid transparent; font-size: 9px; font-weight: 600;
 }
-#GravityDrawerTabs QTabBar::tab:selected { color: #F1DDE9; border-bottom-color: #FF26B5; }
-#GravityDrawerTabs QTabBar::tab:focus { outline: 1px solid #FF26B5; }
-)").replace("%RADIUS%", QString::number(Theme::cornerRadius)));
+#GravityDrawerTabs QTabBar::tab:selected { color: %TEXT%; border-bottom-color: %ACCENT%; }
+)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%BG%",pluginStyle::shell().name()).replace("%FACE%",th().edgeLight(pluginStyle::shell()).name())
+        .replace("%EDGE%",th().separator().name()).replace("%TEXT%",th().textPrimary.name())
+        .replace("%DIM%",th().textSecondary.name()).replace("%WELL%",th().well().name())
+        .replace("%ACCENT%",pluginStyle::accent().name()));
+    };
+    connect(&ThemeManager::instance(),&ThemeManager::changed,this,restyle);
+    restyle();
 
     connect(m_algorithm, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
@@ -760,12 +756,10 @@ QSpinBox { color: #D1D3D7; background: #111214; border: 1px solid #55585E;
     });
     connect(m_freeze, &QAbstractButton::toggled, this, [this](bool frozen) {
         if (m_refreshing) return;
-        if (gravity::GravityInstance* instance = gravityInstance())
-            instance->setFrozen(frozen);
+        if (m_controller) m_controller->setGravityFrozen(m_channelKey, m_insertKey, frozen);
     });
     connect(clear, &QAbstractButton::clicked, this, [this] {
-        if (gravity::GravityInstance* instance = gravityInstance())
-            instance->clearTail();
+        if (m_controller) m_controller->clearGravityTail(m_channelKey, m_insertKey);
         m_field->clearParticles();
     });
 
@@ -802,10 +796,8 @@ QSpinBox { color: #D1D3D7; background: #111214; border: 1px solid #55585E;
     refresh();
 }
 
-gravity::GravityInstance* GravityPanel::gravityInstance() const {
-    if (!m_controller) return nullptr;
-    return dynamic_cast<gravity::GravityInstance*>(
-        m_controller->insertInstance(m_channelKey, m_insertKey));
+bool GravityPanel::available() const {
+    return m_controller && m_controller->hasInsert(m_channelKey, m_insertKey, "daw.gravity");
 }
 
 ui::Knob* GravityPanel::makeKnob(const QString& parameterId, int diameter) {
@@ -823,9 +815,10 @@ ui::Knob* GravityPanel::makeKnob(const QString& parameterId, int diameter) {
         control->setToolTip(QString::fromStdString(info->name));
     }
     control->setBare(diameter);
-    control->setVisualStyle(ui::Knob::VisualStyle::Gravity);
+    control->setVisualStyle(ui::Knob::VisualStyle::Slicer);
     control->setAutomatable(true);
     control->setValue(readParameter(parameterId));
+    control->setProperty("parameterId", parameterId);
     connect(control, &ui::Knob::valueChanged, this,
             [this, parameterId](double value) {
                 beginGesture(parameterId);
@@ -900,8 +893,8 @@ void GravityPanel::applyValues(const PresetValues& values, const QString& kind,
             undoLabel);
     }
     m_controller->collapseUndo(undo, undoLabel);
-    if (gravity::GravityInstance* instance = gravityInstance())
-        instance->setPresetReference(kind.toStdString(), name.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, kind.toStdString(), name.toStdString());
     m_selectedKind = kind;
     m_selectedName = name;
     emit projectEdited();
@@ -914,8 +907,6 @@ void GravityPanel::applyPreset(int index) {
     const gravity::FactoryPreset& preset = presets[std::size_t(index)];
     applyValues(preset.values, QStringLiteral("factory"),
                 QString::fromUtf8(preset.name), "Apply Gravity Preset");
-    if (gravity::GravityInstance* instance = gravityInstance())
-        instance->setLastPreset(index);
     m_selectedPreset = index;
 }
 
@@ -1012,8 +1003,8 @@ void GravityPanel::saveCurrentUserPreset() {
     storeUserPresets();
     m_selectedKind = QStringLiteral("user");
     m_selectedName = name;
-    if (gravity::GravityInstance* instance = gravityInstance())
-        instance->setPresetReference("user", name.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "user", name.toStdString());
     refresh();
 }
 
@@ -1041,8 +1032,8 @@ void GravityPanel::renameCurrentUserPreset() {
     current->name = name;
     m_selectedName = name;
     storeUserPresets();
-    if (gravity::GravityInstance* instance = gravityInstance())
-        instance->setPresetReference("user", name.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "user", name.toStdString());
     refresh();
 }
 
@@ -1062,8 +1053,8 @@ void GravityPanel::deleteCurrentUserPreset() {
     storeUserPresets();
     m_selectedKind = QStringLiteral("custom");
     m_selectedName = oldName;
-    if (gravity::GravityInstance* instance = gravityInstance())
-        instance->setPresetReference("custom", oldName.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "custom", oldName.toStdString());
     refresh();
 }
 
@@ -1186,12 +1177,12 @@ void GravityPanel::refresh() {
         m_power->setChecked(!model->bypassed);
 
     gravity::Telemetry telemetry;
-    if (gravity::GravityInstance* instance = gravityInstance()) {
-        telemetry = instance->consumeTelemetry();
-        m_freeze->setChecked(instance->frozen());
-        m_selectedPreset = std::clamp(instance->lastPreset(), 0,
+    if (const auto snapshot = m_controller->gravitySnapshot(m_channelKey, m_insertKey)) {
+        telemetry = snapshot->telemetry;
+        m_freeze->setChecked(snapshot->frozen);
+        m_selectedPreset = std::clamp(snapshot->lastPreset, 0,
             int(gravity::factoryPresets().size()) - 1);
-        const auto [kind, name] = instance->presetReference();
+        const auto [kind, name] = snapshot->preset;
         m_selectedKind = QString::fromStdString(kind);
         m_selectedName = QString::fromStdString(name);
     }
@@ -1239,7 +1230,10 @@ void GravityPanel::refresh() {
 }
 
 bool GravityPanel::checkForTest() {
-    if (!m_controller || !gravityInstance()) return false;
+    const auto shots = qEnvironmentVariable("VLT_NATIVE_SCREENSHOTS");
+    if (!shots.isEmpty()) { QDir().mkpath(shots); grab().save(shots + "/gravity.png"); }
+
+    if (!m_controller || !available()) return false;
     const auto oneUndoAdvanced = [this](std::size_t before) {
         const std::size_t after = m_controller->undoDepth();
         return before < m_controller->undoLimit() ? after == before + 1

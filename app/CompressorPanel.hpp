@@ -9,15 +9,14 @@
 class QTimer;
 class CompressorPanel;
 namespace daw { class EngineController; }
-namespace ui::graphics { class BrowserSurface; class BrowserProfile; }
+class NativePluginView;
 
-class CompressorWebBridge final : public QObject {
+class CompressorControls final : public QObject {
     Q_OBJECT
 public:
-    explicit CompressorWebBridge(CompressorPanel*);
+    explicit CompressorControls(CompressorPanel*);
 public slots:
-    void ready();
-    void edit(int index, double value, bool finished, int revision);
+    void edit(int index, double value, bool finished);
     void finish(int index);
     void automate(int index);
 signals:
@@ -38,8 +37,8 @@ protected:
     void showEvent(QShowEvent*) override;
     void hideEvent(QHideEvent*) override;
 private:
-    friend class CompressorWebBridge;
-    daw::plugins::compressor::CompressorInstance* instance() const;
+    friend class CompressorControls;
+    bool available() const;
     double read(unsigned) const;
     void write(unsigned, double);
     void finish(unsigned);
@@ -47,12 +46,9 @@ private:
     void refresh(bool meters = false);
     daw::EngineController* m_controller;
     std::string m_channel, m_insert;
-    ui::graphics::BrowserProfile* m_profile;
-    ui::graphics::BrowserSurface* m_view;
-    CompressorWebBridge* m_bridge;
+    NativePluginView* m_view;
+    CompressorControls* m_bridge;
     QTimer* m_timer;
     std::array<std::optional<double>, daw::plugins::compressor::kParameterCount> m_gestures{};
     std::array<double, 3> m_meters{-60, -60, 0};
-    int m_revision = 0;
-    bool m_ready = false;
 };

@@ -122,8 +122,70 @@ int main() {
     audio::AudioBuffer buffer(2, 96000);
     for (int ch = 0; ch < 2; ++ch) std::copy_n(hits->channel(ch), 96000, buffer.getChannel(ch));
     audio::AudioRecorder recorder; recorder.initialize(48000, 2); recorder.writeWAVFile(file, buffer, 48000);
-    EngineController controller;
+    EngineController controller{EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return 1;
+    {
+        controller.setTempo(120);
+        const auto importedTrack = controller.addTrack(TrackKind::Audio, "Auto Warp");
+        ClipMusicalAnalysisModel analysis;
+        analysis.algorithmVersion = analysis.tempo.algorithmVersion = 2;
+        analysis.tempo.status = MusicalAnalysisStatus::Available;
+        analysis.tempo.bpm = 160.01;
+        analysis.tempo.stability = 1;
+        analysis.analyzedDurationSeconds = 2;
+        const auto beforeImport = controller.undoDepth();
+        const auto imported = controller.importAudio(file, importedTrack, 3.25, analysis, true);
+        const auto current = [&] { return controller.audioClip(importedTrack, imported); };
+        check(!imported.empty() && current()->warp.enabled && validWarp(current()->warp) &&
+              current()->warp.preservePitch && current()->warp.mode == 4 &&
+              near(current()->durationSeconds, 8.0 / 3) && near(current()->startSeconds, 3.25) &&
+              near(current()->warp.baselineDurationSeconds, 2),
+              "Auto Warp fits the source tempo to the project without moving the clip or changing pitch");
+        const auto fitted = current()->warp;
+        check(controller.undoDepth() == beforeImport + 1, "auto-fit and import share one Undo entry");
+        controller.undo(); check(!current(), "Undo removes the automatically fitted clip");
+        controller.redo(); check(current() && current()->warp == fitted, "Redo restores the exact fitted map and stable ids");
+        auto off = fitted; off.enabled = false;
+        controller.setClipWarp(importedTrack, imported, off);
+        check(near(current()->durationSeconds, 2) && near(current()->startSeconds, 3.25) &&
+              current()->warp.markers == fitted.markers && near(current()->sampleEdit.stretchTime, 1),
+              "Warp Off restores source duration and playback while keeping the map and placement");
+        controller.undo(); check(current()->warp == fitted && near(current()->durationSeconds, 8.0 / 3),
+                                  "Undo of Warp Off restores automatic fitting");
+        controller.redo();
+        controller.setTempo(80);
+        check(near(current()->durationSeconds, 2), "a disabled auto-fit keeps source duration when BPM changes");
+        controller.setClipWarp(importedTrack, imported, fitted);
+        check(near(current()->durationSeconds, 4), "reenabling auto-fit follows the current project BPM");
+        std::string saved;
+        ProjectModel restored;
+        check(ProjectSerializer::serializeDocument(controller.project(), saved).isOk() &&
+              ProjectSerializer::deserializeDocument(restored, saved).isOk(), "auto-fit project round-trip succeeds");
+        const auto* savedTrack = restored.findTrack(importedTrack);
+        check(savedTrack && savedTrack->clips.back().warp == fitted,
+              "project persistence retains the fitted map and original duration");
+
+        const auto plain = controller.importAudio(file, importedTrack, 0, analysis);
+        check(controller.audioClip(importedTrack, plain)->warp.empty(),
+              "imports that did not request Auto Warp retain their existing behavior");
+        for (int invalid = 0; invalid < 5; ++invalid) {
+            auto uncertain = analysis;
+            if (invalid == 0) uncertain.tempo.status = MusicalAnalysisStatus::Unavailable;
+            if (invalid == 1) uncertain.tempo.status = MusicalAnalysisStatus::Ambiguous;
+            if (invalid == 2) uncertain.tempo.variable = true;
+            if (invalid == 3) uncertain.tempo.bpm = std::numeric_limits<double>::quiet_NaN();
+            if (invalid == 4) uncertain.tempo.stability = 0;
+            const auto id = controller.importAudio(file, importedTrack, 7, uncertain, true);
+            const auto* unwarped = controller.audioClip(importedTrack, id);
+            check(unwarped && unwarped->warp.empty() && near(unwarped->durationSeconds, 2),
+                  "unreliable or missing tempo imports at its original duration");
+        }
+        const auto beforeTrack = controller.undoDepth();
+        const auto newTrack = controller.importAudioToNewTrack(file, 5, "Fitted track", analysis, true);
+        check(!newTrack.empty() && controller.project().findTrack(newTrack)->clips.front().warp.enabled &&
+              controller.undoDepth() == beforeTrack + 1, "new-track auto-fit is one complete import transaction");
+        controller.undo(); check(!controller.project().findTrack(newTrack), "Undo removes the new fitted track atomically");
+    }
     ProjectModel project; project.tempo = 120;
     TrackModel track; track.id = newUuid(); track.name = "Drums"; track.kind = TrackKind::Audio;
     ClipModel clip; clip.id = newUuid(); clip.kind = ClipKind::Audio; clip.filePath = file; clip.durationSeconds = 2; clip.channels = 2;
@@ -254,7 +316,7 @@ int main() {
     check(controller.warpPreviewActive() && std::abs(livePeak() - 30000) < 500,
           "mixdown restores the pending After audition on return");
     controller.cancelWarpPreview();
-    EngineController rack; rack.initialize(48000, 256, false);
+    EngineController rack{EngineController::TestRuntime{}}; rack.initialize(48000, 256, false);
     const auto rackTrack = rack.addTrack(TrackKind::Audio, "Offline rack");
     rack.addInsert(rackTrack, plugins::equalizer::EqualizerInstance::staticDescriptor());
     controller.setRecordDirectory(dir.string());

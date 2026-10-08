@@ -4,6 +4,8 @@
 #include "MidiRecording.hpp"
 #include "StripSilence.hpp"
 #include "RenderSpec.hpp"
+#include "RenderSessionSpec.hpp"
+#include "PluginReadout.hpp"
 #include "model/Document.hpp"
 #include "recovery/RecoverySnapshot.hpp"
 #include "UndoStack.hpp"
@@ -22,7 +24,7 @@
 #include "Internal/SlicerInstance.hpp"
 #include "Job/BackgroundExecutor.hpp"
 
-#include "Engine/RealtimeEngine.hpp"
+#include "AudioRuntimeEndpoint.hpp"
 #include "Common/RealtimeSnapshot.hpp"
 #include "Audio/SampleBuffer.hpp"
 #include "Nodes/BasicNodes.hpp"
@@ -41,6 +43,7 @@
 #include <deque>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <limits>
 #include <span>
 #include <memory>
@@ -118,6 +121,10 @@ struct RecordingPreview {
 class EngineController {
 public:
     EngineController();
+    struct TestRuntime {};
+    explicit EngineController(TestRuntime);
+    struct SecondaryRuntime {};
+    EngineController(SecondaryRuntime, const EngineController& parent);
     ~EngineController();
 
     EngineController(const EngineController&) = delete;
@@ -197,41 +204,12 @@ public:
 
     /// Handles of the engine nodes that make up one channel. Exposed so tools
     /// and tests can look at what the routing actually compiled to.
-    struct TrackNodes {
-        engine::NodeId clips = engine::kInvalidNode;
-        engine::NodeId midiClips = engine::kInvalidNode;
-        engine::NodeId instrument = engine::kInvalidNode;
-        engine::NodeId channelColor = engine::kInvalidNode;
-        /// FX owned by the built-in sampler. These nodes only hear the
-        /// instrument output; routed and monitored audio joins later.
-        std::vector<engine::NodeId> samplerInserts;
-        engine::NodeId samplerFader = engine::kInvalidNode;
-        engine::NodeId samplerMeter = engine::kInvalidNode;
-        engine::NodeId input = engine::kInvalidNode;
-        /// Where audio *arriving from elsewhere* joins this channel: the output
-        /// of another track routed here, or a send. Only channels that actually
-        /// receive something get one, so an ordinary track carries no extra
-        /// node. Everything merged here is ahead of the inserts, which is the
-        /// whole point — a bus's plugins have to hear what is fed into it.
-        engine::NodeId sum = engine::kInvalidNode;
-        /// The insert chain, in document order, between the sources and the
-        /// fader. Empty when the channel has no plugins loaded.
-        std::vector<engine::NodeId> inserts;
-        /// The channel merge/generator output immediately before its inserts.
-        engine::NodeId sourceTap = engine::kInvalidNode;
-        /// What a pre-fader send taps: the last insert, or the clips when there
-        /// are none. "Pre-fader" means before the fader, *after* the inserts —
-        /// tapping ahead of the plugins would send a signal nobody asked for.
-        engine::NodeId preFaderTap = engine::kInvalidNode;
-        engine::NodeId fader = engine::kInvalidNode;
-        engine::NodeId meter = engine::kInvalidNode;
-        std::vector<engine::NodeId> sends;
-    };
+    using TrackNodes = AudioRuntime::TrackNodes;
 
     /// The master bus addresses its inserts through a channel under this
     /// reserved id. Safe from collision because every real track id is a
     /// 36-character uuid from `newUuid()`.
-    static constexpr const char* kMasterChannelId = "master";
+    static constexpr const char* kMasterChannelId = AudioGraphSpec::masterChannelId;
     /// Stems are written concurrently, one open file each, so the ceiling is
     /// really the process file-descriptor limit. Refusing above this is a
     /// clearer failure than `sf_open` running out halfway through.
@@ -316,7 +294,7 @@ public:
     audio::Result initialize(const audio::AudioDeviceConfig& config,
                              bool openDevice = true);
     void shutdown();
-    bool isDeviceOpen() const { return m_deviceOpen && m_devices->isRunning(); }
+    bool isDeviceOpen() const { return m_deviceOpen && m_runtime.deviceSnapshot().running; }
     bool audioDeviceNeedsRecovery() const;
     audio::Result recoverAudioDevice();
     double sampleRate() const { return m_sampleRate; }
@@ -730,7 +708,17 @@ public:
         InsertModel model;
         std::vector<std::uint8_t> state;
         std::vector<std::uint8_t> rightState;   ///< Dual Mono's second instance
+        // Transient immutable resources retain copied Sampler/Slicer audio.
+        // Durable preset serialization continues to use packaged state bytes.
+        std::shared_ptr<const engine::SampleBuffer> source, rightSource;
+        std::string sourcePath, rightSourcePath;
     };
+
+    /// Capture both mono sides under one render gate without changing the
+    /// selected editor channel. On failure, no partial chain is returned.
+    audio::Result captureInsertChain(const std::string& channelId,
+                                    const std::vector<std::string>& slotIds,
+                                    std::vector<ChainSlotSnapshot>& chain);
 
     /// A channel's FX chain, and — when it was copied whole — everything else
     /// the strip holds.
@@ -928,10 +916,64 @@ public:
                                const std::optional<InsertModel>& before,
                                const std::string& label);
 
-    /// The live instance behind a slot, for an editor window. Null when the
-    /// slot is empty or the plugin failed to load.
+    /// Internal integration and diagnostics only. UI uses commands/readouts
+    /// below. Null when the slot is empty or the plugin failed to load.
     plugins::PluginInstance* insertInstance(const std::string& channelId,
                                             const std::string& insertId);
+
+    /// Cheap control-thread lookup; uid restricts a panel to its own processor
+    /// type after slot replacement. No plugin code or allocations are needed.
+    bool hasInsert(const std::string& channelId, const std::string& insertId,
+                   std::string_view uid = {}) const;
+    EffectMeterSnapshot effectMeterSnapshot(const std::string& channelId,
+                                            const std::string& insertId);
+    SamplerSnapshot samplerSnapshot(const std::string& channelId,
+                                    const std::string& insertId) const;
+    PluginIdentity insertIdentity(const std::string& channelId,
+                                  const std::string& insertId) const;
+    std::optional<PluginEditorSnapshot> insertEditorSnapshot(const std::string& channelId,
+        const std::string& insertId,
+        AudioRuntimeEndpoint::Readout readout = AudioRuntimeEndpoint::Readout::Cached) const;
+    /// All editor calls are control-thread-only. Identity is mandatory: a late
+    /// open/close/resize/idle must never act on a replacement in the same slot.
+    bool openInsertEditor(const std::string& channelId, const std::string& insertId,
+        PluginIdentity identity, void* parent = nullptr, plugins::PluginEditorHost* host = nullptr);
+    /// Resolves the owning mono side even if editor selection has since changed.
+    bool closeInsertEditor(const std::string& channelId, const std::string& insertId,
+        PluginIdentity identity, bool onlyUnattached = false);
+    std::optional<PluginEditorSize> insertEditorSize(const std::string& channelId,
+        const std::string& insertId, PluginIdentity identity) const;
+    std::optional<PluginEditorSize> resizeInsertEditor(const std::string& channelId,
+        const std::string& insertId, PluginIdentity identity, PluginEditorSize requested);
+    bool pumpInsertEditor(const std::string& channelId, const std::string& insertId,
+                          PluginIdentity identity);
+    std::uint32_t pollInsertEditorShortcuts(const std::string& channelId, const std::string& insertId,
+                                           PluginIdentity identity, bool enabled);
+    /// Fills caller-owned values during this call; never retains the span.
+    void readInsertParameters(const std::string& channelId, const std::string& insertId,
+                              std::span<PluginParameterReadout> values) const;
+    std::string insertParameterText(const std::string& channelId, const std::string& insertId,
+        const std::string& parameterId, double value, std::int32_t indexHint = -1) const;
+    std::optional<SlicerSnapshot> slicerSnapshot(const std::string& channelId,
+        const std::string& insertId, bool includeActivity = false,
+        AudioRuntimeEndpoint::Readout readout = AudioRuntimeEndpoint::Readout::Cached) const;
+    std::optional<EqualizerSnapshot> equalizerSnapshot(const std::string& channelId,
+        const std::string& insertId, bool consumeMeters = false);
+    std::optional<EqualizerResponse> equalizerResponse(const std::string& channelId,
+                                                      const std::string& insertId) const;
+    std::optional<std::array<double, 180>> modulationResponse(const std::string& channelId,
+                                                           const std::string& insertId) const;
+    std::optional<GravitySnapshot> gravitySnapshot(const std::string& channelId,
+                                                  const std::string& insertId);
+    bool setInsertPresetReference(const std::string& channelId, const std::string& insertId,
+                                  std::string kind, std::string name);
+    bool setEqualizerAnalyzer(const std::string& channelId, const std::string& insertId,
+                              const plugins::equalizer::AnalyzerConfig& config);
+    bool auditionEqualizerBand(const std::string& channelId, const std::string& insertId, int band);
+    bool switchEqualizerComparison(const std::string& channelId, const std::string& insertId, char slot);
+    bool copyEqualizerComparison(const std::string& channelId, const std::string& insertId);
+    bool setGravityFrozen(const std::string& channelId, const std::string& insertId, bool frozen);
+    bool clearGravityTail(const std::string& channelId, const std::string& insertId);
 
     /// Project-wide VLT Pitch edits, including Clip FX, sampler FX and master.
     /// Key import changes only key/scale; copy uses the source editor channel
@@ -1077,6 +1119,13 @@ public:
     /// delay compensation follows). Returns true when the UI should redraw.
     /// Control thread, from the UI's existing periodic tick.
     bool pumpPluginEvents();
+    using PluginRuntimeState = AudioPluginRuntimeState;
+    using PluginRuntimeStatus = AudioPluginRuntimeStatus;
+    PluginRuntimeStatus insertRuntimeStatus(const std::string& channelId,
+        const std::string& slotId, AudioRuntimeEndpoint::Readout readout = AudioRuntimeEndpoint::Readout::Current) const;
+    /// Start a fresh process off the control/render threads. Publication is
+    /// completed by pumpPluginEvents; deleting/replacing the slot cancels it.
+    bool restartInsert(const std::string& channelId, const std::string& slotId);
     /// Device-free editor drafts only: deliver pending host parameter edits
     /// through one silent block, then service plugin callbacks. Never renders
     /// on the control thread when initialized with a live audio device.
@@ -1226,11 +1275,15 @@ public:
     std::string importAudioToNewTrack(const std::string& filePath,
                                       double startSeconds,
                                       const std::string& trackName = {},
-                                      const ClipMusicalAnalysisModel& analysis = {});
+                                      const ClipMusicalAnalysisModel& analysis = {},
+                                      bool autoWarp = false);
+    /// Auto Warp uses a prepared source-tempo estimate. No analysis runs here;
+    /// the original duration and fitted map belong to the same import undo.
     std::string importAudio(const std::string& filePath,
                             const std::string& trackId,
                             double startSeconds,
-                            const ClipMusicalAnalysisModel& analysis = {});
+                            const ClipMusicalAnalysisModel& analysis = {},
+                            bool autoWarp = false);
     struct ClipStartChange {
         std::string trackId;
         std::string clipId;
@@ -1713,7 +1766,17 @@ public:
     /// it can be seen. One undo entry either way, and the same answer every
     /// time it is asked, which is what makes double-clicking a knob safe to
     /// repeat and safe to do by accident.
-    std::pair<std::string, std::string> ensureAutomation(const AutomationTarget& target);
+    std::pair<std::string, std::string> ensureAutomation(
+        const AutomationTarget& target, bool reusePassiveLane = false);
+    /// Control-thread gestures only. Coalesced per channel until the UI drains
+    /// them, so a knob never creates tracks from inside a plugin callback.
+    void touchInsertParameter(const std::string& channelId,
+                              const std::string& insertId,
+                              const std::string& parameterId);
+    std::optional<AutomationTarget> lastTouchedAutomation(
+        const std::string& channelId) const;
+    enum class AutomationFollowChange { None, Values, Structure };
+    AutomationFollowChange followTouchedAutomation();
     /// Replace a curve's breakpoints. Live and *not* undoable, for the same
     /// reason `setLanePoints` is not: drawing is a gesture that fires per
     /// mouse-move. `commitAutomationEdit` turns the finished gesture into one
@@ -1768,8 +1831,8 @@ public:
     float masterPeakLeft() const;
     float masterPeakRight() const;
     float masterPeakHold() const;
-    engine::LoudnessLevels masterLoudness() const { return m_engine.masterLoudness(); }
-    void resetMasterLoudness() { m_engine.resetMasterLoudness(); }
+    engine::LoudnessLevels masterLoudness() const { return m_runtime.masterLoudness(); }
+    void resetMasterLoudness() { m_runtime.resetMasterLoudness(); }
     void resetMasterPeakHold();
     engine::RealtimeEngine::MasterSpectrum masterSpectrum() const;
     void addMasterSpectrumConsumer() noexcept;
@@ -1777,19 +1840,19 @@ public:
     float dspLoad() const;
     // Diagnostics are drained by one control/benchmark consumer, never the UI
     // and benchmark concurrently. Counters are cumulative and never reset live.
-    rt::BlockMetrics& callbackMetrics();
-    rt::BlockMetrics& graphMetrics() { return m_engine.graphMetrics(); }
+    AudioTimingSnapshot callbackMetrics(bool drain = false);
+    AudioTimingSnapshot graphMetrics(bool drain = false) { return m_runtime.timingSnapshot(false, drain); }
     std::array<std::uint64_t, 4> audioXruns() const;
-    int lastAudioRenderError() const { return m_engine.lastRenderError(); }
-    std::uint64_t failedAudioBlocks() const { return m_engine.failedBlocks(); }
-    const audio::AudioDeviceManager& audioDeviceDiagnostics() const { return *m_devices; }
-    std::uint64_t gatedAudioBlocks() const { return m_engine.gatedBlocks(); }
-    void setAudioProfiling(bool enabled) { m_engine.setProfiling(enabled); }
-    unsigned audioWorkerCount() const { return m_engine.workerCount(); }
-    unsigned realtimeAudioWorkerCount() const { return m_engine.realtimeWorkerCount(); }
-    unsigned workgroupAudioWorkerCount() const { return m_engine.workgroupWorkerCount(); }
-    bool popAudioProfile(unsigned worker, rt::ProfileEvent& event) { return m_engine.popProfile(worker, event); }
-    std::uint64_t droppedAudioProfileEvents() const { return m_engine.droppedProfileEvents(); }
+    int lastAudioRenderError() const { return m_runtime.diagnostics().lastRenderError; }
+    std::uint64_t failedAudioBlocks() const { return m_runtime.diagnostics().failedBlocks; }
+    AudioDeviceSnapshot audioDeviceDiagnostics() const { return m_runtime.deviceSnapshot(); }
+    std::uint64_t gatedAudioBlocks() const { return m_runtime.diagnostics().gatedBlocks; }
+    void setAudioProfiling(bool enabled) { m_runtime.setProfiling(enabled); }
+    unsigned audioWorkerCount() const { return m_runtime.diagnostics().workers; }
+    unsigned realtimeAudioWorkerCount() const { return m_runtime.diagnostics().realtimeWorkers; }
+    unsigned workgroupAudioWorkerCount() const { return m_runtime.diagnostics().workgroupWorkers; }
+    bool popAudioProfile(unsigned worker, rt::ProfileEvent& event) { return m_runtime.popProfile(worker, event); }
+    std::uint64_t droppedAudioProfileEvents() const { return m_runtime.diagnostics().droppedProfileEvents; }
 
     // ── Recording ──
     /// How a recording behaves when it lands on existing material. The mode is
@@ -1991,9 +2054,8 @@ public:
     /// owned buffers. Refuses a controller allowed to open hardware. Exactly one
     /// producer may call this, joined before changing device/lifecycle state.
     unsigned configureAudioWorkersForTest(bool realtime, unsigned maxParallelThreads = 0) {
-        if (m_liveDeviceAllowed || !m_prepared || isPlaying() || isRecording()) return 0;
-        m_engine.configureAudioWorkers({realtime, m_sampleRate, m_bufferSize, {}, maxParallelThreads});
-        return m_engine.realtimeWorkerCount();
+        if (isRecording()) return 0;
+        return m_runtime.nativeForWorkerOrTest().configureWorkersForTest(realtime, maxParallelThreads);
     }
     /// Optional ADC/DAC timestamps exercise recording placement and presentation
     /// timing through the production callback without opening an audio device.
@@ -2042,16 +2104,20 @@ public:
     /// pre-fader send from a silenced track still feeds its bus, so a reverb
     /// return would bleed into every stem.
     ///
-    /// Blocking, and it parks live audio for its whole duration (`renderOffline`
-    /// holds the render gate). `onProgress` runs on the calling thread after
-    /// each block; returning false from it cancels, and a cancelled render
-    /// leaves no files behind.
-    ///
-    /// Every temporary change it makes to the project — bypassed inserts,
-    /// cleared mutes, a different sample rate — is restored before it returns,
-    /// including when it throws, and none of it reaches the undo stack.
+    /// Captures state on the control thread, then renders a detached session.
+    /// Progress may dispatch edits to the live document without changing the
+    /// export. Cancellation publishes no partial output.
     audio::Result renderProject(
         const rendering::Spec& spec,
+        const std::function<bool(const rendering::Progress&)>& onProgress,
+        rendering::Report& out);
+
+    /// Capturing must run on the plugin control thread. A failed capture leaves
+    /// `out` invalid. Execution needs no source controller or live graph.
+    audio::Result captureRenderSession(const rendering::Spec& spec,
+                                      RenderSessionSpec& out);
+    static audio::Result renderSession(
+        const RenderSessionSpec& session,
         const std::function<bool(const rendering::Progress&)>& onProgress,
         rendering::Report& out);
 
@@ -2131,9 +2197,9 @@ public:
     std::string currentInputDeviceUid();
     audio::DeviceInfo currentInputDeviceInfo() const;
     audio::DeviceInfo currentOutputDeviceInfo() const {
-        return m_devices ? m_devices->getCurrentOutputDevice() : audio::DeviceInfo{};
+        return m_runtime.currentDevice(false);
     }
-    bool audioDeviceRunning() const { return m_devices && m_devices->isRunning(); }
+    bool audioDeviceRunning() const { return m_runtime.deviceSnapshot().running; }
     audio::AudioDeviceConfig audioConfiguration() const;
     uint32_t bufferSizeFrames() const { return m_bufferSize; }
     audio::Result applyAudioConfiguration(
@@ -2163,7 +2229,13 @@ public:
     std::string pendingLocalAudioPath(const std::string& clipId) const;
 
 private:
-    class DeviceCallback;   // bridges the PortAudio callback to the engine
+    friend class RenderSessionSpec;
+    friend class RenderWorker;
+    friend struct EngineControllerProcessTest;
+    static audio::Result renderSessionInWorker(const RenderSessionSpec& session,
+        const std::function<bool(const rendering::Progress&)>& progress, rendering::Report& out);
+    using InsertSlot = AudioRuntime::InsertSlot;
+    using ClipFxChannel = AudioRuntime::ClipFxChannel;
 
     audio::Result applyPitchCorrectorParameters(
         const std::vector<InsertParameter>& values, const std::string& label,
@@ -2208,11 +2280,27 @@ private:
     void retireOrphanedPendingAudioImports();
 
     /// Rebuild the whole node graph from the document and publish it.
-    audio::Result rebuildGraph(bool reconfigurePlugins = false, bool publish = true);
-    /// After publication, retire the DSP stream of omitted recording Clip FX.
-    void suspendRecordingClipFx();
+    AudioSessionSpec prepareAudioSession(AudioPluginLoadPolicy loadPolicy);
+    audio::Result publishAudioSession(AudioSessionSpec session, bool reconfigurePlugins,
+        std::span<const AudioPluginStateEdit> restores = {});
+    audio::Result rebuildGraph(bool reconfigurePlugins = false,
+        AudioPluginLoadPolicy loadPolicy = AudioPluginLoadPolicy::Required,
+        std::span<const AudioPluginStateEdit> restores = {});
+    void appendInsertStateEdits(std::vector<AudioPluginStateEdit>& edits,
+        const std::string& channelId, const ChainSlotSnapshot& slot,
+        bool applyAllParameters = true) const;
+    void attachPluginStateSample(const std::string& uid, AudioPluginStateRestore& state) const;
+    struct ChainReplacement {
+        std::string channelId;
+        std::span<const ChainSlotSnapshot> contents;
+    };
+    bool applyChains(std::span<const ChainReplacement> replacements);
     /// Push the document's clip list for one track into its player node.
     void syncTrackClips(const TrackModel& track);
+    AudioContentSpec::Clips prepareTrackClips(const TrackModel& track);
+    AudioContentSpec::Midi prepareTrackNotes(const TrackModel& track, bool geometryChanged = true);
+    AudioContentSpec::PluginCurves prepareTrackAutomation(const TrackModel& track);
+    AudioContentSpec::Levels prepareTrackLevelAutomation(const TrackModel& track);
     std::string freezeFingerprint(const TrackModel& track) const;
     bool invalidateTrackFreeze(const TrackModel& track);
     bool m_rebuildingFrozenGraph = false;
@@ -2341,18 +2429,9 @@ private:
     /// Apply the selected start policy shared by playback and recording.
     void applyTransportStartPolicy();
 
-    engine::RealtimeEngine m_engine;
-    class PluginAuditionNode;
-    std::shared_ptr<engine::Node> m_pluginAuditionNode;
     std::shared_ptr<EngineController> m_pluginAuditionOwner;
     std::string m_pluginAuditionCapture;
     bool m_externalPreviewDriven = false;
-    std::unique_ptr<audio::AudioDeviceManager> m_devices;
-    /// Utility recorder — owns nothing that is being captured; it exists for
-    /// `writeWAVFile`, which the offline export and the comp flatten both use.
-    std::unique_ptr<audio::AudioRecorder> m_recorder;
-    std::unique_ptr<DeviceCallback> m_callback;
-
     ProjectModel m_project;
     std::uint64_t m_projectGeneration = 1;
     std::string m_exclusiveAuditionTrackId;
@@ -2386,7 +2465,7 @@ private:
     std::function<void(const std::vector<TrackAuditionState>&)> m_auditionChanged;
     struct SlicerEdit {
         std::string channelId, slotId;
-        plugins::slicer::SlicerInstance* instance = nullptr;
+        PluginIdentity identity;
         plugins::slicer::ControlState before;
     };
     std::optional<SlicerEdit> m_slicerEdit;
@@ -2426,115 +2505,33 @@ private:
     UndoStack m_undo;
     WaveformCache m_waveforms;
     PluginManager m_pluginManager;
-    std::unordered_map<std::string, std::shared_ptr<const recovery::RecoverySnapshot::PluginState>>
-        m_recoveryPluginStateCache, m_recoveryOfflineStateParts;
+    struct CachedPluginState : recovery::RecoverySnapshot::PluginState {
+        std::string uid;
+        PluginFormat format = PluginFormat::None;
+    };
+    std::unordered_map<std::string, std::shared_ptr<const CachedPluginState>> m_recoveryPluginStateCache;
+    std::unordered_map<std::string, std::shared_ptr<const recovery::RecoverySnapshot::PluginState>> m_recoveryOfflineStateParts;
+    const recovery::RecoverySnapshot::PluginState* cachedPluginState(
+        const std::string& stem, const InsertModel& slot) const;
     std::unordered_map<std::string, std::shared_ptr<const TrackModel>> m_recoveryTrackParts;
     std::size_t m_recoveryPluginCaptureCursor = 0;
     bool m_automationWrite = false;
+    std::unordered_map<std::string, AutomationTarget> m_lastTouchedAutomation;
+    std::unordered_map<std::string, AutomationTarget> m_pendingAutomationTouches;
     mutable bool m_automationReadoutCacheDirty = true;
     mutable std::unordered_map<AutomationTarget, engine::LevelCurve,
                                AutomationTargetHash>
         m_automationReadoutCurves;
 
-    /// The node objects behind one channel. They outlive graph rebuilds, so a
-    /// re-route keeps loaded clips, meter values and (later) plugin state
-    /// instead of resetting the project's DSP on every edit.
-    /// One loaded plugin behind an insert slot. `slotId` and `uid` record what
-    /// it was built for, so a rebuild can tell "same plugin, still fine" from
-    /// "the user swapped it" without reloading the world on every edit.
-    struct InsertSlot {
-        std::string slotId;
-        std::string uid;
-        std::shared_ptr<plugins::PluginNode> node;
-        std::shared_ptr<plugins::PluginNode> rightNode;
-        std::shared_ptr<engine::ChannelSelectNode> leftSelector;
-        std::shared_ptr<engine::ChannelSelectNode> rightSelector;
-        std::shared_ptr<engine::StereoMergeNode> stereoMerge;
-        PluginChannelMode channelMode = PluginChannelMode::Auto;
-        /// Handle in the graph currently being assembled. Rewritten on every
-        /// rebuild and used by the deferred sidechain routing pass.
-        engine::NodeId nodeId = engine::kInvalidNode;
-        engine::NodeId rightNodeId = engine::kInvalidNode;
-        engine::NodeId leftSelectorId = engine::kInvalidNode;
-        engine::NodeId rightSelectorId = engine::kInvalidNode;
-        /// Captured immediately before a VST3-requested component reload and
-        /// consumed by the replacement instance. Not project state: it exists
-        /// only across one graph reconciliation.
-        std::vector<std::uint8_t> reloadState;
-        std::vector<std::uint8_t> rightReloadState;
-    };
 
-    struct ClipFxChannel {
-        std::shared_ptr<engine::ClipPlayerNode> player;
-        std::vector<InsertSlot> inserts;
-        std::shared_ptr<engine::GainNode> fader;
-        std::shared_ptr<engine::MeterNode> meter;
-        engine::NodeId playerId = engine::kInvalidNode;
-        std::vector<engine::NodeId> insertIds;
-        engine::NodeId faderId = engine::kInvalidNode;
-        engine::NodeId meterId = engine::kInvalidNode;
-    };
-
-    struct TrackChannel {
-        std::shared_ptr<engine::ClipPlayerNode> clips;
-        std::shared_ptr<engine::ClipPlayerNode> frozenPlayer;
-        /// Clips with their own inserts are split out of the shared player and
-        /// merged back here after their private chains.
-        std::unordered_map<std::string, ClipFxChannel> clipFx;
-        std::shared_ptr<engine::SumNode> clipFxSum;
-        /// The notes, on tracks that carry them. Feeds the instrument.
-        std::shared_ptr<engine::MidiClipPlayerNode> midiClips;
-        /// A list of at most one, so the same reconciliation as the inserts
-        /// applies — the instrument is a plugin slot like any other, it just
-        /// sits ahead of them and is the only one fed MIDI.
-        std::vector<InsertSlot> instrument;
-        std::vector<InsertSlot> miniModules;
-        /// A private post-instrument chain used only while the instrument is
-        /// the built-in sampler instance named by TrackModel::samplerFx.
-        std::vector<InsertSlot> samplerInserts;
-        std::shared_ptr<engine::GainNode> samplerFader;
-        std::shared_ptr<engine::MeterNode> samplerMeter;
-        /// Index-parallel with `TrackModel::inserts`, the same discipline
-        /// `sends` already follows.
-        std::vector<InsertSlot> inserts;
-        std::shared_ptr<engine::GainNode> fader;
-        std::shared_ptr<engine::MeterNode> meter;
-        std::shared_ptr<engine::InputNode> input;
-        uint32_t inputChannel = 0;
-        uint32_t inputChannelCount = 1;
-        /// Merge point for incoming routing; see `TrackNodes::sum`. Null on a
-        /// channel nothing is routed into.
-        std::shared_ptr<engine::SumNode> sum;
-        std::vector<std::shared_ptr<engine::SendNode>> sends;
-        TrackNodes ids;
-    };
-
-    /// Keyed by track uuid, plus `kMasterChannelId` for the master bus.
-    std::unordered_map<std::string, TrackChannel> m_channels;
     std::uint64_t m_graphRebuildCount = 0;
     std::unordered_map<std::string, std::uint64_t> m_midiNotesRevisions;
     std::uint64_t m_midiNotesRevisionCounter = 0;
     std::unordered_map<std::string, std::int32_t> m_midiVoiceIds;
     std::int32_t m_nextMidiVoiceId = 1;
 
-    /// Stem capture points, live only for the duration of a render. Held here
-    /// rather than patched into the graph once because `rebuildGraph` discards
-    /// the whole topology: anything that rebuilds mid-render — a plugin
-    /// reporting new latency, say — would otherwise silently drop the taps and
-    /// write silent stems. Keyed the same way as `m_channels`.
-    std::unordered_map<std::string, std::shared_ptr<engine::TapNode>> m_renderTaps;
-    /// Whether those taps hang off `preFaderTap` instead of `meter`.
-    bool m_renderTapsPreFader = false;
-    bool m_renderTapsAtSource = false;
-    /// True for the duration of an offline render. `rebuildGraph` leaves the
-    /// metronome out while it is set: the click is a monitoring aid, and it is
-    /// gated on `context.playing`, which an offline pass asserts — so without
-    /// this an enabled click lands in the exported file.
-    bool m_renderingPass = false;
-    bool m_isRenderClone = false;
     mutable std::unordered_map<std::string, std::string> m_clipDisplayPaths;
     bool m_exportInProgress = false;
-    std::unordered_map<std::string, std::shared_ptr<plugins::PluginNode>> m_preparedMiniModules;
     std::function<bool()> m_sampleLoadContinue;
     audio::Result renderProjectPass(const rendering::Spec& spec,
         const std::function<bool(const rendering::Progress&)>& onProgress,
@@ -2543,45 +2540,22 @@ private:
     /// Move the whole session to another sample rate, dropping the decoded-clip
     /// caches that were converted for the old one. Used by a render that writes
     /// at a rate the project does not run at, in both directions.
-    audio::Result applyRenderSampleRate(double rate);
+    audio::Result applyRenderSampleRate(double rate, uint32_t frames = 0);
     audio::Result startConfiguredAudioDevice();
     std::uint64_t m_nextDeviceRecoveryNs = 0;
 
-    // ── Insert plumbing (declared here: it needs TrackChannel above) ──
-    /// Bring a channel's loaded plugins in line with its document slots,
-    /// keeping instances that did not change.
-    void syncChannelInserts(const std::string& channelId, TrackChannel& channel,
-                            const std::vector<InsertModel>& slots);
-    /// The same reconciliation against any list of slots — the insert chain has
-    /// one, the instrument slot has a list of exactly one.
-    void syncSlots(const std::string& channelId, std::vector<InsertSlot>& live,
-                   const std::vector<InsertModel>& slots);
-    /// Tell whoever is listening that these slots' plugins are about to go, and
-    /// do it while they are still alive. See `setPluginRetiringCallback`.
-    void announceRetiring(const std::string& channelId,
-                          const std::vector<InsertSlot>& going);
-    /// The same, for every loaded plugin in the project — closing or replacing
-    /// the whole document takes them all at once.
+    // ── Insert plumbing ──
+    AudioPluginAddress pluginAddress(const std::string& channelId, const std::string& slotId,
+                                    std::uint64_t instance = 0) const;
+    /// Resolve document/catalog policy into values consumed by the runtime.
+    AudioPluginChainSpec preparePluginChain(const std::string& channelId,
+        AudioPluginChainSpec::Kind kind, const std::vector<InsertModel>& slots,
+        const std::string& clipId = {}, AudioPluginLoadPolicy loadPolicy = AudioPluginLoadPolicy::Required) const;
+    /// Notify editors before closing or replacing the whole document.
     void announceAllRetiring();
-    /// Wire `head` through the channel's inserts and return the last node in
-    /// the chain — which is `head` itself when there are none.
-    engine::NodeId connectInsertChain(engine::AudioGraph& graph,
-                                      TrackChannel& channel, engine::NodeId head);
-    engine::NodeId connectSlots(engine::AudioGraph& graph,
-                                std::span<InsertSlot> live,
-                                std::vector<engine::NodeId>& ids,
-                                engine::NodeId head);
-    TrackChannel* findChannel(const std::string& channelId);
     void applyChannelColorState(const std::string& trackId, const std::optional<InsertModel>& state);
     void applyMiniModules(const std::string& channelId, const std::vector<InsertModel>&, bool affectsAudio = true);
     bool updateMiniModule(const std::string& channelId, const InsertModel&, const std::string& label, bool affectsAudio = true);
-    engine::NodeId connectMiniModules(engine::AudioGraph&, TrackChannel&, const std::vector<InsertModel>&,
-                                     bool postFx, engine::NodeId head, engine::NodeId* first = nullptr);
-    /// Write each loaded plugin's state chunk into the package's `State/`
-    /// folder and record the filename in the document. Called from
-    /// `saveProject`, because only this class holds the live instances.
-    audio::Result writePluginState(ProjectModel& document,
-                                   const std::string& packageDir);
     audio::Result captureLibraryPlugins(std::vector<TrackModel>& tracks);
     void appendLibraryStates(recovery::RecoverySnapshot& snapshot) const;
     void loadLibraryStates(const std::string& packageDir,
@@ -2597,12 +2571,18 @@ private:
                             const std::string& packageDir);
     /// Restore those chunks after a load, falling back to the stored parameter
     /// values when a blob will not apply.
-    audio::Result loadPluginState(
+    struct PreparedPluginStateEdits {
+        std::vector<AudioPluginStateEdit> imports, retained;
+    };
+    audio::Result collectProjectPluginStateEdits(
+        PreparedPluginStateEdits& output, const AudioSessionSpec& session,
         const std::string& packageDir,
         const std::unordered_set<std::string>* channelFilter = nullptr,
         bool includeMaster = true,
         const std::string& fallbackPackageDir = {},
         bool tolerateStateErrors = false);
+    void acceptPluginStateEdits(std::span<const AudioPluginStateEdit> edits,
+        std::span<const AudioPluginStateSnapshot> snapshots);
     void loadOfflinePluginStates(const std::string& packageDir,
                                  const std::string& fallbackPackageDir = {});
     std::vector<InsertModel> cacheOfflineChain(
@@ -2623,10 +2603,12 @@ private:
                                    const std::string& insertId);
     InsertSlot* liveInsertSlot(const std::string& channelId,
                                const std::string& insertId);
-    plugins::PluginNode* insertNode(const std::string& channelId,
-                                    const std::string& insertId);
-    plugins::PluginNode* editorInsertNode(const std::string& channelId,
-                                          const std::string& insertId);
+    /// Runtime owns the render gate. Missing/failed state stays empty so the
+    /// clipboard can preserve unavailable slots; strict callers check Result.
+    audio::Result captureInsertState(const std::string& channelId,
+                                     const InsertModel& model, ChainSlotSnapshot& slot);
+    audio::Result restoreInsertState(const std::string& channelId,
+        const ChainSlotSnapshot& slot, bool applyAllParameters = true);
     ChannelSnapshot m_channelClipboard;
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_samples;
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_sourceSamples;
@@ -2689,35 +2671,17 @@ private:
     bool queueClipSampleBake(const TrackModel& track, const ClipModel& clip);
     void cancelClipSampleBake();
     void flushDeferredClipSync();
-    static constexpr std::uint32_t kPluginCompatibilitySweepTicks = 64;
-    std::uint64_t m_pluginMainThreadGeneration =
-        plugins::PluginMainThreadWork::generation();
-    std::uint32_t m_pluginCompatibilitySweepTicks = 0;
     std::uint64_t m_pluginEventScanCount = 0;
-    bool m_pendingPitchQualityChanges = false;
     bool m_previewParameterEditsPending = false;
     /// Wait for every built-in sampler's latest background bake. Playback and
     /// offline/export paths call this before consuming the graph so a GUI-tick
     /// race can never render the previous generation.
     void flushSamplerPrecompute();
-    std::shared_ptr<engine::SumNode> m_masterSum;
-    std::shared_ptr<engine::GainNode> m_masterFader;
-    std::shared_ptr<engine::MetronomeNode> m_metronome;
-    /// Auditions files from the browser. Always in the graph, like the
-    /// metronome, so a preview survives every rebuild.
-    std::shared_ptr<engine::PreviewPlayerNode> m_preview;
     std::string m_previewPath;
     double m_previewDuration = 0.0;
-    engine::NodeId m_masterFaderId = engine::kInvalidNode;
-    engine::NodeId m_masterSumId = engine::kInvalidNode;
     bool m_metronomeEnabled = false;
     std::string m_metronomeSamplePath;
 
-    double m_sampleRate = 48000.0;
-    uint32_t m_bufferSize = 512;
-    bool m_deviceOpen = false;
-    bool m_liveDeviceAllowed = false;
-    bool m_prepared = false;
     PlaybackMode m_playbackMode{PlaybackMode::Resume};
     /// Where the current playback run started; Restart mode returns here.
     double m_playAnchorSeconds = 0.0;
@@ -2737,7 +2701,8 @@ private:
     /// One track's capture for the duration of a recording run.
     struct Capture {
         std::string trackId;
-        std::shared_ptr<audio::AudioRecorder> recorder;
+        AudioCaptureId audioCaptureId = 0;
+        std::optional<audio::RecordingSession> closedAudio;
         std::string path;
         double startSeconds = 0.0;      ///< timeline position recording began
         bool monitorBefore = false;     ///< monitor state to restore on stop
@@ -2783,12 +2748,6 @@ private:
     struct MonitorState { bool enabled = false, automatic = false; unsigned mask = 3; };
     std::vector<std::pair<std::string, MonitorState>> m_countInMonitorBefore;
 
-    /// The recorders the audio thread taps, published as an immutable snapshot
-    /// exactly like a track's clip list. Starting or stopping a capture swaps
-    /// the whole list, so the render callback never sees a half-built set and a
-    /// recorder being retired stays alive until the block using it is done.
-    using RecorderList = std::vector<std::shared_ptr<audio::AudioRecorder>>;
-    engine::RealtimeSnapshot<RecorderList> m_activeRecorders;
     void publishRecorders();
 
     /// Open or leave closed the track's monitor per the smart-monitoring rule:
@@ -2877,7 +2836,7 @@ private:
     void syncAutomationTarget(const AutomationTarget& target);
     void syncAllLevelAutomation();
 
-    const plugins::ParameterInfo* automationParameterInfo(
+    std::optional<plugins::ParameterInfo> automationParameterInfo(
         const AutomationTarget& target) const;
 
     /// Point a running capture at the track's current input — a different
@@ -3024,6 +2983,18 @@ private:
         std::vector<ClipTrimOrigin> origins;
     };
     ClipTrimEdit m_clipTrimEdit;
+
+    // Destroy execution before document/history and callback targets. shutdown()
+    // first detaches the device; all plugin/node teardown stays on this thread.
+    struct WorkerRuntime {};
+    explicit EngineController(WorkerRuntime);
+    explicit EngineController(std::shared_ptr<AudioRuntimeEndpoint> endpoint);
+    double m_sampleRate = 48000;
+    std::uint32_t m_bufferSize = 512;
+    bool m_liveDeviceAllowed = false, m_prepared = false, m_isRenderClone = false;
+    bool m_deviceOpen = false;
+    std::shared_ptr<AudioRuntimeEndpoint> m_audioRuntime;
+    AudioRuntimeEndpoint& m_runtime;
 };
 
 } // namespace daw

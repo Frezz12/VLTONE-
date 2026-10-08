@@ -1,4 +1,5 @@
 #include "PluginPickerMenu.hpp"
+#include "MainWindow.hpp"
 
 #include "EngineController.hpp"
 #include "PluginFormatPreference.hpp"
@@ -538,6 +539,8 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
         currentMenu->menuAction()->setToolTip(QString::fromStdString(slot->name));
         currentMenu->menuAction()->setObjectName(QStringLiteral("PluginPickerCurrent"));
         applyPluginMenuStyle(currentMenu);
+        if (addPluginControlsAction(currentMenu, controller, target.channelId, target.slotId))
+            currentMenu->addSeparator();
         searchFilter->watch(currentMenu);
         groupActions.push_back(currentMenu->menuAction());
         auto* modes = new QActionGroup(currentMenu);
@@ -766,6 +769,26 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
 }
 
 } // namespace
+
+QAction* addPluginControlsAction(QMenu* menu, daw::EngineController* controller,
+                                const QString& channelId, const QString& slotId) {
+    if (!menu || !controller) return nullptr;
+    const auto* slot = controller->insertModel(channelId.toStdString(), slotId.toStdString());
+    if (!slot || !slot->isLoaded() || slot->format == daw::PluginFormat::Internal) return nullptr;
+    MainWindow* host = nullptr;
+    for (QWidget* parent = menu->parentWidget(); parent && !host; parent = parent->parentWidget())
+        host = qobject_cast<MainWindow*>(parent);
+    if (!host) return nullptr;
+    auto* action = menu->addAction(QObject::tr("Parameters and routing…"));
+    action->setObjectName(QStringLiteral("PluginHostControls"));
+    QObject::connect(action, &QAction::triggered, host, [host, channelId, slotId] {
+        // Let popup teardown finish before changing the editor hierarchy.
+        QTimer::singleShot(0, host, [host, channelId, slotId] {
+            host->openPluginHostControls(channelId, slotId);
+        });
+    });
+    return action;
+}
 
 QMenu* buildPluginMenu(QWidget* parent, daw::EngineController* controller,
                        bool instruments,

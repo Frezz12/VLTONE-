@@ -37,14 +37,17 @@ nlohmann::json compilationUnit(const MiniModuleDefinition &d) {
             scheduled[b - d.nodes.begin()])
           scheduled[a - d.nodes.begin()] = true;
       }
+  unsigned slot = 0;
   for (unsigned i = 0; i < d.nodes.size(); ++i) {
     const auto &n = d.nodes[i];
-    if (n.function)
+    if (n.function) {
       result["functions"].push_back(
           {{"id", n.id},
-           {"index", i},
+           {"index", d.version >= 5 ? slot++ : i},
            {"scheduled", scheduled[i]},
            {"function", functionToJson(*n.function)}});
+      if (d.version >= 5) result["functions"].back()["stateKey"] = n.stateKey.empty() ? n.id : n.stateKey;
+    }
   }
   for (const auto &e : d.connections)
     if (e.fromPort == "function")

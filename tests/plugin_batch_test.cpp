@@ -48,7 +48,7 @@ int main() {
     }
     audio::AudioRecorder recorder; recorder.initialize(48000, 2);
     recorder.writeWAVFile(wav, tone, 48000);
-    Controller c;
+    Controller c{Controller::TestRuntime{}};
     check(c.initialize(48000, 256, false).isOk(), "headless audio initializes");
     const auto lead = c.addTrack(daw::TrackKind::Audio, "Lead");
     const auto doubleTrack = c.addTrack(daw::TrackKind::Audio, "Double");
@@ -76,12 +76,15 @@ int main() {
     Controller::ChannelSnapshot settings;
     check(draft->capturePluginBatchChain({lead, {}}, {fx}, settings).isOk(), "captures vendor settings for just the added effect");
     check(!settings.inserts.empty() && !settings.inserts.front().state.empty(), "opaque plugin state retained");
+    const auto primaryGraph = c.routingGraph();
     check(c.startPluginAudition(draft).isOk(), "audition is driven by the existing audio device callback");
     const double quiet = level(c);
     draft->setInsertParameter(lead, fx, "output.gain", 0.0);
     const double loud = level(c);
     check(quiet > .01 && std::abs(loud / quiet - 2.0) < .03, "live parameter adjustment changes audible output on the selected source");
     c.stopPluginAudition();
+    check(c.routingGraph() == primaryGraph,
+          "audition restores the existing primary graph without rebuilding its processors");
     check(level(c) < 1.e-7, "stopping audition removes its signal from the device output");
     check(document(c) == before && c.undoDepth() == depth, "audition and cancel leave project and undo history unchanged");
 
@@ -115,7 +118,7 @@ int main() {
     c.redo();
     const auto saved = (dir / "Batch.vlt").string();
     check(c.saveProject(saved).isOk(), "configured track and clip effects save to project");
-    Controller reopened; reopened.initialize(48000, 256, false);
+    Controller reopened{Controller::TestRuntime{}}; reopened.initialize(48000, 256, false);
     check(reopened.openProject(saved).isOk() && reopened.clipFx(lead, leadClip)->size() == 1 &&
         std::abs(gain(reopened, lead, ids[0][0]) + 6.020599913) < .01, "project reload preserves Clip FX settings");
     const auto beforeFailure = document(c);
@@ -140,6 +143,12 @@ int main() {
     check(c.startPluginAudition(busDraft).isOk() && level(c) > .001, "bus audition produces routed audio");
     c.stopPluginAudition();
     check(c.loadInstrumentSampler(midi, wav), "MIDI source instrument loaded");
+    const auto instrumentId = c.project().findTrack(midi)->instrument.id;
+    std::vector<Controller::ChainSlotSnapshot> instrumentState;
+    check(c.samplerSnapshot(midi, instrumentId).hasSource &&
+          c.captureInsertChain(midi, {instrumentId}, instrumentState).isOk() &&
+          instrumentState.size() == 1 && !instrumentState.front().state.empty(),
+          "creation snapshots capture instruments and expose decoded source availability");
     c.addNote(midi, midiClip, 60, 0.0, 4.0);
     std::shared_ptr<Controller> midiDraft;
     check(c.createPluginBatchDraft({midi, {}}, midiDraft).isOk(), "MIDI source restores its instrument state");
@@ -159,6 +168,46 @@ int main() {
     check(c.createPluginBatchDraft({doubleTrack, {}}, secondSource).isOk() &&
         secondSource->project().findTrack(unavailable.id)->inserts.empty(),
         "unrelated missing plugins do not block or run during audition");
+    const auto unavailableCopy = c.copyChannelStrip(unavailable.id, false);
+    check(unavailableCopy.inserts.size() == 1 && unavailableCopy.inserts.front().model.id == missing.id &&
+          unavailableCopy.inserts.front().state.empty(), "clipboard preserves unloaded slot descriptions");
+    std::vector<Controller::ChainSlotSnapshot> rejected;
+    check(!c.captureInsertChain(unavailable.id, {missing.id}, rejected) && rejected.empty(),
+          "strict capture rejects an unloaded plugin");
+    {
+        Controller dual{Controller::TestRuntime{}};
+        dual.initialize(48000, 256, false);
+        const auto source = dual.addTrack(daw::TrackKind::Audio, "Independent sides");
+        const auto slot = dual.addInsert(source, eq);
+        dual.setInsertChannelMode(source, slot, daw::PluginChannelMode::DualMono);
+        dual.setInsertParameter(source, slot, "output.gain", -3);
+        dual.setInsertEditorChannel(source, slot, daw::PluginEditorChannel::Right);
+        dual.setInsertParameter(source, slot, "output.gain", 7);
+        const auto beforeCapture = document(dual);
+        const auto undoBeforeCapture = dual.undoDepth();
+        const auto rightIdentity = dual.insertIdentity(source, slot);
+        std::vector<Controller::ChainSlotSnapshot> captured;
+        check(dual.captureInsertChain(source, {slot}, captured).isOk(), "captures a dual-mono slot");
+        const auto correctSides = [](const Controller::ChainSlotSnapshot& snapshot) {
+            daw::plugins::equalizer::EqualizerInstance left, right;
+            return left.loadState(snapshot.state) && right.loadState(snapshot.rightState) &&
+                std::abs(left.parameterValue(left.parameterIndexForId("output.gain")) + 3) < 1e-6 &&
+                std::abs(right.parameterValue(right.parameterIndexForId("output.gain")) - 7) < 1e-6;
+        };
+        check(captured.size() == 1 && correctSides(captured.front()),
+              "chain capture saves distinct native states while the right editor is selected");
+        const auto clipboard = dual.copyChannelStrip(source, false);
+        check(clipboard.inserts.size() == 1 && correctSides(clipboard.inserts.front()),
+              "clipboard uses the same correct left/right capture path");
+        check(document(dual) == beforeCapture && dual.undoDepth() == undoBeforeCapture &&
+              dual.insertIdentity(source, slot) == rightIdentity,
+              "state capture leaves editor selection, document and undo untouched");
+        check(!dual.captureInsertChain(source, {slot, "missing"}, captured) && captured.empty(),
+              "capture failure returns no partial chain");
+        Controller::ChannelSnapshot batch;
+        check(!dual.capturePluginBatchChain({source, "missing-clip"}, {slot}, batch) && batch.empty(),
+              "batch capture validates the requested chain before resolving slots");
+    }
     fs::remove_all(dir);
     return failures ? 1 : 0;
 }

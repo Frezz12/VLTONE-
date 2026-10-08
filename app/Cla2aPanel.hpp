@@ -28,7 +28,7 @@ protected:
     void hideEvent(QHideEvent*) override;
     void changeEvent(QEvent*) override;
 private:
-    daw::plugins::cla2a::Cla2aInstance* instance() const;
+    bool available() const;
     double read(unsigned) const;
     void write(unsigned, double);
     void finish(unsigned);

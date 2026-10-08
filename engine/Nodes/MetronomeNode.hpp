@@ -44,6 +44,7 @@ public:
     void setSample(std::shared_ptr<const SampleBuffer> sample) {
         m_sample.publish(std::move(sample));
     }
+    std::shared_ptr<const SampleBuffer> sample() const { return m_sample.controlCopy(); }
 
     /// Fire `beats` count-in clicks starting at the next block, at the
     /// transport's tempo and whatever the transport is doing. A count-in has to

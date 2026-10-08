@@ -75,6 +75,8 @@ type Config struct {
 	SMTPPassword                    string
 	SMTPFrom                        string
 	TrustedProxyCIDRs               []string
+	TurnstileSiteKey                string
+	TurnstileSecretKey              string
 }
 
 func Load() (Config, error) {
@@ -88,6 +90,8 @@ func Load() (Config, error) {
 		ForumOrigin:          strings.TrimRight(env("FORUM_ORIGIN", "http://localhost:3002"), "/"),
 		DesktopAPIOrigin:     strings.TrimRight(env("DESKTOP_API_ORIGIN", "http://localhost:8080"), "/"),
 		StorageRoot:          env("STORAGE_ROOT", "./storage"),
+		TurnstileSiteKey:     strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
+		TurnstileSecretKey:   strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
 		ConsentVersion:       env("TELEMETRY_CONSENT_VERSION", "2026-08-23"),
 		AIEnabled:            boolEnv("AI_ENABLED", true),
 		AIGlobalMonthlyLimit: int64Env("AI_GLOBAL_MONTHLY_TOKEN_LIMIT", 0),
@@ -218,6 +222,9 @@ func Load() (Config, error) {
 		}
 	}
 	if c.Environment == "production" {
+		if IsTurnstileTestKey(c.TurnstileSiteKey) || IsTurnstileTestKey(c.TurnstileSecretKey) {
+			return Config{}, errors.New("Turnstile test keys cannot be used in production")
+		}
 		if len(c.SigningSeed) != 32 {
 			return Config{}, errors.New("AUTH_SIGNING_SEED is required in production")
 		}
@@ -229,6 +236,21 @@ func Load() (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// Production registration fails closed until real keys are configured.
+// Local development enables verification as soon as either key is provided.
+func (c Config) RegistrationCaptchaRequired() bool {
+	return c.Environment == "production" || c.TurnstileSiteKey != "" || c.TurnstileSecretKey != ""
+}
+
+func IsTurnstileTestKey(key string) bool {
+	switch key {
+	case "1x00000000000000000000AA", "2x00000000000000000000AB", "1x00000000000000000000BB", "2x00000000000000000000BB", "3x00000000000000000000FF",
+		"1x0000000000000000000000000000000AA", "2x0000000000000000000000000000000AA", "3x0000000000000000000000000000000AA":
+		return true
+	}
+	return false
 }
 
 func env(name, fallback string) string {

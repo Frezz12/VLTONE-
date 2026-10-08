@@ -50,7 +50,7 @@ void check(bool ok,const char* what){std::printf("%s %s\n",ok?"PASS":"FAIL",what
 int main(){
  const auto dir=std::filesystem::temp_directory_path()/("vlt-device-regression-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
  {
-  daw::EngineController c;audio::AudioDeviceConfig config;config.sampleRate=48000;config.bufferSize=32;
+  daw::EngineController c{daw::EngineController::TestRuntime{}};audio::AudioDeviceConfig config;config.sampleRate=48000;config.bufferSize=32;
   check(bool(c.initialize(config,true)),"initialize with one prepared stream");
   const int before=fake::starts;check(bool(c.applyAudioConfiguration(config))&&fake::starts==before,"unchanged Apply starts no stream");
   config.bufferSize=64;check(bool(c.applyAudioConfiguration(config))&&fake::starts==before+1,"changed Apply starts exactly once");
@@ -61,7 +61,7 @@ int main(){
  }
  fake::failRecovery=false;
  {
-  daw::EngineController c; audio::AudioDeviceConfig config;config.sampleRate=48000;config.bufferSize=32;c.initialize(config,true);
+  daw::EngineController c{daw::EngineController::TestRuntime{}}; audio::AudioDeviceConfig config;config.sampleRate=48000;config.bufferSize=32;c.initialize(config,true);
   fake::current->active=false;fake::current->finished(fake::current->data);
   check(!c.isDeviceOpen()&&c.audioDeviceNeedsRecovery(),"finished stream cannot report healthy Running");
   check(bool(c.recoverAudioDevice())&&c.isDeviceOpen(),"lost stream recovers on control thread");
@@ -81,7 +81,7 @@ int main(){
   auto timed=c.finalizeRecordingCapture();check(std::abs(timed.tracks.front().startSeconds-1.97)<1e-9,"ADC/DAC delta aligns first capture to audible timeline");
   c.seekSeconds(2);c.startRecording(track);fake::pump(32,true,false,0,true);
   auto estimated=c.finalizeRecordingCapture();
-  check(std::abs(estimated.tracks.front().startSeconds-1.97)<1e-9&&!c.audioDeviceDiagnostics().diagInputUsesDeviceTime(),"missing hardware timestamps use explicit input/output latency estimate");
+  check(std::abs(estimated.tracks.front().startSeconds-1.97)<1e-9&&!c.audioDeviceDiagnostics().inputUsesDeviceTime,"missing hardware timestamps use explicit input/output latency estimate");
   c.seekSeconds(0);c.startRecording(track);for(int i=0;i<100;++i)fake::pump(32,true,true);
   auto zero=c.finalizeRecordingCapture();check(zero.tracks.front().startSeconds==0&&zero.tracks.front().frames==3200-1440,"negative pre-roll trimmed once at project zero");
   c.startRecording(track);fake::pump(32,false);c.markRecordingInterrupted();c.stopRecording();

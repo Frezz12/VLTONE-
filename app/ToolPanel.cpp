@@ -271,10 +271,10 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     m_showAutomation = new ui::IconButton(
         icons::Glyph::Automation,
-        tr("Show or hide automation lanes for all tracks"), m_trackActions);
+        tr("Show or hide automation lanes for selected tracks"), m_trackActions);
     m_showAutomation->setCheckable(true);
     m_showAutomation->setAccessibleName(
-        tr("Show or hide automation lanes for all tracks"));
+        tr("Show or hide automation lanes for selected tracks"));
     connect(m_showAutomation, &QAbstractButton::toggled, this,
             &ToolPanel::automationVisibilityToggled);
 

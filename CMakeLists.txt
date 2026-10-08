@@ -142,9 +142,13 @@ add_subdirectory(engine)       # graph-based audio engine (C++23, no deps)
 add_subdirectory(core)
 add_subdirectory(creator)
 add_subdirectory(plugins)      # VST3/CLAP/AU hosting; the only user of the SDKs
+add_subdirectory(runtime)      # bounded process transport and deferred graph adapter
+add_subdirectory(plugin_host)  # daw_plugin_host: one disposable native instance
 add_subdirectory(scanner)      # daw_scan: loads plugins out of process, so a crash is survivable
 add_subdirectory(guard)        # daw_guard: watches the app from outside, so a hang is visible
 add_subdirectory(controller)   # framework-agnostic; no Qt dependency
+add_subdirectory(worker)       # disposable offline runtime; parent publishes outputs
+add_subdirectory(audio_host)   # device + executable audio graph in an owned process
 
 if(DAW_BUILD_TESTS)
     add_subdirectory(tests)
@@ -153,3 +157,21 @@ endif()
 if(DAW_BUILD_APP)
     add_subdirectory(app)
 endif()
+
+# A controller executable may invoke the offline worker even when built as a
+# single target. Keep this dependency on executables, not the controller library
+# (the helper links that library itself).
+foreach(directory tests app)
+    if((directory STREQUAL "tests" AND DAW_BUILD_TESTS) OR
+       (directory STREQUAL "app" AND DAW_BUILD_APP))
+        get_property(consumers DIRECTORY "${CMAKE_SOURCE_DIR}/${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+        foreach(consumer IN LISTS consumers)
+            get_target_property(kind ${consumer} TYPE)
+            get_target_property(libraries ${consumer} LINK_LIBRARIES)
+            if(kind STREQUAL "EXECUTABLE" AND "daw_controller" IN_LIST libraries)
+                add_dependencies(${consumer} daw_worker)
+                add_dependencies(${consumer} daw_audio)
+            endif()
+        endforeach()
+    endif()
+endforeach()

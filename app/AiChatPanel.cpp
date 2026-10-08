@@ -1,4 +1,5 @@
 #include "AiChatPanel.hpp"
+#include "AiChatShared.hpp"
 
 #include "AiPrefs.hpp"
 #include "AiChatChecks.hpp"
@@ -110,38 +111,10 @@ constexpr int kAttachmentsMaxHeight = 70;
 // silhouette would read as two different programs.
 
 QToolButton* messageAction(QWidget* parent, icons::Glyph glyph, const QString& label) {
-    auto* button = new QToolButton(parent);
-    button->setObjectName("AiMessageAction");
-    button->setProperty("aiGlyph", int(glyph));
-    button->setIcon(icons::icon(glyph, th().textSecondary, 16));
-    button->setIconSize(QSize(16, 16));
-    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    button->setFixedSize(28, 28);
-    button->setAutoRaise(true);
-    button->setCursor(Qt::PointingHandCursor);
-    button->setFocusPolicy(Qt::StrongFocus);
-    button->setAccessibleName(label);
-    button->setToolTip(label);
-    return button;
+    return ui::aiMessageAction(parent, glyph, label);
 }
-
-QLabel* cardText(QWidget* parent, const QString& text, const char* objectName,
-                 bool secondary = false) {
-    auto* label = new QLabel(text, parent);
-    label->setObjectName(objectName);
-    label->setTextFormat(Qt::PlainText);
-    label->setWordWrap(true);
-    label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-    label->setFocusPolicy(Qt::ClickFocus);
-    auto policy = label->sizePolicy();
-    policy.setHorizontalPolicy(QSizePolicy::Ignored);
-    // Keep QLabel's height-for-width flag: clearing it clips long wrapped
-    // answers instead of growing the transcript and its vertical scroll range.
-    label->setSizePolicy(policy);
-    if (secondary)
-        label->setAccessibleDescription(
-            QObject::tr("Secondary message text"));
-    return label;
+QLabel* cardText(QWidget* parent, const QString& text, const char* objectName, bool secondary = false) {
+    return ui::aiCardText(parent, text, objectName, secondary);
 }
 
 QPair<QWidget*, QVBoxLayout*> messageCard(QWidget* parent,
@@ -196,8 +169,9 @@ QString formatDuration(double seconds) {
 /// multi-round loop rather than a single canned call.
 class ScriptedClient final : public ui::LlmClient {
 public:
-    explicit ScriptedClient(QObject* parent)
-        : ui::LlmClient(ui::LlmClient::Provider::Anthropic, parent) {}
+    explicit ScriptedClient(QObject* parent, bool projectDemo = false, bool russian = false)
+        : ui::LlmClient(ui::LlmClient::Provider::Anthropic, parent),
+          m_projectDemo(projectDemo), m_russian(russian) {}
 
     void send(const QString&, const std::vector<ai::Message>& messages,
               Reply onReply) override {
@@ -229,7 +203,10 @@ private:
         ai::ModelReply reply;
         switch (m_round++) {
             case 0:
-                reply.text = "Making a piano part.";
+                reply.text = m_projectDemo
+                    ? (m_russian ? "Добавлю четыре такта аккордов в до миноре на новую дорожку."
+                                 : "Adding four bars of C minor chords on a new track.")
+                    : "Making a piano part.";
                 reply.calls.push_back({"t1", "add_track",
                                        json{{"kind", "instrument"},
                                             {"name", "AI Piano"}}});
@@ -238,16 +215,26 @@ private:
                 reply.calls.push_back(
                     {"t2", "add_midi_clip",
                      json{{"trackId", lastValue(messages, "trackId")},
-                          {"startBar", 1},
-                          {"lengthBars", 1}}});
+                          {"startBar", m_projectDemo ? 17 : 1},
+                          {"lengthBars", m_projectDemo ? 4 : 1}}});
                 break;
             case 2: {
                 json notes = json::array();
-                for (int i = 0; i < 3; ++i)
-                    notes.push_back(json{{"pitch", 60 + i * 4},
-                                         {"start", 0.0},
-                                         {"length", 3.5},
-                                         {"velocity", 90}});
+                if (m_projectDemo) {
+                    constexpr int chords[4][4]{{60, 63, 67, 70}, {56, 60, 63, 67},
+                                               {63, 67, 70, 74}, {58, 62, 65, 72}};
+                    for (int bar = 0; bar < 4; ++bar)
+                        for (int voice = 0; voice < 4; ++voice)
+                            notes.push_back(json{{"pitch", chords[bar][voice]},
+                                                 {"start", bar * 4.0}, {"length", 3.6},
+                                                 {"velocity", 72 + voice * 3}});
+                } else {
+                    for (int i = 0; i < 3; ++i)
+                        notes.push_back(json{{"pitch", 60 + i * 4},
+                                             {"start", 0.0},
+                                             {"length", 3.5},
+                                             {"velocity", 90}});
+                }
                 reply.calls.push_back(
                     {"t3", "set_clip_notes",
                      json{{"trackId", lastValue(messages, "trackId")},
@@ -256,7 +243,10 @@ private:
                 break;
             }
             default:
-                reply.text = "Done — a C major triad on a new piano track.";
+                reply.text = m_projectDemo
+                    ? (m_russian ? "Готово: Cm7 → Abmaj7 → Ebmaj7 → Bbadd9. Партия добавлена в такты 17–20 Night Bloom."
+                                 : "Done: Cm7 → Abmaj7 → Ebmaj7 → Bbadd9, added to bars 17–20 of Night Bloom.")
+                    : "Done — a C major triad on a new piano track.";
                 break;
         }
         return reply;
@@ -265,6 +255,8 @@ private:
     // `trackId` has to survive past the round that made the clip, since the
     // reply after it needs both ids at once.
     int m_round = 0;
+    bool m_projectDemo = false;
+    bool m_russian = false;
 };
 
 /// A stand-in for a music server, used only by the headless check.
@@ -687,8 +679,8 @@ QWidget* AiChatPanel::buildComposer() {
             for (const auto& clip : m_selection->clips()) { tracks.insert(clip.trackId); clips.insert(clip.clipId); }
             for (const auto& track : m_controller->project().tracks) {
                 if (!tracks.contains(QString::fromStdString(track.id))) continue;
-                if (auto* sampler = m_controller->samplerInstance(track.id, track.instrument.id))
-                    addAttachment(QString::fromStdString(sampler->samplePath()));
+                if (const auto sampler = m_controller->samplerSnapshot(track.id, track.instrument.id); sampler.available)
+                    addAttachment(QString::fromStdString(sampler.path));
                 for (const auto& clip : track.clips)
                     if (clips.isEmpty() || clips.contains(QString::fromStdString(clip.id)))
                         addAttachment(QString::fromStdString(clip.filePath));
@@ -863,7 +855,6 @@ void AiChatPanel::applyTheme() {
 #AiMessageAction { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; }
 #AiMessageAction:hover { background: %MODEL_FILL%; }
 #AiMessageAction:pressed { background: %MARK_FILL%; }
-#AiMessageAction:focus { border: 1px solid %ACCENT_SOFT%; }
 #AiMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
           border-radius: 8px; color: %TEXT1%; font-size: 10px;
           font-weight: 750; }
@@ -873,7 +864,7 @@ void AiChatPanel::applyTheme() {
 #AiModel { background: %MODEL_FILL%; border: 1px solid %SEP%;
            border-radius: 8px; color: %TEXT2%; font-size: 10px;
            padding: 2px 16px 2px 8px; }
-#AiModel:hover { border-color: %ACCENT_SOFT%; color: %TEXT1%; }
+#AiModel:hover { color: %TEXT1%; }
 #AiModel::menu-indicator { subcontrol-position: right center;
                            subcontrol-origin: padding; right: 4px; }
 #AiUsage { color: %TEXT2%; font-size: 10px; }
@@ -934,9 +925,8 @@ void AiChatPanel::applyTheme() {
                   font-size: 9px; font-weight: 650;
                   padding: 2px 0; text-align: left; }
 #AiRevertButton:hover { color: %ACCENT_SOFT%; }
-#AiInput { background: transparent; border: none; color: %TEXT1%;
+#AiInput, #AiInput:focus { background: transparent; border: none; color: %TEXT1%;
            font-size: 12px; padding: 2px; selection-background-color: %SELECT%; }
-#AiInput:focus { border: none; }
 #AiAttachments { background: %INPUT_FILL%; border: 1px solid %INPUT_BORDER%;
                  border-radius: 8px; color: %TEXT1%; font-size: 11px; padding: 7px; }
 #AiAttachments::item:selected { background: %SELECT%; color: %TEXT1%; }
@@ -1121,23 +1111,7 @@ void AiChatPanel::reloadSettings() {
             m_client.reset(new ui::LlmClient(wanted, this));
         }
 
-        ui::LlmConfig config;
-        config.connectionId = connection.id;
-        config.displayName = connection.displayName;
-        config.model = connection.model;
-        config.stream = ui::aiprefs::streaming();
-        config.timeoutSeconds = ui::aiprefs::timeoutSeconds();
-        config.maxRetries = ui::aiprefs::maxRetries();
-        if (connection.source == ui::aiprefs::ModelSource::Managed) {
-            config.transport = ui::LlmConfig::Transport::Managed;
-            if (auto* account = account::Service::instance())
-                config.accessToken = account->accessToken();
-        } else {
-            config.transport = ui::LlmConfig::Transport::Direct;
-            config.endpoint = connection.endpoint;
-            config.apiKey = ui::aiprefs::customApiKey(connection.id);
-        }
-        m_client->setConfig(config);
+        m_client->setConfig(ui::aiModelConfig(connection));
         }
     }
 
@@ -1287,8 +1261,8 @@ void AiChatPanel::updateSelectionContext() {
             const QString name = QString::fromStdString(track.name);
             for (const auto& clip : track.clips)
                 if (!clip.filePath.empty()) usage[key(QString::fromStdString(clip.filePath))] << name;
-            if (auto* sampler = m_controller->samplerInstance(track.id, track.instrument.id)) {
-                const auto path = sampler->samplePath();
+            if (const auto sampler = m_controller->samplerSnapshot(track.id, track.instrument.id); sampler.available) {
+                const auto& path = sampler.path;
                 if (!path.empty()) usage[key(QString::fromStdString(path))] << name;
             }
         }
@@ -1319,8 +1293,8 @@ void AiChatPanel::showContext() {
         if (!tracks.contains(QString::fromStdString(track.id))) continue;
         text += "\n" + QString::fromStdString(track.name) + "\n";
         if (track.instrument.isLoaded()) text += tr("Instrument: %1\n").arg(QString::fromStdString(track.instrument.name));
-        if (auto* sampler = m_controller->samplerInstance(track.id, track.instrument.id))
-            text += tr("Sampler source: %1\n").arg(QFileInfo(QString::fromStdString(sampler->samplePath())).fileName());
+        if (const auto sampler = m_controller->samplerSnapshot(track.id, track.instrument.id); sampler.available)
+            text += tr("Sampler source: %1\n").arg(QFileInfo(QString::fromStdString(sampler.path)).fileName());
         for (const auto& slot : track.inserts)
             if (slot.isLoaded()) text += tr("Effect: %1\n").arg(QString::fromStdString(slot.name));
         for (const auto& clip : track.clips) {
@@ -2731,10 +2705,14 @@ void AiChatPanel::showDemoMusicTranscriptForTest() {
 
 void AiChatPanel::showDemoTranscriptForTest() {
     setMode(Mode::Assistant, /*persist=*/false);
-    m_client.reset(new ScriptedClient(this));
+    const bool projectDemo = qEnvironmentVariableIsSet("DAW_SHOT_AI_PROJECT");
+    const bool russian = qEnvironmentVariable("DAW_SHOT_DEMO_LOCALE") == QLatin1String("ru");
+    m_client.reset(new ScriptedClient(this, projectDemo, russian));
     updateReadiness();
-    m_input->setPlainText(
-        QStringLiteral("make a piano, write the chords, process the channel"));
+    m_input->setPlainText(projectDemo
+        ? (russian ? QStringLiteral("Добавь в Night Bloom четыре такта аккордов в до миноре на новую MIDI-дорожку с 17-го такта.")
+                   : QStringLiteral("Add four bars of C minor chords to Night Bloom on a new MIDI track, starting at bar 17."))
+        : QStringLiteral("make a piano, write the chords, process the channel"));
     send();
     for (int i = 0; i < 400 && m_session->running(); ++i)
         QApplication::processEvents(QEventLoop::AllEvents, 5);

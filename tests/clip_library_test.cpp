@@ -34,7 +34,7 @@ int main() {
     audio::AudioBuffer tone(1,4800);
     for (unsigned i=0;i<4800;++i) tone.getChannel(0)[i]=.3f*std::sin(i*.06f);
     audio::AudioRecorder writer; writer.initialize(48000,1); writer.writeWAVFile(wav,tone,48000);
-    daw::EngineController c;
+    daw::EngineController c{daw::EngineController::TestRuntime{}};
     if (!check(c.initialize(48000,256,false).isOk(),"headless engine")) return 1;
     const auto track=c.addTrack(daw::TrackKind::Midi,"Keys");
     const auto sampler=c.pluginManager().find(daw::plugins::Format::Internal,"daw.sampler");
@@ -168,7 +168,7 @@ int main() {
     const auto package=root/"Project";
     check(c.saveProject(package.string()).isOk(),"project packages archived-only audio and sampler resources");
     const auto moved=root/"Moved"; fs::rename(package,moved); fs::remove(wav);
-    daw::EngineController loaded; loaded.initialize(48000,256,false);
+    daw::EngineController loaded{daw::EngineController::TestRuntime{}}; loaded.initialize(48000,256,false);
     check(loaded.openProject(moved.string()).isOk() && loaded.project().clipLibrary.size()==c.project().clipLibrary.size(),
         "project-local library survives save, relocation and reopen");
     check(loaded.restoreLibraryClip(midiEntry,{},0,restored,true).isOk(),"missing original MIDI lane is recreated");
@@ -205,7 +205,7 @@ int main() {
     {
         std::ofstream stream(stateFile,std::ios::binary|std::ios::trunc); stream << "broken state";
     }
-    daw::EngineController damaged; damaged.initialize(48000,256,false);
+    daw::EngineController damaged{daw::EngineController::TestRuntime{}}; damaged.initialize(48000,256,false);
     check(damaged.openProject(moved.string()).isOk(),"project still opens with damaged archived state");
     const auto damagedDepth=damaged.undoDepth();
     check(!damaged.restoreLibraryClip(patternEntry,{},0,restored) && damaged.project().tracks.empty() &&

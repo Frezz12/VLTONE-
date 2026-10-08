@@ -3,7 +3,6 @@
 #include "Internal/InternalFactory.hpp"
 #include "Scan/ScanProtocol.hpp"
 #include "plugins/ScanProcess.hpp"
-#include "crash/CrashHandler.hpp"
 #include "platform/PathUtils.hpp"
 
 #include <algorithm>
@@ -264,23 +263,21 @@ PluginManager::PluginManager(std::string cachePath)
     : m_cachePath(std::move(cachePath)),
       m_instanceId(gNextPluginManagerId.fetch_add(
                        1, std::memory_order_relaxed) + 1),
-      m_scannerPath(defaultScannerPath()) {}
+      m_scannerPath(helperPath("daw_scan")),
+      m_pluginHostPath(helperPath("daw_plugin_host")) {}
 
 PluginManager::~PluginManager() {
     cancelScan();
     waitForScan();
 }
 
-std::string PluginManager::defaultScannerPath() {
+std::string PluginManager::helperPath(std::string name) {
     const std::string directory = executableDirectory();
-    if (directory.empty()) return "daw_scan";
 #if defined(_WIN32)
-    return platform::pathToUtf8(platform::pathFromUtf8(directory) /
-                                "daw_scan.exe");
-#else
-    return platform::pathToUtf8(platform::pathFromUtf8(directory) /
-                                "daw_scan");
+    name += ".exe";
 #endif
+    return directory.empty() ? name
+        : platform::pathToUtf8(platform::pathFromUtf8(directory) / platform::pathFromUtf8(name));
 }
 
 void PluginManager::setScannerPath(std::string path) {
@@ -1048,16 +1045,7 @@ void PluginManager::clearBlacklist() {
 
 std::unique_ptr<plugins::PluginInstance> PluginManager::instantiate(
     const PluginDescriptor& descriptor) {
-    plugins::PluginFactory* factory = plugins::factoryFor(descriptor.format);
-    if (!factory) return nullptr;
-    // Loading is where third-party code most often takes the program down with
-    // it, and it is the one moment cheap enough to mark. If the fault happens
-    // here, the crash marker names the plugin instead of leaving the user with
-    // an anonymous stack.
-    crash::setPluginInFlight(descriptor.name);
-    auto instance = factory->create(descriptor);
-    crash::clearPluginInFlight();
-    return instance;
+    return plugins::createHostedPlugin(descriptor, {m_hostingMode, m_pluginHostPath});
 }
 
 } // namespace daw

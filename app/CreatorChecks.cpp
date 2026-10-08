@@ -5,6 +5,7 @@
 #include "CreatorCodeEditor.hpp"
 #include "CreatorProject.hpp"
 #include "CreatorStyle.hpp"
+#include "Theme.hpp"
 #include "CreatorWindow.hpp"
 #include "EngineController.hpp"
 #include "Internal/MiniNodeRegistry.hpp"
@@ -16,9 +17,12 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QGraphicsScene>
+#include <QGraphicsPathItem>
 #include <QGraphicsProxyWidget>
 #include <QInputDialog>
 #include <QKeyEvent>
@@ -28,11 +32,14 @@
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QMenu>
+#include <QMimeData>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QTemporaryDir>
+#include <QTableWidget>
 #include <QTextCursor>
 #include <QThread>
 #include <QTimer>
@@ -43,7 +50,16 @@
 
 namespace ui {
 bool CreatorWindow::runCheck(const QString &directory) {
+  if (qEnvironmentVariableIsSet("DAW_CREATOR_AI_CHECK_ONLY")) return runAiCheck(directory);
   using namespace daw::plugins::mini;
+  if (qEnvironmentVariableIsSet("DAW_CREATOR_CHECK_CUSTOM_THEME")) {
+    auto theme = th();
+    theme.background = QColor("#191c18"); theme.surface = QColor("#272d24");
+    theme.surfaceElevated = QColor("#343b30"); theme.accent = QColor("#c5bc7d");
+    theme.accentHighlight = QColor("#ded8aa"); theme.textPrimary = QColor("#eceee7");
+    theme.textSecondary = QColor("#b7c0b0"); theme.gridLine = QColor("#353f32");
+    ThemeManager::instance().applyCustomTheme(theme, false);
+  }
   unsigned failures = 0;
   QDir().mkpath(directory);
   QFile log(QDir(directory).filePath("checks.log"));
@@ -59,7 +75,7 @@ bool CreatorWindow::runCheck(const QString &directory) {
   };
   daw::collab::CommandGateway gateway;
   ::collab::CollaborationCommandBridge bridge(nullptr, &gateway);
-  daw::EngineController controller;
+  daw::EngineController controller{daw::EngineController::TestRuntime{}};
   QTemporaryDir temporary;
   check(bool(controller.initialize(48000, 256, false)),
         "Creator controller initialized");
@@ -92,9 +108,145 @@ bool CreatorWindow::runCheck(const QString &directory) {
                                     window.m_search->rect().center().y()) <= 2 &&
                            window.m_search->rect().contains(button->geometry());
   check(searchIconCentered, "search icon is centered inside its native field");
+  check(creatorColors().panel == th().surface && creatorColors().accent == th().accent &&
+        creatorColors().text == th().textPrimary, "Creator follows the complete application palette");
+  bool compact = true, portTargets = true;
+  for (auto *item : window.m_canvas->scene()->items()) {
+    if (item->data(10).isValid()) compact &= item->boundingRect().width() == 242;
+    if (item->data(12).isValid()) portTargets &= item->boundingRect().width() >= 24 && item->boundingRect().height() >= 24;
+    if (auto *proxy = dynamic_cast<QGraphicsProxyWidget *>(item); proxy && proxy->widget()->property("creatorParameter").isValid())
+      compact &= proxy->widget()->height() == 24;
+  }
+  check(compact && portTargets, "compact 240 px nodes keep 24 px controls and port hit targets");
   window.m_canvas->fitGraph();
   QApplication::processEvents();
   const auto stable = project;
+  const auto findCategory = [&](const QString &key) -> QTreeWidgetItem * {
+    for (int i = 0; i < window.m_library->topLevelItemCount(); ++i) {
+      auto *item = window.m_library->topLevelItem(i);
+      if (item->data(0, Qt::UserRole + 1).toString() == key) return item;
+    }
+    return nullptr;
+  };
+  const auto libraryIndex = [&](const QString &type) {
+    auto *model = window.m_library->model();
+    for (int i = 0; i < model->rowCount(); ++i) {
+      const auto category = model->index(i, 0);
+      for (int j = 0; j < model->rowCount(category); ++j) {
+        const auto item = model->index(j, 0, category);
+        if (item.data(Qt::UserRole).toString() == type) return item;
+      }
+    }
+    return QModelIndex{};
+  };
+  const auto libraryClick = [&](QPoint point) {
+    for (auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+      QMouseEvent event(type, point, window.m_library->viewport()->mapToGlobal(point),
+                        Qt::LeftButton, type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton,
+                        Qt::NoModifier);
+      QApplication::sendEvent(window.m_library->viewport(), &event);
+    }
+    QApplication::processEvents();
+  };
+  const auto collapsedBefore = window.m_collapsedCategories;
+  auto *routing = findCategory("Routing");
+  check(routing && routing->childCount() > 0 && !(routing->flags() & Qt::ItemIsDragEnabled),
+        "library categories have children and cannot be dragged as nodes");
+  if (routing) {
+    routing->setExpanded(true);
+    window.m_library->scrollToItem(routing);
+    libraryClick(window.m_library->visualItemRect(routing).center());
+    check(!routing->isExpanded(), "single click on category label collapses its nodes");
+    const auto rectangle = window.m_library->visualItemRect(routing);
+    libraryClick({rectangle.left() - window.m_library->indentation() / 2, rectangle.center().y()});
+    check(routing->isExpanded(), "native category disclosure arrow expands without double toggling");
+    window.m_library->setCurrentItem(routing);
+    QKeyEvent left(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    QApplication::sendEvent(window.m_library, &left);
+    check(!routing->isExpanded(), "library categories support keyboard collapse");
+  }
+  if (auto *effects = findCategory("Effects")) effects->setExpanded(false);
+  window.m_search->setText("chorus");
+  auto *effects = findCategory("Effects");
+  check(effects && effects->isExpanded() && libraryIndex("chorus").isValid(),
+        "search reveals matching nodes inside collapsed categories");
+  window.m_search->clear();
+  window.refreshNodeLibrary();
+  effects = findCategory("Effects");
+  check(effects && !effects->isExpanded(), "clearing search and refreshing the library preserve collapsed categories");
+  window.m_collapsedCategories = collapsedBefore;
+  window.m_fillLibrary();
+  QString groupError;
+  auto packed = stable;
+  const auto groupId = packed.pack({"chorus", "map"}, "Custom chorus", groupError);
+  check(!groupId.isEmpty() && validate(packed.definition).empty(), "UI project packs connected nodes with typed boundaries");
+  window.edit(tr("Create custom node"), [&](auto &p) { p = packed; });
+  window.enterNode(groupId);
+  check(window.project().graphPath.size() == 1 && window.m_backAction->isEnabled(), "custom node opens with hierarchy navigation");
+  window.m_backAction->trigger();
+  check(window.project().graphPath.empty(), "back returns to outer graph");
+  window.m_undo->undo();
+  check(window.project().definition == stable.definition, "grouping is one complete Undo");
+  window.setProjectForTest(packed);
+  window.m_canvas->selectNode(groupId);
+  window.copySelection(); window.pasteSelection({880, 500});
+  check(window.project().definition.subgraphs == packed.definition.subgraphs &&
+        window.project().definition.nodes.size() == packed.definition.nodes.size() + 1,
+        "custom node copy reuses the embedded definition");
+  window.m_undo->undo();
+  check(window.project().definition == packed.definition, "custom node paste is one Undo");
+  QFile nodeFile(temporary.filePath("Custom.vltnode"));
+  auto nodeBundle = nlohmann::json{{"format","vltnode"},{"version",1},{"name","Portable custom node"},
+    {"root",packed.definition.subgraphs.front().id},{"definition",toJson(packed.definition)}}.dump();
+  nodeFile.open(QIODevice::WriteOnly);nodeFile.write(nodeBundle.data(),qint64(nodeBundle.size()));nodeFile.close();
+  window.setProjectForTest(stable);
+  window.importNodeFile(nodeFile.fileName());
+  check(window.project().definition.subgraphs == packed.definition.subgraphs && window.project().definition.nodes.size() == stable.definition.nodes.size() + 1,
+        "portable vltnode import embeds a reusable definition");
+  window.m_undo->undo();
+  check(window.project().definition == stable.definition,"vltnode import is one Undo");
+  const QPointF importedAt(485, 615);
+  window.addNode("library:" + nodeFile.fileName(), importedAt);
+  const auto importedId = QString::fromStdString(window.project().definition.nodes.back().id);
+  check(window.project().positions.value(window.project().layoutKey()).value(importedId) == importedAt &&
+        window.project().definition.subgraphs == packed.definition.subgraphs,
+        "library file insertion respects the requested canvas position");
+  window.m_undo->undo();
+  check(window.project().definition == stable.definition, "positioned library file insertion is one Undo");
+  auto editable = packed;
+  const auto &ports = editable.definition.subgraphs.front().inputs;
+  auto numberPort = std::find_if(ports.begin(),ports.end(),[](const auto &p){return p.type=="number";});
+  if (numberPort != ports.end()) {
+    const auto removedPort = numberPort->id;
+    const auto row = int(numberPort-ports.begin());
+    for(auto &n:editable.definition.nodes)if(n.id==groupId.toStdString())n.parameters.push_back({removedPort,.5});
+    window.setProjectForTest(editable);window.m_canvas->selectNode(groupId);
+    QPushButton *editPorts=nullptr;
+    for(auto *button:window.m_properties->findChildren<QPushButton *>())if(button->text()==tr("Edit ports…"))editPorts=button;
+    check(editPorts!=nullptr,"custom ports are editable in the inspector");
+    if(editPorts) {
+      QTimer::singleShot(0,&window,[&] {
+        if(auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+          const auto tables=dialog->findChildren<QTableWidget *>();
+          if(!tables.empty())tables.front()->removeRow(row);
+          if(auto *buttons=dialog->findChild<QDialogButtonBox *>())buttons->button(QDialogButtonBox::Ok)->click();
+        }
+      });
+      editPorts->click();
+      const auto &edited=window.project().definition;
+      bool removedDefault=false;
+      for(const auto &n:edited.nodes)if(n.id==groupId.toStdString())removedDefault=std::none_of(n.parameters.begin(),n.parameters.end(),[&](const auto &p){return p.id==removedPort;});
+      check(removedDefault&&!validate(edited).empty()&&edited.connections==editable.definition.connections,
+            "port removal clears hidden defaults but preserves broken outer wires");
+      window.enterNode(groupId);
+      bool visibleBoundary=false;
+      for(const auto &n:window.project().graph().nodes)visibleBoundary|=n.port==removedPort&&n.label.starts_with("Missing:");
+      check(visibleBoundary,"removed custom port keeps its internal boundary visible");
+      window.m_undo->undo();
+      check(window.project().definition==editable.definition,"port editing is restored by one Undo");
+    }
+  }
+  window.setProjectForTest(stable);
   QString error;
   check(project.save(temporary.filePath("project.vltcreator"), error),
         "Creator project saved");
@@ -148,6 +300,69 @@ bool CreatorWindow::runCheck(const QString &directory) {
                       buttons, Qt::NoModifier);
     QApplication::sendEvent(canvas->viewport(), &event);
   };
+  QPoint wirePoint(-10000, -10000);
+  for (auto *item : canvas->scene()->items())
+    if (item->data(11).isValid() && item->data(11).toUInt() == 0)
+      if (auto *wire = dynamic_cast<QGraphicsPathItem *>(item))
+        wirePoint = canvas->mapFromScene(wire->mapToScene(wire->path().pointAtPercent(.5)));
+  const auto beforeDisconnect = window.m_undo->index();
+  mouse(QEvent::MouseButtonPress, wirePoint, Qt::LeftButton, Qt::LeftButton);
+  mouse(QEvent::MouseButtonRelease, wirePoint, Qt::LeftButton, Qt::NoButton);
+  QApplication::processEvents();
+  check(window.project().definition.connections == stable.definition.connections,
+        "single wire click selects without disconnecting");
+  mouse(QEvent::MouseButtonDblClick, wirePoint, Qt::LeftButton, Qt::LeftButton);
+  mouse(QEvent::MouseButtonRelease, wirePoint, Qt::LeftButton, Qt::NoButton);
+  QApplication::processEvents();
+  auto disconnected = stable.definition.connections;
+  disconnected.erase(disconnected.begin());
+  check(window.project().definition.connections == disconnected && window.m_undo->index() == beforeDisconnect + 1,
+        "double-clicking a wire removes exactly that connection in one Undo");
+  if (window.m_undo->index() > beforeDisconnect) window.m_undo->undo();
+  check(window.project().definition.connections == stable.definition.connections,
+        "Undo restores a double-clicked wire and its port bindings");
+  // Use the library model's real drag payload and deliver Qt drop events to the
+  // transformed viewport, exercising both ends of the drag-and-drop contract.
+  window.m_search->setText("constant");
+  const auto draggedIndex = libraryIndex("constant");
+  std::unique_ptr<QMimeData> mime(window.m_library->model()->mimeData({draggedIndex}));
+  check(draggedIndex.isValid() && (draggedIndex.flags() & Qt::ItemIsDragEnabled) &&
+        window.m_library->dragEnabled() && mime && mime->hasFormat(kCreatorNodeMimeType),
+        "library leaf produces a draggable Creator node payload");
+  const auto dropAt = canvas->viewport()->rect().center() + QPoint(38, 51);
+  const auto dropSceneAt = canvas->mapToScene(dropAt);
+  const auto dropHistory = window.m_undo->index();
+  if (mime) {
+    QDragEnterEvent enter(dropAt, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas->viewport(), &enter);
+    QDragMoveEvent move(dropAt, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas->viewport(), &move);
+    QDropEvent drop(dropAt, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas->viewport(), &drop);
+    QApplication::processEvents();
+    const auto &node = window.project().definition.nodes.back();
+    check(enter.isAccepted() && move.isAccepted() && drop.isAccepted() && node.type == "constant" &&
+          window.project().positions.value(window.project().layoutKey()).value(QString::fromStdString(node.id)) == dropSceneAt &&
+          window.m_undo->index() == dropHistory + 1,
+          "native library drop inserts at the pointer through canvas zoom and pan in one Undo");
+  }
+  if (window.m_undo->index() > dropHistory) window.m_undo->undo();
+  QMimeData invalidDrag;
+  invalidDrag.setData(kCreatorNodeMimeType, "unknown_node");
+  QDragEnterEvent invalidEnter(dropAt, Qt::CopyAction, &invalidDrag, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(canvas->viewport(), &invalidEnter);
+  check(!invalidEnter.isAccepted() && window.project().definition == stable.definition,
+        "unknown drag payload is rejected and Undo restores a dropped node");
+  const auto keyboardSource = libraryIndex("constant");
+  window.m_library->setCurrentIndex(keyboardSource);
+  QKeyEvent addWithEnter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+  QApplication::sendEvent(window.m_library, &addWithEnter);
+  QApplication::processEvents();
+  check(window.project().definition.nodes.size() == stable.definition.nodes.size() + 1 &&
+        window.project().definition.nodes.back().type == "constant",
+        "Enter still adds a library node after enabling drag and drop");
+  if (window.m_undo->index() > dropHistory) window.m_undo->undo();
+  window.m_search->clear();
   const auto positions = canvas->nodePositions();
   const auto head =
       canvas->mapFromScene(positions.value("lfo") + QPointF(80, 14));
@@ -310,6 +525,20 @@ bool CreatorWindow::runCheck(const QString &directory) {
   const auto originalSize = window.size();
   window.resize(900, 600);
   QApplication::processEvents();
+  bool toolbarFits = window.findChildren<QToolBar *>(QString{}, Qt::FindDirectChildrenOnly).size() == 1;
+  QRect previous;
+  for (auto *action : toolbar->actions()) {
+    auto *widget = toolbar->widgetForAction(action);
+    if (!widget || !action->isVisible()) continue;
+    toolbarFits &= widget->isVisible() && toolbar->rect().contains(widget->geometry());
+    if (!previous.isNull()) toolbarFits &= previous.right() < widget->geometry().left();
+    previous = widget->geometry();
+    if (auto *button = qobject_cast<QToolButton *>(widget); button && action != window.m_compileAction)
+      toolbarFits &= button->toolButtonStyle() == Qt::ToolButtonIconOnly &&
+                     !button->icon().isNull() && !button->toolTip().isEmpty() &&
+                     button->height() >= 28 && button->width() >= 28;
+  }
+  check(toolbarFits, "one aligned toolbar keeps icon-only actions visible without overlap at 900 px");
   check(compileButton->isVisible() && toolbar->rect().contains(compileButton->geometry()) &&
             canvas->width() >= 320,
         "toolbar and graph remain usable at the minimum window width");
@@ -372,12 +601,12 @@ bool CreatorWindow::runCheck(const QString &directory) {
     window.compile();
     QElapsedTimer timeout;
     timeout.start();
-    while ((window.m_compileFuture.valid() || window.m_pending) &&
+    while (window.m_build->busy() &&
            timeout.elapsed() < 60000) {
       QApplication::processEvents();
       QThread::msleep(1);
     }
-    return !window.m_compileFuture.valid() && !window.m_pending;
+    return !window.m_build->busy();
   };
   const auto installed = window.m_installDirectory + "/" +
                          QString::fromStdString(updated.id) + ".vltmini";
@@ -430,14 +659,12 @@ bool CreatorWindow::runCheck(const QString &directory) {
   const auto waitJobs = [&] {
     QElapsedTimer timeout;
     timeout.start();
-    while ((window.m_codeFuture.valid() || window.m_compileFuture.valid() ||
-            window.m_pending) &&
+    while ((window.m_codeFuture.valid() || window.m_build->busy()) &&
            timeout.elapsed() < 60000) {
       QApplication::processEvents();
       QThread::msleep(1);
     }
-    return !window.m_codeFuture.valid() && !window.m_compileFuture.valid() &&
-           !window.m_pending;
+    return !window.m_codeFuture.valid() && !window.m_build->busy();
   };
   QTimer::singleShot(0, &window, [&] {
     auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
@@ -637,6 +864,7 @@ bool CreatorWindow::runCheck(const QString &directory) {
   window.m_undo->undo();
   window.compile();
   window.m_cancel.store(true);
+  window.m_build->cancel();
   check(waitJobs() && published == priorPublished + 2 &&
             MiniModuleLibrary::read(cppInstalled).definition == installedCpp,
         "cancelled compilation leaves the installed module intact");

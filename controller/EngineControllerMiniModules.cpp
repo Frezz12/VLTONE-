@@ -1,8 +1,10 @@
 #include "EngineController.hpp"
-#include "Internal/MiniModuleInstance.hpp"
+
 #include "MiniModuleUpdate.hpp"
 #include "model/ChannelColor.hpp"
 #include "model/MiniModules.hpp"
+#include "serialization/InsertJson.hpp"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -16,59 +18,20 @@ bool sameMiniAudio(const plugins::mini::MiniModuleDefinition &a,
   return plugins::mini::sameAudioGraph(a, am, b, bm);
 }
 } // namespace
-bool MiniModuleUpdate::prepare() {
-  error = plugins::mini::validate(definition);
-  if (!error.empty())
-    return false;
-  try {
-    for (auto &target : targets) {
-      if (!target.audioChanged)
-        continue;
-      auto instance = std::make_unique<plugins::mini::MiniModuleInstance>();
-      if (!instance->configure(definition,
-                               parseChannelColorSeed(target.after.profileSeed),
-                               target.after.miniModuleMode)) {
-        error = instance->error();
-        return false;
-      }
-      for (const auto &parameter : target.after.parameters) {
-        const auto index = instance->parameterIndexForId(parameter.id);
-        if (index >= 0)
-          instance->setParameterFromHost(unsigned(index), parameter.value);
-      }
-      auto node = std::make_shared<plugins::PluginNode>(target.after.name,
-                                                        std::move(instance));
-      node->setPreferredChannelCount(std::uint16_t(target.channels));
-      node->setBypassed(target.after.bypassed);
-      node->setMix(1);
-      node->prepare(info);
-      node->markPrepared(info);
-      if (!node->isReady()) {
-        error = "Could not prepare mini module: " + target.after.name;
-        return false;
-      }
-      node->reset();
-      target.prepared = std::move(node);
-    }
-    return true;
-  } catch (const std::exception &e) {
-    error = e.what();
-    return false;
-  }
-}
 std::shared_ptr<MiniModuleUpdate> EngineController::planMiniModuleUpdate(
     const plugins::mini::MiniModuleDefinition &definition) const {
   auto result = std::make_shared<MiniModuleUpdate>();
   result->definition = definition;
   result->projectId = m_project.miniModuleProjectId;
-  result->info = {m_engine.sampleRate(), m_engine.maxBlockSize(),
-                  m_engine.channels()};
+  result->info = m_runtime.preparation();
+  result->compiler = m_runtime.miniModuleCompiler();
   const auto collect = [&](const std::string &channel, const auto &modules,
                            unsigned channels) {
     for (const auto &slot : modules)
       if (slot.miniModule && slot.miniModule->id == definition.id) {
         MiniModuleUpdate::Target target;
         target.channel = channel;
+        target.instance = insertIdentity(channel, slot.id).instance;
         target.before = target.after = slot;
         target.channels = channels;
         target.after.name = definition.name;
@@ -101,10 +64,7 @@ std::shared_ptr<MiniModuleUpdate> EngineController::planMiniModuleUpdate(
 }
 bool EngineController::miniModuleUpdateCurrent(
     const MiniModuleUpdate &update) const {
-  if (m_project.miniModuleProjectId != update.projectId ||
-      m_engine.sampleRate() != update.info.sampleRate ||
-      m_engine.maxBlockSize() != update.info.maxBlockSize ||
-      m_engine.channels() != update.info.channels)
+  if (m_project.miniModuleProjectId != update.projectId || m_runtime.preparation() != update.info)
     return false;
   const auto current = planMiniModuleUpdate(update.definition);
   if (current->targets.size() != update.targets.size())
@@ -115,47 +75,21 @@ bool EngineController::miniModuleUpdateCurrent(
         a.before.miniModule != b.before.miniModule ||
         a.before.miniModuleMode != b.before.miniModuleMode ||
         a.before.profileSeed != b.before.profileSeed ||
-        a.channels != b.channels)
+        a.channels != b.channels || a.instance != b.instance ||
+        (update.exactRestore && serialization::insertToJson(a.before) != serialization::insertToJson(b.before)))
       return false;
   }
   return true;
 }
 void EngineController::fadeMiniModuleUpdate(const MiniModuleUpdate &update) {
   if (cloudProjectBound() || !sharedEditingAllowed()) return;
-  for (const auto &target : update.targets) {
-    if (!target.prepared)
-      continue;
-    if (auto *current = dynamic_cast<plugins::mini::MiniModuleInstance *>(
-            insertInstance(target.channel, target.before.id)))
-      if (current->latencySamples() != target.prepared->latencySamples() &&
-          !target.before.bypassed)
-        current->requestUpdateFadeOut();
-  }
+  m_runtime.fadeMiniModulePreparation(update.preparationId, false);
 }
 void EngineController::cancelMiniModuleUpdateFade(const MiniModuleUpdate &update) {
-  for (const auto &target : update.targets) {
-    if (!target.prepared) continue;
-    if (auto *current = dynamic_cast<plugins::mini::MiniModuleInstance *>(insertInstance(target.channel, target.before.id)))
-      if (current->latencySamples() != target.prepared->latencySamples() && !target.before.bypassed)
-        current->cancelUpdateFadeOut();
-  }
+  m_runtime.fadeMiniModulePreparation(update.preparationId, true);
 }
-bool EngineController::miniModuleUpdateFaded(
-    const MiniModuleUpdate &update) const {
-  if (!isPlaying())
-    return true;
-  for (const auto &target : update.targets) {
-    if (!target.prepared || target.before.bypassed)
-      continue;
-    auto *instance = const_cast<EngineController *>(this)->insertInstance(
-        target.channel, target.before.id);
-    auto *current = dynamic_cast<plugins::mini::MiniModuleInstance *>(instance);
-    if (current &&
-        current->latencySamples() != target.prepared->latencySamples() &&
-        !current->updateFadeOutFinished())
-      return false;
-  }
-  return true;
+bool EngineController::miniModuleUpdateFaded(const MiniModuleUpdate &update) const {
+  return !isPlaying() || m_runtime.miniModulePreparationFaded(update.preparationId);
 }
 bool EngineController::applyMiniModuleUpdate(
     const std::shared_ptr<MiniModuleUpdate> &update, std::string &error) {
@@ -188,9 +122,11 @@ bool EngineController::applyMiniModuleUpdate(
         auto parameters = slot.parameters;
         const auto bypass = slot.bypassed, post = slot.miniModulePostFx;
         slot = target.after;
-        slot.bypassed = bypass;
-        slot.miniModulePostFx = post;
-        for (auto &p : slot.parameters)
+        if (!update->exactRestore) {
+          slot.bypassed = bypass;
+          slot.miniModulePostFx = post;
+        }
+        if (!update->exactRestore) for (auto &p : slot.parameters)
           for (const auto &old : parameters)
             if (p.id == old.id) {
               const auto &controls = slot.miniModule->controls;
@@ -210,10 +146,10 @@ bool EngineController::applyMiniModuleUpdate(
   }
   if (update->targets.empty())
     return true;
-  for (const auto &target : update->targets)
-    if (target.prepared)
-      m_preparedMiniModules[target.channel + "\n" + target.before.id] =
-          target.prepared;
+  if (!audioChannels.empty() && !m_runtime.stageMiniModulePreparation(update->preparationId)) {
+    error = "Prepared mini-module generation is no longer available";
+    return false;
+  }
   const auto apply = [this, audioChannels](const auto &state) {
     for (const auto &[id, slots] : state) {
       if (audioChannels.contains(id))
@@ -224,12 +160,14 @@ bool EngineController::applyMiniModuleUpdate(
     return rebuildGraph();
   };
   const auto published = apply(after);
-  m_preparedMiniModules.clear();
+  m_runtime.clearMiniModulePreparation();
   if (!published) {
     (void)apply(before);
     error = published.message();
     return false;
   }
+  for (auto& target : update->targets)
+    target.instance = insertIdentity(target.channel, target.before.id).instance;
   m_undo.push(
       "Recompile " + update->definition.name,
       [apply, before] { apply(before); }, [apply, after] { apply(after); });
@@ -243,23 +181,6 @@ bool EngineController::updateMiniModuleDefinition(
     return false;
   }
   return applyMiniModuleUpdate(update, error);
-}
-engine::NodeId EngineController::connectMiniModules(
-    engine::AudioGraph &graph, TrackChannel &channel,
-    const std::vector<InsertModel> &models, bool postFx, engine::NodeId head,
-    engine::NodeId *first) {
-  for (auto &slot : channel.miniModules) {
-    const auto model =
-        std::find_if(models.begin(), models.end(),
-                     [&](const auto &m) { return m.id == slot.slotId; });
-    if (model == models.end() || model->miniModulePostFx != postFx)
-      continue;
-    std::vector<engine::NodeId> ids;
-    head = connectSlots(graph, std::span(&slot, 1), ids, head);
-    if (first && *first == engine::kInvalidNode && !ids.empty())
-      *first = ids.front();
-  }
-  return head;
 }
 const std::vector<InsertModel> &
 EngineController::miniModules(const std::string &id) const {

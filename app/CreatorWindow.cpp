@@ -1,4 +1,6 @@
 #include "CreatorWindow.hpp"
+#include "CreatorCommands.hpp"
+#include "CreatorAiPanel.hpp"
 #include "Creator/CodeUtilities.hpp"
 #include "Creator/CreatorCompilerClient.hpp"
 #include "CreatorCanvas.hpp"
@@ -37,10 +39,12 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPainter>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QScrollArea>
+#include <QStackedWidget>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -50,6 +54,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QUndoStack>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -62,6 +67,43 @@ using namespace daw::plugins::mini;
 using json = nlohmann::json;
 namespace {
 QString freshId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
+class CreatorNodeLibrary final : public QTreeWidget {
+public:
+  explicit CreatorNodeLibrary(QWidget *parent) : QTreeWidget(parent) {
+    setHeaderHidden(true);
+    setIndentation(16);
+    setUniformRowHeights(true);
+    setExpandsOnDoubleClick(false);
+    setDragEnabled(true);
+    setDragDropMode(DragOnly);
+    setDefaultDropAction(Qt::CopyAction);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setTextElideMode(Qt::ElideRight);
+  }
+protected:
+  void drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const override {
+    // The styled native branch otherwise loses its disclosure glyph and paints
+    // a separate highlight block beside the selected row.
+    const auto colors = creatorColors();
+    painter->fillRect(rect, colors.panel);
+    if (model()->hasChildren(index)) {
+      const QRectF glyph(rect.right() - indentation() + (indentation() - 14) / 2. + 1,
+                          rect.center().y() - 7, 14, 14);
+      icons::paint(*painter, isExpanded(index) ? icons::Glyph::Chevron : icons::Glyph::ChevronRight,
+                   glyph, colors.muted);
+    }
+  }
+  QStringList mimeTypes() const override { return {kCreatorNodeMimeType}; }
+  Qt::DropActions supportedDropActions() const override { return Qt::CopyAction; }
+  QMimeData *mimeData(const QList<QTreeWidgetItem *> &items) const override {
+    if (items.size() != 1) return nullptr;
+    const auto type = items.front()->data(0, Qt::UserRole).toString();
+    if (type.isEmpty()) return nullptr;
+    auto *mime = new QMimeData;
+    mime->setData(kCreatorNodeMimeType, type.toUtf8());
+    return mime;
+  }
+};
 class ProjectEdit final : public QUndoCommand {
 public:
   ProjectEdit(QString name, CreatorProject before, CreatorProject after,
@@ -74,7 +116,7 @@ public:
   bool mergeWith(const QUndoCommand *command) override {
     const auto *next = dynamic_cast<const ProjectEdit *>(command);
     if (!next || next->mergeKey != mergeKey ||
-        next->time - time > std::chrono::milliseconds(800))
+        (!mergeKey.startsWith("ai/") && next->time - time > std::chrono::milliseconds(800)))
       return false;
     after = next->after;
     time = next->time;
@@ -106,65 +148,7 @@ void addStyleChoices(QComboBox *combo) {
 }
 // A broken draft may contain orphaned wires or unchecked source. Validate the
 // new connection on its own so the user can repair it without losing the draft.
-std::string connectionError(const MiniModuleDefinition &graph,
-                            const Connection &candidate) {
-  const auto node = [&](const std::string &id) -> const NodeDefinition * {
-    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
-                                    [&](const auto &n) { return n.id == id; });
-    return found == graph.nodes.end() ? nullptr : &*found;
-  };
-  const auto type = [&](const Connection &edge) -> std::optional<PortType> {
-    const auto *source = node(edge.from), *target = node(edge.to);
-    if (!source || !target)
-      return {};
-    const auto outputs = outputPorts(*source, graph),
-               inputs = inputPorts(*target);
-    const auto a =
-        std::find_if(outputs.begin(), outputs.end(),
-                     [&](const auto &p) { return p.id == edge.fromPort; });
-    const auto b =
-        std::find_if(inputs.begin(), inputs.end(),
-                     [&](const auto &p) { return p.id == edge.toPort; });
-    if (a == outputs.end() || b == inputs.end() || !compatiblePorts(*a, *b))
-      return {};
-    return a->type;
-  };
-  const auto portType = type(candidate);
-  if (!portType)
-    return "Incompatible or missing ports";
-  if (graph.connections.size() > kMaxEdges)
-    return "Too many connections";
-  const bool function = *portType == PortType::Function;
-  std::vector<std::string> pending{candidate.to}, visited;
-  while (!pending.empty()) {
-    const auto current = std::move(pending.back());
-    pending.pop_back();
-    if (current == candidate.from)
-      return function ? "Function dependencies contain a recursive cycle"
-                      : "Graph contains a feedback cycle";
-    if (std::find(visited.begin(), visited.end(), current) != visited.end())
-      continue;
-    visited.push_back(current);
-    for (const auto &edge : graph.connections)
-      if (edge.from == current) {
-        const auto other = type(edge);
-        if (other && (*other == PortType::Function) == function)
-          pending.push_back(edge.to);
-      }
-  }
-  return {};
-}
 } // namespace
-struct CreatorWindow::CompileResult {
-  CreatorProject project;
-  std::string revision;
-  QString error;
-  QStringList warnings;
-  std::vector<CodeDiagnostic> diagnostics;
-  std::shared_ptr<daw::MiniModuleUpdate> update;
-  bool fading = false;
-  std::chrono::steady_clock::time_point fadeStart;
-};
 struct CreatorWindow::CodeResult {
   QString node, mode, project, operation;
   std::string revision;
@@ -186,6 +170,7 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   m_undo->setUndoLimit(100);
   auto *toolbar = addToolBar(tr("Creator"));
   toolbar->setMovable(false);
+  toolbar->setFloatable(false);
   toolbar->setObjectName("CreatorToolbar");
   toolbar->setIconSize(QSize(18, 18));
   toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -217,6 +202,16 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   redo->setShortcut(QKeySequence::Redo);
   toolbar->addAction(undo);
   toolbar->addAction(redo);
+  toolbar->addSeparator();
+  m_backAction = toolbar->addAction(tr("Back to parent graph"));
+  creatorIcon(m_backAction, icons::Glyph::ArrowLeft);
+  m_backAction->setEnabled(false);
+  auto *createNode = toolbar->addAction(tr("Create node…"), this, &CreatorWindow::groupSelection);
+  createNode->setObjectName("CreatorGroupNodes");
+  creatorIcon(createNode, icons::Glyph::Layers);
+  auto *importNode = toolbar->addAction(tr("Import node…"), this, [this] { importNodeFile(); });
+  importNode->setObjectName("CreatorImportNode");
+  creatorIcon(importNode, icons::Glyph::Import);
   m_compileAction = new QAction(tr("Compile"), this);
   m_compileAction->setObjectName("CreatorCompile");
   m_compileAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
@@ -231,10 +226,18 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
     m_cancelAction->setVisible(m_cancelAction->isEnabled());
   });
   connect(m_cancelAction, &QAction::triggered, this, [this] {
+    if (m_ai && m_ai->running()) { m_ai->stop(); return; }
     m_cancel.store(true);
+    if (m_build) m_build->cancel();
     m_status->setText(tr("Cancelling…"));
   });
   auto *space = new QWidget(toolbar);
+  m_aiAction = toolbar->addAction(tr("Creator assistant"));
+  m_aiAction->setObjectName("CreatorAiToggle");
+  m_aiAction->setCheckable(true);
+  creatorIcon(m_aiAction, icons::Glyph::Assistant);
+  connect(m_aiAction, &QAction::triggered, this, [this](bool on) { showAi(on); });
+  space->setMinimumWidth(24);
   space->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
   toolbar->addWidget(space);
   auto *modeLabel = new QLabel(tr("Mode"), toolbar);
@@ -242,6 +245,7 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   toolbar->addWidget(modeLabel);
   m_modes = new QComboBox(toolbar);
   m_modes->setFixedWidth(140);
+  m_modes->setFixedHeight(32);
   m_modes->setAccessibleName(tr("Module mode"));
   toolbar->addWidget(m_modes);
   auto *modeMenuButton = new QToolButton(toolbar);
@@ -257,14 +261,21 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   build->setProperty("creatorPrimary", true);
   build->setAccessibleName(tr("Compile"));
   toolbar->addAction(m_cancelAction);
+  for (auto *button : toolbar->findChildren<QToolButton *>()) {
+    button->setAutoRaise(true);
+    button->setFocusPolicy(Qt::StrongFocus);
+    if (button->defaultAction()) button->setAccessibleName(button->defaultAction()->text());
+  }
   connect(
       m_modes, qOverload<int>(&QComboBox::activated), this, [this](int index) {
-        m_project.viewports[m_project.activeMode] = m_canvas->viewportState();
+        m_project.viewports[m_project.layoutKey()] = m_canvas->viewportState();
         m_project.activeMode = m_modes->itemData(index).toString();
+        ++m_revision;
+        m_project.graphPath.clear();
         m_selected.clear();
         refresh();
         m_canvas->restoreViewport(
-            m_project.viewports.value(m_project.activeMode));
+            m_project.viewports.value(m_project.layoutKey()));
       });
   connect(modeMenuButton, &QToolButton::clicked, this, [this, modeMenuButton] {
     QMenu menu(this);
@@ -312,8 +323,8 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   setCentralWidget(split);
   auto *libraryPanel = new QWidget(split);
   auto *libraryLayout = new QVBoxLayout(libraryPanel);
-  libraryLayout->setContentsMargins(14, 18, 14, 12);
-  libraryLayout->setSpacing(12);
+  libraryLayout->setContentsMargins(10, 12, 10, 8);
+  libraryLayout->setSpacing(8);
   auto *libraryTitle = new QLabel(tr("Nodes"), libraryPanel);
   libraryTitle->setProperty("creatorRole", "heading");
   libraryLayout->addWidget(libraryTitle);
@@ -324,18 +335,48 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   auto *searchIcon = m_search->addAction(QIcon{}, QLineEdit::LeadingPosition);
   creatorIcon(searchIcon, icons::Glyph::Search);
   libraryLayout->addWidget(m_search);
-  m_library = new QListWidget(libraryPanel);
+  m_library = new CreatorNodeLibrary(libraryPanel);
   m_library->setObjectName("CreatorNodeLibrary");
   m_library->setAccessibleName(tr("Node library"));
   libraryLayout->addWidget(m_library);
   libraryPanel->setMinimumWidth(190);
   libraryPanel->setMaximumWidth(270);
+  const auto collapsed = QSettings().value("creator/collapsedCategories").toStringList();
+  m_collapsedCategories = QSet<QString>(collapsed.begin(), collapsed.end());
   const auto fill = [this] {
+    QSignalBlocker blocker(m_library);
+    const auto selected = m_library->currentItem()
+        ? m_library->currentItem()->data(0, Qt::UserRole).toString() : QString{};
     m_library->clear();
-    QString category;
+    QMap<QString, QTreeWidgetItem *> categories;
+    const auto addItem = [&](const QString &name, const QString &type,
+                             const QString &category, const QString &label,
+                             icons::Glyph glyph) {
+      auto *header = categories.value(category);
+      if (!header) {
+        header = new QTreeWidgetItem(m_library, {label});
+        header->setData(0, Qt::UserRole + 1, category);
+        header->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        header->setIcon(0, icons::icon(glyph, creatorColors().muted, 16));
+        header->setForeground(0, creatorColors().muted);
+        header->setToolTip(0, label);
+        auto font = header->font(0);
+        font.setPixelSize(11);
+        font.setWeight(QFont::DemiBold);
+        header->setFont(0, font);
+        header->setSizeHint(0, QSize(0, 28));
+        categories.insert(category, header);
+      }
+      auto *item = new QTreeWidgetItem(header, {name});
+      item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+      item->setData(0, Qt::UserRole, type);
+      item->setSizeHint(0, QSize(0, 28));
+      item->setToolTip(0, name + "\n" + tr("Drag onto the canvas, double-click or press Enter to add"));
+      if (type == selected) m_library->setCurrentItem(item);
+    };
     std::vector<const NodeDescription *> types;
     for (const auto &n : nodeRegistry())
-      types.push_back(&n);
+      if (n.id != "wire" && n.id != "subgraph" && !n.id.starts_with("subgraph_")) types.push_back(&n);
     std::stable_sort(types.begin(), types.end(), [](auto *a, auto *b) {
       return creatorCategoryOrder(a->category) < creatorCategoryOrder(b->category);
     });
@@ -345,28 +386,45 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
           !(name + " " + cat + " " + QString::fromStdString(n->id))
                .contains(m_search->text(), Qt::CaseInsensitive))
         continue;
-      if (cat != category) {
-        auto *header = new QListWidgetItem(cat, m_library);
-        header->setFlags(Qt::NoItemFlags);
-        header->setIcon(icons::icon(creatorCategoryIcon(n->category), creatorColors().muted, 16));
-        header->setForeground(creatorColors().muted);
-        auto font = header->font();
-        font.setPixelSize(11);
-        font.setWeight(QFont::DemiBold);
-        header->setFont(font);
-        category = cat;
-      }
-      auto *item = new QListWidgetItem(name, m_library);
-      item->setData(Qt::UserRole, QString::fromStdString(n->id));
-      item->setToolTip(tr("Double-click or press Enter to add"));
+      addItem(name, QString::fromStdString(n->id), QString::fromStdString(n->category),
+              cat, creatorCategoryIcon(n->category));
     }
+    for (auto it = m_personalNodes.begin(); it != m_personalNodes.end(); ++it) {
+      if ((it.value() + " " + tr("My nodes")).contains(m_search->text(), Qt::CaseInsensitive))
+        addItem(it.value(), it.key(), "personal", tr("My nodes"), icons::Glyph::Layers);
+    }
+    for (auto it = categories.begin(); it != categories.end(); ++it)
+      it.value()->setExpanded(!m_search->text().isEmpty() || !m_collapsedCategories.contains(it.key()));
   };
+  m_fillLibrary = fill;
+  connect(m_library, &QTreeWidget::itemClicked, this, [](auto *item) {
+    if (!item->parent()) item->setExpanded(!item->isExpanded());
+  });
+  const auto rememberCategory = [this](QTreeWidgetItem *item) {
+    if (!m_search->text().isEmpty()) return;
+    const auto key = item->data(0, Qt::UserRole + 1).toString();
+    if (item->isExpanded()) m_collapsedCategories.remove(key);
+    else m_collapsedCategories.insert(key);
+    QSettings().setValue("creator/collapsedCategories", m_collapsedCategories.values());
+  };
+  connect(m_library, &QTreeWidget::itemExpanded, this, rememberCategory);
+  connect(m_library, &QTreeWidget::itemCollapsed, this, rememberCategory);
   connect(m_search, &QLineEdit::textChanged, this, fill);
   connect(&ThemeManager::instance(), &ThemeManager::changed, this, fill);
   fill();
   auto *center = new QSplitter(Qt::Vertical, split);
+  m_split = split;
+  center->setMinimumWidth(320);
   center->setHandleWidth(4);
   m_canvas = new CreatorCanvas(center);
+  refreshNodeLibrary();
+  connect(m_backAction, &QAction::triggered, this, [this] {
+    if (m_project.graphPath.empty()) return;
+    m_project.viewports[m_project.layoutKey()] = m_canvas->viewportState();
+    m_project.graphPath.removeLast(); m_project.codeNode.clear(); m_selected.clear(); refresh();
+    ++m_revision;
+    m_canvas->restoreViewport(m_project.viewports.value(m_project.layoutKey()));
+  });
   m_code = new CreatorCodeEditor(center);
   m_code->hide();
   m_diagnostics = new QListWidget(center);
@@ -379,11 +437,27 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   connect(m_diagnostics->model(), &QAbstractItemModel::rowsRemoved, this, showDiagnostics);
   connect(m_diagnostics->model(), &QAbstractItemModel::modelReset, this, showDiagnostics);
   center->setSizes({390, 260, 95});
-  m_properties = new QScrollArea(split);
+  auto* right = new QWidget(split);
+  right->setObjectName("CreatorRightPanel"); right->setMinimumWidth(250);
+  auto* rightLayout = new QVBoxLayout(right); rightLayout->setContentsMargins(0,0,0,0); rightLayout->setSpacing(0);
+  auto* rightHeader = new QHBoxLayout; rightHeader->setContentsMargins(8,4,8,4); rightHeader->setSpacing(4);
+  auto* parameters = new QToolButton(right); parameters->setText(tr("Parameters")); parameters->setAutoRaise(true);
+  auto* aiTab = new QToolButton(right); aiTab->setText("AI"); aiTab->setAutoRaise(true);
+  auto* closeChat = new QToolButton(right); closeChat->setObjectName("CreatorAiClose"); closeChat->setAutoRaise(true);
+  closeChat->setIcon(icons::icon(icons::Glyph::Close, creatorColors().muted,16)); closeChat->setAccessibleName(tr("Close chat")); closeChat->setToolTip(tr("Close chat"));
+  rightHeader->addWidget(parameters); rightHeader->addWidget(aiTab); rightHeader->addStretch(); rightHeader->addWidget(closeChat);
+  rightLayout->addLayout(rightHeader);
+  m_rightStack = new QStackedWidget(right); rightLayout->addWidget(m_rightStack,1);
+  connect(parameters,&QToolButton::clicked,this,[this]{showAi(false);});
+  connect(aiTab,&QToolButton::clicked,this,[this]{showAi(true);});
+  connect(closeChat,&QToolButton::clicked,this,[this]{showAi(false);});
+  connect(m_rightStack,&QStackedWidget::currentChanged,closeChat,[closeChat](int page){closeChat->setVisible(page==1);});
+  closeChat->hide();
+  m_properties = new QScrollArea(m_rightStack);
   m_properties->setWidgetResizable(true);
   m_properties->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_properties->setMinimumWidth(250);
-  m_properties->setMaximumWidth(320);
+  m_rightStack->addWidget(m_properties);
   m_properties->setFrameShape(QFrame::NoFrame);
   split->setSizes({215, 745, 280});
   split->setStretchFactor(1, 1);
@@ -407,10 +481,11 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   connect(m_canvas, &CreatorCanvas::zoomChanged, actual, [actual](double zoom) {
     actual->setText(QString::number(qRound(zoom * 100)) + "%");
   });
-  connect(m_library, &QListWidget::itemActivated, this, [this](auto *item) {
-    if (item->data(Qt::UserRole).isValid())
-      addNode(item->data(Qt::UserRole).toString(),
-              m_canvas->viewportState().center);
+  connect(m_library, &QTreeWidget::itemActivated, this, [this](auto *item) {
+    const auto type = item->data(0, Qt::UserRole).toString();
+    if (!type.isEmpty()) QTimer::singleShot(0, this, [this, type] {
+      addNode(type, m_canvas->viewportState().center);
+    });
   });
   connect(m_canvas, &CreatorCanvas::status, m_status, &QLabel::setText);
   connect(m_canvas, &CreatorCanvas::codeRequested, this,
@@ -420,7 +495,7 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   connect(m_code, &CreatorCodeEditor::redoRequested, m_undo, &QUndoStack::redo);
   connect(m_code, &CreatorCodeEditor::cursorMoved, this, [this](int position) {
     if (!m_codeId.isEmpty())
-      m_project.codeCursors[m_project.activeMode + "/" + m_codeId] = position;
+      m_project.codeCursors[m_project.layoutKey() + "/" + m_codeId] = position;
   });
   connect(m_code, &CreatorCodeEditor::updateRequested, this,
           [this] { codeOperation("analyze"); });
@@ -437,11 +512,26 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   connect(m_canvas, &CreatorCanvas::nodeSelected, this, [this](QString id) {
     m_selected = id;
     properties(id);
+    if (m_ai) m_ai->contextChanged();
   });
+  connect(m_canvas, &CreatorCanvas::groupRequested, this, &CreatorWindow::groupSelection, Qt::QueuedConnection);
+  connect(m_canvas, &CreatorCanvas::enterRequested, this, &CreatorWindow::enterNode, Qt::QueuedConnection);
+  connect(m_canvas, &CreatorCanvas::importNodeRequested, this, [this] { importNodeFile(); }, Qt::QueuedConnection);
+  connect(m_canvas, &CreatorCanvas::exportNodeRequested, this, &CreatorWindow::exportNodeFile, Qt::QueuedConnection);
+  connect(m_canvas, &CreatorCanvas::unpackRequested, this, [this] {
+    QString error;
+    edit(tr("Expand custom node"), [&](auto &p) { p.unpack(m_selected, error); });
+    if (!error.isEmpty()) diagnostic(error);
+  }, Qt::QueuedConnection);
+  connect(m_canvas, &CreatorCanvas::independentRequested, this, [this] {
+    QString error;
+    edit(tr("Make independent"), [&](auto &p) { p.makeIndependent(m_selected, error); });
+    if (!error.isEmpty()) diagnostic(error);
+  }, Qt::QueuedConnection);
   connect(m_canvas, &CreatorCanvas::nodesMoved, this, [this] {
     const auto positions = m_canvas->nodePositions();
     edit(tr("Move nodes"),
-         [&](auto &p) { p.positions[p.activeMode] = positions; });
+         [&](auto &p) { p.positions[p.layoutKey()] = positions; });
   });
   connect(
       m_canvas, &CreatorCanvas::parameterEdited, this,
@@ -477,6 +567,7 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
         const auto error = connectionError(graph, graph.connections.back());
         if (!error.empty()) {
           diagnostic(QString::fromStdString(error), to);
+          m_canvas->highlightConnectionPath(from, to, error.find("previous-sample") == std::string::npos);
           return;
         }
         edit(tr("Connect ports"), [&](auto &p) { p.setGraph(graph); });
@@ -496,7 +587,7 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   connect(m_canvas, &CreatorCanvas::addRequested, this,
           &CreatorWindow::addSearch);
   connect(m_canvas, &CreatorCanvas::addNodeRequested, this,
-          &CreatorWindow::addNode);
+          &CreatorWindow::addNode, Qt::QueuedConnection);
   connect(m_canvas, &CreatorCanvas::deleteRequested, this,
           &CreatorWindow::removeSelection);
   connect(m_canvas, &CreatorCanvas::copyRequested, this,
@@ -519,16 +610,32 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   });
   connect(m_undo, &QUndoStack::cleanChanged, this,
           [this](bool clean) { setWindowModified(!clean); });
+  m_build = new CreatorBuildService(m_controller, this);
+  m_ai = new CreatorAiPanel(*this, m_rightStack);
+  m_rightStack->addWidget(m_ai);
+  connect(m_ai, &CreatorAiPanel::settingsRequested, this, &CreatorWindow::aiSettingsRequested);
+  connect(m_ai, &CreatorAiPanel::stateChanged, this, [this](bool working, bool completed) {
+    auto pixmap = icons::icon(icons::Glyph::Assistant, creatorColors().text, 18).pixmap(QSize(18,18), devicePixelRatioF());
+    const bool unread = !m_ai->isVisible() && (completed || m_aiAction->property("aiUnread").toBool());
+    m_aiAction->setProperty("aiUnread", unread && !working);
+    if (working || unread) {
+      QPainter p(&pixmap); p.setRenderHint(QPainter::Antialiasing); p.setPen(Qt::NoPen); p.setBrush(creatorColors().accent); p.drawEllipse(QRectF(12,1,5,5));
+    }
+    m_aiAction->setIcon(QIcon(pixmap));
+    m_aiAction->setToolTip(working ? tr("Assistant is working") : unread ? tr("Assistant finished") : tr("Creator assistant"));
+  });
+  connect(split,&QSplitter::splitterMoved,this,[this] {
+    if (m_rightStack->currentWidget()==m_ai) QSettings().setValue("creator/aiWidth", m_split->sizes().value(2,340));
+  });
   m_compilePoll = new QTimer(this);
   m_compilePoll->setInterval(25);
-  connect(m_compilePoll, &QTimer::timeout, this, &CreatorWindow::pollCompile);
   connect(m_compilePoll, &QTimer::timeout, this, &CreatorWindow::pollCode);
   auto *recovery = new QTimer(this);
   recovery->setInterval(5000);
   connect(recovery, &QTimer::timeout, this, [this] {
     if (!m_started || m_undo->isClean())
       return;
-    m_project.viewports[m_project.activeMode] = m_canvas->viewportState();
+    m_project.viewports[m_project.layoutKey()] = m_canvas->viewportState();
     QDir().mkpath(QFileInfo(recoveryPath()).absolutePath());
     QString error;
     m_project.save(recoveryPath(), error);
@@ -541,13 +648,29 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
     properties(m_selected);
   });
   refresh();
+  showAi(QSettings().value("creator/aiVisible",false).toBool());
 }
 CreatorWindow::~CreatorWindow() {
+  delete m_ai; m_ai = nullptr;
   m_cancel.store(true);
   if (m_codeFuture.valid())
     m_codeFuture.wait();
-  if (m_compileFuture.valid())
-    m_compileFuture.wait();
+  delete m_build; m_build = nullptr;
+}
+void CreatorWindow::showAi(bool show) {
+  if (!m_ai || !m_rightStack) return;
+  const auto viewport = m_canvas->viewportState();
+  m_rightStack->setCurrentWidget(show ? static_cast<QWidget*>(m_ai) : static_cast<QWidget*>(m_properties));
+  m_aiAction->setChecked(show); QSettings().setValue("creator/aiVisible", show);
+  auto sizes = m_split->sizes();
+  if (sizes.size()==3) {
+    const int total = sizes[0]+sizes[1]+sizes[2];
+    const int desired = show ? QSettings().value("creator/aiWidth",340).toInt() : 280;
+    sizes[2] = std::clamp(desired,250,std::max(250,total-sizes[0]-320));
+    sizes[1] = std::max(320,total-sizes[0]-sizes[2]); m_split->setSizes(sizes);
+  }
+  m_canvas->restoreViewport(viewport);
+  if (show) { m_aiAction->setProperty("aiUnread",false); m_ai->reloadSettings(); m_ai->contextChanged(); }
 }
 void CreatorWindow::showEvent(QShowEvent *e) {
   QMainWindow::showEvent(e);
@@ -611,7 +734,7 @@ void CreatorWindow::startup() {
       diagnostic(error);
   } else if (action == 4 && recent->currentItem())
     openProject(recent->currentItem()->data(Qt::UserRole).toString());
-  m_canvas->restoreViewport(m_project.viewports.value(m_project.activeMode));
+  m_canvas->restoreViewport(m_project.viewports.value(m_project.layoutKey()));
 }
 bool CreatorWindow::askToSave() {
   if (m_undo->isClean()) {
@@ -633,6 +756,7 @@ bool CreatorWindow::askToSave() {
          (choice == QMessageBox::Save && saveProject());
 }
 void CreatorWindow::newProject() {
+  m_ai->stop();
   if (!askToSave())
     return;
   QDialog dialog(this);
@@ -667,6 +791,7 @@ void CreatorWindow::newProject() {
   m_canvas->fitGraph();
 }
 bool CreatorWindow::openProject(const QString &requested) {
+  m_ai->stop();
   if (!askToSave())
     return false;
   const auto path =
@@ -688,7 +813,7 @@ bool CreatorWindow::openProject(const QString &requested) {
   apply(std::move(project));
   m_undo->setClean();
   rememberRecent();
-  m_canvas->restoreViewport(m_project.viewports.value(m_project.activeMode));
+  m_canvas->restoreViewport(m_project.viewports.value(m_project.layoutKey()));
   return true;
 }
 bool CreatorWindow::saveProject(bool saveAs) {
@@ -702,7 +827,7 @@ bool CreatorWindow::saveProject(bool saveAs) {
     return false;
   if (!path.endsWith(".vltcreator", Qt::CaseInsensitive))
     path += ".vltcreator";
-  m_project.viewports[m_project.activeMode] = m_canvas->viewportState();
+  m_project.viewports[m_project.layoutKey()] = m_canvas->viewportState();
   QString error;
   if (!m_project.save(path, error)) {
     QMessageBox::warning(this, tr("Creator"), error);
@@ -724,12 +849,17 @@ void CreatorWindow::rememberRecent() {
   QSettings().setValue("creator/recent", recent);
 }
 void CreatorWindow::closeEvent(QCloseEvent *event) {
-  if (m_compileFuture.valid() || m_pending || m_codeFuture.valid()) {
+  if (m_ai->running()) { m_closeAfterAi = true; m_ai->stop(); }
+  if (m_build->busy() || m_codeFuture.valid()) {
+    if (m_closeAfterAi) {
+      event->ignore(); QTimer::singleShot(50, this, [this] { if (isVisible()) close(); }); return;
+    }
     m_status->setText(
         tr("Compilation is in progress. Close Creator after it finishes."));
     event->ignore();
     return;
   }
+  m_closeAfterAi = false;
   if (!askToSave()) {
     event->ignore();
     return;
@@ -743,39 +873,56 @@ void CreatorWindow::setProjectForTest(CreatorProject p) {
   apply(std::move(p));
 }
 void CreatorWindow::edit(const QString &name,
-                         const std::function<void(CreatorProject &)> &change) {
+                         const std::function<void(CreatorProject &)> &change, const QString& mergeKey) {
   auto after = m_project;
   change(after);
   if (after == m_project)
     return;
   m_undo->push(new ProjectEdit(name, m_project, std::move(after),
-                               [this](auto p) { apply(std::move(p)); }));
+                               [this](auto p) { apply(std::move(p)); }, mergeKey));
 }
 void CreatorWindow::apply(CreatorProject p) {
+  if (m_ai) m_ai->documentChanging();
+  ++m_revision;
   auto previous = m_project.graph(), next = p.graph();
   const auto stripText = [](auto &graph) {
-    for (auto &node : graph.nodes)
+    const auto strip = [](auto &nodes) { for (auto &node : nodes) {
+      node.parameters.clear();
       if (node.function) {
         node.function->source.clear();
         node.function->entry.clear();
       }
+    } };
+    strip(graph.nodes); for (auto &g : graph.subgraphs) strip(g.nodes);
   };
   stripText(previous);
   stripText(next);
   const bool textOnly = m_project.definition.id == p.definition.id &&
                         m_project.activeMode == p.activeMode &&
+                        m_project.graphPath == p.graphPath &&
                         m_project.positions == p.positions && previous == next;
   m_project = std::move(p);
+  if (m_ai) m_ai->projectChanged();
   if (!textOnly)
     refresh();
   else {
+    m_canvas->updateValues(m_project.graph());
     m_canvas->updateCodeStatus(m_project.graph());
+    properties(m_selected);
     if (!m_codeId.isEmpty())
       openCode(m_codeId);
   }
 }
 void CreatorWindow::refresh() {
   m_refreshing = true;
+  if (m_backAction) {
+    m_backAction->setEnabled(!m_project.graphPath.empty());
+    QStringList names{tr("Module")};
+    for (const auto &id : m_project.graphPath) for (const auto &g : m_project.definition.subgraphs)
+      if (g.id == id.toStdString()) names.push_back(QString::fromStdString(g.name));
+    m_backAction->setToolTip(tr("Back to parent graph") + "\n" + names.join(" / "));
+  }
+  refreshNodeLibrary();
   setWindowTitle(QString::fromStdString(m_project.definition.name) +
                  " — Creator[*]");
   QSignalBlocker blocker(m_modes);
@@ -790,7 +937,7 @@ void CreatorWindow::refresh() {
           QString::fromStdString(mode.id));
   m_modes->setCurrentIndex(m_modes->findData(m_project.activeMode));
   m_canvas->setGraph(m_project.graph(),
-                     m_project.positions.value(m_project.activeMode));
+                     m_project.positions.value(m_project.layoutKey()));
   properties(m_selected);
   if (!m_project.codeNode.isEmpty())
     openCode(m_project.codeNode);
@@ -799,6 +946,7 @@ void CreatorWindow::refresh() {
     m_code->hide();
   }
   m_refreshing = false;
+  if (m_ai) m_ai->contextChanged();
 }
 void CreatorWindow::diagnostic(const QString &message, const QString &node) {
   auto *item = new QListWidgetItem(message, m_diagnostics);
@@ -808,9 +956,10 @@ void CreatorWindow::diagnostic(const QString &message, const QString &node) {
   m_status->setText(message);
 }
 void CreatorWindow::addNode(const QString &type, QPointF position) {
+  if (type.startsWith("library:")) { importNodeFile(type.mid(8), position); return; }
   const auto graph = m_project.graph();
   if (graph.nodes.size() >= kMaxNodes) {
-    diagnostic(tr("A graph supports at most 64 nodes."));
+    diagnostic(tr("A graph supports at most 512 expanded nodes."));
     return;
   }
   if ((type == "input" || type == "output" || type == "interface") &&
@@ -832,12 +981,29 @@ void CreatorWindow::addNode(const QString &type, QPointF position) {
   edit(tr("Add node"), [&](auto &p) {
     auto g = p.graph();
     auto node = makeNode(type.toStdString(), id.toStdString());
+    if (type.startsWith("custom:")) { node = makeNode("subgraph", id.toStdString()); node.subgraph = type.mid(7).toStdString(); }
     node.function = function;
+    if (type == "map" || type == "reduce") {
+      SubgraphDefinition body; body.id = freshId().toStdString(); body.name = type == "map" ? "Map element" : "Reduce elements";
+      body.inputs = {{"item", "Item", "number"}, {"index", "Index", "integer"}};
+      if (type == "reduce") body.inputs.push_back({"accumulator", "Accumulator", "number"});
+      body.outputs = {{"result", "Result", "number"}};
+      for (const auto &port : body.inputs) {
+        auto boundary = makeNode("subgraph_input", port.id); boundary.port = port.id; boundary.valueType = port.type;
+        body.nodes.push_back(boundary);
+        p.positions["node/" + QString::fromStdString(body.id)][QString::fromStdString(boundary.id)] = QPointF(20, body.nodes.size() * 110.);
+      }
+      auto output = makeNode("subgraph_output", "result"); output.port = "result";
+      body.nodes.push_back(output); body.connections = {{"item", "result", "out", "in"}};
+      p.positions["node/" + QString::fromStdString(body.id)]["result"] = QPointF(600, 100);
+      node.subgraph = body.id; g.subgraphs.push_back(body);
+    }
+    if (type.startsWith("custom:") || (nodeDescription(node.type) && nodeDescription(node.type)->operation >= Operation::Wire)) g.version = 5;
     g.nodes.push_back(std::move(node));
     if (function)
-      g.version = 4;
+      g.version = std::max(4u, g.version);
     p.setGraph(g);
-    p.positions[p.activeMode][id] = position;
+    p.positions[p.layoutKey()][id] = position;
   });
   m_canvas->selectNode(id);
   if (function) {
@@ -858,13 +1024,15 @@ void CreatorWindow::addSearch(QPointF position) {
   const auto fill = [=] {
     list->clear();
     for (const auto &n : nodeRegistry())
-      if ((creatorText(n.name) + " " + creatorText(n.category) + " " +
+      if (n.id != "wire" && n.id != "subgraph" && !n.id.starts_with("subgraph_") && (creatorText(n.name) + " " + creatorText(n.category) + " " +
            QString::fromStdString(n.id))
               .contains(search->text(), Qt::CaseInsensitive)) {
         auto *item = new QListWidgetItem(
             creatorText(n.name) + "  ·  " + creatorText(n.category), list);
         item->setData(Qt::UserRole, QString::fromStdString(n.id));
       }
+    for (auto it = m_personalNodes.begin(); it != m_personalNodes.end(); ++it)
+      if (it.value().contains(search->text(), Qt::CaseInsensitive)) { auto *item = new QListWidgetItem(it.value() + " · " + tr("My nodes"), list); item->setData(Qt::UserRole, it.key()); }
     list->setCurrentRow(0);
   };
   connect(search, &QLineEdit::textChanged, &dialog, fill);
@@ -886,7 +1054,7 @@ void CreatorWindow::removeSelection() {
           !ids.contains(QString::fromStdString(n.id)))
         return false;
       removed.push_back(n.id);
-      p.positions[p.activeMode].remove(QString::fromStdString(n.id));
+      p.positions[p.layoutKey()].remove(QString::fromStdString(n.id));
       return true;
     });
     unsigned index = 0;
@@ -919,7 +1087,11 @@ void CreatorWindow::copySelection() {
     return;
   copy.definition = graph;
   copy.activeMode.clear();
-  copy.positions = {{QString{}, m_canvas->nodePositions()}};
+  copy.graphPath.clear();
+  for (auto it = copy.positions.begin(); it != copy.positions.end();) {
+    if (!it.key().startsWith("node/")) it = copy.positions.erase(it); else ++it;
+  }
+  copy.positions[{}] = m_canvas->nodePositions();
   auto *mime = new QMimeData;
   mime->setData("application/x-vlt-creator-nodes",
                 QByteArray::fromStdString(copy.toJson().dump()));
@@ -949,6 +1121,21 @@ void CreatorWindow::pasteSelection(QPointF position) {
   }
   edit(tr("Paste nodes"), [&](auto &p) {
     auto graph = p.graph();
+    std::map<std::string, std::string> definitions;
+    for (const auto &g : clip.definition.subgraphs) {
+      auto existing = std::find_if(graph.subgraphs.begin(), graph.subgraphs.end(), [&](const auto &current) { return current.id == g.id; });
+      definitions[g.id] = existing != graph.subgraphs.end() && *existing != g ? freshId().toStdString() : g.id;
+    }
+    for (auto g : clip.definition.subgraphs) {
+      const auto old = g.id; g.id = definitions.at(old);
+      for (auto &n : g.nodes) if (definitions.contains(n.subgraph)) n.subgraph = definitions.at(n.subgraph);
+      if (std::none_of(graph.subgraphs.begin(), graph.subgraphs.end(), [&](const auto &current) { return current.id == g.id; })) {
+        graph.subgraphs.push_back(g);
+        p.positions["node/" + QString::fromStdString(g.id)] = clip.positions.value("node/" + QString::fromStdString(old));
+        p.viewports["node/" + QString::fromStdString(g.id)] = clip.viewports.value("node/" + QString::fromStdString(old));
+      }
+    }
+    graph.version = std::max(graph.version, clip.definition.version);
     std::map<std::string, std::string> ids;
     QPointF anchor = clip.positions.value({}).value(
         QString::fromStdString(clip.definition.nodes.front().id));
@@ -957,10 +1144,11 @@ void CreatorWindow::pasteSelection(QPointF position) {
         continue;
       const auto id = freshId();
       ids[n.id] = id.toStdString();
-      p.positions[p.activeMode][id] =
+      p.positions[p.layoutKey()][id] =
           position +
           clip.positions.value({}).value(QString::fromStdString(n.id)) - anchor;
       n.id = id.toStdString();
+      if (definitions.contains(n.subgraph)) n.subgraph = definitions.at(n.subgraph);
       graph.nodes.push_back(n);
     }
     for (auto e : clip.definition.connections)
@@ -977,7 +1165,7 @@ void CreatorWindow::properties(const QString &id) {
   body->setObjectName("CreatorPropertiesBody");
   body->setAutoFillBackground(true);
   auto *column = new QVBoxLayout(body);
-  column->setContentsMargins(14, 14, 14, 14);
+  column->setContentsMargins(10, 10, 10, 10);
   column->setSpacing(10);
   const auto graph = m_project.graph();
   const auto node =
@@ -1000,7 +1188,9 @@ void CreatorWindow::properties(const QString &id) {
     const auto c = creatorColors();
     for (const auto &[text, color] : std::initializer_list<std::pair<QString, QColor>>{
         {tr("Audio · sound signal"), c.audio}, {tr("Number · parameter value"), c.number},
-        {tr("Gate · trigger or switch"), c.gate}, {tr("Function · callable C++"), c.function}}) {
+        {tr("Gate · trigger or switch"), c.gate}, {tr("Function · callable C++"), c.function},
+        {tr("Integer · index or counter"), c.integer}, {tr("Array · fixed numeric collection"), c.array},
+        {tr("List · bounded numeric collection"), c.list}, {tr("Buffer · prepared signal history"), c.buffer}}) {
       auto *label = new QLabel(text, body);
       label->setWordWrap(true);
       label->setStyleSheet("color: " + color.name() + "; padding: 4px 0;");
@@ -1026,7 +1216,7 @@ void CreatorWindow::properties(const QString &id) {
     m_properties->setWidget(body);
     return;
   }
-  const auto description = describeNode(*node);
+  const auto description = describeNode(*node, &graph);
   const auto *desc = description.id.empty() ? nullptr : &description;
   auto *title = new QLabel(creatorText(desc ? desc->name : node->type), body);
   title->setProperty("creatorRole", "heading");
@@ -1037,6 +1227,7 @@ void CreatorWindow::properties(const QString &id) {
   form->setRowWrapPolicy(QFormLayout::WrapAllRows);
   form->setVerticalSpacing(8);
   column->addLayout(form);
+  programmingProperties(body, form, *node);
   // Finish the native input event before replacing its property widgets.
   const auto line = [this, body](QFormLayout *form, const QString &label,
                                  const QString &initial, auto setter) {
@@ -1352,7 +1543,7 @@ void CreatorWindow::openCode(const QString &id) {
       m_codeId = id;
       m_project.codeNode = id;
       m_code->setFunction(*node.function, m_project.codeCursors.value(
-                                              m_project.activeMode + "/" + id));
+                                              m_project.layoutKey() + "/" + id));
       m_code->show();
       return;
     }
@@ -1377,17 +1568,17 @@ void CreatorWindow::codeEdited() {
       node.function->entry = m_code->entry().toStdString();
     }
   after.setGraph(graph);
-  after.codeCursors[after.activeMode + "/" + m_codeId] =
+  after.codeCursors[after.layoutKey() + "/" + m_codeId] =
       m_code->cursorPosition();
   if (after == m_project)
     return;
   m_undo->push(new ProjectEdit(
       tr("Edit C++ source"), m_project, std::move(after),
       [this](auto p) { apply(std::move(p)); },
-      m_project.activeMode + "/" + m_codeId));
+      m_project.layoutKey() + "/" + m_codeId));
 }
 void CreatorWindow::codeOperation(const QString &operation) {
-  if (m_codeFuture.valid() || m_compileFuture.valid() || m_pending ||
+  if (m_codeFuture.valid() || m_build->busy() ||
       m_codeId.isEmpty())
     return;
   const auto graph = m_project.graph();
@@ -1424,7 +1615,7 @@ void CreatorWindow::codeOperation(const QString &operation) {
   }
   auto result = std::make_shared<CodeResult>();
   result->node = m_codeId;
-  result->mode = m_project.activeMode;
+  result->mode = m_project.layoutKey();
   result->project = QString::fromStdString(m_project.definition.id);
   result->operation = operation;
   result->revision = functionSourceHash(*node->function);
@@ -1462,7 +1653,7 @@ void CreatorWindow::pollCode() {
       });
   if (m_cancel.load() ||
       result->project != QString::fromStdString(m_project.definition.id) ||
-      result->mode != m_project.activeMode || node == graph.nodes.end() ||
+      result->mode != m_project.layoutKey() || node == graph.nodes.end() ||
       !node->function ||
       functionSourceHash(*node->function) != result->revision) {
     diagnostic(tr("The draft changed or the operation was cancelled. Its "
@@ -1488,62 +1679,14 @@ void CreatorWindow::pollCode() {
                result->node);
     return;
   }
-  const auto updated = functionFromJson(
-      result->reply.at(result->operation == "analyze" ? "function" : "parent"));
-  const auto childId = freshId();
-  edit(result->operation == "analyze"   ? tr("Update C++ ports")
-       : result->operation == "extract" ? tr("Extract function")
-                                        : tr("Create function"),
-       [&](auto &p) {
-         auto g = p.graph();
-         for (auto &n : g.nodes)
-           if (n.id == result->node.toStdString()) {
-             n.function = updated;
-             const auto description = describeNode(n);
-             std::erase_if(n.parameters, [&](auto &value) {
-               auto found = std::find_if(description.parameters.begin(),
-                                         description.parameters.end(),
-                                         [&](const auto &parameter) {
-                                           return value.id == parameter.id;
-                                         });
-               if (found == description.parameters.end())
-                 return true;
-               value.value =
-                   std::clamp(value.value, found->minimum, found->maximum);
-               return false;
-             });
-           }
-         if (result->operation != "analyze") {
-           auto child = makeNode("cpp_function", childId.toStdString());
-           child.function = functionFromJson(result->reply.at("child"));
-           g.nodes.push_back(std::move(child));
-           g.connections.push_back(
-               {childId.toStdString(), result->node.toStdString(), "function",
-                result->reply.at("port").get<std::string>()});
-           auto position = p.positions[p.activeMode].value(result->node) +
-                           QPointF(-320, 240);
-           const auto &function = *g.nodes.back().function;
-           const QSizeF size(280, 160 + 32 * (function.inputs.size() +
-                                             function.outputs.size() + 1));
-           for (unsigned pass = 0; pass < kMaxNodes; ++pass) {
-             bool moved = false;
-             for (const auto *item : m_canvas->scene()->items())
-               if (item->flags().testFlag(QGraphicsItem::ItemIsMovable)) {
-                 const auto occupied =
-                     item->sceneBoundingRect().adjusted(-16, -16, 16, 16);
-                 if (QRectF(position, size).intersects(occupied)) {
-                   position.setY(occupied.bottom() + 24);
-                   moved = true;
-                 }
-               }
-             if (!moved)
-               break;
-           }
-           p.positions[p.activeMode][childId] = position;
-         }
-         g.version = 4;
-         p.setGraph(g);
-       });
+  auto after = m_project;
+  QString error;
+  if (!creatorApplyFunction(after, result->node, result->operation, result->reply, error)) {
+    diagnostic(error, result->node); return;
+  }
+  edit(result->operation == "analyze" ? tr("Update C++ ports") :
+       result->operation == "extract" ? tr("Extract function") : tr("Create function"),
+       [&](auto& p) { p = after; });
   openCode(result->node);
   diagnostic(result->operation == "bind"
                  ? tr("Function connected. Add its call at the desired place "
@@ -1552,259 +1695,37 @@ void CreatorWindow::pollCode() {
              result->node);
 }
 void CreatorWindow::compile() {
-  if (m_codeFuture.valid() || m_compileFuture.valid() || m_pending ||
-      !saveProject())
-    return;
-  m_diagnostics->clear();
-  m_compileAction->setEnabled(false);
-  m_cancel.store(false);
-  m_cancelAction->setEnabled(true);
-  m_code->setBusy(true);
-  m_status->setText(tr("Compiling…"));
-  const auto project = m_project;
-  const double rate = m_controller ? m_controller->sampleRate() : 48000;
-  auto update = m_controller
-                    ? m_controller->planMiniModuleUpdate(project.definition)
-                    : nullptr;
-  m_compileFuture = std::async(std::launch::async, [this, project, rate,
-                                                    update] {
-    CreatorCancellationScope cancellation(&m_cancel);
-    auto result = std::make_shared<CompileResult>();
-    result->project = project;
-    result->revision =
-        codeHash(daw::plugins::mini::toJson(project.definition).dump());
-    result->update = update;
-    result->error = QString::fromStdString(validate(project.definition));
-    if (!result->error.isEmpty())
-      return result;
-    auto &definition = result->project.definition;
-    const auto compileGraph = [&](auto &graph) {
-      std::string error;
-      if (!compileCppGraph(graph, error, result->diagnostics, &m_cancel)) {
-        result->error = QString::fromStdString(error);
-        return false;
-      }
-      return true;
-    };
-    if (definition.modes.empty()) {
-      if (!compileGraph(definition))
-        return result;
-    } else {
-      for (auto &mode : definition.modes) {
-        auto graph = resolved(definition, mode.id);
-        if (!compileGraph(graph))
-          return result;
-        mode.code = graph.code;
-        if (mode.id == definition.defaultMode)
-          definition.code = graph.code;
-      }
-    }
-    if (update) {
-      update->definition = definition;
-      for (auto &target : update->targets) {
-        target.after.miniModule = definition;
-        target.audioChanged = !sameAudioGraph(
-            *target.before.miniModule, target.before.miniModuleMode, definition,
-            target.after.miniModuleMode);
-      }
-    }
-    std::vector<std::string> modes;
-    if (project.definition.modes.empty())
-      modes.push_back({});
-    else
-      for (const auto &m : project.definition.modes)
-        modes.push_back(m.id);
-    for (const auto &mode : modes) {
-      const auto graph = resolved(project.definition, mode);
-      auto used = reachableNodes(graph);
-      for (unsigned pass = 0; pass < graph.nodes.size(); ++pass)
-        for (const auto &edge : graph.connections)
-          if (edge.fromPort == "function") {
-            const auto from =
-                std::find_if(graph.nodes.begin(), graph.nodes.end(),
-                             [&](const auto &n) { return n.id == edge.from; });
-            const auto to =
-                std::find_if(graph.nodes.begin(), graph.nodes.end(),
-                             [&](const auto &n) { return n.id == edge.to; });
-            if (from != graph.nodes.end() && to != graph.nodes.end() &&
-                used[to - graph.nodes.begin()])
-              used[from - graph.nodes.begin()] = true;
-          }
-      for (unsigned i = 0; i < graph.nodes.size(); ++i)
-        if (!used[i] && graph.nodes[i].type != "interface")
-          result->warnings << QString::fromStdString(
-              graph.nodes[i].id + ": unused node will not be processed");
-      for (unsigned channels : {1u, 2u}) {
-        MiniModuleInstance instance;
-        daw::plugins::PluginBusLayout accepted;
-        if (!instance.configure(definition, 0, mode) ||
-            !instance.setBusLayout(
-                {{std::uint16_t(channels)}, {std::uint16_t(channels)}},
-                accepted) ||
-            !instance.activate({rate, 1024})) {
-          result->error = QString::fromStdString(instance.error());
-          if (result->error.isEmpty())
-            result->error = "DSP preparation failed";
-          return result;
-        }
-      }
-    }
-    if (update && !update->prepare())
-      result->error = QString::fromStdString(update->error);
-    return result;
-  });
-  m_compilePoll->start();
+  if (m_codeFuture.valid() || m_build->busy()) return;
+  startBuild();
 }
-void CreatorWindow::pollCompile() {
-  if (!m_pending) {
-    if (!m_compileFuture.valid() ||
-        m_compileFuture.wait_for(std::chrono::milliseconds(0)) !=
-            std::future_status::ready)
-      return;
-    try {
-      m_pending = m_compileFuture.get();
-    } catch (const std::exception &e) {
-      diagnostic(QString::fromUtf8(e.what()));
-      m_compilePoll->stop();
-      m_compileAction->setEnabled(true);
-      m_cancelAction->setEnabled(false);
-      m_code->setBusy(false);
-      return;
-    }
-  }
-  if (m_cancel.load() ||
-      m_pending->revision !=
-          codeHash(daw::plugins::mini::toJson(m_project.definition).dump()))
-    m_pending->error = tr(
-        "The draft changed or the build was cancelled. Nothing was installed.");
-  if (m_controller && m_pending->error.isEmpty() &&
-      m_controller->offlineRenderInProgress()) {
-    m_status->setText(tr("Compiled. Waiting for export or Freeze to finish…"));
-    return;
-  }
-  if (m_controller && m_pending->error.isEmpty() &&
-      !m_controller->miniModuleUpdateCurrent(*m_pending->update)) {
-    // A track, mode or device changed while the worker was preparing. Capture
-    // current targets and prepare again; never apply a stale project snapshot.
-    auto result = std::move(m_pending);
-    if (result->fading)
-      m_controller->cancelMiniModuleUpdateFade(*result->update);
-    result->update =
-        m_controller->planMiniModuleUpdate(result->project.definition);
-    result->fading = false;
-    m_compileFuture = std::async(std::launch::async, [this, result] {
-      CreatorCancellationScope cancellation(&m_cancel);
-      if (!result->update->prepare())
-        result->error = QString::fromStdString(result->update->error);
-      return result;
+bool CreatorWindow::startBuild(CreatorBuildService::Done done) {
+  if (m_codeFuture.valid() || m_build->busy()) return false;
+  const auto revision = codeHash(daw::plugins::mini::toJson(m_project.definition).dump());
+  const auto projectId = m_project.definition.id;
+  m_diagnostics->clear();
+  m_compileAction->setEnabled(false); m_cancelAction->setEnabled(true);
+  m_build->progress = [this](const auto& stage) { m_status->setText(stage); };
+  const bool chatBuild = bool(done);
+  return m_build->start(m_project, m_installDirectory,
+    [this, revision, projectId] {
+      return m_project.definition.id == projectId && revision == codeHash(daw::plugins::mini::toJson(m_project.definition).dump());
+    }, [this, chatBuild, done = std::move(done)](auto result) {
+      m_compileAction->setEnabled(true); m_cancelAction->setEnabled(false);
+      if (!chatBuild) for (const auto& entry : result->diagnostics) {
+        diagnostic(QString("%1:%2 · %3").arg(entry.line).arg(entry.column).arg(QString::fromStdString(entry.message)), QString::fromStdString(entry.node));
+        auto* item = m_diagnostics->item(m_diagnostics->count()-1);
+        item->setData(Qt::UserRole+1, entry.line); item->setData(Qt::UserRole+2, entry.column);
+      }
+      if (!result->error.isEmpty()) { if (chatBuild) m_status->setText(result->error); else diagnostic(result->error); }
+      else {
+        m_project.definition = result->project.definition;
+        if (!chatBuild) for (const auto& warning : result->warnings) diagnostic(warning);
+        if (!m_path.isEmpty()) { QString error; if (!m_project.save(m_path, error)) diagnostic(error); }
+        const auto message = tr("Compiled and installed. Select “%1” in a Channel Strip.").arg(QString::fromStdString(m_project.definition.name));
+        if (chatBuild) m_status->setText(message); else diagnostic(message);
+        emit modulesCompiled();
+      }
+      if (done) done(std::move(result));
     });
-    return;
-  }
-  if (m_controller && m_pending->error.isEmpty()) {
-    if (!m_pending->fading) {
-      m_controller->fadeMiniModuleUpdate(*m_pending->update);
-      m_pending->fading = true;
-      m_pending->fadeStart = std::chrono::steady_clock::now();
-    }
-    // Unrendered/frozen/silent nodes cannot acknowledge a fade. After several
-    // device periods those nodes may be replaced without waiting indefinitely.
-    if (!m_controller->miniModuleUpdateFaded(*m_pending->update) &&
-        std::chrono::steady_clock::now() - m_pending->fadeStart <
-            std::chrono::milliseconds(120))
-      return;
-  }
-  auto result = std::move(m_pending);
-  struct RestoreSound {
-    daw::EngineController *controller;
-    CompileResult *result;
-    bool applied = false;
-    ~RestoreSound() {
-      if (controller && result->fading && !applied)
-        controller->cancelMiniModuleUpdateFade(*result->update);
-    }
-  } restore{m_controller, result.get()};
-  m_compilePoll->stop();
-  m_compileAction->setEnabled(true);
-  m_cancelAction->setEnabled(false);
-  m_code->setBusy(false);
-  for (const auto &entry : result->diagnostics) {
-    diagnostic(QString("%1:%2 · %3")
-                   .arg(entry.line)
-                   .arg(entry.column)
-                   .arg(QString::fromStdString(entry.message)),
-               QString::fromStdString(entry.node));
-    auto *item = m_diagnostics->item(m_diagnostics->count() - 1);
-    item->setData(Qt::UserRole + 1, entry.line);
-    item->setData(Qt::UserRole + 2, entry.column);
-  }
-  if (!result->error.isEmpty()) {
-    diagnostic(result->error);
-    return;
-  }
-  for (const auto &warning : result->warnings)
-    diagnostic(warning, warning.section(':', 0, 0));
-  const auto &definition = result->project.definition;
-  if (!QRegularExpression(QStringLiteral("^[A-Za-z0-9_.-]{1,128}$"))
-           .match(QString::fromStdString(definition.id))
-           .hasMatch() ||
-      definition.id == "." || definition.id == "..") {
-    diagnostic(tr("Invalid module file identity."));
-    return;
-  }
-  const auto folder = m_installDirectory;
-  const auto path =
-      folder + "/" + QString::fromStdString(definition.id) + ".vltmini";
-  if (!QDir().mkpath(folder)) {
-    diagnostic(tr("Cannot create the mini-module folder."));
-    return;
-  }
-  if (QFileInfo::exists(path)) {
-    const auto existing = MiniModuleLibrary::read(path);
-    if (!existing.error.isEmpty() || existing.definition.id != definition.id) {
-      diagnostic(
-          tr("The destination belongs to another or unreadable module."));
-      return;
-    }
-  }
-  QString error;
-  const bool existed = QFileInfo::exists(path);
-  QByteArray oldFile;
-  if (existed) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-      diagnostic(file.errorString());
-      return;
-    }
-    oldFile = file.readAll();
-  }
-  if (!MiniModuleLibrary::write(path, definition, error)) {
-    diagnostic(error);
-    return;
-  }
-  std::string updateError;
-  if (m_controller &&
-      !m_controller->applyMiniModuleUpdate(result->update, updateError)) {
-    if (existed) {
-      QSaveFile rollback(path);
-      if (rollback.open(QIODevice::WriteOnly) &&
-          rollback.write(oldFile) == oldFile.size())
-        rollback.commit();
-    } else
-      QFile::remove(path);
-    diagnostic(QString::fromStdString(updateError));
-    return;
-  }
-  restore.applied = true;
-  m_project.definition = definition;
-  // Keep the source project portable too. This does not create an edit or move
-  // the cursor; its verified artifact is a derivative of the saved source.
-  if (!m_path.isEmpty()) {
-    QString saveError;
-    if (!m_project.save(m_path, saveError))
-      diagnostic(saveError);
-  }
-  diagnostic(tr("Compiled and installed. Select “%1” in a Channel Strip.")
-                 .arg(QString::fromStdString(definition.name)));
-  emit modulesCompiled();
 }
 } // namespace ui

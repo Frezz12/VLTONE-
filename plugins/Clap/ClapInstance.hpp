@@ -35,6 +35,7 @@ public:
     bool activate(const PluginProcessInfo& info) override;
     void deactivate() override;
     bool isActive() const noexcept override { return m_active; }
+    bool isProcessing() const noexcept override { return m_processing; }
     void startProcessing() override;
     void stopProcessing() override;
 

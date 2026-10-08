@@ -44,89 +44,67 @@
 namespace {
 constexpr int kStripGap = 2;
 constexpr int kVerticalInset = 6;
+constexpr int kMasterFoldEdgeWidth = 6;
 int channelStride(int width) { return width + kStripGap; }
 int channelsWidth(int count, int width) {
     return count > 0 ? count * channelStride(width) - kStripGap : 0;
 }
 
 // The strip keeps its full width while its dock clips the part slid past the
-// right edge. Global pointer coordinates keep the moving handle under the hand.
-class MasterFoldHandle final : public QAbstractButton {
+// right edge. Global pointer coordinates keep its left boundary under the hand.
+class MasterFoldEdge final : public QWidget {
 public:
-    explicit MasterFoldHandle(QWidget* parent) : QAbstractButton(parent) {
-        setObjectName("MasterFoldHandle"); setFixedWidth(16);
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-        setCursor(Qt::SplitHCursor); setFocusPolicy(Qt::StrongFocus);
-        setAttribute(Qt::WA_MacShowFocusRect, false);
-        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-                qOverload<>(&QWidget::update));
+    explicit MasterFoldEdge(QWidget* parent) : QWidget(parent) {
+        setObjectName("MasterFoldEdge");
+        setCursor(Qt::SplitHCursor); setFocusPolicy(Qt::ClickFocus);
+        setAttribute(Qt::WA_NoSystemBackground);
     }
     std::function<void()> started, cancelled;
     std::function<void(int)> moved, finished;
 protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
-        const auto& t = th();
-        const bool collapsed = property("collapsed").toBool();
-        const bool active = underMouse() || hasFocus() || m_dragging;
-        const QColor color = collapsed || active ? t.accent : t.textSecondary;
-        const qreal x = width() / 2.;
-        p.setPen(QPen(t.separator(), 1));
-        p.drawLine(QPointF(x, 8), QPointF(x, height() - 8));
-        const QRectF grip(2.5, height() / 2. - 26, width() - 5, 52);
-        p.setBrush(active ? t.panelTop() : t.panelBottom());
-        p.setPen(QPen(hasFocus() ? t.accent : t.separator(), 1));
-        p.drawRoundedRect(grip, 5, 5);
-        p.setPen(QPen(mixColors(t.panelBottom(), color, collapsed || active ? .9 : .55), 1.5,
-                      Qt::SolidLine, Qt::RoundCap));
-        for (qreal offset : {-2.0, 2.0})
-            p.drawLine(QPointF(x + offset, height() / 2. - 10),
-                       QPointF(x + offset, height() / 2. + 10));
-    }
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton) {
             m_pressed = true; m_dragging = false; m_cancelled = false;
             m_origin = e->globalPosition().x();
             if (started) started();
+            e->accept(); return;
         }
-        QAbstractButton::mousePressEvent(e);
+        QWidget::mousePressEvent(e);
     }
     void mouseMoveEvent(QMouseEvent* e) override {
-        if (!m_pressed) { QAbstractButton::mouseMoveEvent(e); return; }
+        if (!m_pressed) { QWidget::mouseMoveEvent(e); return; }
         if (m_cancelled) return;
         const int delta = qRound(e->globalPosition().x() - m_origin);
         if (!m_dragging && std::abs(delta) < QApplication::startDragDistance()) return;
-        m_dragging = true; setDown(false);
+        m_dragging = true;
         if (moved) moved(delta);
-        update(); e->accept();
+        e->accept();
     }
     void mouseReleaseEvent(QMouseEvent* e) override {
-        if (e->button() != Qt::LeftButton) { QAbstractButton::mouseReleaseEvent(e); return; }
+        if (e->button() != Qt::LeftButton) { QWidget::mouseReleaseEvent(e); return; }
         m_pressed = false;
         if (m_dragging && !m_cancelled && finished)
             finished(qRound(e->globalPosition().x() - m_origin));
         else if (cancelled) cancelled();
-        if (m_dragging || m_cancelled) setDown(false);
         m_dragging = false; m_cancelled = false;
-        QAbstractButton::mouseReleaseEvent(e); update();
+        e->accept();
     }
     void keyPressEvent(QKeyEvent* e) override {
         if (e->key() == Qt::Key_Escape && m_pressed) {
             cancel(); e->accept(); return;
         }
-        QAbstractButton::keyPressEvent(e);
+        QWidget::keyPressEvent(e);
     }
     bool event(QEvent* e) override {
         if (m_pressed && (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
                           e->type() == QEvent::WindowDeactivate)) cancel();
-        return QAbstractButton::event(e);
+        return QWidget::event(e);
     }
 private:
     void cancel() {
         if (m_cancelled) return;
-        m_cancelled = true; m_dragging = false; setDown(false);
+        m_cancelled = true; m_dragging = false;
         if (cancelled) cancelled();
-        update();
     }
     bool m_pressed = false, m_dragging = false, m_cancelled = false;
     qreal m_origin = 0;
@@ -244,8 +222,6 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     connect(m_scroll->horizontalScrollBar(), &QScrollBar::valueChanged,
             this, [this] { syncVisibleStrips(); });
     bodyRow->addWidget(m_scroll, 1);
-    auto* handle = new MasterFoldHandle(body);
-    m_masterHandle = handle;
     m_masterDock = new QWidget(body);
     m_masterDock->setObjectName("MasterDock");
     m_masterDock->setMinimumWidth(0);
@@ -258,26 +234,24 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     m_masterBottomGap = new QWidget(body);
     m_masterBottomGap->setFixedHeight(0);
     masterColumn->addWidget(m_masterBottomGap);
-    bodyRow->addWidget(handle);
+    auto* edge = new MasterFoldEdge(m_masterDock);
+    m_masterEdge = edge;
     bodyRow->addWidget(m_masterDock);
     outer->addWidget(body, 1);
 
-    handle->started = [this] {
+    edge->started = [this] {
         m_masterDragging = true; m_masterDragStartWidth = m_masterDock->width();
     };
-    handle->moved = [this](int delta) { setMasterRevealWidth(m_masterDragStartWidth - delta); };
-    handle->finished = [this](int delta) {
+    edge->moved = [this](int delta) { setMasterRevealWidth(m_masterDragStartWidth - delta); };
+    edge->finished = [this](int delta) {
         const bool visible = m_masterDragStartWidth - delta >= masterExpandedWidth() / 2;
         m_masterDragging = false;
         ui::MixerPreferences::instance().setMasterVisible(visible);
         setMasterVisible(visible); // also settle a gesture that retained its state
     };
-    handle->cancelled = [this] {
+    edge->cancelled = [this] {
         m_masterDragging = false; updateMasterGeometry();
     };
-    connect(handle, &QAbstractButton::clicked, this, [this] {
-        ui::MixerPreferences::instance().setMasterVisible(!m_masterVisible);
-    });
     connect(masterScroll->verticalScrollBar(), &QScrollBar::rangeChanged, this,
             [this] { updateMasterGeometry(); });
 
@@ -319,7 +293,6 @@ void MixerWidget::applyTheme() {
 #MasterVisibilityButton:checked { color: %TEXT%; background: %SELECT%; border-color: %SELECT_EDGE%; }
 #MasterVisibilityButton:hover { background: %HOVER%; color: %TEXT%; }
 #MasterVisibilityButton:pressed { background: %WELL%; }
-#MasterVisibilityButton:focus { border-color: %ACCENT%; }
 QScrollBar#MixerNavigationBar { background: %WELL%; }
 QScrollBar#MixerNavigationBar:horizontal {
     height: 12px; margin: 2px 0 0 0;
@@ -376,13 +349,9 @@ void MixerWidget::updateMasterToggle() {
     m_masterToggle->setToolTip(action); m_masterToggle->setAccessibleName(action);
     m_masterToggle->setIcon(icons::icon(m_masterVisible ? icons::Glyph::ArrowRight : icons::Glyph::ArrowLeft,
         m_masterVisible ? th().accent : th().textSecondary, 12));
-    if (m_masterHandle) {
-        m_masterHandle->setAccessibleName(action);
-        m_masterHandle->setToolTip(m_masterVisible
-            ? tr("Drag right to hide Master. Click to toggle.")
-            : tr("Drag left to show Master. Click to toggle."));
-        m_masterHandle->setProperty("collapsed", !m_masterVisible);
-        m_masterHandle->update();
+    if (m_masterEdge) {
+        m_masterEdge->setAccessibleName(action);
+        m_masterEdge->setToolTip(action);
     }
 }
 
@@ -400,12 +369,19 @@ void MixerWidget::setMasterRevealWidth(int width) {
 void MixerWidget::updateMasterGeometry() {
     if (!m_masterColumn) return;
     m_masterColumn->setGeometry(0, 0, masterExpandedWidth(), m_masterDock->height());
+    if (m_masterEdge) {
+        m_masterEdge->setGeometry(0, 0, kMasterFoldEdgeWidth, m_masterDock->height());
+        // Keep the grab alive through a zero-width preview, then remove its
+        // target once Master is closed. It occupies no extra console width.
+        m_masterEdge->setVisible(m_masterVisible || m_masterDragging);
+        m_masterEdge->raise();
+    }
     if (!m_masterDragging) setMasterRevealWidth(m_masterVisible ? masterExpandedWidth() : 0);
 }
 
 void MixerWidget::setMasterVisible(bool visible) {
     m_masterVisible = visible;
-    if (!visible && m_masterColumn && m_masterColumn->isAncestorOf(QApplication::focusWidget()))
+    if (!visible && m_masterDock && m_masterDock->isAncestorOf(QApplication::focusWidget()))
         m_masterToggle->setFocus(Qt::OtherFocusReason);
     updateMasterToggle(); updateMasterGeometry();
     if (visible) refreshMeters();
@@ -450,7 +426,7 @@ bool MixerWidget::checkCollaborationPresenceForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     controller.initialize(48000.0, 512, false);
     const QString trackId =
         QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "A"));
@@ -534,7 +510,7 @@ bool MixerWidget::checkLayoutForTest() {
     });
     preferences.setChannelWidth(ui::MixerPreferences::kDefaultWidth);
     preferences.setMasterVisible(true);
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear();

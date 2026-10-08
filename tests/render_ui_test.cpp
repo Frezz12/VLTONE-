@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 469; ++i) writer.write(channels, 1024);
     writer.close();
 
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     check(bool(controller.initialize(48000, 64, false)), "controller prepares");
     {
         daw::EngineController::BounceRequest selection;

@@ -329,7 +329,7 @@ int main() {
     // behaviour the whole editor depends on — a gesture is live and free, and
     // becomes exactly one entry when it is let go.
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000, 512, /*openDevice=*/false);
         const std::string trackId = controller.addTrack(daw::TrackKind::Audio, "Keys");
         daw::AutomationTarget target;
@@ -403,7 +403,7 @@ int main() {
 
     // ── Realtime compilation and history ───────────────────────────────────
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000, 512, /*openDevice=*/false);
         controller.setTempo(120.0);
         const std::string track =
@@ -424,7 +424,7 @@ int main() {
         controller.shutdown();
     }
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000, 512, /*openDevice=*/false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Audio, "Undo target");
@@ -448,7 +448,7 @@ int main() {
         controller.shutdown();
     }
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000, 512, /*openDevice=*/false);
         const std::string first =
             controller.addTrack(daw::TrackKind::Audio, "First");
@@ -488,7 +488,7 @@ int main() {
         controller.shutdown();
     }
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000, 512, /*openDevice=*/false);
         controller.setTempo(120.0);
         const std::string track =
@@ -524,10 +524,221 @@ int main() {
                     merged = curves && curves->size() == 1;
                 }
             }
+            check(controller.setInsertChannelMode(track, slot, daw::PluginChannelMode::DualMono),
+                  "automated effect switches to two independent instances");
+            const auto dualGraph = controller.routingGraph();
+            const auto dualCurvesMatch = [&](bool populated, double firstValue) {
+                unsigned count = 0;
+                for (const auto& entry : dualGraph->nodes) {
+                    const auto* plugin = dynamic_cast<const daw::plugins::PluginNode*>(entry.node);
+                    if (!plugin || plugin->instance()->descriptor().uid !=
+                        daw::plugins::equalizer::EqualizerInstance::staticDescriptor().uid) continue;
+                    ++count;
+                    const auto curves = plugin->automation();
+                    if (!curves) return false;
+                    if (!populated) { if (!curves->empty()) return false; continue; }
+                    if (curves->size() != 1 || curves->front().points.empty()) return false;
+                    const auto index = plugin->instance()->parameterIndexForId(parameter->id);
+                    if (index < 0 || curves->front().parameterIndex != std::uint32_t(index)) return false;
+                    const auto& info = plugin->instance()->parameters()[std::size_t(index)];
+                    if (!near(curves->front().points.front().second,
+                              info.minValue + (info.maxValue - info.minValue) * firstValue)) return false;
+                }
+                return count == 2;
+            };
+            check(dualCurvesMatch(true, .2),
+                  "both dual-mono instances resolve and merge the same normalized parameter curves");
+            controller.setAutomationPoints(lane, clip, {pt(0, .6), pt(2, .7)});
+            check(controller.routingGraph() == dualGraph && dualCurvesMatch(true, .6),
+                  "incremental automation edits update both instances without rebuilding topology");
+            controller.removeAutomationLane(lane);
+            check(dualCurvesMatch(false, 0),
+                  "removing automation clears both native instances, including the right channel");
         }
         check(merged,
               "split clips targeting one plugin parameter compile as one curve");
         controller.shutdown();
+    }
+
+    // A passive lane follows the last touched parameter, until the user draws.
+    {
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        c.initialize(48000, 512, false);
+        const std::string track = c.addTrack(daw::TrackKind::Audio, "Follow");
+        const std::string slot = c.addInsert(track,
+            daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
+        std::vector<std::string> parameters;
+        for (const auto& info : c.insertParameters(track, slot))
+            if (info.isAutomatable && !info.isStepped) parameters.push_back(info.id);
+        if (check(parameters.size() >= 3, "follow fixture exposes three parameters")) {
+            daw::AutomationTarget volume;
+            volume.channelId = track;
+            const auto graph = c.routingGraph();
+            const auto preview = c.ensureAutomation(volume, true);
+            check(c.routingGraph() == graph,
+                  "adding an automation preview does not rebuild the audio graph");
+            c.renameTrack(track, "Renamed owner");
+            c.setAutomationExpanded(track, false);
+            c.touchInsertParameter(track, slot, parameters[0]);
+            c.touchInsertParameter(track, slot, parameters[1]);
+            c.followTouchedAutomation();
+            check(c.automationLanesOf(track).size() == 1 &&
+                  findClip(c, preview.first, preview.second)->automation.target == volume &&
+                  !c.project().findTrack(track)->automationExpanded,
+                  "hidden automation remembers touches without opening or adding lanes");
+            const auto last = c.lastTouchedAutomation(track);
+            check(last && last->parameterId == parameters[1],
+                  "the latest touch is remembered separately for its channel");
+            const auto reused = c.ensureAutomation(*last, true);
+            check(reused == preview && c.automationLanesOf(track).size() == 1 &&
+                  !findClip(c, reused.first, reused.second)->automation.active &&
+                  c.project().findTrack(reused.first)->name == c.automationTargetName(*last),
+                  "the first plugin touch reuses the volume preview even after its owner is renamed");
+            c.touchInsertParameter(track, slot, parameters[0]);
+            c.touchInsertParameter(track, slot, parameters[2]);
+            c.followTouchedAutomation();
+            const auto latest = *c.lastTouchedAutomation(track);
+            check(c.findAutomation(latest) == preview && c.automationLanesOf(track).size() == 1,
+                  "multiple knob touches in a UI turn replace one preview");
+            const auto depth = c.undoDepth();
+            for (int i = 0; i < 200; ++i)
+                c.setInsertParameter(track, slot, parameters[2],
+                    c.automationToPlain(latest, 0.25));
+            c.followTouchedAutomation();
+            check(c.undoDepth() == depth && c.routingGraph() == graph &&
+                  near(findClip(c, preview.first, preview.second)->automation.defaultValue, 0.25),
+                  "a knob burst updates the passive value without history or graph churn");
+            auto before = findClip(c, preview.first, preview.second)->automation.points;
+            auto drawn = before;
+            drawn.front().value = 0.8;
+            c.setAutomationPoints(preview.first, preview.second, drawn);
+            c.commitAutomationEdit(preview.first, preview.second, before, "Draw", false);
+            c.touchInsertParameter(track, slot, parameters[0]);
+            check(c.followTouchedAutomation() == daw::EngineController::AutomationFollowChange::Structure &&
+                  c.automationLanesOf(track).size() == 2 &&
+                  findClip(c, preview.first, preview.second)->automation.points == drawn &&
+                  findClip(c, preview.first, preview.second)->automation.active,
+                  "drawing protects the original curve and the next knob gets a new lane");
+            const auto second = c.findAutomation(*c.lastTouchedAutomation(track));
+            c.undo();
+            check(!c.project().findTrack(second.first) &&
+                  findClip(c, preview.first, preview.second)->automation.points == drawn,
+                  "one undo removes only the new preview");
+            c.redo();
+            check(c.findAutomation(*c.lastTouchedAutomation(track)) == second,
+                  "redo restores the same preview identities");
+            c.touchInsertParameter(track, slot, parameters[1]);
+            c.followTouchedAutomation();
+            const auto retarget = *c.lastTouchedAutomation(track);
+            check(c.findAutomation(retarget) == second,
+                  "the next untouched preview is reused below the protected curve");
+            c.undo();
+            check(findClip(c, second.first, second.second)->automation.target.parameterId == parameters[0],
+                  "retarget undo restores the old parameter");
+            c.redo();
+            check(c.findAutomation(retarget) == second &&
+                  c.project().findTrack(second.first)->name == c.automationTargetName(retarget),
+                  "retarget redo restores the parameter and lane name together");
+            c.touchInsertParameter(track, slot, parameters[2]);
+            c.followTouchedAutomation();
+            check(c.automationLanesOf(track).size() == 2 && c.findAutomation(latest) == preview,
+                  "touching an already drawn parameter never duplicates its lane");
+            auto custom = findClip(c, second.first, second.second)->automation.points;
+            custom.front().value = 0.7;
+            c.setAutomationPoints(second.first, second.second, custom, false);
+            c.touchInsertParameter(track, slot, parameters[0]);
+            c.followTouchedAutomation();
+            check(c.automationLanesOf(track).size() == 3 &&
+                  findClip(c, second.first, second.second)->automation.points == custom,
+                  "a disabled custom curve is never mistaken for an untouched preview");
+
+            // Exercise the actual notification ring, including beginEdit with
+            // no value change, as emitted by a native VST/CLAP editor.
+            bool gesture = false;
+            const auto* nodes = c.trackNodes(track);
+            for (const auto& entry : c.routingGraph()->nodes) {
+                if (!nodes || nodes->inserts.empty() || entry.id != nodes->inserts.front()) continue;
+                auto* node = dynamic_cast<daw::plugins::PluginNode*>(entry.node);
+                if (!node) continue;
+                const auto index = node->instance()->parameterIndexForId(parameters[1]);
+                node->onParameterGesture(std::uint32_t(index), true);
+                c.pumpPluginEvents();
+                gesture = c.lastTouchedAutomation(track)->parameterId == parameters[1];
+            }
+            check(gesture, "native beginEdit selects automation without changing the knob value");
+
+            const std::string master = c.ensureMasterTrack();
+            daw::AutomationTarget masterVolume;
+            masterVolume.channelId = daw::EngineController::kMasterChannelId;
+            const auto masterPreview = c.ensureAutomation(masterVolume, true);
+            const std::string masterSlot = c.addInsert(masterVolume.channelId,
+                daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
+            c.touchInsertParameter(masterVolume.channelId, masterSlot, parameters[0]);
+            c.followTouchedAutomation();
+            const auto masterTarget = c.lastTouchedAutomation(masterVolume.channelId);
+            check(masterTarget && c.findAutomation(*masterTarget) == masterPreview &&
+                  c.project().findTrack(masterPreview.first)->parentId == master &&
+                  masterTarget->channelId == "master",
+                  "Master reuses its preview with the real master channel target");
+
+            const std::string instrument = c.addTrack(daw::TrackKind::Instrument, "Instrument touch");
+            const auto sampler = c.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
+            if (check(sampler && c.setTrackInstrumentPlugin(instrument, *sampler),
+                      "an instrument loads for automation follow")) {
+                const std::string instrumentSlot = c.project().findTrack(instrument)->instrument.id;
+                daw::AutomationTarget instrumentVolume;
+                instrumentVolume.channelId = instrument;
+                const auto instrumentPreview = c.ensureAutomation(instrumentVolume, true);
+                for (const auto& info : c.insertParameters(instrument, instrumentSlot)) {
+                    if (!info.isAutomatable) continue;
+                    c.touchInsertParameter(instrument, instrumentSlot, info.id);
+                    break;
+                }
+                c.followTouchedAutomation();
+                const auto instrumentTarget = c.lastTouchedAutomation(instrument);
+                check(instrumentTarget && instrumentTarget->slotId.empty() &&
+                      c.findAutomation(*instrumentTarget) == instrumentPreview &&
+                      masterTarget && c.findAutomation(*masterTarget) == masterPreview &&
+                      c.lastTouchedAutomation(track)->parameterId == parameters[1],
+                      "instrument touches use the empty slot convention and leave other tracks alone");
+                if (instrumentTarget) {
+                    auto explicitTarget = *instrumentTarget;
+                    explicitTarget.slotId = instrumentSlot;
+                    c.setAutomationTarget(instrumentPreview.first, instrumentPreview.second, explicitTarget);
+                    c.setAutomationPoints(instrumentPreview.first, instrumentPreview.second,
+                                          {pt(0, .35), pt(4, .75)});
+                    // Both the serialized slot ID and the legacy empty-slot
+                    // convention must resolve to the same native instrument.
+                    const auto curvesMatch = [&] {
+                        const auto graph = c.routingGraph();
+                        const auto* nodes = c.trackNodes(instrument);
+                        if (!graph || !nodes) return false;
+                        for (const auto& entry : graph->nodes) {
+                            if (entry.id != nodes->instrument) continue;
+                            const auto* plugin = dynamic_cast<const daw::plugins::PluginNode*>(entry.node);
+                            const auto curves = plugin ? plugin->automation() : nullptr;
+                            const int index = plugin ? plugin->instance()->parameterIndexForId(explicitTarget.parameterId) : -1;
+                            return index >= 0 && curves && curves->size() == 1 &&
+                                   curves->front().parameterIndex == std::uint32_t(index) &&
+                                   !curves->front().points.empty() &&
+                                   near(curves->front().points.front().second,
+                                        c.automationToPlain(explicitTarget, .35));
+                        }
+                        return false;
+                    };
+                    check(curvesMatch(), "runtime resolves an instrument's explicit stable slot ID");
+                    c.setAutomationTarget(instrumentPreview.first, instrumentPreview.second, *instrumentTarget);
+                    c.setAutomationPoints(instrumentPreview.first, instrumentPreview.second,
+                                          {pt(0, .35), pt(4, .75)});
+                    check(curvesMatch(), "legacy instrument automation still resolves after retargeting");
+                }
+            }
+            c.newProject(false);
+            check(!c.lastTouchedAutomation(track) &&
+                  c.followTouchedAutomation() == daw::EngineController::AutomationFollowChange::None,
+                  "a new project drops remembered and pending touches");
+        }
+        c.shutdown();
     }
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");

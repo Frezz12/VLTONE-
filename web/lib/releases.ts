@@ -1,3 +1,6 @@
+import type { components } from "@vlt/api-client";
+export type ReleaseHighlight = components["schemas"]["ReleaseHighlight"];
+
 export type ReleaseArtifact = {
   id: string;
   kind: "windows-exe" | "macos-dmg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
@@ -13,7 +16,7 @@ export type ReleaseArtifact = {
 export type ReleaseScreenshot = { id: string; caption: string; sort_order: number; width: number; height: number; sha256: string; url: string };
 export type PublicRelease = {
   id: string; version: string; summary: string; features: string[]; changes: string[]; fixes: string[];
-  artifacts: ReleaseArtifact[]; screenshots: ReleaseScreenshot[]; page_url: string; published_at: string;
+  artifacts: ReleaseArtifact[]; screenshots: ReleaseScreenshot[]; highlights?: ReleaseHighlight[]; page_url: string; published_at: string;
 };
 
 const origin = () => (process.env.VLT_API_ORIGIN ?? "http://localhost:8080")

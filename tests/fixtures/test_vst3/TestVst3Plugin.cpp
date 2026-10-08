@@ -419,10 +419,23 @@ private:
 // Optional view exercises host ownership without requiring a native display.
 class TestView final : public U::Implements<U::Directly<IPlugView>> {
 public:
-    TestView() { trace("create\n"); }
+    explicit TestView(IComponentHandler* handler) : m_handler(handler) { trace("create\n"); }
     ~TestView() { trace("destroy\n"); }
     tresult PLUGIN_API isPlatformTypeSupported(FIDString) override { return kResultTrue; }
-    tresult PLUGIN_API attached(void*, FIDString) override { trace("attach\n"); return kResultOk; }
+    tresult PLUGIN_API attached(void*, FIDString) override {
+        trace("attach\n");
+        if (m_handler && std::getenv("DAW_TEST_VST3_EDITOR_GESTURE")) {
+            m_handler->beginEdit(kGainId);
+            m_handler->performEdit(kGainId, .125);
+            m_handler->endEdit(kGainId);
+            if (std::strcmp(std::getenv("DAW_TEST_VST3_EDITOR_GESTURE"), "2") == 0) {
+                m_handler->beginEdit(kGainId);
+                m_handler->performEdit(kGainId, .375);
+                m_handler->endEdit(kGainId);
+            }
+        }
+        return kResultOk;
+    }
     tresult PLUGIN_API removed() override { trace("remove\n"); return kResultOk; }
     tresult PLUGIN_API onWheel(float) override { return kResultFalse; }
     tresult PLUGIN_API onKeyDown(char16, int16, int16) override { return kResultFalse; }
@@ -438,6 +451,7 @@ public:
     tresult PLUGIN_API canResize() override { return kResultFalse; }
     tresult PLUGIN_API checkSizeConstraint(ViewRect*) override { return kResultOk; }
 private:
+    IComponentHandler* m_handler;
     static void trace(const char* event) {
         const char* path = std::getenv("DAW_TEST_VST3_EDITOR_TRACE");
         if (path) {
@@ -573,7 +587,7 @@ public:
     // No GUI: the host must fall back to its generic parameter panel, and that
     // fallback needs a plugin that genuinely has no editor to be tested with.
     IPlugView* PLUGIN_API createView(FIDString) override {
-        return std::getenv("DAW_TEST_VST3_EDITOR_TRACE") ? new TestView : nullptr;
+        return std::getenv("DAW_TEST_VST3_EDITOR_TRACE") ? new TestView(m_handler) : nullptr;
     }
 
     int32 PLUGIN_API getNoteExpressionCount(int32 bus,int16) override {return bus==0?1:0;}

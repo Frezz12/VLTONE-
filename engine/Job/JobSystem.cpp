@@ -102,8 +102,9 @@ void JobSystem::prepare(std::size_t itemCapacity) {
 }
 
 bool JobSystem::acquireItem(unsigned index, std::uint32_t& item) noexcept {
+    const unsigned active = m_passWorkerCount.load(std::memory_order_relaxed);
+    if (index >= active) return false;
     if (m_workers[index].deque.pop(item)) return true;
-    const unsigned active = workerCount();
     if (active == 1) return false;
 
     // Work stealing: try a few random victims before giving up for this spin.
@@ -152,13 +153,19 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
     // next pass opens simply keeps working instead of dropping out and back in.
     while (m_completed.load(std::memory_order_acquire) + local <
            m_target.load(std::memory_order_acquire)) {
+        if (mustFinish && m_sink.poll) {
+            local += m_sink.poll(m_sink.context);
+            if (m_completed.load(std::memory_order_acquire) + local >=
+                m_target.load(std::memory_order_acquire)) break;
+        }
+        if (index >= m_passWorkerCount.load(std::memory_order_relaxed)) break;
         std::uint32_t item = 0;
         if (acquireItem(index, item)) {
             if (waitingSince) { waited += rt::nowNanos() - waitingSince; waitingSince = 0; }
             idleSpins = 0;
             idleSince = {};
-            m_sink.execute(m_sink.context, item, index);
-            if (++local >= kFlushEvery) {
+            if (m_sink.execute(m_sink.context, item, index)) ++local;
+            if (local >= kFlushEvery) {
                 m_completed.fetch_add(local, std::memory_order_release);
                 local = 0;
             }
@@ -272,12 +279,13 @@ void JobSystem::configureAudioWorkers(const rt::AudioWorkerConfig& config) {
     }
 }
 
-void JobSystem::beginPass(std::uint32_t items, unsigned helpers) noexcept {
+void JobSystem::beginPass(std::uint32_t items, unsigned helpers, bool callerOnly) noexcept {
     if (items == 0) return;
+    m_passWorkerCount.store(callerOnly ? 1u : workerCount(), std::memory_order_relaxed);
     m_target.fetch_add(items, std::memory_order_release);
     // Even a caller asking for no helpers opens a new epoch. That keeps pool
     // workers from confusing a later mid-pass wake with the previous pass.
-    if (helpers == 0 || workerCount() == 1) {
+    if (helpers == 0 || callerOnly || workerCount() == 1) {
         m_generation.fetch_add(1, std::memory_order_seq_cst);
         return;
     }
@@ -285,7 +293,7 @@ void JobSystem::beginPass(std::uint32_t items, unsigned helpers) noexcept {
 }
 
 void JobSystem::wakeHelpers(unsigned helpers) noexcept {
-    const unsigned active = workerCount();
+    const unsigned active = m_passWorkerCount.load(std::memory_order_relaxed);
     if (helpers == 0 || active == 1) return;
 
     // Publishing a new work epoch opens a pass or announces a newly-ready

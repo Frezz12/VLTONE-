@@ -509,19 +509,15 @@ void StartupWindow::applyTheme() {
     min-height: 32px; color: %1; background: %6;
     border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 8px;
 }
-#StartupLoginPanel QLineEdit:focus { border-color: %7; }
 #StartupLoginPanel QPushButton { min-height: 28px; }
 #StartupRestoreButton { color: %1; background: %4; border: 1px solid %5; border-radius: %RADIUS%px; }
-#StartupRestoreButton:hover { border-color: %7; }
-#StartupRestoreButton:focus { border-color: %7; }
 #StartupLoginPanel QPushButton:flat { color: %2; background: transparent; border: 1px solid transparent; border-radius: %RADIUS%px; padding: 0 4px; }
 #StartupLoginPanel QPushButton:flat:hover { color: %1; background: %4; }
-#StartupLoginPanel QPushButton:flat:focus { border-color: %7; }
 #StartupLoginButton {
     min-height: 34px; color: %ACCENT_TEXT%; background: %7;
     border: 1px solid %7; border-radius: %RADIUS%px; font-weight: 600;
 }
-#StartupLoginButton:hover, #StartupLoginButton:focus { background: %8; border-color: %8; }
+#StartupLoginButton:hover, #StartupLoginButton:focus { background: %8; }
 #StartupLoginButton:disabled { color: %2; background: %6; border-color: %5; }
 #StartupProgress { background: %6; border: 0; border-radius: 3px; }
 #StartupProgress::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %7, stop:1 %8); border-radius: 3px; }

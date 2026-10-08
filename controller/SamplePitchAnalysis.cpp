@@ -1,4 +1,5 @@
 #include "SamplePitchAnalysis.hpp"
+#include "MediaWorker.hpp"
 #include "DSP/Resampler.hpp"
 
 #include <algorithm>
@@ -102,6 +103,7 @@ double median(std::vector<double> values) {
 SamplePitchEstimate detectSamplePitch(const engine::SampleBuffer& audio,
     engine::FrameCount first, engine::FrameCount end,
     const std::function<bool()>& keepGoing) {
+    if (MediaWorker::enabled()) return MediaWorker::pitch(audio, first, end, keepGoing);
     SamplePitchEstimate result;
     const double rate = audio.sampleRate();
     end = std::min(end, audio.frames());

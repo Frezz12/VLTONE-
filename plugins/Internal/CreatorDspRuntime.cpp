@@ -8,11 +8,13 @@
 #include "MiniNodeRegistry.hpp"
 #include "ModulationInstance.hpp"
 #include "Creator/WasmProgram.hpp"
+#include "CreatorKernelNode.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <map>
 #include <numbers>
+#include <set>
 
 namespace daw::plugins::mini {
 namespace {
@@ -519,6 +521,10 @@ struct CreatorDspRuntime::Impl {
   engine::GraphProcessor processor{1};
   std::shared_ptr<const engine::CompiledGraph> compiled;
   std::vector<std::shared_ptr<TypedNode>> nodes;
+  std::vector<std::pair<std::shared_ptr<KernelNode>, engine::NodeId>> kernels;
+  std::array<double, 2> controlValues{};
+  std::size_t memory = 0;
+  bool tailKnown = true;
   std::array<TypedNode *, 2> controls{};
   TypedNode *input = nullptr;
   unsigned channels = 2, latency = 0, tail = 0;
@@ -526,12 +532,15 @@ struct CreatorDspRuntime::Impl {
 };
 CreatorDspRuntime::CreatorDspRuntime() : m(std::make_unique<Impl>()) {}
 CreatorDspRuntime::~CreatorDspRuntime() = default;
-bool CreatorDspRuntime::prepare(const MiniModuleDefinition &d,
+bool CreatorDspRuntime::prepare(const MiniModuleDefinition &definition,
                                 const PluginProcessInfo &info,
                                 unsigned channels, std::uint64_t seed,
                                 std::string &error) {
-  if (!(error = validate(d)).empty())
+  if (!(error = validate(definition)).empty())
     return false;
+  MiniModuleDefinition expanded;
+  if (!expandSubgraphs(definition, expanded, error)) return false;
+  const auto &d = expanded;
   m = std::make_unique<Impl>();
   m->channels = channels;
   m->rate = info.sampleRate;
@@ -542,10 +551,47 @@ bool CreatorDspRuntime::prepare(const MiniModuleDefinition &d,
   std::map<std::pair<std::string, std::string>, engine::NodeId> outputs;
   std::map<std::string, std::pair<TypedNode *, engine::NodeId>> consumers;
   const auto used = reachableNodes(d);
+  std::map<std::pair<std::string, std::string>, KernelBus *> typedBuses;
+  for (unsigned k = 0; k < d.controls.size(); ++k) m->controlValues[k] = d.controls[k].initial;
+  if (d.version >= 5) {
+    std::vector<std::vector<unsigned>> islands;
+    if (!programmingIslands(d, islands, error)) return false;
+    for (auto selected : islands) {
+      std::erase_if(selected, [&](unsigned i) { return !used[i]; });
+      if (selected.empty()) continue;
+      const auto &first = d.nodes[selected[0]];
+      if (isBlockNode(first) && first.type != "subgraph") continue;
+      auto node = std::make_shared<KernelNode>();
+      if (!node->kernel.prepare(d, selected, info.sampleRate, info.maxBlockSize, channels, seed, m->memory, error)) return false;
+      node->links.resize(node->kernel.inputs().size()); node->controls = &m->controlValues;
+      m->tailKnown &= node->kernel.tailKnown();
+      const auto id = m->graph.adoptNode(node);
+      std::set<std::string> local;
+      for (auto i : selected) local.insert(d.nodes[i].id);
+      for (const auto &port : node->kernel.outputs()) {
+        const bool sink = std::any_of(selected.begin(), selected.end(), [&](unsigned i) { return d.nodes[i].id == port.node && d.nodes[i].type == "output"; });
+        const bool external = std::any_of(d.connections.begin(), d.connections.end(), [&](const auto &e) { return e.from == port.node && e.fromPort == port.port && !local.contains(e.to); });
+        if (!sink && !external) continue;
+        auto bus = std::make_shared<KernelBus>(); bus->port = port;
+        if (!bus->prepare(info.maxBlockSize, m->memory, error)) return false;
+        const auto outputId = m->graph.adoptNode(std::make_shared<KernelOutput>(bus));
+        if (!m->graph.connect(id, outputId)) { error = "Cannot connect primitive output"; return false; }
+        outputs[{port.node, port.port}] = outputId;
+        typedBuses[{port.node, port.port}] = bus.get();
+        node->buses.push_back(std::move(bus));
+        if (sink) m->graph.setSink(outputId);
+      }
+      m->kernels.emplace_back(std::move(node), id);
+    }
+  }
+  unsigned cppSlot = 0;
   for (unsigned i = 0; i < d.nodes.size(); ++i) {
+    const auto codeIndex = d.version >= 5 ? cppSlot : i;
+    if (d.nodes[i].function) ++cppSlot;
     if (!used[i])
       continue;
     const auto &n = d.nodes[i];
+    if (d.version >= 5 && (!isBlockNode(n) || n.type == "subgraph")) continue;
     if (n.type == "interface") {
       for (unsigned k = 0; k < d.controls.size(); ++k) {
         auto node = std::make_shared<TypedNode>(n, seed);
@@ -556,18 +602,18 @@ bool CreatorDspRuntime::prepare(const MiniModuleDefinition &d,
       }
     } else {
       std::uint64_t nodeSeed = seed;
-      for (unsigned char ch : n.id)
+      for (unsigned char ch : n.stateKey.empty() ? n.id : n.stateKey)
         nodeSeed = (nodeSeed ^ ch) * 1099511628211ULL;
       auto node = std::make_shared<TypedNode>(n, nodeSeed);
       if (n.function) {
         node->program = m->program.get();
-        node->codeIndex = i;
+        node->codeIndex = codeIndex;
       }
       const auto id = m->graph.adoptNode(node);
       consumers[n.id] = {node.get(), id};
       if (n.function) {
         for (unsigned p = 0; p < n.function->outputs.size(); ++p) {
-          auto output = std::make_shared<FunctionOutput>(*m->program, i, p);
+          auto output = std::make_shared<FunctionOutput>(*m->program, codeIndex, p);
           const auto outputId = m->graph.adoptNode(output);
           m->graph.connect(id, outputId);
           outputs[{n.id, n.function->outputs[p].id}] = outputId;
@@ -578,6 +624,19 @@ bool CreatorDspRuntime::prepare(const MiniModuleDefinition &d,
       if (n.type == "output")
         m->graph.setSink(id);
       m->nodes.push_back(std::move(node));
+    }
+  }
+  for (auto &[node, target] : m->kernels) {
+    std::map<engine::NodeId, int> slots;
+    const auto imports = node->kernel.inputs();
+    for (unsigned k = 0; k < imports.size(); ++k) {
+      const auto &port = imports[k];
+      auto producer = outputs.find({port.fromNode, port.fromPort});
+      if (producer == outputs.end()) { error = "Missing island input: " + port.node + "." + port.port; return false; }
+      auto [slot, added] = slots.emplace(producer->second, int(slots.size()));
+      if (added && !m->graph.connect(producer->second, target)) { error = "Cannot connect operation island"; return false; }
+      node->links[k].slot = slot->second;
+      if (auto bus = typedBuses.find({port.fromNode, port.fromPort}); bus != typedBuses.end()) node->links[k].bus = bus->second;
     }
   }
   for (const auto &[id, consumer] : consumers) {
@@ -608,7 +667,19 @@ bool CreatorDspRuntime::prepare(const MiniModuleDefinition &d,
       return false;
     }
   m->compiled = *compiled;
+  if (d.version >= 5) {
+    const auto &arena = m->compiled->arena;
+    const auto stride = (std::size_t(arena.frames()) * sizeof(float) + engine::kCacheLine - 1) / engine::kCacheLine * engine::kCacheLine;
+    if (!reserveGraphMemory(arena.bufferCount() * arena.channels() * (stride + sizeof(float *)), m->memory, error)) return false;
+    for (const auto &delay : m->compiled->delays)
+      if (!reserveGraphMemory((std::size_t(delay->delaySamples()) + info.maxBlockSize + 1) * channels * sizeof(float), m->memory, error)) return false;
+  }
   m->latency = m->compiled->totalLatency;
+  unsigned maximumDelay = 0;
+  for (const auto &delay : m->compiled->delays) maximumDelay = std::max(maximumDelay, delay->delaySamples());
+  for (auto &[kernel, id] : m->kernels)
+    if (!kernel->prepareDelays(*m->compiled, m->memory, error) ||
+        !kernel->kernel.retainDelayHistory(maximumDelay, m->memory, error)) return false;
   std::vector<unsigned> tails(m->compiled->nodes.size());
   for (auto i : m->compiled->order) {
     const auto &n = m->compiled->nodes[i];
@@ -623,6 +694,7 @@ bool CreatorDspRuntime::prepare(const MiniModuleDefinition &d,
   return true;
 }
 void CreatorDspRuntime::setControl(unsigned i, double value) noexcept {
+  if (i < 2) m->controlValues[i] = value;
   if (i < 2 && m->controls[i])
     m->controls[i]->external = value;
 }
@@ -632,6 +704,7 @@ bool CreatorDspRuntime::render(const PluginProcessContext &c, unsigned offset,
     m->input->source = &c;
     m->input->sourceOffset = offset;
   }
+  for (auto &[kernel, id] : m->kernels) { kernel->source = &c; kernel->sourceOffset = offset; }
   float *outputs[2]{};
   for (unsigned ch = 0; ch < m->channels; ++ch)
     outputs[ch] = c.outputs[ch] + offset;
@@ -642,18 +715,26 @@ bool CreatorDspRuntime::render(const PluginProcessContext &c, unsigned offset,
       c.sampleTime + offset, c.playing, c.offline, transport);
   if (m->input)
     m->input->source = nullptr;
-  return bool(result) && std::none_of(m->nodes.begin(), m->nodes.end(),
+  for (auto &[kernel, id] : m->kernels) kernel->source = nullptr;
+  return bool(result) && std::none_of(m->kernels.begin(), m->kernels.end(), [](const auto &n) { return n.first->failed; }) && std::none_of(m->nodes.begin(), m->nodes.end(),
                                       [](const auto &n) { return n->failed; });
 }
 void CreatorDspRuntime::reset() noexcept {
   if (m->program) m->program->reset();
   for (const auto &n : m->nodes)
     n->reset();
+  for (const auto &[n, id] : m->kernels) n->reset();
   if (m->compiled)
     for (const auto &delay : m->compiled->delays)
       delay->reset();
 }
 unsigned CreatorDspRuntime::latency() const noexcept { return m->latency; }
 unsigned CreatorDspRuntime::tail() const noexcept { return m->tail; }
-bool CreatorDspRuntime::takeError(std::string &error) {return m->program && m->program->takeError(error);}
+bool CreatorDspRuntime::tailKnown() const noexcept { return m->tailKnown; }
+bool CreatorDspRuntime::takeError(std::string &error) {
+  for (auto &[n, id] : m->kernels) if (n->errorPending.exchange(false, std::memory_order_acq_rel)) {
+    error = n->kernel.error(); if (error.empty()) error = "Creator output exceeds the host's finite audio range"; return true;
+  }
+  return m->program && m->program->takeError(error);
+}
 } // namespace daw::plugins::mini

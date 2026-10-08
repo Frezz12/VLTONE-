@@ -70,6 +70,11 @@ public:
     void suspend() override;
     void resume() override;
     void process(const engine::ProcessContext& context) override;
+    bool hasDeferredProcess() const noexcept override {
+        return m_instance && m_instance->hasDeferredProcess();
+    }
+    bool beginProcess(const engine::ProcessContext& context) override;
+    bool finishProcess(bool expired) noexcept override;
     engine::Status serviceOffline() override;
     engine::Status offlineStatus() const noexcept override;
     engine::Status processStatus() const noexcept override {
@@ -87,6 +92,7 @@ public:
     bool slideClipped() const noexcept { return m_slideClipped.load(); }
     PluginInstance* instance() noexcept { return m_instance.get(); }
     const PluginInstance* instance() const noexcept { return m_instance.get(); }
+    std::uint64_t instanceId() const noexcept { return m_instanceId; }
 
     void setBypassed(bool bypassed) noexcept {
         m_bypassed.store(bypassed, std::memory_order_relaxed);
@@ -96,6 +102,13 @@ public:
     }
     bool isBypassed() const noexcept {
         return m_bypassed.load(std::memory_order_relaxed);
+    }
+    /// Host controls survive replacing the processor. Parameter automation is
+    /// resolved separately against the replacement's stable parameter IDs.
+    void copyControlSettingsFrom(const PluginNode& source) noexcept {
+        setBypassed(source.isBypassed());
+        setMix(source.m_mix.load(std::memory_order_relaxed));
+        setSlideDelivery(source.m_slideMode.load(), source.m_slideRange.load(), source.m_slideTail.load());
     }
     bool isReady() const noexcept { return m_ready.load(std::memory_order_acquire); }
 
@@ -112,6 +125,7 @@ public:
     std::uint16_t preferredChannelCount() const noexcept {
         return m_preferredChannelCount.load(std::memory_order_acquire);
     }
+    bool sidechainConnected() const noexcept { return m_sidechainConnected; }
 
     /// Queue a parameter change for the next block. Lock-free; returns false
     /// when the ring is full, which means the control thread is producing
@@ -150,6 +164,25 @@ public:
     }
     std::shared_ptr<const AutomationCurves> automation() const {
         return m_automation.controlCopy();
+    }
+    struct ControlState {
+        bool bypassed, sidechain;
+        float mix;
+        std::uint16_t channels;
+        SlideDelivery slide;
+        double slideRange, slideTail;
+        std::shared_ptr<const AutomationCurves> curves;
+        std::vector<PluginEvent> pending;
+    };
+    ControlState controlState() {
+        return {isBypassed(), sidechainConnected(), m_mix.load(std::memory_order_relaxed), preferredChannelCount(),
+            m_slideMode.load(), m_slideRange.load(), m_slideTail.load(), automation(), pendingHostEvents()};
+    }
+    void restoreControlState(const ControlState& state) {
+        setBypassed(state.bypassed); setMix(state.mix); setPreferredChannelCount(state.channels);
+        setSidechainConnected(state.sidechain); setSlideDelivery(state.slide, state.slideRange, state.slideTail);
+        setAutomation(state.curves); discardPendingEvents();
+        for (const auto& event : state.pending) (void)pushEvent(event);
     }
 
     /// A live recording gesture owns this parameter until the next loop/stop.
@@ -199,6 +232,17 @@ public:
     void onStateChanged() noexcept override;
 
 private:
+    void finishAudio(PluginProcessDisposition disposition) noexcept;
+    void failProcess(const engine::ProcessContext& context, bool bypassed) noexcept;
+    void forwardMidi(const engine::ProcessContext& context) noexcept;
+    void rememberTransport(const engine::ProcessContext& context) noexcept;
+    struct DeferredBlock {
+        engine::ProcessContext context;
+        PluginProcessContext plugin;
+        float targetWet = 1;
+        bool bypassed = false, needsDry = false, canSleep = false, tailStimulus = false;
+    } m_block;
+    bool m_processing = false;
     using AutomationOverrides = std::vector<std::pair<std::uint32_t, std::uint64_t>>;
     engine::RealtimeSnapshot<AutomationOverrides> m_automationOverrides;
     std::atomic<std::uint64_t> m_overrideEpoch{0};
@@ -233,6 +277,7 @@ private:
     std::atomic<SlideDelivery> m_slideMode{SlideDelivery::Auto};
     std::atomic<double> m_slideRange{2}, m_slideTail{2};
     std::atomic<bool> m_slideOverloaded{false},m_slideClipped{false};
+    const std::uint64_t m_instanceId;
     std::string m_name;
     std::unique_ptr<PluginInstance> m_instance;
     Sink m_sink;
@@ -286,6 +331,9 @@ private:
     const AutomationCurves* m_curveCursorFor = nullptr;
     double m_lastBlockStartBeats = 0.0;
 
+    // A transaction restores this entire host queue, including MIDI releases.
+    // Format-owned editor events remain with the retained native instance.
+    std::vector<PluginEvent> pendingHostEvents();
     static constexpr std::size_t kEventQueueCapacity = 2048;
     engine::LockFreeSPSCQueue<PluginEvent, kEventQueueCapacity> m_inbound;
     engine::LockFreeMPSCQueue<PluginEvent, 512> m_outbound;

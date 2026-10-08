@@ -265,7 +265,7 @@ int main() {
         fs::create_directories(root, error);
         writeTone(source);
 
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         check(controller.initialize(48000, 512, false).isOk(),
               "cloud capture fixture initializes without an audio device");
         const std::string audioTrack =
@@ -441,7 +441,7 @@ int main() {
                       }),
               "staging failures leave no partial generation behind");
 
-        daw::EngineController incompatible;
+        daw::EngineController incompatible{daw::EngineController::TestRuntime{}};
         (void)incompatible.initialize(48000, 512, false);
         daw::ProjectModel incompatibleProject;
         daw::TrackModel incompatibleTrack;

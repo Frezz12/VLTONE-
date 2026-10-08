@@ -873,7 +873,6 @@ body{background:var(--page);color:var(--text);font:400 16px/1.58 "Inter",system-
 .paper{width:min(860px,100%);min-height:100%;margin:0 auto;padding:clamp(12px,4vw,48px);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);border-radius:20px;background:var(--surface);background:color-mix(in srgb,var(--surface) 84%,transparent);box-shadow:0 18px 55px rgba(0,0,0,.20);backdrop-filter:blur(18px) saturate(125%)}
 #editor{min-height:calc(100vh - 170px);outline:none;overflow-wrap:anywhere;white-space:normal}
 #editor:empty::before{content:attr(data-placeholder);color:var(--muted);pointer-events:none}
-#editor:focus-visible{box-shadow:inset 3px 0 var(--accent);padding-left:12px}
 #editor img{display:block;max-width:100%;height:auto;margin:18px auto;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.20)}
 #editor blockquote{margin:18px 0;padding:8px 18px;border-left:3px solid var(--accent);color:var(--muted)}
 #editor h1,#editor h2{line-height:1.18}#editor p{margin:.65em 0}
@@ -1013,7 +1012,6 @@ QTabBar::tab:focus { background: %8; }
 #NotebookSaveStatus { color: %4; font-size: 11px; }
 #NotebookSaveStatus[error="true"] { color: %5; }
 QComboBox, QToolButton { background: %6; color: %3; border: 1px solid %7; border-radius: %RADIUS%px; padding: 3px 7px; }
-QComboBox:focus, QToolButton:focus { border: 1px solid %7; }
 QToolButton:hover { background: %8; }
 )CSS").replace("%RADIUS%", QString::number(Theme::cornerRadius))
                                  .arg(chrome.name(), edge.name(),
@@ -1040,7 +1038,6 @@ QTableWidget::item:selected { background: %8; color: %3; }
 QHeaderView::section { background: %7; color: %4; border: 0; border-bottom: 1px solid %2; padding: 5px; }
 #NotebookCuePreview { color: %3; background: %7; padding: 8px; border-radius: %RADIUS%px; }
 QLineEdit { background: %6; color: %3; border: 1px solid %2; border-radius: %RADIUS%px; padding: 6px; }
-QPushButton:focus, QLineEdit:focus { border: 2px solid %9; }
 )CSS").replace("%RADIUS%", QString::number(Theme::cornerRadius))
                                              .arg(
                                                  panel.name(QColor::HexArgb),
@@ -1050,8 +1047,7 @@ QPushButton:focus, QLineEdit:focus { border: 2px solid %9; }
                                                  Theme::mute().name(),
                                                  theme.surfaceElevated.name(),
                                                  alternate.name(QColor::HexArgb),
-                                                 selection.name(QColor::HexArgb),
-                                                 theme.accent.name()));
+                                                 selection.name(QColor::HexArgb)));
     }
 }
 

@@ -31,6 +31,7 @@ type registerRequest struct {
 	TermsVersion         string `json:"terms_version"`
 	DiagnosticsAccepted  bool   `json:"diagnostics_accepted"`
 	DiagnosticsVersion   string `json:"diagnostics_version"`
+	CaptchaToken         string `json:"captcha_token"`
 }
 
 type loginRequest struct {
@@ -81,6 +82,9 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(fields) != 0 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", "Check the highlighted fields.", fields)
+		return
+	}
+	if !s.validateRegistrationCaptcha(w, r, input.CaptchaToken, ip) {
 		return
 	}
 	passwordHash, err := auth.HashPassword(input.Password)

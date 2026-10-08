@@ -43,7 +43,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    daw::plugins::graphit::GraphitInstance* graphitInstance() const;
+    bool available() const;
     double readParameter(const char* parameterId) const;
     void writeParameter(const char* parameterId, double value);
     void beginAmountGesture();

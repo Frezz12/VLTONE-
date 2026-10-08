@@ -1,0 +1,198 @@
+{
+  "format": "vltcreator",
+  "version": 3,
+  "name": "NodeFeedbackDelay",
+  "activeMode": "",
+  "graphPath": [],
+  "definition": {
+    "id": "creator.nodes.NodeFeedbackDelay",
+    "name": "NodeFeedbackDelay",
+    "version": 5,
+    "nodes": [
+      {
+        "id": "input",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "interface",
+        "type": "interface",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "buffer",
+        "type": "delay_buffer",
+        "version": 1,
+        "parameters": {
+          "maximum": 2000
+        }
+      },
+      {
+        "id": "tap",
+        "type": "delay_read",
+        "version": 1,
+        "parameters": {
+          "time": 280
+        }
+      },
+      {
+        "id": "feedback",
+        "type": "audio_scale",
+        "version": 1,
+        "parameters": {
+          "gain": 0.4
+        }
+      },
+      {
+        "id": "write",
+        "type": "audio_add",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "mix",
+        "type": "audio_add",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "input",
+        "to": "write",
+        "fromPort": "out",
+        "toPort": "a"
+      },
+      {
+        "from": "tap",
+        "to": "feedback",
+        "fromPort": "out",
+        "toPort": "in"
+      },
+      {
+        "from": "feedback",
+        "to": "write",
+        "fromPort": "out",
+        "toPort": "b"
+      },
+      {
+        "from": "write",
+        "to": "buffer",
+        "fromPort": "out",
+        "toPort": "in"
+      },
+      {
+        "from": "buffer",
+        "to": "tap",
+        "fromPort": "out",
+        "toPort": "buffer"
+      },
+      {
+        "from": "interface",
+        "to": "tap",
+        "fromPort": "time",
+        "toPort": "time"
+      },
+      {
+        "from": "interface",
+        "to": "feedback",
+        "fromPort": "feedback",
+        "toPort": "gain"
+      },
+      {
+        "from": "input",
+        "to": "mix",
+        "fromPort": "out",
+        "toPort": "a"
+      },
+      {
+        "from": "tap",
+        "to": "mix",
+        "fromPort": "out",
+        "toPort": "b"
+      },
+      {
+        "from": "mix",
+        "to": "output",
+        "fromPort": "out",
+        "toPort": "in"
+      }
+    ],
+    "controls": [
+      {
+        "id": "time",
+        "name": "Time",
+        "min": 1,
+        "max": 2000,
+        "default": 280,
+        "unit": "ms",
+        "log": false,
+        "bindings": []
+      },
+      {
+        "id": "feedback",
+        "name": "Feedback",
+        "min": 0,
+        "max": 0.9,
+        "default": 0.4,
+        "unit": "",
+        "log": false,
+        "bindings": []
+      }
+    ],
+    "subgraphs": []
+  },
+  "positions": {
+    "": {
+      "input": [
+        40,
+        60
+      ],
+      "output": [
+        350,
+        60
+      ],
+      "interface": [
+        660,
+        60
+      ],
+      "buffer": [
+        970,
+        60
+      ],
+      "tap": [
+        40,
+        330
+      ],
+      "feedback": [
+        350,
+        330
+      ],
+      "write": [
+        660,
+        330
+      ],
+      "mix": [
+        970,
+        330
+      ]
+    }
+  },
+  "viewports": {
+    "": {
+      "center": [
+        630,
+        380
+      ],
+      "zoom": 0.8
+    }
+  }
+}

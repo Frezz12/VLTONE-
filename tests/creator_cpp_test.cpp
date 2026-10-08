@@ -148,6 +148,12 @@ int main(int argc, char **argv) {
           "compiler diagnostics include source locations");
     auto d = graph(f);
     check(compile(d), "C++23 builds portable WebAssembly");
+    auto large = graph(f); large.version = 5;
+    auto cppNode = large.nodes[2]; large.nodes.erase(large.nodes.begin() + 2);
+    for (unsigned i = 0; i < 90; ++i) large.nodes.push_back(makeNode("constant", "unused_" + std::to_string(i)));
+    large.nodes.push_back(cppNode);
+    MiniModuleInstance largeInstance;
+    check(compile(large) && prepare(largeInstance, large), "C++ slots stay dense in a graph larger than 64 elementary nodes");
     check(fromJson(toJson(d)) == d,
           "source signature and portable code survive JSON roundtrip");
     bool exact = true, noAlloc = true;

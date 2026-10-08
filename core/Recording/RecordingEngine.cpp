@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -166,6 +167,56 @@ std::atomic<uint64_t> g_recordingPathSequence{1};
 
 AudioRecorder::AudioRecorder() = default;
 AudioRecorder::~AudioRecorder() { shutdown(); }
+
+Result AudioRecorder::recoverInterruptedFile(const RecordingSession& expected, RecordingSession& closed) {
+    closed = {};
+    if (expected.filePath.empty() || expected.channelCount < 1 || expected.channelCount > 2 ||
+        !std::isfinite(expected.sampleRate) || expected.sampleRate < kMinSampleRate || expected.sampleRate > kMaxSampleRate)
+        return Result::fail(EngineError::InvalidArgument, "Invalid interrupted recording identity.");
+    try {
+        const auto path = daw::platform::pathFromUtf8(expected.filePath);
+        const auto status = std::filesystem::symlink_status(path);
+        if (!std::filesystem::is_regular_file(status) || std::filesystem::is_symlink(status))
+            return Result::fail(EngineError::UnsupportedFormat, "Interrupted recording is not a regular file.");
+        const auto bytes = std::filesystem::file_size(path);
+        if (bytes < sizeof(WAVHeader))
+            return Result::fail(EngineError::UnsupportedFormat, "Interrupted recording header is incomplete.");
+        std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+        WAVHeader actual;
+        if (!file.read(reinterpret_cast<char*>(&actual), sizeof(actual)))
+            return Result::fail(EngineError::UnsupportedFormat, "Cannot read the interrupted recording header.");
+        const auto identity = makeHeader(uint16_t(expected.channelCount), uint32_t(expected.sampleRate), 0);
+        auto normalized = actual;
+        normalized.fileSize = identity.fileSize;
+        normalized.sampleLength = normalized.dataSize = 0;
+        if (std::memcmp(&normalized, &identity, sizeof(identity)) != 0)
+            return Result::fail(EngineError::UnsupportedFormat, "Interrupted recording format differs from its acknowledged capture.");
+        const auto frames = (bytes - sizeof(WAVHeader)) / identity.blockAlign;
+        if (frames > maxWavFrames(identity.blockAlign))
+            return Result::fail(EngineError::FileWriteError, "Interrupted recording exceeds the WAV size limit.");
+        // Ignore an incomplete trailing frame. Retain every byte on disk;
+        // RIFF/data lengths expose only the complete interleaved frame prefix.
+        const auto repaired = makeHeader(identity.numChannels, identity.sampleRate, frames);
+        file.seekp(0);
+        file.write(reinterpret_cast<const char*>(&repaired), sizeof(repaired));
+        file.flush();
+        const bool flushed = bool(file);
+        file.close();
+        if (!flushed || !file)
+            return Result::fail(EngineError::FileWriteError, "Cannot finalize the interrupted recording header.");
+        closed = expected;
+        closed.state = RecordingSession::State::Stopped;
+        closed.writtenFrames = closed.capturedFrames = closed.recordedSamples = TimeSamples(frames);
+        closed.interrupted = true;
+        closed.fileWriteSucceeded = true;
+        if (expected.capturedFrames > TimeSamples(frames))
+            closed.droppedFrames = std::max(closed.droppedFrames,
+                uint64_t(expected.capturedFrames - TimeSamples(frames)));
+        return Result::ok();
+    } catch (const std::exception& error) {
+        return Result::fail(EngineError::FileWriteError, error.what());
+    }
+}
 
 Result AudioRecorder::initialize(SampleRate sampleRate, uint32_t channels) {
     std::lock_guard<std::mutex> lock(m_mutex);

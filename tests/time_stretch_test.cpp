@@ -166,18 +166,38 @@ int main() {
         ProcessContext context;
         context.frames = std::min(512, 49000 - at);
         context.output = AudioBlock(output, 2, context.frames);
+        context.sampleRate = rate;
         context.timelinePosition = at;
         context.playing = true;
         player.process(context);
     }
     watchAllocations = false;
     check(allocations == 0, "the arrangement stretch path allocates nothing");
+    // Live clip boundaries use the same bounded 5 ms de-click transition as
+    // transport edits. It may finish after the source range, without delaying it.
     check(std::all_of(arranged.l.begin(), arranged.l.begin() + 100, [](float s) { return s == 0; }) &&
-          std::all_of(arranged.l.begin() + 48100, arranged.l.end(), [](float s) { return s == 0; }),
-          "stretched clips obey their exact timeline start and end");
+          std::all_of(arranged.l.begin() + 48100 + int(rate * .005), arranged.l.end(), [](float s) { return s == 0; }) &&
+          std::abs(arranged.l[48100] - arranged.l[48099]) < 1e-6f,
+          "live stretched clips start on time and finish with a bounded click-free transition");
     check(std::abs(rms(arranged.l, 12000, 12000) - .25 * .5 / std::sqrt(2.0)) < .01 &&
           std::abs(frequency(arranged.l, 12000, 36000, rate) - 220) < 1,
           "the real clip player preserves level and pitch after time stretching");
+    player.reset();
+    Audio exported(49000);
+    for (int at = 0; at < 49000; at += 512) {
+        float* output[2]{exported.l.data() + at, exported.r.data() + at};
+        ProcessContext context;
+        context.frames = std::min(512, 49000 - at);
+        context.output = AudioBlock(output, 2, context.frames);
+        context.sampleRate = rate;
+        context.timelinePosition = at;
+        context.playing = true;
+        context.offline = true;
+        player.process(context);
+    }
+    check(std::all_of(exported.l.begin(), exported.l.begin() + 100, [](float s) { return s == 0; }) &&
+          std::all_of(exported.l.begin() + 48100, exported.l.end(), [](float s) { return s == 0; }),
+          "exported stretched clips obey their exact timeline start and end");
 
     // Transients must land on the new beat, including the first and last hit.
     auto hits = std::make_shared<SampleBuffer>(2, 96000, rate);

@@ -806,7 +806,6 @@ void FileBrowserPanel::applyTheme() {
 #BrowserTabs QToolButton#BrowserTabButton:checked {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %CONTROL_TOP%,stop:1 %CONTROL_BOTTOM%);
     border-color: %SELECTEDGE%; border-top-color: %LIGHT%; border-bottom-color: %ACCENT%; }
-#BrowserTabs QToolButton#BrowserTabButton:focus { border-color: %ACCENT%; }
 #BrowserTitle { color: %TEXT1%; font-size: %TITLEPX%px; font-weight: 600;
                 letter-spacing: 0.5px; }
 #BrowserFileLabel { color: %TEXT2%; font-size: %SMALLPX%px; }
@@ -814,7 +813,6 @@ void FileBrowserPanel::applyTheme() {
                                             stop:0 %RECESS%, stop:1 %WELL%);
                  border: 1px solid %SEP%; border-top-color: %RECESS%; border-bottom-color: %LIGHT%; border-radius: %RADIUS%px;
                  padding: %PADPX%px 6px; color: %TEXT1%; font-size: %BODYPX%px; }
-#BrowserSearch:focus { border-color: %ACCENT%; }
 #BrowserPreview { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                              stop:0 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
                   border-top: 1px solid %SEP%; }

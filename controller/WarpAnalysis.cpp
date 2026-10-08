@@ -1,10 +1,12 @@
 #include "WarpAnalysis.hpp"
+#include "MediaWorker.hpp"
 #include "analysis/Signal.hpp"
 #include <array>
 
 namespace daw::analysis {
 std::vector<WarpTransient> detectWarpTransients(const engine::SampleBuffer& audio,
     double begin, double end, const std::function<bool()>& keepGoing) {
+    if (MediaWorker::enabled()) return MediaWorker::transients(audio, begin, end, keepGoing);
     constexpr std::size_t size = 1024, hop = 256;
     const auto first = std::size_t(std::clamp(begin * audio.sampleRate(), 0., double(audio.frames())));
     const auto last = std::size_t(std::clamp(end * audio.sampleRate(), 0., double(audio.frames())));

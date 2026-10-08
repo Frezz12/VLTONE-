@@ -161,7 +161,7 @@ export function PromptRegistry() {
               <label className="sr-only" htmlFor="prompt-body">Текст промпта</label>
               <textarea
                 id="prompt-body" className="vlt-input" value={draft.body} spellCheck={false}
-                style={{ marginTop: 8, minHeight: 460, fontFamily: "var(--vlt-font-mono, monospace)" }}
+                style={{ marginTop: 8, minHeight: 460, fontFamily: "var(--vlt-font-sans)" }}
                 onChange={(event) => setDraft({ ...draft, body: event.target.value })}
               />
               <div className="vlt-row" style={{ marginTop: 12, gap: 8 }}>

@@ -2,7 +2,7 @@
 #include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 
-#include "Internal/GravityInstance.hpp"
+#include "Internal/GravityParams.hpp"
 
 #include <QHash>
 #include <QString>
@@ -114,7 +114,7 @@ private:
         PresetValues values{};
     };
 
-    daw::plugins::gravity::GravityInstance* gravityInstance() const;
+    bool available() const;
     ui::Knob* makeKnob(const QString& parameterId, int diameter);
     double readParameter(const QString& parameterId) const;
     void writeParameter(const QString& parameterId, double value);

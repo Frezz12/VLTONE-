@@ -158,7 +158,7 @@
           "Takes",
           "Time stretch"
         ],
-        "caption": "Arrangement · audio tracks and takes",
+        "caption": "Night Bloom: drums, instruments and audio transitions",
         "points": [
           "Select an input, arm and monitor the required track, and record against the metronome and project tempo.",
           "Layer multiple takes while keeping the source material available so you can build the strongest performance.",
@@ -176,7 +176,7 @@
           "Patterns",
           "Sampler"
         ],
-        "caption": "Piano Roll · notes and velocity",
+        "caption": "Warm Keys: chords and note velocity",
         "points": [
           "Use the Piano Roll to create, select, move, and edit notes inside a MIDI clip.",
           "Program rhythms in the Pattern editor and manage sound sources directly from each row.",
@@ -194,7 +194,7 @@
           "Automation",
           "Mix / Stems"
         ],
-        "caption": "Mixer · channels, effects, and master",
+        "caption": "Night Bloom: channels, effects and shared sends",
         "points": [
           "Channel strips include gain, inserts, sends, pan, fader, meters, mute, solo, record, and monitoring states.",
           "Bus and Send tracks plus summing folders support group and parallel processing without duplicating identical chains.",
@@ -212,7 +212,7 @@
           "CLAP",
           "AU · macOS"
         ],
-        "caption": "Plugin Manager",
+        "caption": "Choosing an effect for Warm Keys",
         "points": [
           "Use CLAP, VST, and VST3 plugins; Audio Unit is also available on macOS.",
           "Plugin Manager controls search paths, scanning, rescanning, and the blacklist for unstable modules.",
@@ -230,7 +230,7 @@
           "Commands",
           "Undo"
         ],
-        "caption": "AI assistant · chat and actions",
+        "caption": "AI assistant in the Night Bloom project",
         "points": [
           "Chat can explain the project and perform available actions involving tracks, clips, MIDI, and processing.",
           "Results and errors remain in the transcript, while completed operations stay visible in history and support Undo.",
@@ -248,7 +248,7 @@
           "Recovery",
           "Portability"
         ],
-        "caption": "Project recovery after a crash",
+        "caption": "Recovering the Night Bloom project",
         "points": [
           "A project stores tracks, clips, MIDI, automation, routing, and plugin state, with structural edits participating in Undo.",
           "The background recovery journal captures state regularly and offers restoration on the next launch after a failure.",
@@ -278,8 +278,8 @@
     "noAccount": "No account yet?",
     "hasAccount": "Already registered?",
     "working": "Please wait…",
-    "registerCopy": "Create your open beta account. Then download VLTone and sign in to the app with the same email and password.",
-    "loginCopy": "Sign in to your VLTone account. Use the same email and password in the app.",
+    "registerCopy": "Create an account for the VLTone website and app.",
+    "loginCopy": "Sign in with your account email and password.",
     "termsLabel": "I accept the <terms>terms of use</terms>.",
     "consentLabel": "I separately <consent>consent to processing my account data</consent>.",
     "diagnosticsLabel": "I <diagnostics>consent to diagnostic data processing</diagnostics> to help improve VLTone. Optional.",
@@ -287,7 +287,20 @@
     "legalLoading": "Loading registration terms…",
     "legalUnavailable": "Could not verify the registration terms. Refresh the page and try again.",
     "passwordMismatch": "Passwords do not match.",
-    "requestFailed": "The request failed. Please try again."
+    "requestFailed": "The request failed. Please try again.",
+    "captchaUnavailable": "The security check is temporarily unavailable. Please try again later.",
+    "captchaRetry": "Try again",
+    "storyTitle": "It all starts with music.",
+    "captchaLabel": "Security check",
+    "captchaVerified": "Verification complete",
+    "backToSite": "Back to the site",
+    "captchaExpired": "Verification expired. Please try again.",
+    "registerKicker": "Start with an account",
+    "captchaLoading": "Checking that you are human…",
+    "storyCopy": "Record sound, create MIDI parts and mix tracks. From your first idea to a finished piece — in VLTone.",
+    "loginKicker": "Welcome back",
+    "accountHint": "Use the same email and password to sign in to the app.",
+    "captchaError": "The security check could not load. Please try again."
   },
   "Account": {
     "title": "Your account",

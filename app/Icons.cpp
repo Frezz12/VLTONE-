@@ -714,6 +714,14 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         p.drawRoundedRect(QRectF(13.4, 7.4, 3.2, 6.2), 1.0, 1.0);
         break;
     }
+    case Glyph::Workspace: {
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(3.5, 4.5, 17, 15), 2, 2);
+        p.drawLine(QPointF(9, 4.5), QPointF(9, 19.5));
+        p.drawLine(QPointF(9, 14), QPointF(20.5, 14));
+        break;
+    }
     case Glyph::Layers: {
         // Three offset rectangles — the same stack the timeline draws in a
         // clip's take badge, so the button and the badge say the same word.

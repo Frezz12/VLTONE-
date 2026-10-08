@@ -127,6 +127,27 @@ func TestCollaborationDefaultsToDisabledAndBoundsLimits(t *testing.T) {
 // 32 bytes of base64, matching auth.MinimumCodePepperBytes.
 const testInviteCodePepper = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
+func TestProductionRejectsTurnstileTestKeys(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("PUBLIC_ORIGIN", "https://vlt.example")
+	t.Setenv("ADMIN_ORIGIN", "https://admin.vlt.example")
+	t.Setenv("FORUM_ORIGIN", "https://forum.vlt.example")
+	t.Setenv("DESKTOP_API_ORIGIN", "https://api.vlt.example")
+	t.Setenv("AUTH_SIGNING_SEED", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Setenv("AI_GLOBAL_MONTHLY_TOKEN_LIMIT", "100000000")
+	t.Setenv("SMTP_HOST", "smtp.vlt.example")
+	t.Setenv("TURNSTILE_SITE_KEY", "1x00000000000000000000AA")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "test keys") {
+		t.Fatalf("production test key accepted: %v", err)
+	}
+	t.Setenv("TURNSTILE_SITE_KEY", "")
+	t.Setenv("TURNSTILE_SECRET_KEY", "")
+	loaded, err := Load()
+	if err != nil || !loaded.RegistrationCaptchaRequired() {
+		t.Fatal("production must require CAPTCHA even before keys are configured")
+	}
+}
+
 // A missing or short pepper must stop the server rather than quietly falling
 // back to an unkeyed digest: a twelve digit code space is precomputable, so an
 // unpeppered database disclosure would reveal every outstanding invite.

@@ -297,7 +297,7 @@ int main(int argc, char **) {
   for (unsigned i = 0; i < 256; ++i)
     exact &= whole.outL[i] == (i < 73 ? first.outL[i] : second.outL[i - 73]);
   check(exact, "sample-offset automation matches split processing exactly");
-  EngineController controller;
+  EngineController controller{EngineController::TestRuntime{}};
   check(bool(controller.initialize(48000, 256, false)),
         "controller initialized");
   const auto track = controller.addTrack(TrackKind::Audio, "Mini modules");
@@ -329,8 +329,14 @@ int main(int argc, char **) {
   controller.setInsertBypassed(track, color, true);
   check(controller.miniModules(track)[2].bypassed, "independent bypass");
   check(controller.setMiniModulePostFx(track, color, true) &&
-            controller.setMiniModuleMode(track, color, "tube"),
-        "each card stores its own route and mode");
+            controller.insertInstance(track, color) == processor,
+        "route changes preserve the processor and its history");
+  const auto beforeMode = controller.insertIdentity(track, color);
+  check(controller.setMiniModuleMode(track, color, "tube") &&
+            controller.insertIdentity(track, color) != beforeMode &&
+            controller.insertParameter(track, color, "drive") == -37,
+        "a changed DSP mode publishes a prepared generation with its controls intact");
+  processor = controller.insertInstance(track, color);
   auto look = controller.miniModules(track)[2].miniModule->appearance;
   look.theme = "ivory";
   look.controlStyle = "glass";
@@ -345,7 +351,7 @@ int main(int argc, char **) {
   controller.redo();
   check(controller.insertParameter(track, color, "drive") == -37 &&
             controller.insertInstance(track, color) == processor,
-        "mode and route preserve controls and processor identity");
+        "appearance edits preserve controls and the published processor identity");
   check(!controller.addMiniModule("master", builtin("chorus")).empty(),
         "Master accepts mini modules");
   const auto bus = controller.addTrack(TrackKind::Bus, "Bus");
@@ -367,7 +373,7 @@ int main(int argc, char **) {
   std::filesystem::create_directories(directory);
   check(bool(controller.saveProject(directory.string())),
         "project saves module graphs");
-  EngineController reopened;
+  EngineController reopened{EngineController::TestRuntime{}};
   reopened.initialize(48000, 256, false);
   check(bool(reopened.openProject(directory.string())) &&
             reopened.miniModules(track).size() == 3 &&
@@ -431,8 +437,9 @@ int main(int argc, char **) {
     virtualColor.tracks[0].miniModules = {invalid};
     ProjectSerializer::serializeDocument(virtualColor, bytes);
     check(bool(ProjectSerializer::deserializeDocument(migrated, bytes)) &&
-              migrated.tracks[0].miniModules[0].miniModule ==
-                  invalid.miniModule,
+              migrated.tracks[0].miniModules[0].miniModule.has_value() &&
+              toJson(*migrated.tracks[0].miniModules[0].miniModule) == toJson(*invalid.miniModule) &&
+              !validate(*migrated.tracks[0].miniModules[0].miniModule).empty(),
           "unknown node definition survives project round trip");
     document = nlohmann::json::parse(bytes);
     for (int i = 0; i < 3; ++i)
@@ -445,8 +452,8 @@ int main(int argc, char **) {
     const auto unavailablePath = (directory / "unknown.vlt").string();
     check(bool(ProjectSerializer::save(unavailable, unavailablePath)) &&
               bool(controller.openProject(unavailablePath)) &&
-              controller.miniModules(track).front().miniModule ==
-                  invalid.miniModule,
+              controller.miniModules(track).front().miniModule.has_value() &&
+              toJson(*controller.miniModules(track).front().miniModule) == toJson(*invalid.miniModule),
           "unavailable module can remain in a local document");
     rendering::Spec spec;
     spec.outputDir = directory.string();

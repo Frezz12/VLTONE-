@@ -1,0 +1,54 @@
+[
+  {
+    "audio_duration_ms": 85.33333333333333,
+    "block_size": 128,
+    "channels": 64,
+    "checksum_difference": 0.0,
+    "direct_kernel_ms": 124.0058,
+    "host_ms": 133.232,
+    "host_single_core_percent": 156.13125000000002,
+    "host_to_direct_ratio": 1.0744013586461278,
+    "modules_per_channel": 3,
+    "name": "NodeCompressor",
+    "sample_rate": 48000.0
+  },
+  {
+    "audio_duration_ms": 85.33333333333333,
+    "block_size": 128,
+    "channels": 64,
+    "checksum_difference": 0.0,
+    "direct_kernel_ms": 47.9497,
+    "host_ms": 54.156,
+    "host_single_core_percent": 63.464062500000004,
+    "host_to_direct_ratio": 1.1294335522432883,
+    "modules_per_channel": 3,
+    "name": "NodeEqualizer",
+    "sample_rate": 48000.0
+  },
+  {
+    "audio_duration_ms": 85.33333333333333,
+    "block_size": 128,
+    "channels": 64,
+    "checksum_difference": 0.0,
+    "direct_kernel_ms": 85.0979,
+    "host_ms": 94.4343,
+    "host_single_core_percent": 110.6651953125,
+    "host_to_direct_ratio": 1.109713635706639,
+    "modules_per_channel": 3,
+    "name": "NodeFeedbackDelay",
+    "sample_rate": 48000.0
+  },
+  {
+    "audio_duration_ms": 85.33333333333333,
+    "block_size": 128,
+    "channels": 64,
+    "checksum_difference": 0.0,
+    "direct_kernel_ms": 593.809,
+    "host_ms": 632.4666,
+    "host_single_core_percent": 741.1717968749999,
+    "host_to_direct_ratio": 1.065101067851784,
+    "modules_per_channel": 3,
+    "name": "NodeSaturator4x",
+    "sample_rate": 48000.0
+  }
+]

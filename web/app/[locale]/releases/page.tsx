@@ -31,7 +31,7 @@ export default async function ReleasesPage({ params }: { params: Promise<{ local
           <p className="download-account-note">{ru ? "После установки войдите с аккаунтом VLTone." : "Sign in with your VLTone account after installation."} <Link href="/register">{ru ? "Создать аккаунт" : "Create an account"}<ArrowRight size={13} aria-hidden /></Link></p>
         </div>
         <figure className="download-preview">
-          <Image src={`/images/studio/workspace-${locale}.webp?v=${screenshotVersion}`} width={1600} height={1000} sizes="(max-width: 900px) 94vw, 54vw" loading="eager" fetchPriority="high" alt={ru ? "Интерфейс VLTone" : "VLTone interface"} />
+          <Image src={`/images/studio/showcase-instrumental-${locale}.webp?v=${screenshotVersion}`} width={2880} height={1800} sizes="(max-width: 900px) 94vw, 54vw" loading="eager" fetchPriority="high" alt={ru ? "Night Bloom в VLTone: ударные, бас, клавиши, арпеджио и мелодия" : "Night Bloom in VLTone: drums, bass, keys, arpeggios and melody"} />
           <figcaption>VLTone · Windows · macOS</figcaption>
         </figure>
       </header>

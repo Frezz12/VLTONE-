@@ -35,6 +35,7 @@ struct Node {
   unsigned index;
   bool scheduled;
   FunctionDefinition f;
+  std::uint64_t seedSalt = 0;
 };
 std::string type(const FunctionPort &p) {
   return p.type == "audio"  ? "vlt::AudioFrame"
@@ -63,6 +64,13 @@ std::string sourceUnit(const json &request, const std::filesystem::path &tools,
           item.at("id").get<std::string>());
     Node n{item.at("id"), item.at("index"), item.value("scheduled", true),
            std::move(analyzed.function)};
+    n.seedSalt = nodes.size() + 1;
+    if (item.contains("stateKey")) {
+      const auto key = item.at("stateKey").get<std::string>();
+      if (key.empty() || key.size() > 128) throw std::runtime_error("Invalid function state identity");
+      n.seedSalt = 1469598103934665603ULL;
+      for (unsigned char c : key) n.seedSalt = (n.seedSalt ^ c) * 1099511628211ULL;
+    }
     if (n.index >= 64 || !ids.emplace(n.id, unsigned(nodes.size())).second)
       throw std::runtime_error("Invalid function identity");
     // Includes remain at translation-unit scope. Each function's declarations
@@ -244,7 +252,7 @@ extern "C" void vlt_init(double rate,unsigned channels,unsigned frames,unsigned 
       text += "{vlt::PrepareContext "
               "c;c.sampleRate=rate;c.channels=channels;c.maxBlockSize=frames;c."
               "seed=seed^" +
-              std::to_string(i + 1) + "ULL;root" + std::to_string(i) +
+              std::to_string(n.seedSalt) + "ULL;root" + std::to_string(i) +
               ".prepare(c);" + s + ".latency=c.latency;" + s +
               ".tail=c.tail;}\n";
       for (unsigned p = 0; p < n.f.inputs.size(); ++p)

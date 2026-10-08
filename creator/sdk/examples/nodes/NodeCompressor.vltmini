@@ -1,0 +1,207 @@
+{
+  "format": "vltmini",
+  "version": 5,
+  "definition": {
+    "id": "creator.nodes.NodeCompressor",
+    "name": "NodeCompressor",
+    "version": 5,
+    "nodes": [
+      {
+        "id": "input",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "interface",
+        "type": "interface",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "peak",
+        "type": "peak",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "db",
+        "type": "linear_to_db",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "over",
+        "type": "subtract",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "knee",
+        "type": "max",
+        "version": 1,
+        "parameters": {
+          "b": 0
+        }
+      },
+      {
+        "id": "envelope",
+        "type": "attack_release",
+        "version": 1,
+        "parameters": {
+          "attack": 8,
+          "release": 120
+        }
+      },
+      {
+        "id": "reciprocal",
+        "type": "divide",
+        "version": 1,
+        "parameters": {
+          "a": 1
+        }
+      },
+      {
+        "id": "slope",
+        "type": "subtract",
+        "version": 1,
+        "parameters": {
+          "b": 1
+        }
+      },
+      {
+        "id": "reduction",
+        "type": "multiply",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "gain",
+        "type": "db_to_linear",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "vca",
+        "type": "audio_scale",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "input",
+        "to": "peak",
+        "fromPort": "out",
+        "toPort": "in"
+      },
+      {
+        "from": "peak",
+        "to": "db",
+        "fromPort": "out",
+        "toPort": "value"
+      },
+      {
+        "from": "db",
+        "to": "over",
+        "fromPort": "out",
+        "toPort": "a"
+      },
+      {
+        "from": "interface",
+        "to": "over",
+        "fromPort": "threshold",
+        "toPort": "b"
+      },
+      {
+        "from": "over",
+        "to": "knee",
+        "fromPort": "out",
+        "toPort": "a"
+      },
+      {
+        "from": "knee",
+        "to": "envelope",
+        "fromPort": "out",
+        "toPort": "value"
+      },
+      {
+        "from": "interface",
+        "to": "reciprocal",
+        "fromPort": "ratio",
+        "toPort": "b"
+      },
+      {
+        "from": "reciprocal",
+        "to": "slope",
+        "fromPort": "out",
+        "toPort": "a"
+      },
+      {
+        "from": "envelope",
+        "to": "reduction",
+        "fromPort": "out",
+        "toPort": "a"
+      },
+      {
+        "from": "slope",
+        "to": "reduction",
+        "fromPort": "out",
+        "toPort": "b"
+      },
+      {
+        "from": "reduction",
+        "to": "gain",
+        "fromPort": "out",
+        "toPort": "value"
+      },
+      {
+        "from": "gain",
+        "to": "vca",
+        "fromPort": "out",
+        "toPort": "gain"
+      },
+      {
+        "from": "input",
+        "to": "vca",
+        "fromPort": "out",
+        "toPort": "in"
+      },
+      {
+        "from": "vca",
+        "to": "output",
+        "fromPort": "out",
+        "toPort": "in"
+      }
+    ],
+    "controls": [
+      {
+        "id": "threshold",
+        "name": "Threshold",
+        "min": -60,
+        "max": 0,
+        "default": -18,
+        "unit": "dB",
+        "log": false,
+        "bindings": []
+      },
+      {
+        "id": "ratio",
+        "name": "Ratio",
+        "min": 1,
+        "max": 20,
+        "default": 4,
+        "unit": "",
+        "log": false,
+        "bindings": []
+      }
+    ],
+    "subgraphs": []
+  }
+}

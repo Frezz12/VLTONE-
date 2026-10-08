@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -9,12 +10,16 @@ namespace daw::engine {
 class SampleStorage {
 public:
     explicit SampleStorage(std::size_t samples);
+    /// Map an existing, immutable planar PCM file. Exact size is required;
+    /// the mapping owns its pages independently of the caller's file handle.
+    SampleStorage(const std::filesystem::path& path, std::size_t samples);
     ~SampleStorage();
     SampleStorage(const SampleStorage&) = delete;
     SampleStorage& operator=(const SampleStorage&) = delete;
     float* data() noexcept;
     const float* data() const noexcept;
     bool fileBacked() const noexcept;
+    bool readOnly() const noexcept;
 private:
     struct Mapping;
     std::unique_ptr<Mapping> m_mapping;

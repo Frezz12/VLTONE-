@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cctype>
 #include <cstdio>
@@ -19,6 +20,7 @@
 namespace audio::platform {
 
 namespace {
+std::atomic<std::shared_ptr<const AudioFileServices>> fileServices;
 // libsndfile's own container list, minus the ones nothing produces. `caf` and
 // `w64` are here because the sampler already offered them and libsndfile does
 // read both — platform_test writes and decodes one of each rather than taking
@@ -59,6 +61,7 @@ bool isDecodableExtension(const std::string& extLower) {
 }
 
 Result probeAudioFile(const std::string& path, AudioFileInfo& out) {
+    if (const auto services = fileServices.load()) return services->probe(path, out);
     if (nativeAudioPath(path)) {
         AudioFileReader reader;
         const auto result = reader.open(path);
@@ -90,8 +93,18 @@ Result decodeAudioFile(const std::string& path, DecodedAudio& out,
     try {
         if (options.keepGoing && !options.keepGoing())
             return Result::fail(EngineError::InvalidArgument, "cancelled");
+        // A process-backed reader prepares immutable PCM at open. Preserve the
+        // caller's decode budget before asking that worker to decode a long file.
+        if (const auto services = fileServices.load()) {
+            AudioFileInfo info;
+            if (const auto probed = services->probe(path, info); !probed) return probed;
+            if (!info.channels || info.channels > 32 ||
+                info.frames > options.maxBytes / sizeof(float) / info.channels)
+                return Result::fail(EngineError::UnsupportedFormat,
+                    "audio exceeds the in-memory decode budget; use the streaming reader");
+        }
         AudioFileReader reader;
-        if (const auto opened = reader.open(path); !opened) return opened;
+        if (const auto opened = reader.open(path, options.keepGoing); !opened) return opened;
         const auto info = reader.info();
         if (info.channels > 32 || info.frames >
             options.maxBytes / sizeof(float) / info.channels)
@@ -125,6 +138,7 @@ Result decodeAudioFile(const std::string& path, DecodedAudio& out,
 struct AudioFileReader::Impl {
     SNDFILE* file = nullptr;
     std::unique_ptr<NativeAudioFileReader> native;
+    std::unique_ptr<AudioFileSource> source;
     AudioFileInfo info;
 };
 
@@ -136,9 +150,26 @@ AudioFileReader& AudioFileReader::operator=(AudioFileReader&& other) noexcept {
     return *this;
 }
 
-Result AudioFileReader::open(const std::string& path) {
+void setAudioFileServices(std::shared_ptr<const AudioFileServices> services) {
+    fileServices.store(std::move(services));
+}
+
+Result AudioFileReader::open(const std::string& path, const std::function<bool()>& keepGoing) {
     close();
     if (!m_impl) m_impl = std::make_unique<Impl>();
+    if (keepGoing && !keepGoing()) return Result::fail(EngineError::InvalidArgument, "cancelled");
+    if (const auto services = fileServices.load()) {
+        std::unique_ptr<AudioFileSource> source;
+        const auto result = services->open(path, source, keepGoing);
+        if (!result) return result;
+        if (!source) return Result::fail(EngineError::UnsupportedFormat, "decoder returned no audio source");
+        const auto info = source->info();
+        if (!info.channels || info.channels > 32 || !info.frames || !std::isfinite(info.sampleRate) || info.sampleRate <= 0)
+            return Result::fail(EngineError::UnsupportedFormat, "invalid decoded audio dimensions");
+        m_impl->info = info;
+        m_impl->source = std::move(source);
+        return Result::ok();
+    }
     if (nativeAudioPath(path)) {
         auto native = std::make_unique<NativeAudioFileReader>();
         const auto result = native->open(path);
@@ -169,6 +200,7 @@ Result AudioFileReader::open(const std::string& path) {
 
 void AudioFileReader::close() {
     if (!m_impl) return;
+    m_impl->source.reset();
     m_impl->native.reset();
     if (m_impl->file) sf_close(m_impl->file);
     m_impl->file = nullptr;
@@ -176,7 +208,7 @@ void AudioFileReader::close() {
 }
 
 bool AudioFileReader::isOpen() const noexcept {
-    return m_impl && (m_impl->file || m_impl->native);
+    return m_impl && (m_impl->file || m_impl->native || m_impl->source);
 }
 
 const AudioFileInfo& AudioFileReader::info() const noexcept {
@@ -188,6 +220,7 @@ Result AudioFileReader::seek(FrameCount frame) {
     if (!isOpen())
         return Result::fail(EngineError::InvalidArgument, "audio reader is closed");
     const FrameCount clamped = std::min(frame, m_impl->info.frames);
+    if (m_impl->source) return m_impl->source->seek(clamped);
     if (m_impl->native) return m_impl->native->seek(clamped);
     if (sf_seek(m_impl->file, static_cast<sf_count_t>(clamped), SEEK_SET) < 0) {
         return Result::fail(EngineError::UnsupportedFormat,
@@ -199,6 +232,7 @@ Result AudioFileReader::seek(FrameCount frame) {
 
 FrameCount AudioFileReader::read(float* destination, FrameCount frames) {
     if (!isOpen() || !destination || frames == 0) return 0;
+    if (m_impl->source) return m_impl->source->read(destination, frames);
     if (m_impl->native) return m_impl->native->read(destination, frames);
     const sf_count_t requested = static_cast<sf_count_t>(std::min<FrameCount>(
         frames, FrameCount(std::numeric_limits<sf_count_t>::max())));
@@ -209,6 +243,7 @@ FrameCount AudioFileReader::read(float* destination, FrameCount frames) {
 Result AudioFileReader::readStatus() const {
     if (!isOpen())
         return Result::fail(EngineError::InvalidArgument, "audio reader is closed");
+    if (m_impl->source) return m_impl->source->readStatus();
     if (m_impl->native) return m_impl->native->readStatus();
     if (sf_error(m_impl->file) != SF_ERR_NO_ERROR)
         return Result::fail(EngineError::UnsupportedFormat,

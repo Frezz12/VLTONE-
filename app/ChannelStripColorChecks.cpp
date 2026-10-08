@@ -43,7 +43,7 @@ bool ChannelStrip::checkColorForTest() {
   };
   daw::collab::CommandGateway gateway;
   ::collab::CollaborationCommandBridge bridge(nullptr, &gateway);
-  daw::EngineController controller;
+  daw::EngineController controller{daw::EngineController::TestRuntime{}};
   if (!controller.initialize(48000, 256, false))
     return false;
   controller.attachSharedMutationSink(bridge);
@@ -311,7 +311,7 @@ bool ChannelStrip::checkColorForTest() {
   check(master.findChild<ui::MiniModuleRack *>() != nullptr,
         "Master exposes rack");
   {
-    daw::EngineController large;
+    daw::EngineController large{daw::EngineController::TestRuntime{}};
     large.initialize(48000, 256, false);
     std::string first, last;
     for (int i = 0; i < 40; ++i) {

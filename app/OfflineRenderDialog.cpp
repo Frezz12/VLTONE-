@@ -75,7 +75,8 @@ OfflineRenderDialog::OfflineRenderDialog(
     daw::EngineController& controller,
     std::vector<daw::EngineController::ClipAddress> clips,
     QWidget* parent)
-    : QDialog(parent), m_controller(controller), m_clips(std::move(clips)) {
+    : QDialog(parent), m_controller(controller), m_clips(std::move(clips)),
+      m_scratch(daw::EngineController::SecondaryRuntime{}, controller) {
     setWindowTitle(tr("Offline Render"));
     setModal(true);
     setObjectName(QStringLiteral("OfflineRenderDialog"));
@@ -378,7 +379,7 @@ void OfflineRenderDialog::openEditor(const QString& insertId) {
         open->activateWindow();
         return;
     }
-    if (!m_scratch.insertInstance(m_chainTrackId, insertId.toStdString())) {
+    if (!m_scratch.hasInsert(m_chainTrackId, insertId.toStdString())) {
         QMessageBox::information(this, tr("Offline Render"),
                                  tr("This plugin is not available."));
         return;
@@ -421,10 +422,7 @@ bool OfflineRenderDialog::eventFilter(QObject* watched, QEvent* event) {
             if (auto* window = qobject_cast<QDialog*>(editor->parentWidget())) {
                 const QSize requested =
                     static_cast<QResizeEvent*>(event)->size();
-                auto* plugin = m_scratch.insertInstance(
-                    m_chainTrackId, editor->insertId().toStdString());
-                if (editor->isEmbedded() && plugin &&
-                    !plugin->editorCanResize()) {
+                if (editor->isEmbedded() && !editor->canResizeNativeEditor()) {
                     window->setFixedSize(requested);
                 } else {
                     window->resize(requested);
@@ -655,7 +653,7 @@ void OfflineRenderDialog::applyTheme() {
     background: transparent; color: %TEXT2%; border: 1px solid %SEP%;
     border-radius: %RADIUS%px; padding: 2px 8px;
 }
-#OfflinePresetSave:hover { color: %TEXT%; background: %HOVER%; border-color: %ACCENT%; }
+#OfflinePresetSave:hover { color: %TEXT%; background: %HOVER%; }
 #OfflinePresetCards {
     background: %WELL%; color: %TEXT%; border: 1px solid %SEP%;
     border-radius: %RADIUS%px; outline: none;
@@ -664,7 +662,7 @@ void OfflineRenderDialog::applyTheme() {
     background: %ELEVATED%; color: %TEXT%; border: 1px solid %SEP%;
     border-radius: %RADIUS%px; padding: 5px; margin: 2px;
 }
-#OfflinePresetCards::item:hover { background: %HOVER%; border-color: %ACCENT%; }
+#OfflinePresetCards::item:hover { background: %HOVER%; }
 #OfflinePresetCards::item:selected { background: %SELECTED%; border-color: %ACCENT%; }
 #OfflinePresetCards::item:disabled { background: transparent; color: %TEXT2%; border: none; }
 #OfflineClipsPanel { margin-top: 8px; padding-top: 10px; }
@@ -699,7 +697,7 @@ bool OfflineRenderDialog::checkForTest(const QString& screenshotPath) {
     QTemporaryDir dir;
     if (!dir.isValid()) return false;
     qputenv("DAW_PRESET_ROOT", dir.filePath(QStringLiteral("presets")).toUtf8());
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     controller.setRecordDirectory(dir.path().toStdString());
     const auto file = (dir.path() + QStringLiteral("/Vocal.wav")).toStdString();

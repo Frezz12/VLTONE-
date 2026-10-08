@@ -88,8 +88,10 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                 "out-of-range VST program is saved as absent metadata");
     preset->stopProcessing(); preset->deactivate();
 
+    for (const auto hosting : {PluginManager::HostingMode::Local, PluginManager::HostingMode::Isolated})
     for (const std::string scope : {"track", "group", "master", "clip", "dual-mono"}) {
-        EngineController controller;
+        EngineController controller{EngineController::TestRuntime{}};
+        controller.pluginManager().setHostingMode(hosting, DAW_PLUGIN_HOST_PATH);
         require(bool(controller.initialize(48000, kBlock, false)), "initialize controller");
         const auto track = controller.addTrack(TrackKind::Audio, "Voice");
         const auto clip = controller.importAudio(source, track, 0);
@@ -116,8 +118,17 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
         live.setGraph(controller.routingGraph());
         engine::AudioBlock block(outputs, 2, kBlock);
         const auto play = [&] {
-            for (unsigned i = 0; i < 4; ++i)
-                require(bool(live.process(block, kBlock, i * kBlock, true)), "live DSP");
+            for (unsigned i = 0; i < 4; ++i) {
+                const auto result = live.process(block, kBlock, i * kBlock, true);
+                if (!result) {
+                    const auto status = controller.insertRuntimeStatus(channel, slot);
+                    std::cerr << descriptor.name << " / " << scope
+                              << (hosting == PluginManager::HostingMode::Isolated ? " / isolated" : " / local")
+                              << " / block " << i << ": " << engine::describe(result.error())
+                              << "; " << status.detail << '\n';
+                }
+                require(bool(result), "live DSP");
+            }
         };
         play(); // consume startup/host events before loading the native preset
         eachSide([&] { require(controller.insertInstance(channel, slot)->loadState(state), "load preset"); });
@@ -142,7 +153,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                     descriptor.name + " / " + scope + ": export retains audible settings");
         };
         render(0.1f, 0.1f);
-        if (descriptor.format == Format::Vst3) {
+        if (descriptor.format == Format::Vst3 && hosting == PluginManager::HostingMode::Local) {
             // The native editor queues directly in the format, without a
             // PluginNode host event. Export before the next device callback.
             environment("DAW_TEST_VST3_EDITOR_EDIT", "1");
@@ -216,6 +227,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
             checkSplitAudio();
         }
         std::cout << "PASS " << descriptor.name << " / " << scope
+                  << (hosting == PluginManager::HostingMode::Isolated ? " / isolated" : " / local")
                   << ": preset, pending edits, cancellation, live audio\n";
     }
 }

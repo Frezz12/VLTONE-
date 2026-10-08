@@ -10,6 +10,7 @@
 #else
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -30,6 +31,7 @@ struct SampleStorage::Mapping {
     FILE* file = nullptr;
     float* address = nullptr;
     std::size_t bytes = 0;
+    bool readOnly = false;
 #if defined(_WIN32)
     HANDLE handle = nullptr;
 #endif
@@ -100,11 +102,53 @@ SampleStorage::SampleStorage(std::size_t samples) {
 SampleStorage::~SampleStorage() {
     residentSampleBytes.fetch_sub(m_memory.size() * sizeof(float), std::memory_order_relaxed);
 }
+SampleStorage::SampleStorage(const std::filesystem::path& path, std::size_t samples) {
+    if (!samples || samples > std::numeric_limits<std::size_t>::max() / sizeof(float))
+        throw std::length_error("invalid mapped audio size");
+    auto mapping = std::make_unique<Mapping>();
+    mapping->bytes = samples * sizeof(float);
+    mapping->readOnly = true;
+#if defined(_WIN32)
+    const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot open audio resource");
+    LARGE_INTEGER size{};
+    BY_HANDLE_FILE_INFORMATION info{};
+    const bool valid = GetFileSizeEx(file, &size) && GetFileInformationByHandle(file, &info) &&
+        !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) &&
+        size.QuadPart >= 0 && std::uint64_t(size.QuadPart) == mapping->bytes;
+    if (valid) mapping->handle = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    CloseHandle(file);
+    if (!valid) throw std::runtime_error("invalid audio resource file or size");
+    if (mapping->handle) mapping->address = static_cast<float*>(MapViewOfFile(
+        mapping->handle, FILE_MAP_READ, 0, 0, mapping->bytes));
+#else
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) throw std::runtime_error("cannot open audio resource");
+    struct stat info{};
+    const bool valid = fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_size >= 0 &&
+        std::uint64_t(info.st_size) == mapping->bytes;
+    if (valid) {
+        void* address = mmap(nullptr, mapping->bytes, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (address != MAP_FAILED) mapping->address = static_cast<float*>(address);
+    }
+    close(fd);
+    if (!valid) throw std::runtime_error("invalid audio resource file or size");
+#endif
+    if (!mapping->address) throw std::runtime_error("cannot map audio resource read-only");
+#if defined(_WIN32)
+    CloseHandle(mapping->handle);
+    mapping->handle = nullptr;
+#endif
+    m_mapping = std::move(mapping);
+}
 float* SampleStorage::data() noexcept {
+    if (readOnly()) return nullptr;
     return m_mapping ? m_mapping->address : m_memory.data();
 }
 const float* SampleStorage::data() const noexcept {
     return m_mapping ? m_mapping->address : m_memory.data();
 }
 bool SampleStorage::fileBacked() const noexcept { return bool(m_mapping); }
+bool SampleStorage::readOnly() const noexcept { return m_mapping && m_mapping->readOnly; }
 } // namespace daw::engine

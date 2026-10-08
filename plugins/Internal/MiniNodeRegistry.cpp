@@ -11,10 +11,8 @@
 
 namespace daw::plugins::mini {
 const char *portTypeName(PortType t) noexcept {
-  return t == PortType::Audio  ? "Audio"
-         : t == PortType::Function ? "Function"
-         : t == PortType::Gate ? "Gate"
-                               : "Number";
+  constexpr const char *names[] = {"Audio", "Number", "Gate", "Function", "Integer", "Array", "List", "Buffer"};
+  return names[unsigned(t)];
 }
 std::span<const NodeDescription> nodeRegistry() {
   static const auto registry = [] {
@@ -218,6 +216,7 @@ std::span<const NodeDescription> nodeRegistry() {
     value(reverb, "decay", "Decay", .1, 12, 2, "s", true);
     value(reverb, "damping", "Damping", 0, 1, .5);
     value(reverb, "room", "Space", 0, 1, 0, "", false, false, {"Room", "Hall"});
+    appendProgrammingNodes(r);
     return r;
   }();
   return registry;
@@ -228,10 +227,51 @@ const NodeDescription *nodeDescription(std::string_view id, unsigned version) {
       return &n;
   return nullptr;
 }
-NodeDescription describeNode(const NodeDefinition &n) {
+NodeDescription describeNode(const NodeDefinition &n, const MiniModuleDefinition *graph) {
   const auto *registered = nodeDescription(n.type, n.version);
   if (!registered) return {};
   auto d = *registered;
+  if (!n.label.empty()) d.name = n.label;
+  const auto valueType = parsePortType(n.valueType).value_or(PortType::Number);
+  const auto collectionType = valueType == PortType::List ? PortType::List : PortType::Array;
+  if (n.type == "subgraph" && graph) {
+    for (const auto &g : graph->subgraphs) if (g.id == n.subgraph) {
+      d.name = n.label.empty() ? g.name : n.label;
+      const auto port = [](const GraphPort &p) {
+        return PortDescription{p.id, p.name, parsePortType(p.type).value_or(PortType::Number), false, -1, p.signature, p.capacity};
+      };
+      for (const auto &p : g.inputs) {
+        auto v = port(p);
+        if (v.type == PortType::Number || v.type == PortType::Integer || v.type == PortType::Gate) {
+          v.parameter = int(d.parameters.size());
+          d.parameters.push_back({p.id, p.name, p.unit, p.minimum, p.maximum, p.initial, p.logarithmic});
+        }
+        d.inputs.push_back(v);
+      }
+      for (const auto &p : g.outputs) d.outputs.push_back(port(p));
+      return d;
+    }
+    return {};
+  }
+  if (n.type == "history") {
+    d.outputs[0].type = valueType;
+    d.outputs[0].capacity = n.capacity;
+    for (auto &p : d.inputs) if (p.id == "next") p.type = valueType;
+  }
+  if (n.type == "wire" || n.type == "subgraph_input" || n.type == "subgraph_output") {
+    d.outputs[0].type = valueType;
+    d.outputs[0].signature = n.signature;
+    d.outputs[0].capacity = n.capacity;
+    d.parameters.push_back({"default", "Default", "", -1e6, 1e6, 0});
+    if (!d.inputs.empty()) { d.inputs[0].type = valueType; d.inputs[0].parameter = 0; d.inputs[0].signature = n.signature; }
+  }
+  for (auto &p : d.outputs) if (p.type == PortType::Array || p.type == PortType::List) p.capacity = n.capacity;
+  if (n.type == "biquad_coefficients") d.outputs[0].capacity = 5;
+  if (n.type == "length" || n.type == "get" || n.type == "set" || n.type == "clear" ||
+      n.type == "sum" || n.type == "collection_min" || n.type == "collection_max" || n.type == "map" || n.type == "reduce") {
+    d.inputs[0].type = collectionType;
+    if (n.type == "set" || n.type == "clear" || n.type == "map") d.outputs[0].type = collectionType;
+  }
   if (n.type != "cpp_function" || !n.function) return d;
   const auto &f = *n.function;
   d.name = f.entry;
@@ -256,8 +296,8 @@ NodeDescription describeNode(const NodeDefinition &n) {
                        false, -1, callableSignature(f)});
   return d;
 }
-std::vector<PortDescription> inputPorts(const NodeDefinition &n) {
-  return describeNode(n).inputs;
+std::vector<PortDescription> inputPorts(const NodeDefinition &n, const MiniModuleDefinition *d) {
+  return describeNode(n, d).inputs;
 }
 bool compatiblePorts(const PortDescription &a, const PortDescription &b) {
   return a.type == b.type &&
@@ -271,19 +311,22 @@ std::vector<PortDescription> outputPorts(const NodeDefinition &n,
       result.push_back({c.id, c.name, PortType::Number});
     return result;
   }
-  return describeNode(n).outputs;
+  return describeNode(n, &d).outputs;
 }
 NodeDefinition makeNode(std::string_view type, std::string id) {
   NodeDefinition n{std::move(id), std::string(type)};
   if (const auto *d = nodeDescription(type))
     for (const auto &p : d->parameters)
       n.parameters.push_back({p.id, p.initial});
+  if (type == "curve") n.values = {-1, -1, 0, 0, 1, 1};
+  if (type == "array") n.values = {1};
+  if (type == "list" || type == "append" || type == "remove") n.valueType = "list";
   return n;
 }
 std::vector<bool> reachableNodes(const MiniModuleDefinition &d) {
   std::vector<bool> reachable(d.nodes.size());
   for (unsigned i = 0; i < d.nodes.size(); ++i)
-    reachable[i] = d.nodes[i].type == "output";
+    reachable[i] = d.nodes[i].type == "output" || d.nodes[i].type == "subgraph_output";
   for (unsigned pass = 0; pass < d.nodes.size(); ++pass) {
     bool changed = false;
     for (const auto &e : d.connections) {
@@ -303,12 +346,17 @@ std::vector<bool> reachableNodes(const MiniModuleDefinition &d) {
   }
   return reachable;
 }
-std::string validateTypedGraph(const MiniModuleDefinition &d) {
+std::string validateTypedGraph(const MiniModuleDefinition &d, bool nested) {
+  if (d.version < 5) {
+    if (d.nodes.size() > 64) return "Legacy Creator graphs support 64 nodes";
+    for (const auto &n : d.nodes) if (const auto *description = nodeDescription(n.type, n.version))
+      if (description->operation >= Operation::Wire) return "Programming nodes require mini-module format 5";
+  }
   std::map<std::string, unsigned> ids;
   unsigned inputs = 0, outputs = 0, interfaces = 0;
   for (unsigned i = 0; i < d.nodes.size(); ++i) {
     const auto &n = d.nodes[i];
-    const auto description = describeNode(n);
+    const auto description = describeNode(n, &d);
     const auto *desc = description.id.empty() ? nullptr : &description;
     if (n.id.empty() || n.id.size() > 128 || !ids.emplace(n.id, i).second)
       return "Invalid or duplicate node ID: " + n.id;
@@ -341,7 +389,8 @@ std::string validateTypedGraph(const MiniModuleDefinition &d) {
         return "Invalid parameter: " + n.id + "." + p.id;
     }
   }
-  if (inputs != 1 || outputs != 1 || interfaces > 1)
+  if ((!nested && (inputs != 1 || outputs != 1 || interfaces > 1)) ||
+      (nested && (inputs || outputs || interfaces)))
     return "A graph needs one Input, one Output and at most one Interface";
   std::set<std::pair<std::string, std::string>> destinations;
   std::vector<unsigned> degree(d.nodes.size());
@@ -353,7 +402,7 @@ std::string validateTypedGraph(const MiniModuleDefinition &d) {
       return "Connection refers to a missing node";
     const auto &a = d.nodes[ids[e.from]], &b = d.nodes[ids[e.to]];
     const auto ports = outputPorts(a, d);
-    const auto description = describeNode(b);
+    const auto description = describeNode(b, &d);
     const auto *desc = &description;
     auto src = std::find_if(ports.begin(), ports.end(),
                             [&](const auto &p) { return p.id == e.fromPort; });
@@ -371,7 +420,7 @@ std::string validateTypedGraph(const MiniModuleDefinition &d) {
     if (src->type == PortType::Function) {
       functionNext[ids[e.from]].push_back(ids[e.to]);
       ++functionDegree[ids[e.to]];
-    } else {
+    } else if (d.version < 5 || !isMemoryWrite(b, e.toPort)) {
       next[ids[e.from]].push_back(ids[e.to]);
       ++degree[ids[e.to]];
     }
@@ -385,7 +434,7 @@ std::string validateTypedGraph(const MiniModuleDefinition &d) {
       if (!--degree[n])
         ready.push_back(n);
   if (ready.size() != d.nodes.size())
-    return "Graph contains a feedback cycle";
+    return "Graph contains a feedback cycle without an explicit previous-sample memory";
   ready.clear();
   for (unsigned i = 0; i < functionDegree.size(); ++i)
     if (!functionDegree[i]) ready.push_back(i);
@@ -398,7 +447,7 @@ std::string validateTypedGraph(const MiniModuleDefinition &d) {
   for (unsigned i = 0; i < d.nodes.size(); ++i)
     if (reachable[i]) {
       const auto &n = d.nodes[i];
-      for (const auto &p : inputPorts(n))
+      for (const auto &p : inputPorts(n, &d))
         if (p.required && !destinations.contains({n.id, p.id}))
           return "Connect required input: " + n.id + "." + p.id;
     }

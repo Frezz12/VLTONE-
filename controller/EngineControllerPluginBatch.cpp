@@ -13,6 +13,27 @@ namespace {
 audio::Result batchError(const std::string& message) {
     return audio::Result::fail(audio::EngineError::InvalidArgument, message);
 }
+
+bool capturedSide(const AudioPluginStateSnapshot& snapshot,
+                  EngineController::ChainSlotSnapshot& slot, bool right = false) {
+    auto& bytes = right ? slot.rightState : slot.state;
+    auto& parameters = right ? slot.model.rightParameters : slot.model.parameters;
+    const auto format = slot.model.format;
+    if (!snapshot.exists || (snapshot.failed && !snapshot.isolated) ||
+        (snapshot.supportsState && !snapshot.stateCaptured)) return false;
+    bytes = snapshot.state;
+    (right ? slot.rightSource : slot.source) = snapshot.sample;
+    (right ? slot.rightSourcePath : slot.sourcePath) = snapshot.samplePath;
+    // Native AU controls need not notify the parameter mirror in the document.
+    if (snapshot.failed || format == PluginFormat::AudioUnit ||
+        (!snapshot.supportsState && !snapshot.documentParametersAuthoritative))
+        parameters = snapshot.parameters;
+    appendMissingParameters(parameters, snapshot.parameters);
+    overlayPendingParameters(parameters, snapshot.pending);
+    return true;
+}
+
+
 }
 
 bool EngineController::submitSharedPluginSnapshotBatch(std::shared_ptr<collab::BatchCommand> batch,
@@ -83,46 +104,61 @@ audio::Result EngineController::validatePluginBatch(
     return audio::Result::ok();
 }
 
+audio::Result EngineController::captureInsertState(const std::string& channelId,
+    const InsertModel& model, ChainSlotSnapshot& slot) {
+    slot = {};
+    slot.model = model;
+    const auto id = channelId.empty() ? kMasterChannelId : channelId;
+    std::vector<AudioPluginStateRequest> requests{{{id, model.id}}};
+    if (model.channelMode == PluginChannelMode::DualMono) requests.push_back({{id, model.id, true}});
+    for (auto& request : requests) request.purpose = AudioPluginSnapshotPurpose::RecoverFailed;
+    const auto snapshots = m_runtime.pluginStateSnapshots(requests);
+    const bool left = capturedSide(snapshots[0], slot);
+    const bool right = model.channelMode != PluginChannelMode::DualMono ||
+        capturedSide(snapshots[1], slot, true);
+    return left && right ? audio::Result::ok()
+                        : batchError("Could not capture settings for " + model.name);
+}
+
+audio::Result EngineController::captureInsertChain(const std::string& channelId,
+    const std::vector<std::string>& slotIds, std::vector<ChainSlotSnapshot>& chain) {
+    chain.clear();
+    std::vector<ChainSlotSnapshot> captured;
+    std::vector<AudioPluginStateRequest> requests;
+    captured.reserve(slotIds.size());
+    for (const auto& id : slotIds) {
+        const auto* model = insertModel(channelId, id);
+        if (!model) return batchError("A plugin slot is no longer available.");
+        captured.push_back({});
+        captured.back().model = *model;
+        const auto channel = channelId.empty() ? kMasterChannelId : channelId;
+        requests.push_back({{channel, id}});
+        if (model->channelMode == PluginChannelMode::DualMono) requests.push_back({{channel, id, true}});
+    }
+    for (auto& request : requests) request.purpose = AudioPluginSnapshotPurpose::RecoverFailed;
+    const auto snapshots = m_runtime.pluginStateSnapshots(requests);
+    std::size_t next = 0;
+    for (auto& slot : captured) {
+        if (!capturedSide(snapshots[next++], slot) ||
+            (slot.model.channelMode == PluginChannelMode::DualMono &&
+             !capturedSide(snapshots[next++], slot, true)))
+            return batchError("Could not capture settings for " + slot.model.name);
+    }
+    chain = std::move(captured);
+    return audio::Result::ok();
+}
+
 audio::Result EngineController::capturePluginBatchChain(
     const PluginBatchTarget& target, const std::vector<std::string>& slotIds,
     ChannelSnapshot& chain) {
     chain = {};
-    const engine::RealtimeEngine::RenderGate gate(m_engine);
     const auto* models = target.clipId.empty() ? channelInserts(target.trackId)
                                               : clipFx(target.trackId, target.clipId);
     if (!models) return batchError("The source is no longer available.");
-    for (const auto& id : slotIds) {
-        const auto model = std::find_if(models->begin(), models->end(),
-            [&](const auto& slot) { return slot.id == id; });
-        if (model == models->end()) return batchError("A draft effect is no longer available.");
-        auto* live = liveInsertSlot(target.trackId, id);
-        if (!live || !live->node || !live->node->instance())
-            return batchError("A draft plugin is not loaded.");
-        ChainSlotSnapshot slot;
-        slot.model = *model;
-        if (!live->node->instance()->saveState(slot.state))
-            return batchError("Could not capture settings for " + model->name);
-        if (model->channelMode == PluginChannelMode::DualMono &&
-            (!live->rightNode || !live->rightNode->instance() ||
-             !live->rightNode->instance()->saveState(slot.rightState)))
-            return batchError("Could not capture the right-channel plugin settings.");
-        // Audio Unit native controls may not notify the host. A stale mirror
-        // must never overwrite the freshly captured vendor state on Apply.
-        if (model->format == PluginFormat::AudioUnit) {
-            const auto refresh = [](const auto& node, auto& parameters) {
-                parameters.clear();
-                const auto& infos = node->instance()->parameters();
-                for (std::size_t i = 0; i < infos.size(); ++i) {
-                    const double value = node->instance()->parameterValue(std::uint32_t(i));
-                    if (std::isfinite(value)) parameters.push_back({infos[i].id, value});
-                }
-            };
-            refresh(live->node, slot.model.parameters);
-            if (model->channelMode == PluginChannelMode::DualMono) refresh(live->rightNode, slot.model.rightParameters);
-        }
-        chain.inserts.push_back(std::move(slot));
-    }
-    return audio::Result::ok();
+    for (const auto& id : slotIds)
+        if (std::none_of(models->begin(), models->end(), [&](const auto& slot) { return slot.id == id; }))
+            return batchError("A draft effect is no longer available.");
+    return captureInsertChain(target.trackId, slotIds, chain.inserts);
 }
 
 audio::Result EngineController::appendPluginBatch(
@@ -131,7 +167,7 @@ audio::Result EngineController::appendPluginBatch(
     addedIds.clear();
     if (const auto valid = validatePluginBatch(targets, chain.inserts.size()); !valid) return valid;
     if (chain.inserts.empty()) return batchError("Add an effect first.");
-    if (isRecording() || m_exportInProgress || m_pluginAuditionNode)
+    if (isRecording() || m_exportInProgress || m_pluginAuditionOwner)
         return batchError("Stop recording, rendering or preview before applying plugins.");
     if (cloudProjectBound()) {
         if (!sharedEditingAllowed() || !m_sharedAssetMutationSink || m_sharedMutationSink->commandSchemaVersion() < 6)
@@ -247,35 +283,21 @@ audio::Result EngineController::appendPluginBatch(
     };
     const auto apply = [this, states, settings, writeModels](bool after) -> audio::Result {
         if (!writeModels(after)) return batchError("A selected target was removed.");
-        const auto rollback = [&] { writeModels(!after); (void)rebuildGraph(); };
+        // Failed applySession retains the acknowledged graph and native owners.
+        const auto rollback = [&] { writeModels(!after); };
         try {
-        // Newly constructed instances stay unpublished until every opaque
-        // state and parameter mirror has been restored successfully.
-        if (const auto built = rebuildGraph(false, false); !built) { rollback(); return built; }
+        std::vector<AudioPluginStateEdit> restores;
         if (after) {
             for (const auto& state : *states) {
                 for (std::size_t i = 0; i < settings->inserts.size(); ++i) {
-                    const auto& model = state.after[state.before.size() + i];
-                    const auto& saved = settings->inserts[i];
-                    auto* live = liveInsertSlot(state.target.trackId, model.id);
-                    const auto restore = [this](const auto& node, const auto& bytes, const auto& parameters) {
-                        if (!node || !node->instance()) return false;
-                        if (!bytes.empty() && !node->instance()->loadState(bytes)) return false;
-                        node->discardPendingEvents();
-                        applyStoredParameters(*node, parameters);
-                        node->invalidatePrepare();
-                        return true;
-                    };
-                    bool ok = live && restore(live->node, saved.state, model.parameters);
-                    if (ok && model.channelMode == PluginChannelMode::DualMono)
-                        ok = restore(live->rightNode, saved.rightState.empty() ? saved.state : saved.rightState,
-                                     model.rightParameters.empty() ? model.parameters : model.rightParameters);
-                    if (!ok) { rollback(); return batchError("Could not load plugin settings. No plugins were applied."); }
+                    auto saved = settings->inserts[i];
+                    saved.model = state.after[state.before.size() + i];
+                    appendInsertStateEdits(restores, state.target.trackId, saved);
                 }
             }
         }
-        const auto committed = m_engine.commitGraph();
-        if (!committed) { rollback(); return batchError(std::string(engine::describe(committed.error()))); }
+        const auto committed = rebuildGraph(false, AudioPluginLoadPolicy::Required, restores);
+        if (!committed) { rollback(); return batchError(committed.message()); }
         return audio::Result::ok();
         } catch (const std::exception& error) {
             rollback(); return batchError(std::string("Could not apply plugin settings: ") + error.what());
@@ -298,7 +320,7 @@ audio::Result EngineController::createPluginBatchDraft(
     const PluginBatchTarget& source, std::shared_ptr<EngineController>& out) {
     if (const auto valid = validatePluginBatch({source}); !valid) return valid;
     auto snapshot = captureRecoverySnapshot();
-    auto draft = std::make_shared<EngineController>();
+    auto draft = std::make_shared<EngineController>(SecondaryRuntime{}, *this);
     if (const auto ready = draft->initialize(m_sampleRate, m_bufferSize, false); !ready) return ready;
     draft->m_pluginManager.copyCatalogFrom(m_pluginManager);
     draft->m_project = std::move(snapshot.project);
@@ -363,25 +385,20 @@ audio::Result EngineController::createPluginBatchDraft(
         for (auto& clip : track.clips) clip.inserts.clear();
     }
     draft->m_project.masterInserts.clear();
-    if (const auto built = draft->rebuildGraph(); !built) return built;
     std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
     for (const auto& state : snapshot.pluginStates) states[state.fileName] = &state.bytes;
+    std::vector<AudioPluginStateEdit> restores;
     const auto restore = [&](const std::string& track, const InsertModel& model) {
         if (!model.isLoaded()) return true;
-        auto* live = draft->liveInsertSlot(track, model.id);
-        if (!live) return model.bypassed;
-        const auto restoreNode = [&](const auto& node, const auto& file, const auto& parameters) {
-            if (!node || !node->instance()) return model.bypassed;
-            if (const auto bytes = states.find(file); bytes != states.end())
-                if (!node->instance()->loadState(*bytes->second)) return false;
-            node->discardPendingEvents();
-            draft->applyStoredParameters(*node, parameters);
-            node->invalidatePrepare();
-            return true;
+        const auto bytes = [&](const std::string& file) -> const std::vector<std::uint8_t>& {
+            static const std::vector<std::uint8_t> empty;
+            const auto found = states.find(file);
+            return found == states.end() ? empty : *found->second;
         };
-        return restoreNode(live->node, model.stateFile, model.parameters) &&
-            (model.channelMode != PluginChannelMode::DualMono ||
-             restoreNode(live->rightNode, model.rightStateFile, model.rightParameters));
+        ChainSlotSnapshot saved;
+        saved.model = model; saved.state = bytes(model.stateFile); saved.rightState = bytes(model.rightStateFile);
+        draft->appendInsertStateEdits(restores, track, saved);
+        return true;
     };
     for (const auto& track : draft->m_project.tracks) {
         if (!restore(track.id, track.instrument)) return batchError("Could not prepare the source instrument.");
@@ -393,9 +410,15 @@ audio::Result EngineController::createPluginBatchDraft(
             for (const auto& slot : clip.inserts)
                 if (!restore(track.id, slot)) return batchError("Could not prepare source Clip FX.");
     }
-    if (const auto built = draft->rebuildGraph(); !built) return built;
-    draft->m_engine.transport().setTempo(m_project.tempo);
-    draft->m_engine.transport().setTimeSignature(m_project.timeSigNumerator, m_project.timeSigDenominator);
+    auto session = draft->prepareAudioSession(AudioPluginLoadPolicy::Required);
+    // The former draft allowed an unavailable bypassed slot, but required every
+    // audible source processor. Preserve that policy independently per slot.
+    for (auto& chain : session.pluginChains) for (auto& slot : chain.slots)
+        if (slot.bypassed) slot.loadPolicy = AudioPluginLoadPolicy::PreserveUnavailable;
+    if (const auto built = draft->publishAudioSession(std::move(session), false, restores); !built) return built;
+    draft->m_runtime.transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = m_project.tempo});
+    draft->m_runtime.transportCommand({.action = AudioTransportCommand::Action::TimeSignature,
+        .numerator = m_project.timeSigNumerator, .denominator = m_project.timeSigDenominator});
     double start = std::numeric_limits<double>::max(), end = 0.0;
     for (const auto& track : draft->m_project.tracks)
         for (const auto& clip : track.clips)
@@ -411,48 +434,25 @@ audio::Result EngineController::createPluginBatchDraft(
     return audio::Result::ok();
 }
 
-class EngineController::PluginAuditionNode final : public engine::Node {
-public:
-    explicit PluginAuditionNode(std::shared_ptr<EngineController> owner) : m_owner(std::move(owner)) {}
-    std::string_view name() const noexcept override { return "Plugin draft audition"; }
-    bool isSource() const noexcept override { return true; }
-    engine::MidiNodeRole midiRole() const noexcept override { return engine::MidiNodeRole::None; }
-    void process(const engine::ProcessContext& context) override {
-        if (context.offline || context.sampleRate != m_owner->m_sampleRate ||
-            context.frames > m_owner->m_bufferSize) {
-            for (engine::ChannelCount ch = 0; ch < context.output.numChannels(); ++ch)
-                engine::dsp::clear(context.output.channel(ch));
-            return;
-        }
-        m_owner->m_engine.renderBlock(context.output, nullptr, 0, context.frames);
-    }
-private:
-    std::shared_ptr<EngineController> m_owner;
-};
-
 audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineController> draft) {
     if (!draft || draft.get() == this || draft->m_liveDeviceAllowed ||
         draft->m_sampleRate != m_sampleRate || draft->m_bufferSize != m_bufferSize ||
-        isRecording() || m_exportInProgress || m_pluginAuditionNode)
+        isRecording() || m_exportInProgress || m_pluginAuditionOwner)
         return batchError("Plugin preview is unavailable right now.");
-    pause();
-    stopPreview();
-    const engine::RealtimeEngine::RenderGate gate(m_engine);
-    m_pluginAuditionOwner = draft;
-    draft->m_externalPreviewDriven = true;
-    m_pluginAuditionNode = std::make_shared<PluginAuditionNode>(draft);
-    const auto result = rebuildGraph();
-    if (!result) { stopPluginAudition(); return result; }
-    draft->play();
+    draft->stopPreview();
+    draft->flushDeferredClipSync();
+    draft->flushSamplerPrecompute();
+    draft->applyTransportStartPolicy();
+    const auto result = m_runtime.startAudition(draft->m_audioRuntime);
+    if (!result) return result;
+    m_pluginAuditionOwner = std::move(draft);
+    m_pluginAuditionOwner->m_externalPreviewDriven = true;
     return audio::Result::ok();
 }
 
 void EngineController::stopPluginAudition() {
-    if (!m_pluginAuditionNode) return;
-    const engine::RealtimeEngine::RenderGate gate(m_engine);
-    m_pluginAuditionNode.reset();
-    (void)rebuildGraph();
-    m_pluginAuditionOwner->pause();
+    if (!m_pluginAuditionOwner) return;
+    m_runtime.stopAudition();
     m_pluginAuditionOwner->m_externalPreviewDriven = false;
     m_pluginAuditionOwner.reset();
 }

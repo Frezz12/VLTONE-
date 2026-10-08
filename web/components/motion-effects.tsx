@@ -8,7 +8,8 @@ export function MotionEffects() {
 
   useEffect(() => {
     const elements = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const animations = new Set<Animation>();
     if (!("IntersectionObserver" in window)) return;
 
     const observer = new IntersectionObserver((entries) => {
@@ -16,7 +17,8 @@ export function MotionEffects() {
         if (!entry.isIntersecting) continue;
         const element = entry.target as HTMLElement;
         const requestedDelay = Number(element.dataset.reveal);
-        element.animate(
+        const reducedMotion = motionPreference.matches;
+        const animation = element.animate(
           reducedMotion ? [
             { opacity: 0 },
             { opacity: 1 },
@@ -31,12 +33,19 @@ export function MotionEffects() {
             fill: "backwards",
           },
         );
+        animations.add(animation);
+        animation.onfinish = () => animations.delete(animation);
         observer.unobserve(element);
       }
     }, { rootMargin: "0px 0px -8%", threshold: 0.08 });
 
     elements.forEach((element) => observer.observe(element));
-    return () => observer.disconnect();
+    const cancelMotion = () => {
+      animations.forEach(animation => animation.cancel());
+      animations.clear();
+    };
+    motionPreference.addEventListener("change", cancelMotion);
+    return () => { observer.disconnect(); cancelMotion(); motionPreference.removeEventListener("change", cancelMotion); };
   }, [pathname]);
 
   return null;

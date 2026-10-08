@@ -1016,10 +1016,8 @@ void WebBrowserPanel::addBookmark() {
         "QDialog { background:#22232d; color:#f5f5f7; }"
         "QLabel { color:#f5f5f7; }"
         "QLineEdit { background:#171820; color:#f5f5f7; border:1px solid #454957; border-radius:6px; padding:7px; }"
-        "QLineEdit:focus { border-color:#a0cdef; }"
         "QPushButton { background:#343744; color:#f5f5f7; border:1px solid #505466; border-radius:6px; padding:7px 16px; }"
-        "QPushButton:hover { background:#454959; } QPushButton:pressed { background:#171820; }"
-        "QPushButton:focus { border-color:#a0cdef; }"));
+        "QPushButton:hover { background:#454959; } QPushButton:pressed { background:#171820; }"));
     auto* form = new QFormLayout(&dialog);
     auto* title = new BrowserAddressEdit(&dialog);
     title->setObjectName(QStringLiteral("WebShortcutTitle"));
@@ -1988,18 +1986,15 @@ QTabBar#WebTabBar QToolButton { background: #252630; border: none; color: #f5f5f
     border-radius: 15px; padding: 4px 9px; min-height: 22px;
     selection-background-color: #a0cdef; selection-color: #152536; font-size: 12px;
 }
-#WebAddress:focus, #WebFindText:focus { border-color: #a0cdef; }
 #WebMenuButton { color: #d8d9e0; background: transparent; border: 1px solid transparent; border-radius: 14px; font-size: 22px; }
 #WebMenuButton:hover { background: #2b2d38; }
 #WebMenuButton:pressed { background: #111218; }
-#WebMenuButton:focus { border-color: #a0cdef; }
 QPushButton#WebRailButton { background: #242630; border: 1px solid transparent; border-radius: 18px; }
 QPushButton#WebRailButton[railRole="home"], QPushButton#WebRailButton[railRole="settings"] { background: #c94347; }
 QPushButton#WebRailButton[railRole="bookmarks"] { background: #6464ce; }
 QPushButton#WebRailButton[railRole="history"] { background: #327c91; }
 QPushButton#WebRailButton:hover { border-color: #d6dce8; }
 QPushButton#WebRailButton:pressed { background: #111218; }
-QPushButton#WebRailButton:focus { border: 2px solid #a0cdef; }
 #WebDownloadBar { background: #20212b; border: none; border-top: 1px solid #30323d; }
 #WebPageProgress, #WebDownloadProgress { border: none; background: #20212b; border-radius: 1px; }
 #WebPageProgress::chunk, #WebDownloadProgress::chunk { background: #c94347; border-radius: 1px; }
@@ -2012,8 +2007,6 @@ QPushButton#WebBookmarksButton, QPushButton#WebBookmarkChip, QPushButton#WebBook
 QPushButton#WebBookmarksButton { color: #f5f5f7; }
 QPushButton#WebBookmarksButton:hover, QPushButton#WebBookmarkChip:hover,
 QPushButton#WebBookmarksMore:hover { color: #f5f5f7; background: #252630; }
-QPushButton#WebBookmarksButton:focus, QPushButton#WebBookmarkChip:focus,
-QPushButton#WebBookmarksMore:focus { border-color: #a0cdef; }
 )"));
     update();
 }

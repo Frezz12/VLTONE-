@@ -9,6 +9,8 @@
 #include <new>
 #include <numbers>
 #include <tuple>
+#include <chrono>
+#include <string_view>
 
 using namespace daw::plugins;
 using namespace daw::plugins::delay;
@@ -57,10 +59,27 @@ double difference(const Audio& a, const Audio& b) {
     return error;
 }
 }
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string_view(argv[1]) == "--benchmark") {
+        constexpr unsigned block = 128, blocks = 7500;
+        std::array<float, block> input{}, left{}, right{};
+        for (unsigned i = 0; i < block; ++i) input[i] = float(.3 * std::sin(i * .13));
+        const float* inputs[]{input.data(), input.data()}; float* outputs[]{left.data(), right.data()};
+        PluginProcessContext c; c.inputs = inputs; c.outputs = outputs; c.inputChannels = c.outputChannels = 2; c.frames = block;
+        for (unsigned character = 0; character < kCharacterCount; ++character) {
+            DelayInstance d; set(d, Param::Character, character); d.activate({48000, block}); d.startProcessing();
+            for (int i = 0; i < 500; ++i) d.process(c);
+            const auto start = std::chrono::steady_clock::now();
+            for (unsigned i = 0; i < blocks; ++i) d.process(c);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            std::printf("%.*s: %.3f ms for 20 s stereo, %.3f%% of one core, %.3f us/block\n",
+                int(characterName(character).size()), characterName(character).data(), ms, ms / 200, ms * 1000 / blocks);
+        }
+        return 0;
+    }
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     InternalFactory factory; auto plugin = factory.create(DelayInstance::staticDescriptor());
-    check(plugin && plugin->descriptor().name == "Flowers Delay" && plugin->descriptor().uid == "daw.delay" && plugin->descriptor().category == "Effect|Delay" && plugin->parameters().size() == 14, "Flowers Delay is registered with its stable UID and 14 parameters");
+    check(plugin && plugin->descriptor().name == "Classic Delay" && plugin->descriptor().uid == "daw.delay" && plugin->descriptor().category == "Effect|Delay" && plugin->parameters().size() == 14, "Classic Delay is registered with its stable UID and 14 parameters");
     bool ids = true; for (const auto& p : parameterTable()) ids &= p.isAutomatable && plugin->parameterIndexForId(p.id) == int(p.index) && plugin->parameterValue(p.index) == p.defaultValue;
     check(ids, "parameter metadata, defaults and IDs agree");
     for (const auto& p : parameterTable()) plugin->setParameterFromHost(p.index, p.maxValue);

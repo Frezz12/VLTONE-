@@ -4,13 +4,14 @@
 #include "Memory/PcmReadCache.hpp"
 
 #include <algorithm>
+#include <cassert>
 
 namespace daw::engine {
 
 GraphProcessor::GraphProcessor(unsigned threadCount) : m_jobs(threadCount) {
     // The sink never changes, so it is installed once rather than per block —
     // the audio thread must not write anything the workers read concurrently.
-    m_jobs.setSink(JobSink{&GraphProcessor::executeJob, this});
+    m_jobs.setSink(JobSink{&GraphProcessor::executeJob, this, &GraphProcessor::pollJobs});
 }
 
 GraphProcessor::~GraphProcessor() = default;
@@ -167,28 +168,44 @@ ProcessContext GraphProcessor::makeContext(
     context.midiInputs = std::span<const MidiBuffer* const>(
         graph.midiInputScratch.data() + first, entry.inputCount);
     context.midiOutput = midiOutput;
+    context.deadlineNanos = m_deadline;
     return context;
 }
 
-void GraphProcessor::runNode(const CompiledGraph& graph,
+bool GraphProcessor::runNode(const CompiledGraph& graph,
                              std::uint32_t nodeIndex,
                              unsigned workerIndex) noexcept {
     for (;;) {
-    const auto& entry = graph.nodes[nodeIndex];
+        const auto& entry = graph.nodes[nodeIndex];
+        const ProcessContext context = makeContext(graph, entry);
+        const PcmReadScope pcmRead(!m_offline);
+        const bool profiling = m_jobs.profiling();
+        const auto started = profiling || !m_nodeCosts.empty() ? rt::nowNanos() : 0;
+        if (!entry.node->beginProcess(context)) {
+            // Only a node declaring deferred work at compile time may suspend.
+            const auto index = entry.deferredIndex;
+            assert(index < graph.deferredNodes.size());
+            graph.deferredStarted[index] = started;
+            m_deferredCount.fetch_add(1, std::memory_order_relaxed);
+            graph.deferredPending[index].value.store(1, std::memory_order_release);
+            return false;
+        }
+        if (!m_nodeCosts.empty()) m_nodeCosts[nodeIndex] = double(rt::nowNanos() - started);
+        if (profiling) m_jobs.recordProfile(workerIndex,
+            {graph.generation, rt::nowNanos() - started, m_position,
+             entry.id, workerIndex, rt::ProfileEvent::Kind::Node});
+        if (m_fuseBlock && entry.inlineSuccessor != kInvalidNode) {
+            nodeIndex = entry.inlineSuccessor;
+            continue;
+        }
 
-    const ProcessContext context = makeContext(graph, entry);
-    const PcmReadScope pcmRead(!m_offline);
-    const bool profiling = m_jobs.profiling();
-    const auto started = profiling ? rt::nowNanos() : 0;
-    entry.node->process(context);
-    if (profiling) m_jobs.recordProfile(workerIndex,
-        {graph.generation, rt::nowNanos() - started, m_position,
-         entry.id, workerIndex, rt::ProfileEvent::Kind::Node});
-    if (m_fuseBlock && entry.inlineSuccessor != kInvalidNode) {
-        nodeIndex = entry.inlineSuccessor;
-        continue;
+        releaseSuccessors(graph, entry, workerIndex);
+        return true;
     }
+}
 
+void GraphProcessor::releaseSuccessors(const CompiledGraph& graph,
+    const CompiledGraph::CompiledNode& entry, unsigned workerIndex) noexcept {
     // Release the successors this node was blocking; any that hit zero are
     // ready and go straight onto this worker's deque (their input data is warm
     // in this core's cache).
@@ -206,14 +223,69 @@ void GraphProcessor::runNode(const CompiledGraph& graph,
     // that gap and just exposed a wide frontier, wake enough of them to share
     // it. The current worker accounts for one ready item itself.
     if (newlyReady > 1) m_jobs.wakeHelpers(newlyReady - 1);
-    break;
-    }
 }
 
-void GraphProcessor::executeJob(void* context, std::uint32_t nodeIndex,
+bool GraphProcessor::executeJob(void* context, std::uint32_t nodeIndex,
                                 unsigned workerIndex) noexcept {
     auto* self = static_cast<GraphProcessor*>(context);
-    self->runNode(*self->m_active, nodeIndex, workerIndex);
+    return self->runNode(*self->m_active, nodeIndex, workerIndex);
+}
+
+std::uint32_t GraphProcessor::pollJobs(void* context) noexcept {
+    auto& self = *static_cast<GraphProcessor*>(context);
+    if (!self.m_deferredCount.load(std::memory_order_relaxed)) return 0;
+    const auto& graph = *self.m_active;
+    const bool expired = rt::nowNanos() >= self.m_deadline;
+    std::uint32_t completed = 0;
+    // Bounded round-robin work per scheduler turn; a large plugin bank must
+    // not turn each ordinary node into a scan of the entire graph.
+    const auto count = std::min<std::size_t>(8, graph.deferredNodes.size());
+    for (std::size_t n = 0; n < count; ++n) {
+        const auto index = self.m_pollCursor;
+        self.m_pollCursor = (index + 1) % std::uint32_t(graph.deferredNodes.size());
+        if (!graph.deferredPending[index].value.load(std::memory_order_acquire)) continue;
+        const auto nodeIndex = graph.deferredNodes[index];
+        const auto& entry = graph.nodes[nodeIndex];
+        if (!entry.node->finishProcess(expired)) continue;
+        graph.deferredPending[index].value.store(0, std::memory_order_relaxed);
+        self.m_deferredCount.fetch_sub(1, std::memory_order_relaxed);
+        const bool profiling = self.m_jobs.profiling();
+        if (profiling || !self.m_nodeCosts.empty()) {
+            const auto elapsed = rt::nowNanos() - graph.deferredStarted[index];
+            if (!self.m_nodeCosts.empty()) self.m_nodeCosts[nodeIndex] = double(elapsed);
+            if (profiling) self.m_jobs.recordProfile(0,
+                {graph.generation, elapsed, self.m_position, entry.id, 0, rt::ProfileEvent::Kind::Node});
+        }
+        self.releaseSuccessors(graph, entry, 0);
+        ++completed;
+    }
+    return completed;
+}
+
+void GraphProcessor::runScheduled(const CompiledGraph& graph, bool serial,
+                                  std::span<double> nodeCosts) noexcept {
+    m_nodeCosts = nodeCosts;
+    m_pollCursor = 0;
+    m_deadline = 0;
+    if (!graph.deferredNodes.empty()) {
+        // Same-block exchange adds no buffering latency. Leave 20% of the
+        // period for downstream native DSP and device delivery after expiry.
+        const double rate = graph.sampleRate > 0 ? graph.sampleRate : 48000.0;
+        const auto budget = m_offline ? 10'000'000'000ull
+            : std::max<std::uint64_t>(1, std::uint64_t(double(m_frames) * 800'000'000.0 / rate));
+        m_deadline = rt::nowNanos() + budget;
+    }
+    prepareBlockState(graph);
+    const auto tasks = m_fuseBlock ? graph.taskCount : std::uint32_t(graph.nodes.size());
+    const auto ready = std::min<std::size_t>(graph.roots.size(), tasks);
+    const unsigned available = ready > 0 ? unsigned(ready - 1) : 0;
+    const unsigned helpers = serial ? 0 : std::min({available, m_jobs.workerCount() - 1,
+        unsigned(std::max<std::size_t>(graph.nodes.size() / 16, 1))});
+    m_jobs.beginPass(tasks, helpers, serial);
+    for (std::uint32_t root : graph.roots) m_jobs.submit(0, root);
+    m_jobs.waitForPass();
+    assert(m_deferredCount.load(std::memory_order_relaxed) == 0);
+    m_nodeCosts = {};
 }
 
 Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
@@ -254,27 +326,7 @@ Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
     m_fuseBlock = m_taskFusion.load(std::memory_order_relaxed);
 
     prepareMidiTimeline(*snapshot, frames, timelinePosition, playing, offline);
-    prepareBlockState(*snapshot);
-
-    // A fused chain is one stealable task, regardless of its raw node count.
-    // Wake only helpers that can take ready roots; runNode announces later
-    // fan-outs when they actually become ready. Keep the established wake
-    // density for wide DSP graphs: a plugin can have an expensive block at
-    // any buffer size, so a low node count is not a reason to withhold workers.
-    const auto tasks = m_fuseBlock ? snapshot->taskCount : std::uint32_t(snapshot->nodes.size());
-    const auto ready = std::min<std::size_t>(snapshot->roots.size(), tasks);
-    const unsigned available = ready > 0 ? unsigned(ready - 1) : 0;
-    const unsigned helpers = std::min({available, m_jobs.workerCount() - 1,
-        unsigned(std::max<std::size_t>(snapshot->nodes.size() / 16, 1))});
-    m_jobs.beginPass(tasks, helpers);
-
-    // Seed every source into worker 0's deque — this thread owns it, and a
-    // work-stealing deque may only be pushed to by its owner. The other workers
-    // pull the sources out from the top as they wake, which spreads the work
-    // without any cross-thread pushes.
-    for (std::uint32_t root : snapshot->roots) m_jobs.submit(0, root);
-
-    m_jobs.waitForPass();
+    runScheduled(*snapshot, false);
 
     const auto status = writeSink(*snapshot, output, frames);
     m_active = nullptr;
@@ -307,12 +359,16 @@ Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames
     m_playing = playing;
     m_offline = offline;
     m_transport = transport;
+    m_deadline = 0;
 
     prepareMidiTimeline(*snapshot, frames, timelinePosition, playing, offline);
 
     // Topological order guarantees every input is finished before its consumer,
     // so the serial path produces exactly the same samples as the parallel one.
-    for (std::uint32_t nodeIndex : snapshot->order) {
+    if (!snapshot->deferredNodes.empty()) {
+        m_fuseBlock = false;
+        runScheduled(*snapshot, true, nodeCosts);
+    } else for (std::uint32_t nodeIndex : snapshot->order) {
         const auto& entry = snapshot->nodes[nodeIndex];
         const ProcessContext context = makeContext(*snapshot, entry);
         const PcmReadScope pcmRead(!offline);

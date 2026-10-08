@@ -1,3 +1,4 @@
+#include "PluginStyle.hpp"
 #include "graphics/ScenePaintSource.hpp"
 #include "graphics/SceneRecordingTag.hpp"
 #include "graphics/SceneRecorder.hpp"
@@ -165,11 +166,6 @@ protected:
         p.setFont(label);
         p.setPen(isChecked() ? t.textPrimary : t.textSecondary);
         p.drawText(rect().adjusted(20, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, text());
-        if (hasFocus()) {
-            p.setPen(QPen(t.accent, 1));
-            p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
-        }
     }
 };
 
@@ -1093,9 +1089,9 @@ QTabBar#SamplerToolsTabs::tab:hover { color: %TEXT%; background: %HOVER%; }
 #SamplerButton { padding: 3px 10px; min-height: 18px; font-size: 11px; }
 QComboBox { font-size: 11px; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-            .replace("%SURFACE%", t.surface.name())
-            .replace("%TOP%", t.panelTop().name())
-            .replace("%BOTTOM%", t.panelBottom().name())
+            .replace("%SURFACE%", pluginStyle::shell().name())
+            .replace("%TOP%", t.edgeLight(pluginStyle::shell()).name())
+            .replace("%BOTTOM%", t.edgeDark(pluginStyle::shell()).name())
             .replace("%EDGE%", t.edgeLight(t.panelTop()).name())
             .replace("%SHADOW%", t.edgeDark(t.panelBottom()).name())
             .replace("%CONTROL_TOP%", t.controlTop().name())
@@ -1113,15 +1109,15 @@ QComboBox { font-size: 11px; }
             .replace("%DIM%", mixColors(t.textSecondary, t.background, 0.35).name())
             .replace("%BYPASS%", mixColors(Theme::mute(), t.background, 0.45).name())
             .replace("%NAMEPLATE%", mixColors(t.surface, t.accent, 0.17).name())
-            .replace("%BG%", t.background.name()));
+            .replace("%BG%", pluginStyle::shell().name()));
     for (auto* add : findChildren<QToolButton*>(QStringLiteral("SamplerInsertAddArea")))
         add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 14));
 }
 
-sampler::SamplerInstance* SamplerPanel::sampler() const {
-    if (!m_controller || m_context != Context::Instrument) return nullptr;
-    return m_controller->samplerInstance(m_channelId.toStdString(),
-                                         m_slotId.toStdString());
+daw::SamplerSnapshot SamplerPanel::sampler() const {
+    if (!m_controller || m_context != Context::Instrument) return {};
+    return m_controller->samplerSnapshot(m_channelId.toStdString(),
+                                        m_slotId.toStdString());
 }
 
 std::shared_ptr<const sampler::SampleData> SamplerPanel::currentSample() {
@@ -1132,8 +1128,7 @@ std::shared_ptr<const sampler::SampleData> SamplerPanel::currentSample() {
         if (!data) m_controller->requestClipSampleData(track, clip);
         return data;
     }
-    if (sampler::SamplerInstance* instance = sampler()) return instance->sample();
-    return {};
+    return sampler().sample;
 }
 
 // ── Parameter binding ──
@@ -1212,8 +1207,9 @@ ui::Knob* SamplerPanel::knob(const QString& parameterId, const QString& captionT
         control->setToolTip(QString::fromStdString(info->name));
     }
     if (compact) control->setCompact(true);
-    control->setVisualStyle(ui::Knob::VisualStyle::SamplerDigital);
+    control->setVisualStyle(ui::Knob::VisualStyle::Slicer);
     control->setObjectName(QStringLiteral("SamplerParameter.") + parameterId);
+    if (m_context == Context::Instrument) control->setProperty("parameterId", parameterId);
     control->installEventFilter(this);
     control->setAccessibleName(captionText);
     control->setAccessibleDescription(tr("Drag vertically to adjust. Hold Shift for fine control. Double click to reset."));
@@ -1691,6 +1687,7 @@ void SamplerPanel::showFxContext(const QString& insertId, int index,
     const daw::InsertModel slot = (*inserts)[std::size_t(index)];
     QMenu menu(this);
     QAction* open = menu.addAction(tr("Open"));
+    ui::addPluginControlsAction(&menu, m_controller, m_channelId, insertId);
     QAction* bypass = menu.addAction(slot.bypassed ? tr("Enable") : tr("Bypass"));
     QAction* replace = menu.addAction(tr("Replace…"));
     menu.addSeparator();
@@ -2156,10 +2153,10 @@ void SamplerPanel::refreshPitchAnalysis() {
         m_pitchBusy = m_pitchAnalyzed = false;
         m_pitchEstimate = {};
     }
-    auto* instance = sampler();
-    const bool sourceReady = instance && data && data->audio && data->baseFrames &&
-        !instance->precomputePending();
-    const bool editable = m_controller && m_controller->sharedEditingAllowed() && instance;
+    const auto snapshot = sampler();
+    const bool sourceReady = snapshot.available && data && data->audio && data->baseFrames &&
+        !snapshot.precomputePending;
+    const bool editable = m_controller && m_controller->sharedEditingAllowed() && snapshot.available;
     m_detectPitch->setEnabled(sourceReady && !m_pitchBusy);
     m_detectPitch->setText(m_pitchBusy ? tr("Analyzing…") : tr("Detect note"));
     const bool detected = sourceReady && !m_pitchBusy && m_pitchAnalyzed &&
@@ -2330,16 +2327,16 @@ void SamplerPanel::refresh() {
         }
         m_offlineHistory->setText(caption);
     }
-    sampler::SamplerInstance* instance = sampler();
+    const auto snapshot = sampler();
     std::shared_ptr<const sampler::SampleData> data = currentSample();
     refreshPitchAnalysis();
 
-    if (instance || m_context == Context::Clip) {
+    if (snapshot.available || m_context == Context::Clip) {
         std::string path;
         std::string name;
-        if (instance) {
-            path = instance->samplePath();
-            name = instance->sampleName();
+        if (snapshot.available) {
+            path = snapshot.path;
+            name = snapshot.name;
         } else if (const daw::ClipModel* clip = m_controller->audioClip(
                        m_channelId.toStdString(), m_slotId.toStdString())) {
             path = clip->filePath;
@@ -2529,8 +2526,8 @@ void SamplerPanel::openSampleDialog() {
 
 void SamplerPanel::revealSample() {
     QString path;
-    if (sampler::SamplerInstance* instance = sampler()) {
-        path = QString::fromStdString(instance->samplePath());
+    if (const auto snapshot = sampler(); snapshot.available) {
+        path = QString::fromStdString(snapshot.path);
     } else if (m_context == Context::Clip && m_controller) {
         if (const daw::ClipModel* clip = m_controller->audioClip(
                 m_channelId.toStdString(), m_slotId.toStdString()))
@@ -2613,7 +2610,7 @@ bool SamplerWaveform::checkPeakUpdatesForTest() {
 
 bool SamplerPanel::checkLayoutForTest() {
     if (!SamplerWaveform::checkPeakUpdatesForTest()) return false;
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto descriptor = controller.pluginManager().find(
         daw::plugins::Format::Internal, "daw.sampler");

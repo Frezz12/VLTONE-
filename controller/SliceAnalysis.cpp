@@ -1,4 +1,5 @@
 #include "SliceAnalysis.hpp"
+#include "MediaWorker.hpp"
 
 #include "WarpAnalysis.hpp"
 
@@ -198,6 +199,7 @@ bool merge(SliceTable& table, int right) {
 
 SliceTable cut(const engine::SampleBuffer& audio, const SliceSettings& settings,
                const std::function<bool()>& keepGoing) {
+    if (MediaWorker::enabled()) return MediaWorker::slice(audio, settings, keepGoing);
     SliceTable table;
     const engine::FrameCount frames = audio.frames();
     if (frames == 0) return table;

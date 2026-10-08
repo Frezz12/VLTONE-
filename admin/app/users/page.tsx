@@ -1,2 +1,3 @@
 import { UserRegistry } from "@/components/user-registry";
-export default function Users() { return <UserRegistry />; }
+import { Suspense } from "react";
+export default function Users() { return <Suspense fallback={<p className="vlt-muted">Загрузка пользователей…</p>}><UserRegistry /></Suspense>; }

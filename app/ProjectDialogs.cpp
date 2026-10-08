@@ -555,18 +555,17 @@ void ProjectSaveDialog::applyTheme() {
     min-height: 30px; color: %2; background: %4;
     border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 9px;
 }
-#ProjectSaveDialog QLineEdit:focus { border-color: %6; }
 #ProjectDestination {
     color: %3; background: %4; border: 1px solid %5;
     border-radius: %RADIUS%px; padding: 9px;
 }
-#ProjectError { color: %7; }
+#ProjectError { color: %6; }
 #ProjectPrimaryButton {
     min-height: 32px; padding: 0 18px;
 }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
-             t.well().name(), t.separator().name(), t.accent.name(),
+             t.well().name(), t.separator().name(),
              Theme::record().name()));
     showCover(m_cover, m_coverPath, m_cover->size());
 }
@@ -931,18 +930,17 @@ void ProjectTemplateSaveDialog::applyTheme() {
     min-height: 32px; color: %2; background: %4;
     border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 10px;
 }
-#ProjectTemplateSaveDialog QLineEdit:focus { border-color: %6; }
 #ProjectDestination {
     color: %3; background: %4; border: 1px solid %5;
     border-radius: %RADIUS%px; padding: 9px;
 }
-#ProjectError { color: %7; }
+#ProjectError { color: %6; }
 #ProjectPrimaryButton {
     min-height: 32px; padding: 0 18px;
 }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
-             t.well().name(), t.separator().name(), t.accent.name(),
+             t.well().name(), t.separator().name(),
              Theme::record().name()));
     mediaPreview(m_preview)->setSource({});
     mediaPreview(m_preview)->setSource(m_artworkPath);

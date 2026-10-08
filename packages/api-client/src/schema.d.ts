@@ -1182,6 +1182,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["changeCloudProjectSessionMode"];
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["controlCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/plugins/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getCloudProjectPluginCatalog"];
+        put: operations["updateCloudProjectPluginInventory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/moderation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["moderateCloudProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/edit-leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acquireProjectEditLease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/projects/{projectId}/sessions/{sessionId}/edit-leases/{leaseId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+                leaseId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["releaseProjectEditLease"];
+        options?: never;
+        head?: never;
+        patch: operations["renewProjectEditLease"];
+        trace?: never;
+    };
     "/v1/desktop/projects/{projectId}/sessions/{sessionId}/leases": {
         parameters: {
             query?: never;
@@ -1838,6 +1953,10 @@ export interface components {
                 [key: string]: string;
             };
             request_id: string;
+            /** @description Exact application version required by the live session. */
+            required_app_version?: string;
+            required_engine_version?: string;
+            minimum_app_version?: string;
         };
         /**
          * @description Stable machine-readable release errors that desktop clients may branch on.
@@ -1873,6 +1992,8 @@ export interface components {
             format_version: 7;
             engine_version: string;
             minimum_app_version: string;
+            /** @enum {unknown} */
+            plugin_policy?: "builtin_only" | "external_checked";
             /** Format: int64 */
             head_seq: number;
             /** Format: int64 */
@@ -1890,6 +2011,16 @@ export interface components {
             role: "owner" | "editor" | "viewer";
         };
         CreateCloudProjectRequest: {
+            /**
+             * Format: uuid
+             * @description Stable client generated publication identity; reuse after unknown outcomes.
+             */
+            projectId?: string;
+            /**
+             * @default builtin_only
+             * @enum {unknown}
+             */
+            pluginPolicy: "builtin_only" | "external_checked";
             title: string;
             /** @constant */
             format_version: 7;
@@ -1946,7 +2077,10 @@ export interface components {
             revoked_at?: string | null;
             /** Format: date-time */
             created_at: string;
-            /** @description Width of the short numeric code */
+            /**
+             * @deprecated
+             * @description Optional legacy server metadata. Current servers omit it; the code itself is never returned after creation.
+             */
             code_digits?: number;
         };
         CreatedProjectInvite: {
@@ -2146,8 +2280,8 @@ export interface components {
             /** Format: uuid */
             actor_device_id?: string | null;
             kind: string;
-            /** @constant */
-            schemaVersion: 2;
+            /** @enum {unknown} */
+            schemaVersion: 2 | 3 | 4 | 5 | 6;
             /** Format: int64 */
             baseServerSeq: number;
             /** @description Canonical command payload; the complete submitted command is limited to 1 MiB of JSON. */
@@ -2196,7 +2330,11 @@ export interface components {
             /** Format: int64 */
             version: number;
             /** @enum {unknown} */
-            command_schema_version: 2 | 3;
+            command_schema_version: 2 | 3 | 4 | 5 | 6;
+            app_version?: string;
+            /** @enum {unknown} */
+            plugin_policy?: "builtin_only" | "external_checked";
+            catalog_revision?: number;
             /** Format: int64 */
             plugin_requirements_revision: number;
             plugin_requirements: components["schemas"]["PluginRequirement"][];
@@ -2214,18 +2352,30 @@ export interface components {
             appVersion: string;
             engineVersion: string;
             /** @enum {unknown} */
-            commandSchemaVersion: 2 | 3;
+            commandSchemaVersion: 2 | 3 | 4 | 5 | 6;
             /** @constant */
             projectFormatVersion: 7;
+            /**
+             * @default builtin_only
+             * @enum {unknown}
+             */
+            pluginPolicy: "builtin_only" | "external_checked";
+            pluginInventory?: components["schemas"]["PluginRequirement"][];
         };
         JoinProjectSessionRequest: {
             /** @description SemVer 2.0.0 application version */
             appVersion: string;
             engineVersion: string;
             /** @enum {unknown} */
-            commandSchemaVersion: 2 | 3;
+            commandSchemaVersion: 2 | 3 | 4 | 5 | 6;
             /** @constant */
             projectFormatVersion: 7;
+            /**
+             * @default builtin_only
+             * @enum {unknown}
+             */
+            pluginPolicy: "builtin_only" | "external_checked";
+            pluginInventory?: components["schemas"]["PluginRequirement"][];
             /** @description Required when the session reports passwordRequired */
             password?: string;
             readiness?: components["schemas"]["PluginReadinessReport"];
@@ -2235,9 +2385,15 @@ export interface components {
             appVersion: string;
             engineVersion: string;
             /** @enum {unknown} */
-            commandSchemaVersion: 2 | 3;
+            commandSchemaVersion: 2 | 3 | 4 | 5 | 6;
             /** @constant */
             projectFormatVersion: 7;
+            /**
+             * @default builtin_only
+             * @enum {unknown}
+             */
+            pluginPolicy: "builtin_only" | "external_checked";
+            pluginInventory?: components["schemas"]["PluginRequirement"][];
             /**
              * @default independent
              * @enum {unknown}
@@ -2259,6 +2415,7 @@ export interface components {
             kind: "instrument" | "effect";
             /** @enum {unknown} */
             channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            parameterFingerprint?: string;
         };
         PluginReadinessResult: {
             /** @enum {unknown} */
@@ -2271,6 +2428,7 @@ export interface components {
             kind: "instrument" | "effect";
             /** @enum {unknown} */
             channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            parameterFingerprint?: string;
             /** @enum {unknown} */
             status: "ready" | "missing" | "version_mismatch" | "probe_failed";
             buildHmac?: string;
@@ -2297,6 +2455,7 @@ export interface components {
             /** Format: int64 */
             readiness_revision: number;
             plugin_readiness: components["schemas"]["PluginReadinessResult"][];
+            plugin_inventory?: components["schemas"]["PluginRequirement"][];
             /** Format: date-time */
             joined_at: string;
             /** Format: date-time */
@@ -2305,6 +2464,11 @@ export interface components {
             left_at?: string | null;
         };
         ProjectSessionState: {
+            /** @description Verified local head required for an owner version migration. */
+            expected_head_seq?: number;
+            /** @enum {string} */
+            pluginPolicy?: "builtin_only" | "external_checked";
+            control?: components["schemas"]["SessionControl"];
             session: components["schemas"]["ProjectLiveSession"];
             members: components["schemas"]["ProjectSessionMember"][];
             /** @description Whether a new participant must supply a session password. The password itself is never returned. */
@@ -2314,6 +2478,93 @@ export interface components {
             /** Format: uuid */
             track_id: string;
             ttl_seconds?: number;
+        };
+        SessionCommandRequestV6: {
+            command: components["schemas"]["project-command-v6.schema"];
+            sessionVersion: number;
+        };
+        /** @description Switching out of independent requires the current leader's transport and audition seed. */
+        SessionModeRequest: {
+            /** @enum {unknown} */
+            mode: "independent" | "follow_host" | "synchronized";
+            expectedVersion: number;
+            transport?: components["schemas"]["SessionTransport"];
+            audition?: components["schemas"]["SessionAudition"];
+        };
+        SessionTransport: {
+            revision?: number;
+            playing: boolean;
+            positionSeconds: number;
+            rate: number;
+            serverTimeMs?: number;
+            effectiveAtServerMs?: number;
+            loopEnabled?: boolean;
+            loopStartSeconds?: number;
+            loopEndSeconds?: number;
+        };
+        SessionAudition: {
+            revision?: number;
+            mutedTrackIds: string[];
+            soloTrackIds: string[];
+        };
+        SessionControl: {
+            /** @enum {unknown} */
+            mode: "independent" | "follow_host" | "synchronized";
+            sessionVersion: number;
+            /** Format: uuid */
+            hostMemberId: string | null;
+            transport: components["schemas"]["SessionTransport"];
+            audition: components["schemas"]["SessionAudition"];
+        };
+        SessionControlAction: {
+            /** Format: uuid */
+            actionId: string;
+            expectedSessionVersion: number;
+            /** @enum {unknown} */
+            kind: "play" | "pause" | "stop" | "seek" | "loop" | "audition";
+            positionSeconds?: number;
+            rate?: number;
+            /** Format: uuid */
+            trackId?: string;
+            muted?: boolean;
+            solo?: boolean;
+            loopEnabled?: boolean;
+            loopStartSeconds?: number;
+            loopEndSeconds?: number;
+        };
+        SessionControlResult: {
+            /** Format: uuid */
+            actionId: string;
+            control: components["schemas"]["SessionControl"];
+        };
+        SessionPluginCatalog: {
+            catalogRevision: number;
+            /** @enum {unknown} */
+            pluginPolicy: "builtin_only" | "external_checked";
+            plugins: components["schemas"]["PluginRequirement"][];
+        };
+        EditLeaseRequest: {
+            /** @description Entity keys such as clip UUID or plugin UUID, optionally followed by a field suffix; prefix hierarchy conflicts atomically with durable command touched fields. A recording:<memberUuid> marker must identify the authenticated member and prevents mode changes until recording completes or the renewable lease expires, without locking a track against another recorder. */
+            fieldKeys: string[];
+            /** @default 15 */
+            ttlSeconds: number;
+            expectedSessionVersion?: number;
+        };
+        EditLeaseRenewal: {
+            /** @default 15 */
+            ttlSeconds: number;
+            expectedSessionVersion?: number;
+        };
+        ProjectEditLease: {
+            /** Format: uuid */
+            leaseId: string;
+            /** Format: uuid */
+            sessionId: string;
+            /** Format: uuid */
+            holderMemberId: string;
+            fieldKeys: string[];
+            /** Format: date-time */
+            expiresAt: string;
         };
         ProjectTrackLease: {
             /** Format: uuid */
@@ -2364,6 +2615,21 @@ export interface components {
             sha256: string;
             url: string;
         };
+        ReleaseHighlight: {
+            id: string;
+            /** @enum {string} */
+            tone: "coral" | "lilac" | "lime" | "sky" | "peach" | "mint" | "rose" | "periwinkle";
+            title_ru: string;
+            title_en: string;
+            lead_ru: string;
+            lead_en: string;
+            label_ru: string;
+            label_en: string;
+            details_ru: string[];
+            details_en: string[];
+            /** @description Screenshot UUID belonging to this release; empty while drafting */
+            screenshot_id: string;
+        };
         PublicRelease: {
             /** Format: uuid */
             id: string;
@@ -2373,6 +2639,7 @@ export interface components {
             features: string[];
             changes: string[];
             fixes: string[];
+            highlights?: components["schemas"]["ReleaseHighlight"][];
             artifacts: components["schemas"]["ReleaseArtifact"][];
             screenshots: components["schemas"]["ReleaseScreenshot"][];
             /** Format: uri */
@@ -2394,6 +2661,7 @@ export interface components {
             changes_en: string[];
             fixes_ru: string[];
             fixes_en: string[];
+            highlights?: components["schemas"]["ReleaseHighlight"][];
             artifacts: components["schemas"]["ReleaseArtifact"][];
             screenshots: components["schemas"]["ReleaseScreenshot"][];
             /** Format: date-time */
@@ -2414,6 +2682,7 @@ export interface components {
             changes_en: string[];
             fixes_ru: string[];
             fixes_en: string[];
+            highlights?: components["schemas"]["ReleaseHighlight"][];
         };
         ReleaseScreenshotWrite: {
             caption_ru: string;
@@ -2484,6 +2753,15 @@ export interface components {
             };
             /** @description Operational availability of account registration; does not assert legal publication readiness. */
             registration_enabled: boolean;
+            registration_captcha: {
+                /** @constant */
+                provider: "turnstile";
+                /** @description Always true in production. */
+                required: boolean;
+                configured: boolean;
+                /** @description Public widget key. Never contains the verification secret. */
+                site_key: string;
+            };
             /** @description Legacy desktop entitlement field; registration uses registration_legal.version. */
             consent_version: string;
             /** @constant */
@@ -2494,13 +2772,13 @@ export interface components {
             collaboration: {
                 enabled: boolean;
                 /** @constant */
-                protocol: "vlt-collab-v3";
-                protocols: ("vlt-collab-v2" | "vlt-collab-v3")[];
+                protocol: "vlt-collab-v6";
+                protocols: ("vlt-collab-v2" | "vlt-collab-v3" | "vlt-collab-v4" | "vlt-collab-v5" | "vlt-collab-v6")[];
                 /** @constant */
                 project_format: 7;
                 /** @constant */
-                command_schema: 3;
-                command_schemas: (2 | 3)[];
+                command_schema: 6;
+                command_schemas: (2 | 3 | 4 | 5 | 6)[];
                 /** @constant */
                 recording: true;
                 max_participants: number;
@@ -2529,6 +2807,8 @@ export interface components {
             diagnostics_accepted: boolean;
             /** @description Required current revision when diagnostics_accepted is true. */
             diagnostics_version?: string;
+            /** @description Required when registration_captcha.required is true; verified server-side before account creation. */
+            captcha_token?: string;
         };
         PasswordResetConfirmRequest: {
             token: string;
@@ -5088,6 +5368,3574 @@ export interface components {
                 };
             };
         } & components["schemas"]["$defs-bodyShape"];
+        builtinSharedInsert: {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @constant */
+            format: "internal";
+            /** @enum {unknown} */
+            uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+            vendor: string;
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+        } & unknown;
+        "project-command-v4.schema_$defs-sharedInsert": components["schemas"]["builtinSharedInsert"] | components["schemas"]["externalSharedInsert"];
+        "$defs-note": {
+            id: components["schemas"]["id"];
+            pitch: number;
+            startBeats: number;
+            lengthBeats: number;
+            velocity: number;
+            muted: boolean;
+            color: number;
+            pan: number;
+            channel?: number;
+            releaseVelocity?: number;
+            endOrder?: number;
+            startOrder?: number;
+        };
+        "$defs-automationPoint": {
+            id: components["schemas"]["id"];
+            beats: number;
+            value: number;
+            /** @enum {unknown} */
+            shape: "linear" | "hold" | "scurve";
+            curve: number;
+            eventOrder?: number;
+        };
+        "$defs-controllerLaneTarget": {
+            cc: number;
+            parameterId: string;
+            slotId: components["schemas"]["optionalId"];
+            channel?: number;
+            key?: number;
+        } & unknown;
+        audioTake: {
+            id: components["schemas"]["id"];
+            name: string;
+            offsetSeconds: number;
+            lengthSeconds: number;
+            clipOffsetSeconds: number;
+            gain: number;
+            muted: boolean;
+            channels: number;
+            color: number;
+            asset: components["schemas"]["audioAssetRef"];
+        };
+        midiLane: {
+            id: components["schemas"]["id"];
+            name: string;
+            cc: number;
+            parameterId: string;
+            slotId: components["schemas"]["optionalId"];
+            channel: number;
+            key: number;
+            defaultValue: number;
+            points: components["schemas"]["$defs-automationPoint"][];
+        } & unknown;
+        midiTake: {
+            id: components["schemas"]["id"];
+            name: string;
+            offsetSeconds: number;
+            lengthSeconds: number;
+            clipOffsetSeconds: number;
+            gain: number;
+            muted: boolean;
+            channels: number;
+            color: number;
+            notes: components["schemas"]["$defs-note"][];
+            lanes?: components["schemas"]["midiLane"][];
+        };
+        "$defs-take": components["schemas"]["audioTake"] | components["schemas"]["midiTake"];
+        "project-command-v4.schema_$defs-pluginAddPayload": {
+            location: components["schemas"]["pluginLocation"];
+            insert: components["schemas"]["project-command-v4.schema_$defs-sharedInsert"];
+            afterId: components["schemas"]["optionalId"];
+        } & (unknown & unknown);
+        "project-command-v4.schema_$defs-pluginReplacePayload": {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            replacement: components["schemas"]["project-command-v4.schema_$defs-sharedInsert"];
+        } & unknown;
+        "$defs-noteUpsertPayload": {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            note: components["schemas"]["$defs-note"];
+            afterId?: components["schemas"]["optionalId"];
+        };
+        "$defs-automationPointUpsertPayload": {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId?: components["schemas"]["optionalId"];
+            point: components["schemas"]["$defs-automationPoint"];
+            afterId?: components["schemas"]["optionalId"];
+        };
+        "$defs-controllerLaneAddPayload": {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+            name: string;
+            target: components["schemas"]["$defs-controllerLaneTarget"];
+            defaultValue: number;
+            afterId: components["schemas"]["optionalId"];
+        };
+        "$defs-controllerLaneTargetPayload": {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            laneId: components["schemas"]["id"];
+            target: components["schemas"]["$defs-controllerLaneTarget"];
+        };
+        "$defs-takeAddPayload": {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            take: components["schemas"]["$defs-take"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        midiComp: {
+            id: components["schemas"]["id"];
+            takeId: components["schemas"]["id"];
+            startSeconds: number;
+            endSeconds: number;
+        };
+        midiContent: {
+            notes: components["schemas"]["$defs-note"][];
+            lanes: components["schemas"]["midiLane"][];
+            takes: components["schemas"]["midiTake"][];
+            comp: components["schemas"]["midiComp"][];
+            expanded: boolean;
+        };
+        prepareMidiPayload: {
+            recordingId: components["schemas"]["id"];
+            contentId: components["schemas"]["id"];
+            index: number;
+            count: number;
+            content: components["schemas"]["midiContent"];
+        };
+        applyMidiPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            recordingId: components["schemas"]["id"];
+            contentId: components["schemas"]["id"];
+            count: number;
+        };
+        restoreMidiPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            operationId: components["schemas"]["id"];
+        };
+        "project-command-v4.schema_$defs-nonBatchBody": {
+            /** @constant */
+            kind?: "project.setScalar";
+            payload?: components["schemas"]["setScalarPayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setTimeSignature";
+            payload?: components["schemas"]["timeSignaturePayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setKey";
+            payload?: components["schemas"]["projectKeyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.add";
+            payload?: components["schemas"]["trackAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.delete";
+            payload?: components["schemas"]["trackIdPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.restore";
+            payload?: components["schemas"]["trackRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.move";
+            payload?: components["schemas"]["trackMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setProperty";
+            payload?: components["schemas"]["trackPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setParent";
+            payload?: components["schemas"]["trackParentPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setOutput";
+            payload?: components["schemas"]["trackOutputPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.add";
+            payload?: components["schemas"]["sendAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.delete";
+            payload?: components["schemas"]["sendRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.restore";
+            payload?: components["schemas"]["sendRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.move";
+            payload?: components["schemas"]["sendMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.setProperty";
+            payload?: components["schemas"]["sendPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.delete";
+            payload?: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.restore";
+            payload?: components["schemas"]["clipRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.move";
+            payload?: components["schemas"]["clipMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setSampleEdit";
+            payload?: components["schemas"]["clipSampleEditPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFade";
+            payload?: components["schemas"]["clipFadePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeCurve";
+            payload?: components["schemas"]["clipFadeCurvePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeMode";
+            payload?: components["schemas"]["clipFadeModePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setPatternOwner";
+            payload?: components["schemas"]["clipPatternOwnerPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setMusicalAnalysis";
+            payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.add";
+            payload?: components["schemas"]["project-command-v4.schema_$defs-pluginAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.delete";
+            payload?: components["schemas"]["pluginRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.restore";
+            payload?: components["schemas"]["pluginRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.move";
+            payload?: components["schemas"]["pluginMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.replace";
+            payload?: components["schemas"]["project-command-v4.schema_$defs-pluginReplacePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setProperty";
+            payload?: components["schemas"]["pluginPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setState";
+            payload?: components["schemas"]["$defs-pluginStatePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setParameter";
+            payload?: components["schemas"]["pluginParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeParameter";
+            payload?: components["schemas"]["pluginRemoveParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setAssetBinding";
+            payload?: components["schemas"]["pluginBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeAssetBinding";
+            payload?: components["schemas"]["pluginRemoveBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "samplerFx.setLevels";
+            payload?: components["schemas"]["samplerFxLevelsPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.upsert";
+            payload?: components["schemas"]["$defs-noteUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.delete";
+            payload?: components["schemas"]["noteRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.restore";
+            payload?: components["schemas"]["noteRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.upsert";
+            payload?: components["schemas"]["$defs-automationPointUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.delete";
+            payload?: components["schemas"]["automationPointRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.restore";
+            payload?: components["schemas"]["automationPointRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.add";
+            payload?: components["schemas"]["$defs-controllerLaneAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.delete";
+            payload?: components["schemas"]["controllerLaneRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.restore";
+            payload?: components["schemas"]["controllerLaneRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setTarget";
+            payload?: components["schemas"]["$defs-controllerLaneTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setDefault";
+            payload?: components["schemas"]["controllerLaneDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setTarget";
+            payload?: components["schemas"]["automationTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setDefault";
+            payload?: components["schemas"]["automationDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setActive";
+            payload?: components["schemas"]["automationActivePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["$defs-takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.delete";
+            payload?: components["schemas"]["takeRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.restore";
+            payload?: components["schemas"]["takeRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.move";
+            payload?: components["schemas"]["takeMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.setProperty";
+            payload?: components["schemas"]["takePropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.delete";
+            payload?: components["schemas"]["compSegmentRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.restore";
+            payload?: components["schemas"]["compSegmentRestorePayload"];
+        } | {
+            /** @constant */
+            kind: "recording.prepareMidi";
+            payload: components["schemas"]["prepareMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.applyMidi";
+            payload: components["schemas"]["applyMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.restoreMidi";
+            payload: components["schemas"]["restoreMidiPayload"];
+        };
+        /** @enum {unknown} */
+        "$defs-kind": "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch" | "recording.prepareMidi" | "recording.applyMidi" | "recording.restoreMidi";
+        "project-command-v4.schema_$defs-batchItem": {
+            kind: components["schemas"]["$defs-kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & components["schemas"]["project-command-v4.schema_$defs-nonBatchBody"];
+        "$defs-recordingCommitItem": {
+            /** @enum {unknown} */
+            kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert" | "recording.applyMidi" | "clip.delete" | "clip.setPatternOwner";
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & ({
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["$defs-takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.applyMidi";
+            payload: components["schemas"]["applyMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "clip.delete";
+            payload: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind: "clip.setPatternOwner";
+            payload: components["schemas"]["clipPatternOwnerPayload"];
+        });
+        "project-command-v4.schema_$defs-recordingCommitPayload": {
+            leases: components["schemas"]["recordingLease"][];
+            commands: components["schemas"]["$defs-recordingCommitItem"][];
+        };
+        "project-command-v4.schema_$defs-batchPayload": {
+            commands: components["schemas"]["project-command-v4.schema_$defs-batchItem"][];
+        };
+        "project-command-v4.schema_$defs-bodyShape": components["schemas"]["project-command-v4.schema_$defs-nonBatchBody"] | {
+            /** @constant */
+            kind?: "recording.commit";
+            payload?: components["schemas"]["project-command-v4.schema_$defs-recordingCommitPayload"];
+        } | {
+            /** @constant */
+            kind?: "batch";
+            payload?: components["schemas"]["project-command-v4.schema_$defs-batchPayload"];
+        };
+        /**
+         * VLT Project Command v4
+         * @description Collaboration v4. Retains the v3 external plugin contract and adds expressive MIDI, MIDI take content and atomic multipart MIDI recording. Previous command schemas remain immutable.
+         */
+        "project-command-v4.schema": {
+            /** @constant */
+            schemaVersion: 4;
+            opId: components["schemas"]["id"];
+            transactionId: components["schemas"]["optionalId"];
+            baseServerSeq: number;
+            kind: components["schemas"]["$defs-kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+            touchedFields: string[];
+            $defs: {
+                id: components["schemas"]["id"];
+                optionalId: components["schemas"]["optionalId"];
+                /** @enum {unknown} */
+                kind: "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch" | "recording.prepareMidi" | "recording.applyMidi" | "recording.restoreMidi";
+                scalarValue: components["schemas"]["scalarValue"];
+                precondition: components["schemas"]["precondition"];
+                setScalarPayload: components["schemas"]["setScalarPayload"];
+                timeSignaturePayload: components["schemas"]["timeSignaturePayload"];
+                projectKeyPayload: components["schemas"]["projectKeyPayload"];
+                trackAddPayload: components["schemas"]["trackAddPayload"];
+                trackIdPayload: components["schemas"]["trackIdPayload"];
+                trackRestorePayload: components["schemas"]["trackRestorePayload"];
+                trackMovePayload: components["schemas"]["trackMovePayload"];
+                trackPropertyPayload: components["schemas"]["trackPropertyPayload"];
+                trackParentPayload: components["schemas"]["trackParentPayload"];
+                trackOutputPayload: components["schemas"]["trackOutputPayload"];
+                send: components["schemas"]["send"];
+                sendAddPayload: components["schemas"]["sendAddPayload"];
+                sendRefPayload: components["schemas"]["sendRefPayload"];
+                sendRestorePayload: components["schemas"]["sendRestorePayload"];
+                sendMovePayload: components["schemas"]["sendMovePayload"];
+                sendPropertyPayload: components["schemas"]["sendPropertyPayload"];
+                clipAddPayload: components["schemas"]["clipAddPayload"];
+                clipRefPayload: components["schemas"]["clipRefPayload"];
+                clipRestorePayload: components["schemas"]["clipRestorePayload"];
+                clipMovePayload: components["schemas"]["clipMovePayload"];
+                clipPropertyPayload: components["schemas"]["clipPropertyPayload"];
+                assetRef: components["schemas"]["assetRef"];
+                optionalAssetRef: components["schemas"]["optionalAssetRef"];
+                pluginStateAssetRef: components["schemas"]["pluginStateAssetRef"];
+                optionalPluginStateAssetRef: components["schemas"]["optionalPluginStateAssetRef"];
+                clipAssetPayload: components["schemas"]["clipAssetPayload"];
+                sampleEdit: components["schemas"]["sampleEdit"];
+                clipSampleEditPayload: components["schemas"]["clipSampleEditPayload"];
+                clipFadePayload: components["schemas"]["clipFadePayload"];
+                clipFadeCurvePayload: components["schemas"]["clipFadeCurvePayload"];
+                clipFadeModePayload: components["schemas"]["clipFadeModePayload"];
+                clipPatternOwnerPayload: components["schemas"]["clipPatternOwnerPayload"];
+                musicalAnalysis: components["schemas"]["musicalAnalysis"];
+                clipMusicalAnalysisPayload: components["schemas"]["clipMusicalAnalysisPayload"];
+                pluginLocation: components["schemas"]["pluginLocation"];
+                insertParameter: components["schemas"]["insertParameter"];
+                pluginAssetBinding: components["schemas"]["pluginAssetBinding"];
+                samplerAssetBinding: components["schemas"]["samplerAssetBinding"];
+                sharedInsert: components["schemas"]["builtinSharedInsert"] | components["schemas"]["externalSharedInsert"];
+                pluginAddPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insert: components["schemas"]["project-command-v4.schema_$defs-sharedInsert"];
+                    afterId: components["schemas"]["optionalId"];
+                } & (unknown & unknown);
+                pluginRefPayload: components["schemas"]["pluginRefPayload"];
+                pluginRestorePayload: components["schemas"]["pluginRestorePayload"];
+                pluginMovePayload: components["schemas"]["pluginMovePayload"];
+                pluginReplacePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    replacement: components["schemas"]["project-command-v4.schema_$defs-sharedInsert"];
+                } & unknown;
+                sidechainTrackIds: components["schemas"]["sidechainTrackIds"];
+                pluginPropertyPayload: components["schemas"]["pluginPropertyPayload"];
+                pluginStatePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                };
+                pluginParameterPayload: components["schemas"]["pluginParameterPayload"];
+                pluginRemoveParameterPayload: components["schemas"]["pluginRemoveParameterPayload"];
+                pluginBindingPayload: components["schemas"]["pluginBindingPayload"];
+                pluginRemoveBindingPayload: components["schemas"]["pluginRemoveBindingPayload"];
+                samplerFxLevelsPayload: components["schemas"]["samplerFxLevelsPayload"];
+                note: {
+                    id: components["schemas"]["id"];
+                    pitch: number;
+                    startBeats: number;
+                    lengthBeats: number;
+                    velocity: number;
+                    muted: boolean;
+                    color: number;
+                    pan: number;
+                    channel?: number;
+                    releaseVelocity?: number;
+                    endOrder?: number;
+                    startOrder?: number;
+                };
+                noteUpsertPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    note: components["schemas"]["$defs-note"];
+                    afterId?: components["schemas"]["optionalId"];
+                };
+                noteRefPayload: components["schemas"]["noteRefPayload"];
+                noteRestorePayload: components["schemas"]["noteRestorePayload"];
+                automationPoint: {
+                    id: components["schemas"]["id"];
+                    beats: number;
+                    value: number;
+                    /** @enum {unknown} */
+                    shape: "linear" | "hold" | "scurve";
+                    curve: number;
+                    eventOrder?: number;
+                };
+                automationPointUpsertPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId?: components["schemas"]["optionalId"];
+                    point: components["schemas"]["$defs-automationPoint"];
+                    afterId?: components["schemas"]["optionalId"];
+                };
+                automationPointRefPayload: components["schemas"]["automationPointRefPayload"];
+                automationPointRestorePayload: components["schemas"]["automationPointRestorePayload"];
+                controllerLaneTarget: {
+                    cc: number;
+                    parameterId: string;
+                    slotId: components["schemas"]["optionalId"];
+                    channel?: number;
+                    key?: number;
+                } & unknown;
+                controllerLaneAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                    name: string;
+                    target: components["schemas"]["$defs-controllerLaneTarget"];
+                    defaultValue: number;
+                    afterId: components["schemas"]["optionalId"];
+                };
+                controllerLaneRefPayload: components["schemas"]["controllerLaneRefPayload"];
+                controllerLaneRestorePayload: components["schemas"]["controllerLaneRestorePayload"];
+                controllerLaneTargetPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    laneId: components["schemas"]["id"];
+                    target: components["schemas"]["$defs-controllerLaneTarget"];
+                };
+                controllerLaneDefaultPayload: components["schemas"]["controllerLaneDefaultPayload"];
+                automationTarget: components["schemas"]["automationTarget"];
+                automationTargetPayload: components["schemas"]["automationTargetPayload"];
+                automationDefaultPayload: components["schemas"]["automationDefaultPayload"];
+                automationActivePayload: components["schemas"]["automationActivePayload"];
+                audioMetadata: components["schemas"]["audioMetadata"];
+                audioAssetRef: components["schemas"]["audioAssetRef"];
+                take: components["schemas"]["audioTake"] | components["schemas"]["midiTake"];
+                takeAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    take: components["schemas"]["$defs-take"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                takeRefPayload: components["schemas"]["takeRefPayload"];
+                takeRestorePayload: components["schemas"]["takeRestorePayload"];
+                takeMovePayload: components["schemas"]["takeMovePayload"];
+                takePropertyPayload: components["schemas"]["takePropertyPayload"];
+                compSegment: components["schemas"]["compSegment"];
+                compSegmentUpsertPayload: components["schemas"]["compSegmentUpsertPayload"];
+                compSegmentRefPayload: components["schemas"]["compSegmentRefPayload"];
+                compSegmentRestorePayload: components["schemas"]["compSegmentRestorePayload"];
+                nonBatchBody: {
+                    /** @constant */
+                    kind?: "project.setScalar";
+                    payload?: components["schemas"]["setScalarPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setTimeSignature";
+                    payload?: components["schemas"]["timeSignaturePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setKey";
+                    payload?: components["schemas"]["projectKeyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.add";
+                    payload?: components["schemas"]["trackAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.delete";
+                    payload?: components["schemas"]["trackIdPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.restore";
+                    payload?: components["schemas"]["trackRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.move";
+                    payload?: components["schemas"]["trackMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setProperty";
+                    payload?: components["schemas"]["trackPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setParent";
+                    payload?: components["schemas"]["trackParentPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setOutput";
+                    payload?: components["schemas"]["trackOutputPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.add";
+                    payload?: components["schemas"]["sendAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.delete";
+                    payload?: components["schemas"]["sendRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.restore";
+                    payload?: components["schemas"]["sendRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.move";
+                    payload?: components["schemas"]["sendMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.setProperty";
+                    payload?: components["schemas"]["sendPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.delete";
+                    payload?: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.restore";
+                    payload?: components["schemas"]["clipRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.move";
+                    payload?: components["schemas"]["clipMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setSampleEdit";
+                    payload?: components["schemas"]["clipSampleEditPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFade";
+                    payload?: components["schemas"]["clipFadePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeCurve";
+                    payload?: components["schemas"]["clipFadeCurvePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeMode";
+                    payload?: components["schemas"]["clipFadeModePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setPatternOwner";
+                    payload?: components["schemas"]["clipPatternOwnerPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setMusicalAnalysis";
+                    payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.add";
+                    payload?: components["schemas"]["project-command-v4.schema_$defs-pluginAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.delete";
+                    payload?: components["schemas"]["pluginRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.restore";
+                    payload?: components["schemas"]["pluginRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.move";
+                    payload?: components["schemas"]["pluginMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.replace";
+                    payload?: components["schemas"]["project-command-v4.schema_$defs-pluginReplacePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setProperty";
+                    payload?: components["schemas"]["pluginPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setState";
+                    payload?: components["schemas"]["$defs-pluginStatePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setParameter";
+                    payload?: components["schemas"]["pluginParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeParameter";
+                    payload?: components["schemas"]["pluginRemoveParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setAssetBinding";
+                    payload?: components["schemas"]["pluginBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeAssetBinding";
+                    payload?: components["schemas"]["pluginRemoveBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "samplerFx.setLevels";
+                    payload?: components["schemas"]["samplerFxLevelsPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.upsert";
+                    payload?: components["schemas"]["$defs-noteUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.delete";
+                    payload?: components["schemas"]["noteRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.restore";
+                    payload?: components["schemas"]["noteRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.upsert";
+                    payload?: components["schemas"]["$defs-automationPointUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.delete";
+                    payload?: components["schemas"]["automationPointRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.restore";
+                    payload?: components["schemas"]["automationPointRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.add";
+                    payload?: components["schemas"]["$defs-controllerLaneAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.delete";
+                    payload?: components["schemas"]["controllerLaneRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.restore";
+                    payload?: components["schemas"]["controllerLaneRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setTarget";
+                    payload?: components["schemas"]["$defs-controllerLaneTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setDefault";
+                    payload?: components["schemas"]["controllerLaneDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setTarget";
+                    payload?: components["schemas"]["automationTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setDefault";
+                    payload?: components["schemas"]["automationDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setActive";
+                    payload?: components["schemas"]["automationActivePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["$defs-takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.delete";
+                    payload?: components["schemas"]["takeRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.restore";
+                    payload?: components["schemas"]["takeRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.move";
+                    payload?: components["schemas"]["takeMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.setProperty";
+                    payload?: components["schemas"]["takePropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.delete";
+                    payload?: components["schemas"]["compSegmentRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.restore";
+                    payload?: components["schemas"]["compSegmentRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.prepareMidi";
+                    payload: components["schemas"]["prepareMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.applyMidi";
+                    payload: components["schemas"]["applyMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.restoreMidi";
+                    payload: components["schemas"]["restoreMidiPayload"];
+                };
+                batchItem: {
+                    kind: components["schemas"]["$defs-kind"];
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & components["schemas"]["project-command-v4.schema_$defs-nonBatchBody"];
+                batchPayload: {
+                    commands: components["schemas"]["project-command-v4.schema_$defs-batchItem"][];
+                };
+                recordingLease: components["schemas"]["recordingLease"];
+                recordingCommitItem: {
+                    /** @enum {unknown} */
+                    kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert" | "recording.applyMidi" | "clip.delete" | "clip.setPatternOwner";
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & ({
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["$defs-takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.applyMidi";
+                    payload: components["schemas"]["applyMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.delete";
+                    payload: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.setPatternOwner";
+                    payload: components["schemas"]["clipPatternOwnerPayload"];
+                });
+                recordingCommitPayload: {
+                    leases: components["schemas"]["recordingLease"][];
+                    commands: components["schemas"]["$defs-recordingCommitItem"][];
+                };
+                bodyShape: components["schemas"]["project-command-v4.schema_$defs-nonBatchBody"] | {
+                    /** @constant */
+                    kind?: "recording.commit";
+                    payload?: components["schemas"]["project-command-v4.schema_$defs-recordingCommitPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "batch";
+                    payload?: components["schemas"]["project-command-v4.schema_$defs-batchPayload"];
+                };
+                builtinSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @constant */
+                    format: "internal";
+                    /** @enum {unknown} */
+                    uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                    vendor: string;
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                } & unknown;
+                externalPluginText: string;
+                externalSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @enum {unknown} */
+                    format: "clap" | "vst3" | "au" | "vst";
+                    uid: components["schemas"]["externalPluginText"];
+                    vendor: components["schemas"]["externalPluginText"] & unknown;
+                    pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                };
+                midiLane: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    cc: number;
+                    parameterId: string;
+                    slotId: components["schemas"]["optionalId"];
+                    channel: number;
+                    key: number;
+                    defaultValue: number;
+                    points: components["schemas"]["$defs-automationPoint"][];
+                } & unknown;
+                midiTake: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    offsetSeconds: number;
+                    lengthSeconds: number;
+                    clipOffsetSeconds: number;
+                    gain: number;
+                    muted: boolean;
+                    channels: number;
+                    color: number;
+                    notes: components["schemas"]["$defs-note"][];
+                    lanes?: components["schemas"]["midiLane"][];
+                };
+                audioTake: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    offsetSeconds: number;
+                    lengthSeconds: number;
+                    clipOffsetSeconds: number;
+                    gain: number;
+                    muted: boolean;
+                    channels: number;
+                    color: number;
+                    asset: components["schemas"]["audioAssetRef"];
+                };
+                midiComp: {
+                    id: components["schemas"]["id"];
+                    takeId: components["schemas"]["id"];
+                    startSeconds: number;
+                    endSeconds: number;
+                };
+                midiContent: {
+                    notes: components["schemas"]["$defs-note"][];
+                    lanes: components["schemas"]["midiLane"][];
+                    takes: components["schemas"]["midiTake"][];
+                    comp: components["schemas"]["midiComp"][];
+                    expanded: boolean;
+                };
+                prepareMidiPayload: {
+                    recordingId: components["schemas"]["id"];
+                    contentId: components["schemas"]["id"];
+                    index: number;
+                    count: number;
+                    content: components["schemas"]["midiContent"];
+                };
+                applyMidiPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    recordingId: components["schemas"]["id"];
+                    contentId: components["schemas"]["id"];
+                    count: number;
+                };
+                restoreMidiPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    operationId: components["schemas"]["id"];
+                };
+            };
+        } & components["schemas"]["project-command-v4.schema_$defs-bodyShape"];
+        "$defs-builtinSharedInsert": {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @constant */
+            format: "internal";
+            /** @enum {unknown} */
+            uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+            vendor: string;
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+            slideDelivery?: number;
+            slideBendRange?: number;
+            slideReleaseReserve?: number;
+        } & unknown;
+        "$defs-externalSharedInsert": {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @enum {unknown} */
+            format: "clap" | "vst3" | "au" | "vst";
+            uid: components["schemas"]["externalPluginText"];
+            vendor: components["schemas"]["externalPluginText"] & unknown;
+            pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+            slideDelivery?: number;
+            slideBendRange?: number;
+            slideReleaseReserve?: number;
+        };
+        "project-command-v5.schema_$defs-sharedInsert": components["schemas"]["$defs-builtinSharedInsert"] | components["schemas"]["$defs-externalSharedInsert"];
+        /**
+         * SlideNote (project 11 / protocol 5)
+         * @description Silent pitch control. The C++ and Go validators additionally require strictly increasing times, first time 0 and last time 1. Missing references are retained as inactive data.
+         */
+        "slide-note.schema": {
+            id: components["schemas"]["id"];
+            startBeats: number;
+            lengthBeats: number;
+            referenceNoteId: components["schemas"]["optionalId"];
+            targetNoteIds: components["schemas"]["id"][];
+            chord: boolean;
+            muted: boolean;
+            resumed?: boolean;
+            points: {
+                time: number;
+                pitch: number;
+                shape: number;
+                curve: number;
+            }[];
+        };
+        "$defs-midiTake": {
+            id: components["schemas"]["id"];
+            name: string;
+            offsetSeconds: number;
+            lengthSeconds: number;
+            clipOffsetSeconds: number;
+            gain: number;
+            muted: boolean;
+            channels: number;
+            color: number;
+            notes: components["schemas"]["$defs-note"][];
+            lanes?: components["schemas"]["midiLane"][];
+            slideNotes?: components["schemas"]["slide-note.schema"][];
+        };
+        "project-command-v5.schema_$defs-take": components["schemas"]["audioTake"] | components["schemas"]["$defs-midiTake"];
+        "project-command-v5.schema_$defs-pluginAddPayload": {
+            location: components["schemas"]["pluginLocation"];
+            insert: components["schemas"]["project-command-v5.schema_$defs-sharedInsert"];
+            afterId: components["schemas"]["optionalId"];
+        } & (unknown & unknown);
+        "project-command-v5.schema_$defs-pluginReplacePayload": {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            replacement: components["schemas"]["project-command-v5.schema_$defs-sharedInsert"];
+        } & unknown;
+        "$defs-pluginPropertyPayload": {
+            location: components["schemas"]["pluginLocation"];
+            insertId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId" | "sidechainTrackIds" | "slideDelivery" | "slideBendRange" | "slideReleaseReserve";
+            value: components["schemas"]["scalarValue"] | components["schemas"]["sidechainTrackIds"];
+        } & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "bypassed";
+            value?: boolean;
+        } | {
+            /** @constant */
+            property?: "mix";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "channelMode";
+            /** @enum {unknown} */
+            value?: "auto" | "mono" | "stereo" | "dual-mono";
+        } | {
+            /** @constant */
+            property?: "sidechainTrackId";
+            value?: components["schemas"]["optionalId"];
+        } | {
+            /** @constant */
+            property?: "sidechainTrackIds";
+            value?: components["schemas"]["sidechainTrackIds"];
+        } | {
+            /** @constant */
+            property?: "slideDelivery";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "slideBendRange";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "slideReleaseReserve";
+            value?: number;
+        });
+        "project-command-v5.schema_$defs-takeAddPayload": {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            take: components["schemas"]["project-command-v5.schema_$defs-take"];
+            afterId: components["schemas"]["optionalId"];
+        };
+        "$defs-midiContent": {
+            notes: components["schemas"]["$defs-note"][];
+            lanes: components["schemas"]["midiLane"][];
+            takes: components["schemas"]["$defs-midiTake"][];
+            comp: components["schemas"]["midiComp"][];
+            expanded: boolean;
+            slideNotes?: components["schemas"]["slide-note.schema"][];
+        };
+        "$defs-prepareMidiPayload": {
+            recordingId: components["schemas"]["id"];
+            contentId: components["schemas"]["id"];
+            index: number;
+            count: number;
+            content: components["schemas"]["$defs-midiContent"];
+        };
+        slideSetPayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            takeId: components["schemas"]["optionalId"];
+            slideId: components["schemas"]["id"];
+            slide: null | components["schemas"]["slide-note.schema"];
+        };
+        "project-command-v5.schema_$defs-nonBatchBody": {
+            /** @constant */
+            kind?: "project.setScalar";
+            payload?: components["schemas"]["setScalarPayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setTimeSignature";
+            payload?: components["schemas"]["timeSignaturePayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setKey";
+            payload?: components["schemas"]["projectKeyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.add";
+            payload?: components["schemas"]["trackAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.delete";
+            payload?: components["schemas"]["trackIdPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.restore";
+            payload?: components["schemas"]["trackRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.move";
+            payload?: components["schemas"]["trackMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setProperty";
+            payload?: components["schemas"]["trackPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setParent";
+            payload?: components["schemas"]["trackParentPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setOutput";
+            payload?: components["schemas"]["trackOutputPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.add";
+            payload?: components["schemas"]["sendAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.delete";
+            payload?: components["schemas"]["sendRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.restore";
+            payload?: components["schemas"]["sendRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.move";
+            payload?: components["schemas"]["sendMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.setProperty";
+            payload?: components["schemas"]["sendPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.delete";
+            payload?: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.restore";
+            payload?: components["schemas"]["clipRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.move";
+            payload?: components["schemas"]["clipMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setSampleEdit";
+            payload?: components["schemas"]["clipSampleEditPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFade";
+            payload?: components["schemas"]["clipFadePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeCurve";
+            payload?: components["schemas"]["clipFadeCurvePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeMode";
+            payload?: components["schemas"]["clipFadeModePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setPatternOwner";
+            payload?: components["schemas"]["clipPatternOwnerPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setMusicalAnalysis";
+            payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.add";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-pluginAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.delete";
+            payload?: components["schemas"]["pluginRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.restore";
+            payload?: components["schemas"]["pluginRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.move";
+            payload?: components["schemas"]["pluginMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.replace";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-pluginReplacePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setProperty";
+            payload?: components["schemas"]["$defs-pluginPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setState";
+            payload?: components["schemas"]["$defs-pluginStatePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setParameter";
+            payload?: components["schemas"]["pluginParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeParameter";
+            payload?: components["schemas"]["pluginRemoveParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setAssetBinding";
+            payload?: components["schemas"]["pluginBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeAssetBinding";
+            payload?: components["schemas"]["pluginRemoveBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "samplerFx.setLevels";
+            payload?: components["schemas"]["samplerFxLevelsPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.upsert";
+            payload?: components["schemas"]["$defs-noteUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.delete";
+            payload?: components["schemas"]["noteRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.restore";
+            payload?: components["schemas"]["noteRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.upsert";
+            payload?: components["schemas"]["$defs-automationPointUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.delete";
+            payload?: components["schemas"]["automationPointRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.restore";
+            payload?: components["schemas"]["automationPointRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.add";
+            payload?: components["schemas"]["$defs-controllerLaneAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.delete";
+            payload?: components["schemas"]["controllerLaneRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.restore";
+            payload?: components["schemas"]["controllerLaneRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setTarget";
+            payload?: components["schemas"]["$defs-controllerLaneTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setDefault";
+            payload?: components["schemas"]["controllerLaneDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setTarget";
+            payload?: components["schemas"]["automationTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setDefault";
+            payload?: components["schemas"]["automationDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setActive";
+            payload?: components["schemas"]["automationActivePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.delete";
+            payload?: components["schemas"]["takeRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.restore";
+            payload?: components["schemas"]["takeRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.move";
+            payload?: components["schemas"]["takeMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.setProperty";
+            payload?: components["schemas"]["takePropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.delete";
+            payload?: components["schemas"]["compSegmentRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.restore";
+            payload?: components["schemas"]["compSegmentRestorePayload"];
+        } | {
+            /** @constant */
+            kind: "recording.prepareMidi";
+            payload: components["schemas"]["$defs-prepareMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.applyMidi";
+            payload: components["schemas"]["applyMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.restoreMidi";
+            payload: components["schemas"]["restoreMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "slide.set";
+            payload: components["schemas"]["slideSetPayload"];
+        };
+        /** @enum {unknown} */
+        "project-command-v5.schema_$defs-kind": "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch" | "recording.prepareMidi" | "recording.applyMidi" | "recording.restoreMidi" | "slide.set";
+        "project-command-v5.schema_$defs-batchItem": {
+            kind: components["schemas"]["project-command-v5.schema_$defs-kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & components["schemas"]["project-command-v5.schema_$defs-nonBatchBody"];
+        "project-command-v5.schema_$defs-recordingCommitItem": {
+            /** @enum {unknown} */
+            kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert" | "recording.applyMidi" | "clip.delete" | "clip.setPatternOwner";
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & ({
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.applyMidi";
+            payload: components["schemas"]["applyMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "clip.delete";
+            payload: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind: "clip.setPatternOwner";
+            payload: components["schemas"]["clipPatternOwnerPayload"];
+        });
+        "project-command-v5.schema_$defs-recordingCommitPayload": {
+            leases: components["schemas"]["recordingLease"][];
+            commands: components["schemas"]["project-command-v5.schema_$defs-recordingCommitItem"][];
+        };
+        "project-command-v5.schema_$defs-batchPayload": {
+            commands: components["schemas"]["project-command-v5.schema_$defs-batchItem"][];
+        };
+        "project-command-v5.schema_$defs-bodyShape": components["schemas"]["project-command-v5.schema_$defs-nonBatchBody"] | {
+            /** @constant */
+            kind?: "recording.commit";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-recordingCommitPayload"];
+        } | {
+            /** @constant */
+            kind?: "batch";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-batchPayload"];
+        };
+        /**
+         * VLT Project Command v5
+         * @description Collaboration v5. Adds slide notes and plugin slide delivery settings. Runtime validation additionally checks ordered slide points, matching slide ids and referential constraints.
+         */
+        "project-command-v5.schema": {
+            /** @constant */
+            schemaVersion: 5;
+            opId: components["schemas"]["id"];
+            transactionId: components["schemas"]["optionalId"];
+            baseServerSeq: number;
+            kind: components["schemas"]["project-command-v5.schema_$defs-kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+            touchedFields: string[];
+            $defs: {
+                id: components["schemas"]["id"];
+                optionalId: components["schemas"]["optionalId"];
+                /** @enum {unknown} */
+                kind: "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch" | "recording.prepareMidi" | "recording.applyMidi" | "recording.restoreMidi" | "slide.set";
+                scalarValue: components["schemas"]["scalarValue"];
+                precondition: components["schemas"]["precondition"];
+                setScalarPayload: components["schemas"]["setScalarPayload"];
+                timeSignaturePayload: components["schemas"]["timeSignaturePayload"];
+                projectKeyPayload: components["schemas"]["projectKeyPayload"];
+                trackAddPayload: components["schemas"]["trackAddPayload"];
+                trackIdPayload: components["schemas"]["trackIdPayload"];
+                trackRestorePayload: components["schemas"]["trackRestorePayload"];
+                trackMovePayload: components["schemas"]["trackMovePayload"];
+                trackPropertyPayload: components["schemas"]["trackPropertyPayload"];
+                trackParentPayload: components["schemas"]["trackParentPayload"];
+                trackOutputPayload: components["schemas"]["trackOutputPayload"];
+                send: components["schemas"]["send"];
+                sendAddPayload: components["schemas"]["sendAddPayload"];
+                sendRefPayload: components["schemas"]["sendRefPayload"];
+                sendRestorePayload: components["schemas"]["sendRestorePayload"];
+                sendMovePayload: components["schemas"]["sendMovePayload"];
+                sendPropertyPayload: components["schemas"]["sendPropertyPayload"];
+                clipAddPayload: components["schemas"]["clipAddPayload"];
+                clipRefPayload: components["schemas"]["clipRefPayload"];
+                clipRestorePayload: components["schemas"]["clipRestorePayload"];
+                clipMovePayload: components["schemas"]["clipMovePayload"];
+                clipPropertyPayload: components["schemas"]["clipPropertyPayload"];
+                assetRef: components["schemas"]["assetRef"];
+                optionalAssetRef: components["schemas"]["optionalAssetRef"];
+                pluginStateAssetRef: components["schemas"]["pluginStateAssetRef"];
+                optionalPluginStateAssetRef: components["schemas"]["optionalPluginStateAssetRef"];
+                clipAssetPayload: components["schemas"]["clipAssetPayload"];
+                sampleEdit: components["schemas"]["sampleEdit"];
+                clipSampleEditPayload: components["schemas"]["clipSampleEditPayload"];
+                clipFadePayload: components["schemas"]["clipFadePayload"];
+                clipFadeCurvePayload: components["schemas"]["clipFadeCurvePayload"];
+                clipFadeModePayload: components["schemas"]["clipFadeModePayload"];
+                clipPatternOwnerPayload: components["schemas"]["clipPatternOwnerPayload"];
+                musicalAnalysis: components["schemas"]["musicalAnalysis"];
+                clipMusicalAnalysisPayload: components["schemas"]["clipMusicalAnalysisPayload"];
+                pluginLocation: components["schemas"]["pluginLocation"];
+                insertParameter: components["schemas"]["insertParameter"];
+                pluginAssetBinding: components["schemas"]["pluginAssetBinding"];
+                samplerAssetBinding: components["schemas"]["samplerAssetBinding"];
+                sharedInsert: components["schemas"]["$defs-builtinSharedInsert"] | components["schemas"]["$defs-externalSharedInsert"];
+                pluginAddPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insert: components["schemas"]["project-command-v5.schema_$defs-sharedInsert"];
+                    afterId: components["schemas"]["optionalId"];
+                } & (unknown & unknown);
+                pluginRefPayload: components["schemas"]["pluginRefPayload"];
+                pluginRestorePayload: components["schemas"]["pluginRestorePayload"];
+                pluginMovePayload: components["schemas"]["pluginMovePayload"];
+                pluginReplacePayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    replacement: components["schemas"]["project-command-v5.schema_$defs-sharedInsert"];
+                } & unknown;
+                sidechainTrackIds: components["schemas"]["sidechainTrackIds"];
+                pluginPropertyPayload: {
+                    location: components["schemas"]["pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId" | "sidechainTrackIds" | "slideDelivery" | "slideBendRange" | "slideReleaseReserve";
+                    value: components["schemas"]["scalarValue"] | components["schemas"]["sidechainTrackIds"];
+                } & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "bypassed";
+                    value?: boolean;
+                } | {
+                    /** @constant */
+                    property?: "mix";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "channelMode";
+                    /** @enum {unknown} */
+                    value?: "auto" | "mono" | "stereo" | "dual-mono";
+                } | {
+                    /** @constant */
+                    property?: "sidechainTrackId";
+                    value?: components["schemas"]["optionalId"];
+                } | {
+                    /** @constant */
+                    property?: "sidechainTrackIds";
+                    value?: components["schemas"]["sidechainTrackIds"];
+                } | {
+                    /** @constant */
+                    property?: "slideDelivery";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "slideBendRange";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "slideReleaseReserve";
+                    value?: number;
+                });
+                pluginStatePayload: components["schemas"]["$defs-pluginStatePayload"];
+                pluginParameterPayload: components["schemas"]["pluginParameterPayload"];
+                pluginRemoveParameterPayload: components["schemas"]["pluginRemoveParameterPayload"];
+                pluginBindingPayload: components["schemas"]["pluginBindingPayload"];
+                pluginRemoveBindingPayload: components["schemas"]["pluginRemoveBindingPayload"];
+                samplerFxLevelsPayload: components["schemas"]["samplerFxLevelsPayload"];
+                note: components["schemas"]["$defs-note"];
+                noteUpsertPayload: components["schemas"]["$defs-noteUpsertPayload"];
+                noteRefPayload: components["schemas"]["noteRefPayload"];
+                noteRestorePayload: components["schemas"]["noteRestorePayload"];
+                automationPoint: components["schemas"]["$defs-automationPoint"];
+                automationPointUpsertPayload: components["schemas"]["$defs-automationPointUpsertPayload"];
+                automationPointRefPayload: components["schemas"]["automationPointRefPayload"];
+                automationPointRestorePayload: components["schemas"]["automationPointRestorePayload"];
+                controllerLaneTarget: components["schemas"]["$defs-controllerLaneTarget"];
+                controllerLaneAddPayload: components["schemas"]["$defs-controllerLaneAddPayload"];
+                controllerLaneRefPayload: components["schemas"]["controllerLaneRefPayload"];
+                controllerLaneRestorePayload: components["schemas"]["controllerLaneRestorePayload"];
+                controllerLaneTargetPayload: components["schemas"]["$defs-controllerLaneTargetPayload"];
+                controllerLaneDefaultPayload: components["schemas"]["controllerLaneDefaultPayload"];
+                automationTarget: components["schemas"]["automationTarget"];
+                automationTargetPayload: components["schemas"]["automationTargetPayload"];
+                automationDefaultPayload: components["schemas"]["automationDefaultPayload"];
+                automationActivePayload: components["schemas"]["automationActivePayload"];
+                audioMetadata: components["schemas"]["audioMetadata"];
+                audioAssetRef: components["schemas"]["audioAssetRef"];
+                take: components["schemas"]["audioTake"] | components["schemas"]["$defs-midiTake"];
+                takeAddPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    take: components["schemas"]["project-command-v5.schema_$defs-take"];
+                    afterId: components["schemas"]["optionalId"];
+                };
+                takeRefPayload: components["schemas"]["takeRefPayload"];
+                takeRestorePayload: components["schemas"]["takeRestorePayload"];
+                takeMovePayload: components["schemas"]["takeMovePayload"];
+                takePropertyPayload: components["schemas"]["takePropertyPayload"];
+                compSegment: components["schemas"]["compSegment"];
+                compSegmentUpsertPayload: components["schemas"]["compSegmentUpsertPayload"];
+                compSegmentRefPayload: components["schemas"]["compSegmentRefPayload"];
+                compSegmentRestorePayload: components["schemas"]["compSegmentRestorePayload"];
+                nonBatchBody: {
+                    /** @constant */
+                    kind?: "project.setScalar";
+                    payload?: components["schemas"]["setScalarPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setTimeSignature";
+                    payload?: components["schemas"]["timeSignaturePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setKey";
+                    payload?: components["schemas"]["projectKeyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.add";
+                    payload?: components["schemas"]["trackAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.delete";
+                    payload?: components["schemas"]["trackIdPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.restore";
+                    payload?: components["schemas"]["trackRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.move";
+                    payload?: components["schemas"]["trackMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setProperty";
+                    payload?: components["schemas"]["trackPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setParent";
+                    payload?: components["schemas"]["trackParentPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setOutput";
+                    payload?: components["schemas"]["trackOutputPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.add";
+                    payload?: components["schemas"]["sendAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.delete";
+                    payload?: components["schemas"]["sendRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.restore";
+                    payload?: components["schemas"]["sendRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.move";
+                    payload?: components["schemas"]["sendMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.setProperty";
+                    payload?: components["schemas"]["sendPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.delete";
+                    payload?: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.restore";
+                    payload?: components["schemas"]["clipRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.move";
+                    payload?: components["schemas"]["clipMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setSampleEdit";
+                    payload?: components["schemas"]["clipSampleEditPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFade";
+                    payload?: components["schemas"]["clipFadePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeCurve";
+                    payload?: components["schemas"]["clipFadeCurvePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeMode";
+                    payload?: components["schemas"]["clipFadeModePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setPatternOwner";
+                    payload?: components["schemas"]["clipPatternOwnerPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setMusicalAnalysis";
+                    payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.add";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-pluginAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.delete";
+                    payload?: components["schemas"]["pluginRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.restore";
+                    payload?: components["schemas"]["pluginRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.move";
+                    payload?: components["schemas"]["pluginMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.replace";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-pluginReplacePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setProperty";
+                    payload?: components["schemas"]["$defs-pluginPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setState";
+                    payload?: components["schemas"]["$defs-pluginStatePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setParameter";
+                    payload?: components["schemas"]["pluginParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeParameter";
+                    payload?: components["schemas"]["pluginRemoveParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setAssetBinding";
+                    payload?: components["schemas"]["pluginBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeAssetBinding";
+                    payload?: components["schemas"]["pluginRemoveBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "samplerFx.setLevels";
+                    payload?: components["schemas"]["samplerFxLevelsPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.upsert";
+                    payload?: components["schemas"]["$defs-noteUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.delete";
+                    payload?: components["schemas"]["noteRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.restore";
+                    payload?: components["schemas"]["noteRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.upsert";
+                    payload?: components["schemas"]["$defs-automationPointUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.delete";
+                    payload?: components["schemas"]["automationPointRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.restore";
+                    payload?: components["schemas"]["automationPointRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.add";
+                    payload?: components["schemas"]["$defs-controllerLaneAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.delete";
+                    payload?: components["schemas"]["controllerLaneRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.restore";
+                    payload?: components["schemas"]["controllerLaneRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setTarget";
+                    payload?: components["schemas"]["$defs-controllerLaneTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setDefault";
+                    payload?: components["schemas"]["controllerLaneDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setTarget";
+                    payload?: components["schemas"]["automationTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setDefault";
+                    payload?: components["schemas"]["automationDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setActive";
+                    payload?: components["schemas"]["automationActivePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.delete";
+                    payload?: components["schemas"]["takeRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.restore";
+                    payload?: components["schemas"]["takeRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.move";
+                    payload?: components["schemas"]["takeMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.setProperty";
+                    payload?: components["schemas"]["takePropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.delete";
+                    payload?: components["schemas"]["compSegmentRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.restore";
+                    payload?: components["schemas"]["compSegmentRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.prepareMidi";
+                    payload: components["schemas"]["$defs-prepareMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.applyMidi";
+                    payload: components["schemas"]["applyMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.restoreMidi";
+                    payload: components["schemas"]["restoreMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "slide.set";
+                    payload: components["schemas"]["slideSetPayload"];
+                };
+                batchItem: {
+                    kind: components["schemas"]["project-command-v5.schema_$defs-kind"];
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & components["schemas"]["project-command-v5.schema_$defs-nonBatchBody"];
+                batchPayload: {
+                    commands: components["schemas"]["project-command-v5.schema_$defs-batchItem"][];
+                };
+                recordingLease: components["schemas"]["recordingLease"];
+                recordingCommitItem: {
+                    /** @enum {unknown} */
+                    kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert" | "recording.applyMidi" | "clip.delete" | "clip.setPatternOwner";
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & ({
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.applyMidi";
+                    payload: components["schemas"]["applyMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.delete";
+                    payload: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.setPatternOwner";
+                    payload: components["schemas"]["clipPatternOwnerPayload"];
+                });
+                recordingCommitPayload: {
+                    leases: components["schemas"]["recordingLease"][];
+                    commands: components["schemas"]["project-command-v5.schema_$defs-recordingCommitItem"][];
+                };
+                bodyShape: components["schemas"]["project-command-v5.schema_$defs-nonBatchBody"] | {
+                    /** @constant */
+                    kind?: "recording.commit";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-recordingCommitPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "batch";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-batchPayload"];
+                };
+                builtinSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @constant */
+                    format: "internal";
+                    /** @enum {unknown} */
+                    uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector";
+                    vendor: string;
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                    slideDelivery?: number;
+                    slideBendRange?: number;
+                    slideReleaseReserve?: number;
+                } & unknown;
+                externalPluginText: components["schemas"]["externalPluginText"];
+                externalSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @enum {unknown} */
+                    format: "clap" | "vst3" | "au" | "vst";
+                    uid: components["schemas"]["externalPluginText"];
+                    vendor: components["schemas"]["externalPluginText"] & unknown;
+                    pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                    slideDelivery?: number;
+                    slideBendRange?: number;
+                    slideReleaseReserve?: number;
+                };
+                midiLane: components["schemas"]["midiLane"];
+                midiTake: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    offsetSeconds: number;
+                    lengthSeconds: number;
+                    clipOffsetSeconds: number;
+                    gain: number;
+                    muted: boolean;
+                    channels: number;
+                    color: number;
+                    notes: components["schemas"]["$defs-note"][];
+                    lanes?: components["schemas"]["midiLane"][];
+                    slideNotes?: components["schemas"]["slide-note.schema"][];
+                };
+                audioTake: components["schemas"]["audioTake"];
+                midiComp: components["schemas"]["midiComp"];
+                midiContent: {
+                    notes: components["schemas"]["$defs-note"][];
+                    lanes: components["schemas"]["midiLane"][];
+                    takes: components["schemas"]["$defs-midiTake"][];
+                    comp: components["schemas"]["midiComp"][];
+                    expanded: boolean;
+                    slideNotes?: components["schemas"]["slide-note.schema"][];
+                };
+                prepareMidiPayload: {
+                    recordingId: components["schemas"]["id"];
+                    contentId: components["schemas"]["id"];
+                    index: number;
+                    count: number;
+                    content: components["schemas"]["$defs-midiContent"];
+                };
+                applyMidiPayload: components["schemas"]["applyMidiPayload"];
+                restoreMidiPayload: components["schemas"]["restoreMidiPayload"];
+                slideSetPayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    takeId: components["schemas"]["optionalId"];
+                    slideId: components["schemas"]["id"];
+                    slide: null | components["schemas"]["slide-note.schema"];
+                };
+            };
+        } & components["schemas"]["project-command-v5.schema_$defs-bodyShape"];
+        "project-command-v6.schema_$defs-builtinSharedInsert": {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @constant */
+            format: "internal";
+            /** @enum {unknown} */
+            uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
+            vendor: string;
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+            slideDelivery?: number;
+            slideBendRange?: number;
+            slideReleaseReserve?: number;
+            parameterFingerprint?: string;
+            profileSeed?: string;
+        } & (unknown & unknown);
+        "project-command-v6.schema_$defs-externalSharedInsert": {
+            id: components["schemas"]["id"];
+            name: string;
+            bypassed: boolean;
+            /** @enum {unknown} */
+            format: "clap" | "vst3" | "au" | "vst";
+            uid: components["schemas"]["externalPluginText"];
+            vendor: components["schemas"]["externalPluginText"] & unknown;
+            pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+            stateSchemaVersion: number;
+            mix: number;
+            /** @enum {unknown} */
+            channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+            sidechainTrackId: components["schemas"]["optionalId"];
+            sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+            slideDelivery?: number;
+            slideBendRange?: number;
+            slideReleaseReserve?: number;
+            parameterFingerprint?: string;
+        };
+        "$defs-pluginLocation": {
+            /** @enum {unknown} */
+            chain: "master" | "track" | "instrument" | "samplerFx" | "clip" | "channelColor";
+            trackId: components["schemas"]["optionalId"];
+            clipId: components["schemas"]["optionalId"];
+        } & ({
+            /** @constant */
+            chain?: "master";
+            /** @constant */
+            trackId?: "";
+            /** @constant */
+            clipId?: "";
+        } | {
+            /** @enum {unknown} */
+            chain?: "track" | "instrument" | "samplerFx" | "channelColor";
+            trackId?: components["schemas"]["id"];
+            /** @constant */
+            clipId?: "";
+        } | {
+            /** @constant */
+            chain?: "clip";
+            trackId?: components["schemas"]["id"];
+            clipId?: components["schemas"]["id"];
+        });
+        "project-command-v6.schema_$defs-sharedInsert": components["schemas"]["project-command-v6.schema_$defs-builtinSharedInsert"] | components["schemas"]["project-command-v6.schema_$defs-externalSharedInsert"];
+        "$defs-setScalarPayload": {
+            /** @enum {unknown} */
+            field: "name" | "tempo" | "aiInstructions" | "renderSampleRate" | "masterVolume" | "masterPan" | "notebookHtml";
+            value: string | number | boolean;
+        } & ({
+            /** @constant */
+            field?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            field?: "aiInstructions";
+            value?: string;
+        } | {
+            /** @constant */
+            field?: "tempo";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "renderSampleRate";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "masterVolume";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "masterPan";
+            value?: number;
+        } | {
+            /** @constant */
+            field?: "notebookHtml";
+            value?: string;
+        });
+        "$defs-trackPropertyPayload": {
+            trackId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "color" | "volume" | "pan" | "mono" | "summing" | "iconId";
+            value: components["schemas"]["scalarValue"];
+        } & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "iconId";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "color";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "volume";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "pan";
+            value?: number;
+        } | {
+            /** @enum {unknown} */
+            property?: "mono" | "summing";
+            value?: boolean;
+        });
+        "project-command-v6.schema_$defs-pluginAddPayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insert: components["schemas"]["project-command-v6.schema_$defs-sharedInsert"];
+            afterId: components["schemas"]["optionalId"];
+        } & (unknown & unknown & unknown);
+        "$defs-pluginRefPayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+        };
+        "$defs-pluginRestorePayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            deleteOperationId: components["schemas"]["id"];
+        };
+        "$defs-pluginMovePayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            afterId: components["schemas"]["optionalId"];
+        } & unknown;
+        "project-command-v6.schema_$defs-pluginReplacePayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            replacement: components["schemas"]["project-command-v6.schema_$defs-sharedInsert"];
+        } & (unknown & unknown);
+        "project-command-v6.schema_$defs-pluginPropertyPayload": ({
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            /** @enum {unknown} */
+            property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId" | "sidechainTrackIds" | "slideDelivery" | "slideBendRange" | "slideReleaseReserve";
+            value: components["schemas"]["scalarValue"] | components["schemas"]["sidechainTrackIds"];
+        } & unknown) & ({
+            /** @constant */
+            property?: "name";
+            value?: string;
+        } | {
+            /** @constant */
+            property?: "bypassed";
+            value?: boolean;
+        } | {
+            /** @constant */
+            property?: "mix";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "channelMode";
+            /** @enum {unknown} */
+            value?: "auto" | "mono" | "stereo" | "dual-mono";
+        } | {
+            /** @constant */
+            property?: "sidechainTrackId";
+            value?: components["schemas"]["optionalId"];
+        } | {
+            /** @constant */
+            property?: "sidechainTrackIds";
+            value?: components["schemas"]["sidechainTrackIds"];
+        } | {
+            /** @constant */
+            property?: "slideDelivery";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "slideBendRange";
+            value?: number;
+        } | {
+            /** @constant */
+            property?: "slideReleaseReserve";
+            value?: number;
+        });
+        "project-command-v6.schema_$defs-pluginStatePayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            pluginVersion: string;
+            stateSchemaVersion: number;
+            stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+            parameters: components["schemas"]["insertParameter"][];
+            rightParameters: components["schemas"]["insertParameter"][];
+            assetBindings: components["schemas"]["pluginAssetBinding"][];
+        } & unknown;
+        "$defs-pluginParameterPayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            parameterId: string;
+            value: number;
+            rightChannel: boolean;
+        } & unknown;
+        "$defs-pluginRemoveParameterPayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            parameterId: string;
+            rightChannel: boolean;
+        } & unknown;
+        "$defs-pluginBindingPayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            binding: components["schemas"]["pluginAssetBinding"];
+        } & (unknown & unknown);
+        "$defs-pluginRemoveBindingPayload": {
+            location: components["schemas"]["$defs-pluginLocation"];
+            insertId: components["schemas"]["id"];
+            key: string;
+        };
+        notebookCuesPayload: {
+            cues: {
+                seconds: number;
+                text: string;
+            }[];
+        };
+        freezePayload: {
+            trackId: components["schemas"]["id"];
+            asset: components["schemas"]["audioAssetRef"] | null;
+            durationSeconds: number;
+            sampleRate: number;
+        } & ({
+            asset?: null;
+            /** @constant */
+            durationSeconds?: 0;
+            /** @constant */
+            sampleRate?: 0;
+        } | {
+            asset?: components["schemas"]["audioAssetRef"];
+            durationSeconds?: unknown;
+            sampleRate?: unknown;
+        });
+        renderWarp: {
+            enabled: boolean;
+            preservePitch: boolean;
+            mode: number;
+            baselineDurationSeconds: number;
+            sensitivity: number;
+            markers: {
+                id: components["schemas"]["id"];
+                sourceSeconds: number;
+                targetBeats: number;
+                locked: boolean;
+            }[];
+        } & unknown;
+        renderSource: {
+            asset: components["schemas"]["audioAssetRef"] | null;
+            durationSeconds: number;
+            offsetSeconds: number;
+            fadeInSeconds: number;
+            fadeOutSeconds: number;
+            fadeInCurve: number;
+            fadeOutCurve: number;
+            /** @enum {unknown} */
+            fadeInMode: "gain" | "tape";
+            /** @enum {unknown} */
+            fadeOutMode: "gain" | "tape";
+            gain: number;
+            pan: number;
+            channels: number;
+            takes: components["schemas"]["audioTake"][];
+            comp: components["schemas"]["compSegment"][];
+            compCrossfadeMs: number;
+            sampleEdit: components["schemas"]["sampleEdit"];
+            analysis: components["schemas"]["musicalAnalysis"];
+            warp: components["schemas"]["renderWarp"];
+        };
+        renderStatePayload: {
+            trackId: components["schemas"]["id"];
+            clipId: components["schemas"]["id"];
+            source: components["schemas"]["renderSource"];
+            history: {
+                id: components["schemas"]["id"];
+                parentId: components["schemas"]["optionalId"];
+                label: string;
+                source: components["schemas"]["renderSource"];
+            }[];
+            versionId: components["schemas"]["optionalId"];
+            injection: {
+                /** @enum {unknown} */
+                stage: "none" | "trackSource" | "beforeTrackFader" | "beforeFolderFader" | "beforeMasterFx" | "beforeMasterFader";
+                anchorChannelId: components["schemas"]["optionalId"] | "master";
+            };
+        };
+        "project-command-v6.schema_$defs-nonBatchBody": {
+            /** @constant */
+            kind?: "project.setScalar";
+            payload?: components["schemas"]["$defs-setScalarPayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setTimeSignature";
+            payload?: components["schemas"]["timeSignaturePayload"];
+        } | {
+            /** @constant */
+            kind?: "project.setKey";
+            payload?: components["schemas"]["projectKeyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.add";
+            payload?: components["schemas"]["trackAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.delete";
+            payload?: components["schemas"]["trackIdPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.restore";
+            payload?: components["schemas"]["trackRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.move";
+            payload?: components["schemas"]["trackMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setProperty";
+            payload?: components["schemas"]["$defs-trackPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setParent";
+            payload?: components["schemas"]["trackParentPayload"];
+        } | {
+            /** @constant */
+            kind?: "track.setOutput";
+            payload?: components["schemas"]["trackOutputPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.add";
+            payload?: components["schemas"]["sendAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.delete";
+            payload?: components["schemas"]["sendRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "send.restore";
+            payload?: components["schemas"]["sendRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.move";
+            payload?: components["schemas"]["sendMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "send.setProperty";
+            payload?: components["schemas"]["sendPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.delete";
+            payload?: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.restore";
+            payload?: components["schemas"]["clipRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.move";
+            payload?: components["schemas"]["clipMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setSampleEdit";
+            payload?: components["schemas"]["clipSampleEditPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFade";
+            payload?: components["schemas"]["clipFadePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeCurve";
+            payload?: components["schemas"]["clipFadeCurvePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFadeMode";
+            payload?: components["schemas"]["clipFadeModePayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setPatternOwner";
+            payload?: components["schemas"]["clipPatternOwnerPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setMusicalAnalysis";
+            payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.add";
+            payload?: components["schemas"]["project-command-v6.schema_$defs-pluginAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.delete";
+            payload?: components["schemas"]["$defs-pluginRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.restore";
+            payload?: components["schemas"]["$defs-pluginRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.move";
+            payload?: components["schemas"]["$defs-pluginMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.replace";
+            payload?: components["schemas"]["project-command-v6.schema_$defs-pluginReplacePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setProperty";
+            payload?: components["schemas"]["project-command-v6.schema_$defs-pluginPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setState";
+            payload?: components["schemas"]["project-command-v6.schema_$defs-pluginStatePayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setParameter";
+            payload?: components["schemas"]["$defs-pluginParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeParameter";
+            payload?: components["schemas"]["$defs-pluginRemoveParameterPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.setAssetBinding";
+            payload?: components["schemas"]["$defs-pluginBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "plugin.removeAssetBinding";
+            payload?: components["schemas"]["$defs-pluginRemoveBindingPayload"];
+        } | {
+            /** @constant */
+            kind?: "samplerFx.setLevels";
+            payload?: components["schemas"]["samplerFxLevelsPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.upsert";
+            payload?: components["schemas"]["$defs-noteUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.delete";
+            payload?: components["schemas"]["noteRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "note.restore";
+            payload?: components["schemas"]["noteRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.upsert";
+            payload?: components["schemas"]["$defs-automationPointUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.delete";
+            payload?: components["schemas"]["automationPointRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "automationPoint.restore";
+            payload?: components["schemas"]["automationPointRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.add";
+            payload?: components["schemas"]["$defs-controllerLaneAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.delete";
+            payload?: components["schemas"]["controllerLaneRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.restore";
+            payload?: components["schemas"]["controllerLaneRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setTarget";
+            payload?: components["schemas"]["$defs-controllerLaneTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "controllerLane.setDefault";
+            payload?: components["schemas"]["controllerLaneDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setTarget";
+            payload?: components["schemas"]["automationTargetPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setDefault";
+            payload?: components["schemas"]["automationDefaultPayload"];
+        } | {
+            /** @constant */
+            kind?: "automation.setActive";
+            payload?: components["schemas"]["automationActivePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.delete";
+            payload?: components["schemas"]["takeRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.restore";
+            payload?: components["schemas"]["takeRestorePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.move";
+            payload?: components["schemas"]["takeMovePayload"];
+        } | {
+            /** @constant */
+            kind?: "take.setProperty";
+            payload?: components["schemas"]["takePropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.delete";
+            payload?: components["schemas"]["compSegmentRefPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.restore";
+            payload?: components["schemas"]["compSegmentRestorePayload"];
+        } | {
+            /** @constant */
+            kind: "recording.prepareMidi";
+            payload: components["schemas"]["$defs-prepareMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.applyMidi";
+            payload: components["schemas"]["applyMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.restoreMidi";
+            payload: components["schemas"]["restoreMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "slide.set";
+            payload: components["schemas"]["slideSetPayload"];
+        } | {
+            /** @constant */
+            kind: "project.setNotebookCues";
+            payload: components["schemas"]["notebookCuesPayload"];
+        } | {
+            /** @constant */
+            kind: "track.setFreeze";
+            payload: components["schemas"]["freezePayload"];
+        } | {
+            /** @constant */
+            kind: "clip.setRenderState";
+            payload: components["schemas"]["renderStatePayload"];
+        };
+        /** @enum {unknown} */
+        "project-command-v6.schema_$defs-kind": "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch" | "recording.prepareMidi" | "recording.applyMidi" | "recording.restoreMidi" | "slide.set" | "project.setNotebookCues" | "track.setFreeze" | "clip.setRenderState";
+        "project-command-v6.schema_$defs-batchItem": {
+            kind: components["schemas"]["project-command-v6.schema_$defs-kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & components["schemas"]["project-command-v6.schema_$defs-nonBatchBody"];
+        "project-command-v6.schema_$defs-recordingCommitItem": {
+            /** @enum {unknown} */
+            kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert" | "recording.applyMidi" | "clip.delete" | "clip.setPatternOwner" | "clip.setFade";
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+        } & ({
+            /** @constant */
+            kind?: "clip.add";
+            payload?: components["schemas"]["clipAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setProperty";
+            payload?: components["schemas"]["clipPropertyPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setAsset";
+            payload?: components["schemas"]["clipAssetPayload"];
+        } | {
+            /** @constant */
+            kind?: "take.add";
+            payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+        } | {
+            /** @constant */
+            kind?: "compSegment.upsert";
+            payload?: components["schemas"]["compSegmentUpsertPayload"];
+        } | {
+            /** @constant */
+            kind: "recording.applyMidi";
+            payload: components["schemas"]["applyMidiPayload"];
+        } | {
+            /** @constant */
+            kind: "clip.delete";
+            payload: components["schemas"]["clipRefPayload"];
+        } | {
+            /** @constant */
+            kind: "clip.setPatternOwner";
+            payload: components["schemas"]["clipPatternOwnerPayload"];
+        } | {
+            /** @constant */
+            kind?: "clip.setFade";
+            payload?: components["schemas"]["clipFadePayload"];
+        });
+        "project-command-v6.schema_$defs-recordingCommitPayload": {
+            leases: components["schemas"]["recordingLease"][];
+            commands: components["schemas"]["project-command-v6.schema_$defs-recordingCommitItem"][];
+        };
+        "project-command-v6.schema_$defs-batchPayload": {
+            commands: components["schemas"]["project-command-v6.schema_$defs-batchItem"][];
+        };
+        "project-command-v6.schema_$defs-bodyShape": components["schemas"]["project-command-v6.schema_$defs-nonBatchBody"] | {
+            /** @constant */
+            kind?: "recording.commit";
+            payload?: components["schemas"]["project-command-v6.schema_$defs-recordingCommitPayload"];
+        } | {
+            /** @constant */
+            kind?: "batch";
+            payload?: components["schemas"]["project-command-v6.schema_$defs-batchPayload"];
+        };
+        /**
+         * VLT Project Command v6
+         * @description Collaboration v6. Adds the shared notebook and path-free external plugin parameter fingerprints. Session mode, conductor, playback, monitoring and moderation use the separate server-authoritative session control contract. COLOR is a fixed source-channel tape/tube stage with a persistent component profile.
+         */
+        "project-command-v6.schema": {
+            /** @constant */
+            schemaVersion: 6;
+            opId: components["schemas"]["id"];
+            transactionId: components["schemas"]["optionalId"];
+            baseServerSeq: number;
+            kind: components["schemas"]["project-command-v6.schema_$defs-kind"];
+            payload: Record<string, never>;
+            preconditions: components["schemas"]["precondition"][];
+            touchedFields: string[];
+            $defs: {
+                id: components["schemas"]["id"];
+                optionalId: components["schemas"]["optionalId"];
+                /** @enum {unknown} */
+                kind: "project.setScalar" | "project.setTimeSignature" | "project.setKey" | "track.add" | "track.delete" | "track.restore" | "track.move" | "track.setProperty" | "track.setParent" | "track.setOutput" | "send.add" | "send.delete" | "send.restore" | "send.move" | "send.setProperty" | "clip.add" | "clip.delete" | "clip.restore" | "clip.move" | "clip.setProperty" | "clip.setAsset" | "clip.setSampleEdit" | "clip.setFade" | "clip.setFadeCurve" | "clip.setFadeMode" | "clip.setPatternOwner" | "clip.setMusicalAnalysis" | "plugin.add" | "plugin.delete" | "plugin.restore" | "plugin.move" | "plugin.replace" | "plugin.setProperty" | "plugin.setState" | "plugin.setParameter" | "plugin.removeParameter" | "plugin.setAssetBinding" | "plugin.removeAssetBinding" | "samplerFx.setLevels" | "note.upsert" | "note.delete" | "note.restore" | "automationPoint.upsert" | "automationPoint.delete" | "automationPoint.restore" | "controllerLane.add" | "controllerLane.delete" | "controllerLane.restore" | "controllerLane.setTarget" | "controllerLane.setDefault" | "automation.setTarget" | "automation.setDefault" | "automation.setActive" | "take.add" | "take.delete" | "take.restore" | "take.move" | "take.setProperty" | "compSegment.upsert" | "compSegment.delete" | "compSegment.restore" | "recording.commit" | "batch" | "recording.prepareMidi" | "recording.applyMidi" | "recording.restoreMidi" | "slide.set" | "project.setNotebookCues" | "track.setFreeze" | "clip.setRenderState";
+                scalarValue: components["schemas"]["scalarValue"];
+                precondition: components["schemas"]["precondition"];
+                setScalarPayload: {
+                    /** @enum {unknown} */
+                    field: "name" | "tempo" | "aiInstructions" | "renderSampleRate" | "masterVolume" | "masterPan" | "notebookHtml";
+                    value: string | number | boolean;
+                } & ({
+                    /** @constant */
+                    field?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    field?: "aiInstructions";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    field?: "tempo";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "renderSampleRate";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "masterVolume";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "masterPan";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    field?: "notebookHtml";
+                    value?: string;
+                });
+                timeSignaturePayload: components["schemas"]["timeSignaturePayload"];
+                projectKeyPayload: components["schemas"]["projectKeyPayload"];
+                trackAddPayload: components["schemas"]["trackAddPayload"];
+                trackIdPayload: components["schemas"]["trackIdPayload"];
+                trackRestorePayload: components["schemas"]["trackRestorePayload"];
+                trackMovePayload: components["schemas"]["trackMovePayload"];
+                trackPropertyPayload: {
+                    trackId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "color" | "volume" | "pan" | "mono" | "summing" | "iconId";
+                    value: components["schemas"]["scalarValue"];
+                } & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "iconId";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "color";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "volume";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "pan";
+                    value?: number;
+                } | {
+                    /** @enum {unknown} */
+                    property?: "mono" | "summing";
+                    value?: boolean;
+                });
+                trackParentPayload: components["schemas"]["trackParentPayload"];
+                trackOutputPayload: components["schemas"]["trackOutputPayload"];
+                send: components["schemas"]["send"];
+                sendAddPayload: components["schemas"]["sendAddPayload"];
+                sendRefPayload: components["schemas"]["sendRefPayload"];
+                sendRestorePayload: components["schemas"]["sendRestorePayload"];
+                sendMovePayload: components["schemas"]["sendMovePayload"];
+                sendPropertyPayload: components["schemas"]["sendPropertyPayload"];
+                clipAddPayload: components["schemas"]["clipAddPayload"];
+                clipRefPayload: components["schemas"]["clipRefPayload"];
+                clipRestorePayload: components["schemas"]["clipRestorePayload"];
+                clipMovePayload: components["schemas"]["clipMovePayload"];
+                clipPropertyPayload: components["schemas"]["clipPropertyPayload"];
+                assetRef: components["schemas"]["assetRef"];
+                optionalAssetRef: components["schemas"]["optionalAssetRef"];
+                pluginStateAssetRef: components["schemas"]["assetRef"] & {
+                    /** @constant */
+                    kind?: "plugin-state";
+                };
+                optionalPluginStateAssetRef: components["schemas"]["optionalPluginStateAssetRef"];
+                clipAssetPayload: components["schemas"]["clipAssetPayload"];
+                sampleEdit: components["schemas"]["sampleEdit"];
+                clipSampleEditPayload: components["schemas"]["clipSampleEditPayload"];
+                clipFadePayload: components["schemas"]["clipFadePayload"];
+                clipFadeCurvePayload: components["schemas"]["clipFadeCurvePayload"];
+                clipFadeModePayload: components["schemas"]["clipFadeModePayload"];
+                clipPatternOwnerPayload: components["schemas"]["clipPatternOwnerPayload"];
+                musicalAnalysis: components["schemas"]["musicalAnalysis"];
+                clipMusicalAnalysisPayload: components["schemas"]["clipMusicalAnalysisPayload"];
+                pluginLocation: {
+                    /** @enum {unknown} */
+                    chain: "master" | "track" | "instrument" | "samplerFx" | "clip" | "channelColor";
+                    trackId: components["schemas"]["optionalId"];
+                    clipId: components["schemas"]["optionalId"];
+                } & ({
+                    /** @constant */
+                    chain?: "master";
+                    /** @constant */
+                    trackId?: "";
+                    /** @constant */
+                    clipId?: "";
+                } | {
+                    /** @enum {unknown} */
+                    chain?: "track" | "instrument" | "samplerFx" | "channelColor";
+                    trackId?: components["schemas"]["id"];
+                    /** @constant */
+                    clipId?: "";
+                } | {
+                    /** @constant */
+                    chain?: "clip";
+                    trackId?: components["schemas"]["id"];
+                    clipId?: components["schemas"]["id"];
+                });
+                insertParameter: components["schemas"]["insertParameter"];
+                pluginAssetBinding: {
+                    key: string;
+                    asset: components["schemas"]["assetRef"];
+                    required: boolean;
+                } & unknown;
+                samplerAssetBinding: components["schemas"]["samplerAssetBinding"];
+                sharedInsert: components["schemas"]["project-command-v6.schema_$defs-builtinSharedInsert"] | components["schemas"]["project-command-v6.schema_$defs-externalSharedInsert"];
+                pluginAddPayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insert: components["schemas"]["project-command-v6.schema_$defs-sharedInsert"];
+                    afterId: components["schemas"]["optionalId"];
+                } & (unknown & unknown & unknown);
+                pluginRefPayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                };
+                pluginRestorePayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    deleteOperationId: components["schemas"]["id"];
+                };
+                pluginMovePayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    afterId: components["schemas"]["optionalId"];
+                } & unknown;
+                pluginReplacePayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    replacement: components["schemas"]["project-command-v6.schema_$defs-sharedInsert"];
+                } & (unknown & unknown);
+                sidechainTrackIds: components["schemas"]["sidechainTrackIds"];
+                pluginPropertyPayload: ({
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    /** @enum {unknown} */
+                    property: "name" | "bypassed" | "mix" | "channelMode" | "sidechainTrackId" | "sidechainTrackIds" | "slideDelivery" | "slideBendRange" | "slideReleaseReserve";
+                    value: components["schemas"]["scalarValue"] | components["schemas"]["sidechainTrackIds"];
+                } & unknown) & ({
+                    /** @constant */
+                    property?: "name";
+                    value?: string;
+                } | {
+                    /** @constant */
+                    property?: "bypassed";
+                    value?: boolean;
+                } | {
+                    /** @constant */
+                    property?: "mix";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "channelMode";
+                    /** @enum {unknown} */
+                    value?: "auto" | "mono" | "stereo" | "dual-mono";
+                } | {
+                    /** @constant */
+                    property?: "sidechainTrackId";
+                    value?: components["schemas"]["optionalId"];
+                } | {
+                    /** @constant */
+                    property?: "sidechainTrackIds";
+                    value?: components["schemas"]["sidechainTrackIds"];
+                } | {
+                    /** @constant */
+                    property?: "slideDelivery";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "slideBendRange";
+                    value?: number;
+                } | {
+                    /** @constant */
+                    property?: "slideReleaseReserve";
+                    value?: number;
+                });
+                pluginStatePayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                } & unknown;
+                pluginParameterPayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    parameterId: string;
+                    value: number;
+                    rightChannel: boolean;
+                } & unknown;
+                pluginRemoveParameterPayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    parameterId: string;
+                    rightChannel: boolean;
+                } & unknown;
+                pluginBindingPayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    binding: components["schemas"]["pluginAssetBinding"];
+                } & (unknown & unknown);
+                pluginRemoveBindingPayload: {
+                    location: components["schemas"]["$defs-pluginLocation"];
+                    insertId: components["schemas"]["id"];
+                    key: string;
+                };
+                samplerFxLevelsPayload: components["schemas"]["samplerFxLevelsPayload"];
+                note: components["schemas"]["$defs-note"];
+                noteUpsertPayload: components["schemas"]["$defs-noteUpsertPayload"];
+                noteRefPayload: components["schemas"]["noteRefPayload"];
+                noteRestorePayload: components["schemas"]["noteRestorePayload"];
+                automationPoint: components["schemas"]["$defs-automationPoint"];
+                automationPointUpsertPayload: components["schemas"]["$defs-automationPointUpsertPayload"];
+                automationPointRefPayload: components["schemas"]["automationPointRefPayload"];
+                automationPointRestorePayload: components["schemas"]["automationPointRestorePayload"];
+                controllerLaneTarget: components["schemas"]["$defs-controllerLaneTarget"];
+                controllerLaneAddPayload: components["schemas"]["$defs-controllerLaneAddPayload"];
+                controllerLaneRefPayload: components["schemas"]["controllerLaneRefPayload"];
+                controllerLaneRestorePayload: components["schemas"]["controllerLaneRestorePayload"];
+                controllerLaneTargetPayload: components["schemas"]["$defs-controllerLaneTargetPayload"];
+                controllerLaneDefaultPayload: components["schemas"]["controllerLaneDefaultPayload"];
+                automationTarget: components["schemas"]["automationTarget"];
+                automationTargetPayload: components["schemas"]["automationTargetPayload"];
+                automationDefaultPayload: components["schemas"]["automationDefaultPayload"];
+                automationActivePayload: components["schemas"]["automationActivePayload"];
+                audioMetadata: components["schemas"]["audioMetadata"];
+                audioAssetRef: components["schemas"]["audioAssetRef"];
+                take: components["schemas"]["project-command-v5.schema_$defs-take"];
+                takeAddPayload: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+                takeRefPayload: components["schemas"]["takeRefPayload"];
+                takeRestorePayload: components["schemas"]["takeRestorePayload"];
+                takeMovePayload: components["schemas"]["takeMovePayload"];
+                takePropertyPayload: components["schemas"]["takePropertyPayload"];
+                compSegment: components["schemas"]["compSegment"];
+                compSegmentUpsertPayload: components["schemas"]["compSegmentUpsertPayload"];
+                compSegmentRefPayload: components["schemas"]["compSegmentRefPayload"];
+                compSegmentRestorePayload: components["schemas"]["compSegmentRestorePayload"];
+                nonBatchBody: {
+                    /** @constant */
+                    kind?: "project.setScalar";
+                    payload?: components["schemas"]["$defs-setScalarPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setTimeSignature";
+                    payload?: components["schemas"]["timeSignaturePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "project.setKey";
+                    payload?: components["schemas"]["projectKeyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.add";
+                    payload?: components["schemas"]["trackAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.delete";
+                    payload?: components["schemas"]["trackIdPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.restore";
+                    payload?: components["schemas"]["trackRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.move";
+                    payload?: components["schemas"]["trackMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setProperty";
+                    payload?: components["schemas"]["$defs-trackPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setParent";
+                    payload?: components["schemas"]["trackParentPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "track.setOutput";
+                    payload?: components["schemas"]["trackOutputPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.add";
+                    payload?: components["schemas"]["sendAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.delete";
+                    payload?: components["schemas"]["sendRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.restore";
+                    payload?: components["schemas"]["sendRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.move";
+                    payload?: components["schemas"]["sendMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "send.setProperty";
+                    payload?: components["schemas"]["sendPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.delete";
+                    payload?: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.restore";
+                    payload?: components["schemas"]["clipRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.move";
+                    payload?: components["schemas"]["clipMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setSampleEdit";
+                    payload?: components["schemas"]["clipSampleEditPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFade";
+                    payload?: components["schemas"]["clipFadePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeCurve";
+                    payload?: components["schemas"]["clipFadeCurvePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFadeMode";
+                    payload?: components["schemas"]["clipFadeModePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setPatternOwner";
+                    payload?: components["schemas"]["clipPatternOwnerPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setMusicalAnalysis";
+                    payload?: components["schemas"]["clipMusicalAnalysisPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.add";
+                    payload?: components["schemas"]["project-command-v6.schema_$defs-pluginAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.delete";
+                    payload?: components["schemas"]["$defs-pluginRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.restore";
+                    payload?: components["schemas"]["$defs-pluginRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.move";
+                    payload?: components["schemas"]["$defs-pluginMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.replace";
+                    payload?: components["schemas"]["project-command-v6.schema_$defs-pluginReplacePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setProperty";
+                    payload?: components["schemas"]["project-command-v6.schema_$defs-pluginPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setState";
+                    payload?: components["schemas"]["project-command-v6.schema_$defs-pluginStatePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setParameter";
+                    payload?: components["schemas"]["$defs-pluginParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeParameter";
+                    payload?: components["schemas"]["$defs-pluginRemoveParameterPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.setAssetBinding";
+                    payload?: components["schemas"]["$defs-pluginBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "plugin.removeAssetBinding";
+                    payload?: components["schemas"]["$defs-pluginRemoveBindingPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "samplerFx.setLevels";
+                    payload?: components["schemas"]["samplerFxLevelsPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.upsert";
+                    payload?: components["schemas"]["$defs-noteUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.delete";
+                    payload?: components["schemas"]["noteRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "note.restore";
+                    payload?: components["schemas"]["noteRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.upsert";
+                    payload?: components["schemas"]["$defs-automationPointUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.delete";
+                    payload?: components["schemas"]["automationPointRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automationPoint.restore";
+                    payload?: components["schemas"]["automationPointRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.add";
+                    payload?: components["schemas"]["$defs-controllerLaneAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.delete";
+                    payload?: components["schemas"]["controllerLaneRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.restore";
+                    payload?: components["schemas"]["controllerLaneRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setTarget";
+                    payload?: components["schemas"]["$defs-controllerLaneTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "controllerLane.setDefault";
+                    payload?: components["schemas"]["controllerLaneDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setTarget";
+                    payload?: components["schemas"]["automationTargetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setDefault";
+                    payload?: components["schemas"]["automationDefaultPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "automation.setActive";
+                    payload?: components["schemas"]["automationActivePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.delete";
+                    payload?: components["schemas"]["takeRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.restore";
+                    payload?: components["schemas"]["takeRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.move";
+                    payload?: components["schemas"]["takeMovePayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.setProperty";
+                    payload?: components["schemas"]["takePropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.delete";
+                    payload?: components["schemas"]["compSegmentRefPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.restore";
+                    payload?: components["schemas"]["compSegmentRestorePayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.prepareMidi";
+                    payload: components["schemas"]["$defs-prepareMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.applyMidi";
+                    payload: components["schemas"]["applyMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.restoreMidi";
+                    payload: components["schemas"]["restoreMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "slide.set";
+                    payload: components["schemas"]["slideSetPayload"];
+                } | {
+                    /** @constant */
+                    kind: "project.setNotebookCues";
+                    payload: components["schemas"]["notebookCuesPayload"];
+                } | {
+                    /** @constant */
+                    kind: "track.setFreeze";
+                    payload: components["schemas"]["freezePayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.setRenderState";
+                    payload: components["schemas"]["renderStatePayload"];
+                };
+                batchItem: {
+                    kind: components["schemas"]["project-command-v6.schema_$defs-kind"];
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & components["schemas"]["project-command-v6.schema_$defs-nonBatchBody"];
+                batchPayload: {
+                    commands: components["schemas"]["project-command-v6.schema_$defs-batchItem"][];
+                };
+                recordingLease: components["schemas"]["recordingLease"];
+                recordingCommitItem: {
+                    /** @enum {unknown} */
+                    kind: "clip.add" | "clip.setProperty" | "clip.setAsset" | "take.add" | "compSegment.upsert" | "recording.applyMidi" | "clip.delete" | "clip.setPatternOwner" | "clip.setFade";
+                    payload: Record<string, never>;
+                    preconditions: components["schemas"]["precondition"][];
+                } & ({
+                    /** @constant */
+                    kind?: "clip.add";
+                    payload?: components["schemas"]["clipAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setProperty";
+                    payload?: components["schemas"]["clipPropertyPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setAsset";
+                    payload?: components["schemas"]["clipAssetPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "take.add";
+                    payload?: components["schemas"]["project-command-v5.schema_$defs-takeAddPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "compSegment.upsert";
+                    payload?: components["schemas"]["compSegmentUpsertPayload"];
+                } | {
+                    /** @constant */
+                    kind: "recording.applyMidi";
+                    payload: components["schemas"]["applyMidiPayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.delete";
+                    payload: components["schemas"]["clipRefPayload"];
+                } | {
+                    /** @constant */
+                    kind: "clip.setPatternOwner";
+                    payload: components["schemas"]["clipPatternOwnerPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "clip.setFade";
+                    payload?: components["schemas"]["clipFadePayload"];
+                });
+                recordingCommitPayload: {
+                    leases: components["schemas"]["recordingLease"][];
+                    commands: components["schemas"]["project-command-v6.schema_$defs-recordingCommitItem"][];
+                };
+                bodyShape: components["schemas"]["project-command-v6.schema_$defs-nonBatchBody"] | {
+                    /** @constant */
+                    kind?: "recording.commit";
+                    payload?: components["schemas"]["project-command-v6.schema_$defs-recordingCommitPayload"];
+                } | {
+                    /** @constant */
+                    kind?: "batch";
+                    payload?: components["schemas"]["project-command-v6.schema_$defs-batchPayload"];
+                };
+                builtinSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @constant */
+                    format: "internal";
+                    /** @enum {unknown} */
+                    uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
+                    vendor: string;
+                    pluginVersion: string;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                    slideDelivery?: number;
+                    slideBendRange?: number;
+                    slideReleaseReserve?: number;
+                    parameterFingerprint?: string;
+                    profileSeed?: string;
+                } & (unknown & unknown);
+                externalPluginText: components["schemas"]["externalPluginText"];
+                externalSharedInsert: {
+                    id: components["schemas"]["id"];
+                    name: string;
+                    bypassed: boolean;
+                    /** @enum {unknown} */
+                    format: "clap" | "vst3" | "au" | "vst";
+                    uid: components["schemas"]["externalPluginText"];
+                    vendor: components["schemas"]["externalPluginText"] & unknown;
+                    pluginVersion: components["schemas"]["externalPluginText"] & unknown;
+                    stateSchemaVersion: number;
+                    mix: number;
+                    /** @enum {unknown} */
+                    channelMode: "auto" | "mono" | "stereo" | "dual-mono";
+                    sidechainTrackId: components["schemas"]["optionalId"];
+                    sidechainTrackIds?: components["schemas"]["sidechainTrackIds"];
+                    stateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    rightStateAsset: components["schemas"]["optionalPluginStateAssetRef"];
+                    parameters: components["schemas"]["insertParameter"][];
+                    rightParameters: components["schemas"]["insertParameter"][];
+                    assetBindings: components["schemas"]["pluginAssetBinding"][];
+                    slideDelivery?: number;
+                    slideBendRange?: number;
+                    slideReleaseReserve?: number;
+                    parameterFingerprint?: string;
+                };
+                midiLane: components["schemas"]["midiLane"];
+                midiTake: components["schemas"]["$defs-midiTake"];
+                audioTake: components["schemas"]["audioTake"];
+                midiComp: components["schemas"]["midiComp"];
+                midiContent: components["schemas"]["$defs-midiContent"];
+                prepareMidiPayload: components["schemas"]["$defs-prepareMidiPayload"];
+                applyMidiPayload: components["schemas"]["applyMidiPayload"];
+                restoreMidiPayload: components["schemas"]["restoreMidiPayload"];
+                slideSetPayload: components["schemas"]["slideSetPayload"];
+                notebookCuesPayload: {
+                    cues: {
+                        seconds: number;
+                        text: string;
+                    }[];
+                };
+                freezePayload: {
+                    trackId: components["schemas"]["id"];
+                    asset: components["schemas"]["audioAssetRef"] | null;
+                    durationSeconds: number;
+                    sampleRate: number;
+                } & ({
+                    asset?: null;
+                    /** @constant */
+                    durationSeconds?: 0;
+                    /** @constant */
+                    sampleRate?: 0;
+                } | {
+                    asset?: components["schemas"]["audioAssetRef"];
+                    durationSeconds?: unknown;
+                    sampleRate?: unknown;
+                });
+                renderWarp: {
+                    enabled: boolean;
+                    preservePitch: boolean;
+                    mode: number;
+                    baselineDurationSeconds: number;
+                    sensitivity: number;
+                    markers: {
+                        id: components["schemas"]["id"];
+                        sourceSeconds: number;
+                        targetBeats: number;
+                        locked: boolean;
+                    }[];
+                } & unknown;
+                renderSource: {
+                    asset: components["schemas"]["audioAssetRef"] | null;
+                    durationSeconds: number;
+                    offsetSeconds: number;
+                    fadeInSeconds: number;
+                    fadeOutSeconds: number;
+                    fadeInCurve: number;
+                    fadeOutCurve: number;
+                    /** @enum {unknown} */
+                    fadeInMode: "gain" | "tape";
+                    /** @enum {unknown} */
+                    fadeOutMode: "gain" | "tape";
+                    gain: number;
+                    pan: number;
+                    channels: number;
+                    takes: components["schemas"]["audioTake"][];
+                    comp: components["schemas"]["compSegment"][];
+                    compCrossfadeMs: number;
+                    sampleEdit: components["schemas"]["sampleEdit"];
+                    analysis: components["schemas"]["musicalAnalysis"];
+                    warp: components["schemas"]["renderWarp"];
+                };
+                renderStatePayload: {
+                    trackId: components["schemas"]["id"];
+                    clipId: components["schemas"]["id"];
+                    source: components["schemas"]["renderSource"];
+                    history: {
+                        id: components["schemas"]["id"];
+                        parentId: components["schemas"]["optionalId"];
+                        label: string;
+                        source: components["schemas"]["renderSource"];
+                    }[];
+                    versionId: components["schemas"]["optionalId"];
+                    injection: {
+                        /** @enum {unknown} */
+                        stage: "none" | "trackSource" | "beforeTrackFader" | "beforeFolderFader" | "beforeMasterFx" | "beforeMasterFader";
+                        anchorChannelId: components["schemas"]["optionalId"] | "master";
+                    };
+                };
+            };
+        } & components["schemas"]["project-command-v6.schema_$defs-bodyShape"];
     };
     responses: {
         /** @description Structured API error */
@@ -6291,7 +10139,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["project-command-v2.schema"] | components["schemas"]["project-command-v3.schema"];
+                "application/json": components["schemas"]["project-command-v2.schema"] | components["schemas"]["project-command-v3.schema"] | components["schemas"]["project-command-v4.schema"] | components["schemas"]["project-command-v5.schema"] | components["schemas"]["SessionCommandRequestV6"];
             };
         };
         responses: {
@@ -6986,6 +10834,230 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
+        };
+    };
+    changeCloudProjectSessionMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionModeRequest"];
+            };
+        };
+        responses: {
+            /** @description Atomic policy transition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    controlCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionControlAction"];
+            };
+        };
+        responses: {
+            /** @description Acknowledged action or idempotent retry with current control state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionControlResult"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getCloudProjectPluginCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact plugin inventory intersection across ready editors */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPluginCatalog"];
+                };
+            };
+        };
+    };
+    updateCloudProjectPluginInventory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    pluginInventory: components["schemas"]["PluginRequirement"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated common catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPluginCatalog"];
+                };
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    moderateCloudProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {unknown} */
+                    action: "kick" | "readmit" | "ban" | "unban";
+                    /** Format: uuid */
+                    targetUserId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Owner-only moderation applied */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionState"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    acquireProjectEditLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditLeaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Bounded exclusive element edit lease */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEditLease"];
+                };
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    releaseProjectEditLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+                leaseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Holder lease released */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    renewProjectEditLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                sessionId: components["parameters"]["SessionId"];
+                leaseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditLeaseRenewal"];
+            };
+        };
+        responses: {
+            /** @description Holder lease renewed after current permission check */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEditLease"];
+                };
+            };
+            409: components["responses"]["Error"];
         };
     };
     acquireProjectRecordingLease: {

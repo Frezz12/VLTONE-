@@ -2,6 +2,7 @@
 #include "graphics/ScenePaintSource.hpp"
 #include "UiFrameClock.hpp"
 #include "SamplePitchAnalysis.hpp"
+#include "PluginReadout.hpp"
 
 #include <QColor>
 #include <QHash>
@@ -33,7 +34,6 @@ class PanKnob;
 namespace daw {
 class EngineController;
 namespace plugins::sampler {
-class SamplerInstance;
 struct SampleData;
 }
 } // namespace daw
@@ -165,7 +165,7 @@ signals:
     void automationRequested(const QString& parameterId);
 
 private:
-    daw::plugins::sampler::SamplerInstance* sampler() const;
+    daw::SamplerSnapshot sampler() const;
     std::shared_ptr<const daw::plugins::sampler::SampleData> currentSample();
 
     QWidget* buildFxStrip();

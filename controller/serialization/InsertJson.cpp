@@ -13,8 +13,11 @@ using json = nlohmann::json;
 json parametersToJson(const std::vector<InsertParameter>& values) {
     json out = json::array();
     for (const InsertParameter& value : values) {
-        if (!value.id.empty() && std::isfinite(value.value))
-            out.push_back(json{{"id", value.id}, {"value", value.value}});
+        if (!value.id.empty() && std::isfinite(value.value)) {
+            json parameter{{"id", value.id}, {"value", value.value}};
+            if (value.restoreAfterState) parameter["restoreAfterState"] = true;
+            out.push_back(std::move(parameter));
+        }
     }
     return out;
 }
@@ -31,6 +34,8 @@ std::vector<InsertParameter> parametersFromJson(const json& parent,
         }
         InsertParameter parameter{value.at("id").get<std::string>(),
                                   value.at("value").get<double>()};
+        const auto restore = value.find("restoreAfterState");
+        parameter.restoreAfterState = restore != value.end() && restore->is_boolean() && restore->get<bool>();
         if (!parameter.id.empty() && std::isfinite(parameter.value))
             out.push_back(std::move(parameter));
     }
@@ -101,6 +106,10 @@ InsertModel insertFromJson(const json& j) {
 
     i.format = pluginFormatFromString(j.value("format", std::string()));
     i.uid = j.value("uid", "");
+    // Only migrate the old built-in default name; keep user-given labels.
+    if (i.format == PluginFormat::Internal && i.uid == "daw.delay" &&
+        i.name == "Flowers Delay")
+        i.name = "Classic Delay";
     if (j.contains("miniModule")) {
         i.miniModule = plugins::mini::fromJson(j.at("miniModule"));
         i.miniModuleMode = j.value("miniModuleMode", std::string{});

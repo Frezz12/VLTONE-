@@ -77,15 +77,6 @@ public:
     }
 protected:
     void wheelEvent(QWheelEvent* event) override { event->ignore(); }
-    void paintEvent(QPaintEvent* event) override {
-        FaderWidget::paintEvent(event);
-        if (!hasFocus()) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(th().accent, 1.0, Qt::DotLine));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
-    }
     bool event(QEvent* event) override {
         if (event->type() == QEvent::ShortcutOverride) {
             const auto* key = static_cast<QKeyEvent*>(event);
@@ -275,8 +266,8 @@ protected:
         QColor fill = mixColors(t.well(), accent, isDown() ? 0.18 : 0.07);
         if (underMouse()) fill = mixColors(fill, accent, 0.08);
         p.setBrush(fill);
-        p.setPen(QPen(mixColors(t.separator(), accent, underMouse() ? 0.55 : 0.28),
-                      hasFocus() ? 1.8 : 1.0));
+        p.setPen(QPen(mixColors(t.separator(), accent, 0.28),
+                      1.0));
         p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7);
         if (!track) return;
         if (!daw::trackAccepts(track->kind, daw::ClipKind::Midi)) {
@@ -468,7 +459,7 @@ protected:
         p.fillPath(shape, mixColors(t.surfaceElevated, t.accent,
                                     isDown() ? 0.15 : underMouse() ? 0.07 : 0.0));
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(hasFocus() ? t.accent : t.separator(), hasFocus() ? 1.5 : 1.0));
+        p.setPen(QPen(t.separator(), 1.0));
         p.drawPath(shape);
         p.setPen(Qt::NoPen);
         p.setBrush(m_color.isValid() ? m_color : t.accent);
@@ -1722,7 +1713,7 @@ void PatternWindow::populateSourceMenu(QMenu* menu, const QString& trackId) {
         populateRhythmMenu(fill, trackId);
     }
     const std::string slotId = track->instrument.id;
-    if (m_controller->samplerInstance(track->id, slotId)) {
+    if (m_controller->hasInsert(track->id, slotId, "daw.sampler")) {
         auto* cut = menu->addAction(tr("Cut Itself"));
         cut->setObjectName(QStringLiteral("pattern.cutItself"));
         cut->setCheckable(true);
@@ -1783,7 +1774,7 @@ void PatternWindow::fillRhythm(const QString& trackId, int divisionsPerBar) {
     // A Sampler trigger uses its root key, so rhythm fill does not transpose
     // the sample. Other instruments retain the source's current pitch.
     int pitch = clip && !clip->notes.empty() ? clip->notes.front().pitch : 60;
-    if (m_controller->samplerInstance(track->id, track->instrument.id))
+    if (m_controller->hasInsert(track->id, track->instrument.id, "daw.sampler"))
         pitch = int(std::lround(m_controller->insertParameter(track->id,
                                              track->instrument.id, "rootnote")));
     std::vector<daw::NoteModel> notes;
@@ -2031,7 +2022,7 @@ bool PatternWindow::checkInteractionGesturesForTest() {
 }
 
 bool PatternWindow::checkEditingForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto sampler = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
     if (!sampler) return false;
@@ -2393,11 +2384,11 @@ QToolButton#PatternToolbarButton:hover { background: %HOVER%;
 QToolButton#PatternToolbarButton:disabled { color: %TEXT2%; background: %SURFACE%; }
 QToolButton#PatternAddInstrument { min-height: 28px; padding: 4px 10px;
     color: %TEXT%; background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px; }
-QToolButton#PatternAddInstrument:hover { background: %HOVER%; border-color: %ACCENT%; }
+QToolButton#PatternAddInstrument:hover { background: %HOVER%; }
 #PatternDropHint { color: %TEXT2%; font-size: 10px; }
 QToolButton#PatternRhythm { border: 1px solid transparent; border-radius: %RADIUS%px; }
 QToolButton#PatternRhythm:hover, QToolButton#PatternRhythm:focus {
-    background: %HOVER%; border-color: %ACCENT%; }
+    background: %HOVER%; }
 QToolButton#PatternRhythm::menu-indicator { image: none; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())

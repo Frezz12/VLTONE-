@@ -151,7 +151,11 @@ const clap_plugin_t* create(const clap_plugin_factory_t*, const clap_host_t* hos
     unsigned kind = 0;
     while (kind < descriptorCount && std::strcmp(id, descriptors[kind].id)) ++kind;
     if (kind == descriptorCount) return nullptr;
-    if ((kind == 4 && instances[kind] >= 1) || (kind == 5 && instances[kind] >= 3)) return nullptr;
+    // Armed only after the live instance loads. The worker and isolated host
+    // have independent module globals, so the failure crosses the boundary
+    // through this test fixture's inherited environment instead of a counter.
+    if (const auto* fail = std::getenv("DAW_TEST_RENDER_CREATE_FAILURE");
+        (kind == 4 || kind == 5) && fail && !std::strcmp(fail, id)) return nullptr;
     ++instances[kind];
     auto* self = new Instance;
     self->host = host; self->kind = kind;

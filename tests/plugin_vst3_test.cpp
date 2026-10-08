@@ -407,7 +407,7 @@ int main() {
         std::error_code error;
         std::filesystem::remove_all(directory, error);
         const auto package = (directory / "Preset.vlt").string();
-        EngineController source;
+        EngineController source{EngineController::TestRuntime{}};
         check(source.initialize(48000, kBlock, false).isOk(),
               "the preset project initializes without an audio device");
         const auto track = source.addTrack(TrackKind::Audio, "Preset");
@@ -442,7 +442,7 @@ int main() {
             return verifier->parameterValue(0);
         };
         for (int pass = 0; pass < 2; ++pass) {
-            EngineController reopened;
+            EngineController reopened{EngineController::TestRuntime{}};
             reopened.initialize(48000, kBlock, false);
             check(reopened.openProject(package).isOk(), "the preset project reopens");
             check(std::fabs(processAndReadGain(reopened) - 0.5) < 1e-9,
@@ -458,7 +458,7 @@ int main() {
         savedDocument.tracks.front().inserts.front().parameters.front().value = 0.75;
         check(ProjectSerializer::save(savedDocument, package).isOk(),
               "a project with a missing plugin state file is prepared");
-        EngineController fallback;
+        EngineController fallback{EngineController::TestRuntime{}};
         fallback.initialize(48000, kBlock, false);
         check(fallback.openProject(package).isOk() &&
                   std::fabs(processAndReadGain(fallback) - 0.75) < 1e-9,

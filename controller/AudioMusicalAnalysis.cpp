@@ -1,4 +1,5 @@
 #include "AudioMusicalAnalysis.hpp"
+#include "MediaWorker.hpp"
 #include "analysis/Signal.hpp"
 #include "DSP/Resampler.hpp"
 #include "platform/AudioFileDecoder.hpp"
@@ -146,6 +147,7 @@ audio::Result analyzeAudioSamples(const float* input, std::size_t frames, int ch
 audio::Result analyzeAudioFile(const std::string& path, const MusicalAnalysisRequest& request,
                                MusicalAnalysisResult& out, const AnalysisProgress& progress) {
     out = {};
+    if (MediaWorker::enabled()) return MediaWorker::analyze(path, request, out, progress);
     if (!validRequest(request))
         return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid analysis range or transform");
     if (!request.detectTempo && !request.detectKey) return audio::Result::ok();

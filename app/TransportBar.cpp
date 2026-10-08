@@ -35,7 +35,6 @@
 #include <QSignalBlocker>
 #include <QShowEvent>
 #include <QStyle>
-#include <QStyleOption>
 #include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -500,19 +499,78 @@ protected:
         const qreal cy = height() / 2.0;
         p.drawPolyline(QPolygonF{QPointF(cx - 2.5, cy - 1),
                                  QPointF(cx, cy + 1.5), QPointF(cx + 2.5, cy - 1)});
-        QStyleOption focus;
-        focus.initFrom(this);
-        if (hasFocus() && (focus.state & QStyle::State_KeyboardFocusChange)) {
-            p.setPen(QPen(t.accent, 1));
-            p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(r.adjusted(1, 1, -1, -1),
-                              radius - 1, radius - 1);
-        }
     }
 private:
     bool m_primary;
     QString m_modifier;
     int m_modifierWidth = 0;
+};
+
+QColor headerDockFill() {
+    return mixColors(th().headerBackground, th().well(), 0.72);
+}
+
+QColor headerDockEdge() {
+    return mixColors(headerDockFill(), th().textSecondary, 0.24);
+}
+
+void paintHeaderDock(QPainter& painter, const QRectF& bounds) {
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setBrush(headerDockFill());
+    painter.setPen(QPen(headerDockEdge(), 1));
+    painter.drawRoundedRect(bounds, Theme::cornerRadius, Theme::cornerRadius);
+}
+
+// The edge controls share one rail. A lit underline indicates an open panel;
+// the button face responds only while the pointer hovers or presses it.
+class HeaderDockButton final : public ui::IconButton {
+public:
+    HeaderDockButton(icons::Glyph glyph, const QString& tip, QWidget* parent)
+        : ui::IconButton(glyph, tip, parent), m_glyph(glyph) {}
+protected:
+    void enterEvent(QEnterEvent*) override { update(); }
+    void leaveEvent(QEvent*) override { update(); }
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const auto& t = th();
+        const bool disclosure = m_glyph == icons::Glyph::Workspace;
+        const QRectF face = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
+        constexpr qreal radius = Theme::cornerRadius - 2;
+        const QColor base = headerDockFill();
+        QColor fill = base;
+        if (isEnabled() && underMouse() && !isChecked())
+            fill = mixColors(fill, t.textPrimary, 0.08);
+        if (isDown()) fill = mixColors(base, t.textPrimary, 0.16);
+        if (!isEnabled()) p.setOpacity(0.4);
+        p.setBrush(fill);
+        p.setPen(Qt::NoPen);
+        p.drawRoundedRect(face, radius, radius);
+
+        const QColor ink = t.textPrimary;
+        const qreal iconX = disclosure ? 6 : (width() - 18) / 2.0;
+        icons::paint(p, m_glyph, QRectF(iconX, (height() - 18) / 2.0, 18, 18), ink);
+        p.setPen(QPen(ink, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        if (disclosure) {
+            const qreal x = width() - 10;
+            const qreal y = height() / 2.0;
+            const qreal direction = isChecked() ? -1 : 1;
+            p.drawPolyline(QPolygonF{QPointF(x - direction * 1.5, y - 3),
+                QPointF(x + direction * 1.5, y), QPointF(x - direction * 1.5, y + 3)});
+        }
+        if (isChecked()) {
+            const QLineF indicator(iconX + 6, height() - 4, iconX + 12, height() - 4);
+            QColor glow = t.accent;
+            glow.setAlphaF(underMouse() && isEnabled() ? 0.28 : 0.18);
+            p.setPen(QPen(glow, 4, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(indicator);
+            p.setPen(QPen(mixColors(t.accent, t.textPrimary, t.dark ? 0.35 : 0.0),
+                          1.5, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(indicator);
+        }
+    }
+private:
+    const icons::Glyph m_glyph;
 };
 
 // The same workspace commands can live inline or in an anchored popup. Moving
@@ -527,12 +585,12 @@ public:
         m_row->setContentsMargins(5, 6, 5, 6);
         m_row->setSpacing(3);
         if (collapsible) {
-            m_reveal = new ui::IconButton(icons::Glyph::Layers, tr("Show workspace controls"), this);
+            m_reveal = new HeaderDockButton(icons::Glyph::Workspace, tr("Show workspace controls"), this);
             m_reveal->setObjectName(QStringLiteral("HeaderDockReveal"));
             m_reveal->setAccessibleName(tr("Workspace controls"));
             m_reveal->setFocusPolicy(Qt::StrongFocus);
             m_reveal->setCheckable(true);
-            m_reveal->setButtonSize(kButtonSize, kButtonSize);
+            m_reveal->setButtonSize(kButtonSize + 10, kButtonSize);
             m_row->addWidget(m_reveal);
             m_popup = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
             m_popup->setObjectName(QStringLiteral("HeaderWorkspacePopup"));
@@ -548,6 +606,10 @@ public:
             connect(m_reveal, &QAbstractButton::toggled, this,
                     [this](bool expanded) { setExpanded(expanded); });
         }
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
+            if (m_popup) m_popup->update();
+            update();
+        });
     }
     void addAction(QWidget* action) {
         (m_collapsible ? m_actionRow : m_row)->addWidget(action);
@@ -570,7 +632,18 @@ public:
         setExpanded(false);
     }
 protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        paintHeaderDock(p, QRectF(rect()).adjusted(0.5, 4.5, -0.5, -4.5));
+    }
     bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == m_popup && event->type() == QEvent::Paint) {
+            // A translucent native popup needs an explicit opaque plate;
+            // QFrame's styled background can otherwise leave only the buttons.
+            QPainter p(m_popup);
+            paintHeaderDock(p, QRectF(m_popup->rect()).adjusted(0.5, 0.5, -0.5, -0.5));
+            return true;
+        }
         if (watched == m_popup && event->type() == QEvent::Hide) {
             QSignalBlocker block(m_reveal);
             m_reveal->setChecked(false);
@@ -600,10 +673,6 @@ private:
         } else if (m_popupMode) {
             m_popup->layout()->addWidget(m_actionHost);
             m_actionHost->show();
-            const auto& t = th();
-            m_popup->setStyleSheet(QStringLiteral(
-                "QFrame#HeaderWorkspacePopup { background: %1; border: 1px solid %2; border-radius: %3px; }")
-                .arg(t.headerBackground.name(), t.separator().name()).arg(Theme::cornerRadius));
             m_popup->adjustSize();
             // Anchor below the entire header, not below the shorter button
             // group. Native frame rounding differs between 1x and Retina.
@@ -690,7 +759,7 @@ QWidget* TransportBar::buildLeftDock() {
 
     const auto panelButton = [panel](icons::Glyph glyph, const QString& tip,
                                      const char* objectName) {
-        auto* button = new ui::IconButton(glyph, tip, panel);
+        auto* button = new HeaderDockButton(glyph, tip, panel);
         button->setObjectName(QString::fromLatin1(objectName));
         button->setAccessibleName(tip);
         button->setFocusPolicy(Qt::StrongFocus);
@@ -767,7 +836,7 @@ QWidget* TransportBar::buildRightDock() {
     panel->setObjectName(QStringLiteral("HeaderRightDock"));
     panel->setAccessibleName(tr("Connected panels"));
 
-    m_webPanelButton = new ui::IconButton(
+    m_webPanelButton = new HeaderDockButton(
         icons::Glyph::Globe, tr("Open the integrated web browser (Alt+W)"),
         panel);
     m_webPanelButton->setObjectName(QStringLiteral("HeaderWebButton"));
@@ -779,7 +848,7 @@ QWidget* TransportBar::buildRightDock() {
             &TransportBar::webToggled);
     panel->addAction(m_webPanelButton);
 
-    m_notebookPanelButton = new ui::IconButton(
+    m_notebookPanelButton = new HeaderDockButton(
         icons::Glyph::Notebook, tr("Open the notebook"), panel);
     m_notebookPanelButton->setObjectName(QStringLiteral("HeaderNotebookButton"));
     m_notebookPanelButton->setAccessibleName(tr("Notebook"));
@@ -790,7 +859,7 @@ QWidget* TransportBar::buildRightDock() {
             &TransportBar::notebookToggled);
     panel->addAction(m_notebookPanelButton);
 
-    m_aiPanelButton = new ui::IconButton(
+    m_aiPanelButton = new HeaderDockButton(
         icons::Glyph::Assistant, tr("Open the AI assistant"), panel);
     m_aiPanelButton->setObjectName(QStringLiteral("HeaderAiButton"));
     m_aiPanelButton->setAccessibleName(tr("AI assistant"));
@@ -1399,7 +1468,7 @@ void TransportBar::applyTheme() {
     setStyleSheet(QStringLiteral(R"(
 #TransportPill, #TransportGroup, #HeaderToolGroup, #LcdScreen,
 #PositionSection, #StatsSection { background: transparent; border: none; }
-#LcdScreen QLabel { background: transparent; color: %8; font-size: 10px; }
+#LcdScreen QLabel { background: transparent; color: %7; font-size: 10px; }
 #TempoField, #TimeSignatureButton, #GridChip, #RulerFormatButton {
     background: transparent; color: %2; border: 1px solid transparent;
     border-radius: %RADIUS%px; padding: 0 3px; font-size: 15px;
@@ -1407,20 +1476,19 @@ void TransportBar::applyTheme() {
 }
 #GridChip { font-size: 12px; }
 #TempoField:hover, #TimeSignatureButton:hover, #GridChip:hover, #RulerFormatButton:hover { background: %3; }
-#TempoField:focus { border-color: %4; }
 #GridChip::menu-indicator, #TimeSignatureButton::menu-indicator, #RulerFormatButton::menu-indicator { image: none; width: 0; }
 QMenu#HeaderToolMenu {
-    background: %6; color: %1; border: 1px solid %7;
+    background: %5; color: %1; border: 1px solid %6;
     border-radius: %RADIUS%px; padding: 5px; font-size: 13px;
 }
 QMenu#HeaderToolMenu::item { min-height: 22px; padding: 4px 32px 4px 8px; border-radius: %RADIUS%px; font-size: 13px; }
 QMenu#HeaderToolMenu::item:checked { color: %1; font-weight: 600; }
-QMenu#HeaderToolMenu::item:selected { background: %5; }
+QMenu#HeaderToolMenu::item:selected { background: %4; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
           .replace("%ACCENT%", t.accent.name())
           .replace("%ACCENT_TEXT%", t.accentText().name())
           .arg(t.textPrimary.name(), ink.name(), hover.name(),
-          t.accentHighlight.name(), pressed.name(), t.headerBackground.name(),
+          pressed.name(), t.headerBackground.name(),
           t.separator().name(), t.textSecondary.name()));
     m_tempoIcon->setText(QStringLiteral("BPM"));
     m_signatureIcon->setText(tr("Meter"));
@@ -1455,10 +1523,9 @@ void TransportBar::updatePositionStyle() {
         "#BarsPosition { background: transparent; border: 1px solid transparent; "
         "border-radius: 4px; color: %1; padding: 0 5px; font-size: %2px; "
         "font-weight: 400; selection-color: %1; selection-background-color: %3; }"
-        "#BarsPosition:hover { background: %3; }"
-        "#BarsPosition:focus { border-color: %4; }")
+        "#BarsPosition:hover { background: %3; }")
         .arg(ink.name(), QString::number(kPositionFontPx),
-             mixColors(t.headerBackground, t.textPrimary, 0.10).name(), t.accentHighlight.name()));
+             mixColors(t.headerBackground, t.textPrimary, 0.10).name()));
 }
 
 void TransportBar::paintEvent(QPaintEvent*) {
@@ -1497,20 +1564,6 @@ void TransportBar::paintScene(QPainter& p, const QRegion&) {
         p.setPen(QPen(QBrush(edge), 1));
         p.setBrush(bed);
         p.drawRoundedRect(display, Theme::cornerRadius, Theme::cornerRadius);
-    }
-    // Peripheral commands share the same restrained, softly edged material.
-    for (QWidget* dock : {m_leftDock, m_rightDock}) {
-        if (!dock) continue;
-        const QRectF plate = QRectF(dock->geometry()).adjusted(0.5, 4.5, -0.5, -4.5);
-        QLinearGradient face(plate.topLeft(), plate.bottomLeft());
-        face.setColorAt(0, mixColors(t.headerBackground, t.surfaceElevated, 0.48));
-        face.setColorAt(1, mixColors(t.headerBackground, t.surface, 0.20));
-        QLinearGradient rim(plate.topLeft(), plate.bottomLeft());
-        rim.setColorAt(0, t.edgeLight(t.headerBackground));
-        rim.setColorAt(1, t.edgeDark(t.headerBackground));
-        p.setBrush(face);
-        p.setPen(QPen(QBrush(rim), 1));
-        p.drawRoundedRect(plate, Theme::cornerRadius, Theme::cornerRadius);
     }
 }
 
@@ -2010,7 +2063,7 @@ bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) 
         std::fprintf(stderr, "Header interaction check failed at line %d\n", line);
         return false;
     };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return fail(__LINE__);
     QWidget host;
     host.resize(1920, 400);
@@ -2142,6 +2195,21 @@ bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) 
         bar.setCycleEnabled(false); bar.toggleMetronome();
         host.resize(1440, 400); bar.resize(1440, ui::kTransportHeight); flush();
         if (!bar.grab().save(screenshotPath)) return fail(__LINE__);
+        // Keep the edge rails in their real inline, popup and active states
+        // available for visual review at each theme and device scale.
+        bar.setWebVisible(true); bar.setAiVisible(true);
+        host.resize(1920, 400); bar.resize(1920, ui::kTransportHeight); flush();
+        reveal->click(); flush();
+        if (!bar.grab().save(screenshotPath + QStringLiteral(".expanded.png"))) return fail(__LINE__);
+        reveal->click(); flush();
+        host.resize(minimumWidth, 400); bar.resize(minimumWidth, ui::kTransportHeight); flush();
+        reveal->click(); flush();
+        if (!bar.grab().save(screenshotPath + QStringLiteral(".compact.png"))) return fail(__LINE__);
+        if (browser->window() != &host &&
+            !browser->window()->grab().save(screenshotPath + QStringLiteral(".popup.png"))) return fail(__LINE__);
+        reveal->click(); flush();
+        bar.setWebVisible(false); bar.setAiVisible(false);
+        host.resize(1440, 400); bar.resize(1440, ui::kTransportHeight); flush();
         for (auto* chip : {bar.m_toolButton, bar.m_altToolButton}) {
             QMenu* menu = chip->menu();
             bool saved = false;
@@ -2160,7 +2228,7 @@ bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) 
 
 bool TransportBar::checkTempoInteractionForTest() {
     const auto fail = [](int line) { std::fprintf(stderr, "BPM interaction check failed at line %d\n", line); return false; };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return fail(__LINE__);
     QWidget host;
     host.resize(1200, 600);

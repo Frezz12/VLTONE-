@@ -5,6 +5,8 @@
 #include "UndoStack.hpp"
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -81,6 +83,25 @@ struct ModelReply {
 /// a tool that actually exists is taken, so ordinary prose containing JSON is
 /// left alone. The spans that were taken are cut from `text`.
 std::vector<ToolCall> toolCallsInText(std::string& text);
+std::vector<ToolCall> toolCallsInText(std::string& text, const std::vector<ToolSpec>& tools);
+
+/// Workspace boundary. An empty execute result suspends the loop until
+/// completeTool receives the matching run and call IDs on the owner thread.
+class AiWorkspace {
+public:
+    virtual ~AiWorkspace() = default;
+    virtual std::uint64_t revision() const = 0;
+    virtual std::string systemPrompt(const ToolContext&) const = 0;
+    virtual std::vector<ToolSpec> tools(InteractionMode) const = 0;
+    virtual std::optional<ToolResult> execute(const ToolCall&, const ToolContext&, std::uint64_t run) = 0;
+    virtual void begin(std::uint64_t, const std::string&, std::size_t) {}
+    virtual void finish(bool, bool) {}
+    virtual void cancel() {}
+    virtual const std::vector<Checkpoint>& checkpoints() const;
+    virtual bool revertTo(std::size_t) { return false; }
+    virtual void clear() {}
+    virtual std::string completionIssue() const { return {}; }
+};
 
 /// The agent loop, as pure state.
 ///
@@ -93,6 +114,8 @@ std::vector<ToolCall> toolCallsInText(std::string& text);
 class AiSession {
 public:
     explicit AiSession(EngineController& controller);
+    explicit AiSession(AiWorkspace& workspace);
+    ~AiSession();
 
     AiSession(const AiSession&) = delete;
     AiSession& operator=(const AiSession&) = delete;
@@ -115,6 +138,7 @@ public:
 
     enum class Step {
         NeedsRequest,  ///< tools ran; send the conversation again
+        WaitingForTool,
         Finished,      ///< the model is done, or the user stopped it
         Failed,        ///< the request errored, or the cap was reached
     };
@@ -122,6 +146,10 @@ public:
     /// Feed a provider's answer in. Runs whatever tools it asked for against the
     /// document, appends both to the transcript, and reports what happens next.
     Step applyReply(const ModelReply& reply);
+    Step completeTool(std::uint64_t run, const std::string& callId, const ToolResult& result);
+    std::uint64_t runId() const { return m_runId; }
+    bool waitingForTool() const { return !m_waitingId.empty(); }
+    void restoreMessages(std::vector<Message> messages, std::string error = {}, InteractionMode mode = InteractionMode::Do);
 
     /// Stop after the step in flight. The edits already made stay, and still
     /// collapse into the single undo entry.
@@ -154,7 +182,7 @@ public:
     /// Capability-filtered schema for the active mode. The provider never sees
     /// operations that the policy layer would reject.
     std::vector<ToolSpec> availableTools() const {
-        return toolSpecsForMode(m_context.mode);
+        return m_workspace->tools(m_context.mode);
     }
 
     const std::string& lastError() const { return m_lastError; }
@@ -172,7 +200,7 @@ public:
 
     /// One per request that changed anything, oldest first. Capped, because a
     /// snapshot of a big project is not small.
-    const std::vector<Checkpoint>& checkpoints() const { return m_checkpoints; }
+    const std::vector<Checkpoint>& checkpoints() const { return m_workspace->checkpoints(); }
 
     /// Put the project back to how it was before the request that started at
     /// `messageIndex`, as one undo entry. Everything done since goes with it —
@@ -186,23 +214,27 @@ public:
 private:
     /// Close the run and fold every edit it made into one undo entry.
     void finish();
+    Step executePending();
 
-    EngineController& m_controller;
+    std::unique_ptr<AiWorkspace> m_ownedWorkspace;
+    AiWorkspace* m_workspace = nullptr;
     std::vector<Message> m_messages;
     ToolContext m_context;
-    std::vector<Checkpoint> m_checkpoints;
-    Checkpoint m_pendingCheckpoint;
+    std::vector<ToolCall> m_pendingCalls;
+    Message m_pendingResults;
+    std::size_t m_nextCall = 0;
+    std::string m_waitingId;
+    std::uint64_t m_runId = 0;
+    bool m_staleBatch = false;
 
     bool m_running = false;
     bool m_cancelled = false;
     int m_iterations = 0;
     int m_maxIterations = 24;
     std::size_t m_runStartMessage = 0;
-    UndoStack::Group m_undoGroup;
     std::uint64_t m_expectedRevision = 0;
     bool m_interleaved = false;
     bool m_hadAiEdits = false;
-    std::string m_undoLabel;
     std::string m_lastError;
     Usage m_usage;
     std::size_t m_historyLimit = 12;

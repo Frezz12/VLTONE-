@@ -220,7 +220,7 @@ static void exportChecks() {
     ap::AudioFileWriter writer; const float* audio[] = {samples.data(), samples.data()};
     require(bool(writer.open(source, format, 48000, 2, samples.size())) &&
             bool(writer.write(audio, unsigned(samples.size()))) && bool(writer.close()), "write source");
-    daw::EngineController c;
+    daw::EngineController c{daw::EngineController::TestRuntime{}};
     require(bool(c.initialize(48000, 64, false)), "initialize export controller");
     const auto a = c.addTrack(daw::TrackKind::Audio, "A"), b = c.addTrack(daw::TrackKind::Audio, "B");
     require(!c.importAudio(source, a, 0).empty() && !c.importAudio(source, b, 0).empty(), "import source");

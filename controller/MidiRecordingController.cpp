@@ -21,7 +21,7 @@ template <class Queue, class Event> void appendTimedMidi(Queue &queue, Event eve
 
 MidiInputStamp EngineController::midiInputStamp() const noexcept {
     const auto ns = std::uint64_t(engine::presentationNowNs());
-    return {ns, m_engine.transport().inputBeatsAt(ns), m_engine.transport().tempo()};
+    return {ns, m_runtime.inputBeatsAt(ns), m_runtime.transportSnapshot().tempo};
 }
 
 void EngineController::resetMidiInput() {
@@ -260,11 +260,7 @@ void EngineController::captureMidiParameter(const std::string &trackId, const st
         if (firstTouch && initial != capture.midiInitialParameters.end())
             capture.midiRecording.parameter({}, parameter, found->name, initial->second, 0, 0);
         capture.midiRecording.parameter({}, parameter, found->name, value, beat, order);
-        if (auto *node = editorInsertNode(trackId, slot); node && node->instance()) {
-            const auto index = node->instance()->parameterIndexForId(parameter);
-            if (index >= 0)
-                node->overrideAutomation(std::uint32_t(index));
-        }
+        m_runtime.setPluginAutomationOverride(pluginAddress(trackId, slot), parameter);
     }
 }
 

@@ -102,7 +102,6 @@ PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
     scanHeading->addStretch(1);
     scanHeading->addWidget(m_startupScan);
     scanLayout->addLayout(scanHeading);
-
     auto* header = new QHBoxLayout();
     header->setSpacing(8);
     m_rescanButton = new QPushButton(tr("Scan"), this);
@@ -679,7 +678,6 @@ QTableWidget, QListWidget {
     background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px;
     alternate-background-color: %ALT%; outline: none;
 }
-QTableWidget:focus, QListWidget:focus { border-color: %ACCENT%; }
 QTableWidget::item, QListWidget::item { padding: 4px 8px; border: none; }
 QTableWidget::item:selected, QListWidget::item:selected {
     background: %ACCENT%; color: %ACCENT_TEXT%;

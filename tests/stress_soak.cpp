@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
     std::printf("── soak: seed %u, %.0f s, %d tracks ──\n", seed, seconds, trackCount);
 
     const double rate = 48000.0;
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (auto r = controller.initialize(rate, 256, /*openDevice=*/true); !r) {
         std::fprintf(stderr, "initialize failed: %s\n", r.message().c_str());
         return 1;

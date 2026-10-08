@@ -292,6 +292,7 @@ type Release struct {
 	ChangesEN    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"changes_en"`
 	FixesRU      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"fixes_ru"`
 	FixesEN      datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"fixes_en"`
+	Highlights   datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"highlights"`
 	CreatedBy    *uuid.UUID     `gorm:"type:uuid" json:"created_by,omitempty"`
 	UpdatedBy    *uuid.UUID     `gorm:"type:uuid" json:"updated_by,omitempty"`
 	PublishedAt  *time.Time     `json:"published_at"`

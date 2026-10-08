@@ -57,13 +57,11 @@ audio::Result EngineController::applyKeyToPitchCorrectors(
 audio::Result EngineController::copyPitchCorrectorSettings(
     const std::string& channelId, const std::string& insertId, std::size_t* updated) {
     if (updated) *updated = 0;
-    auto* source = dynamic_cast<pitch::PitchCorrectorInstance*>(insertInstance(channelId, insertId));
-    if (!source)
+    const AudioPluginAddress source{channelId, insertId};
+    if (!m_runtime.hasPlugin(source, pitch::PitchCorrectorInstance::uid()))
         return audio::Result::fail(audio::EngineError::InvalidArgument,
                                   "The source VLT Pitch instance is unavailable.");
-    std::vector<InsertParameter> values;
-    for (const auto& parameter : pitch::parameterTable())
-        values.push_back({parameter.id, source->parameterValue(parameter.index)});
+    const auto values = m_runtime.pluginParameterValues(source);
     return applyPitchCorrectorParameters(values, "Send VLT Pitch Settings to All",
                                          channelId, insertId, updated);
 }
@@ -87,17 +85,20 @@ audio::Result EngineController::applyPitchCorrectorParameters(
         if (target.channel == excludeChannel && slot.id == excludeInsert) continue;
         ++targets;
         bool slotChanged = false;
-        auto* live = liveInsertSlot(target.channel, slot.id);
         const int sides = slot.channelMode == PluginChannelMode::DualMono ? 2 : 1;
         for (int side = 0; side < sides; ++side) {
-            auto* node = !live ? nullptr : (side ? live->rightNode.get() : live->node.get());
-            auto* instance = node ? dynamic_cast<pitch::PitchCorrectorInstance*>(node->instance()) : nullptr;
-            if (!instance)
+            const AudioPluginAddress address{target.channel, slot.id, side != 0};
+            if (!m_runtime.hasPlugin(address, pitch::PitchCorrectorInstance::uid()))
                 return audio::Result::fail(audio::EngineError::InvalidArgument,
                                           "A VLT Pitch instance is unavailable. No settings were changed.");
+            const auto current = m_runtime.pluginParameterValues(address);
             for (const auto& parameter : values) {
-                const auto index = instance->parameterIndexForId(parameter.id);
-                const double before = instance->parameterValue(std::uint32_t(index));
+                const auto found = std::find_if(current.begin(), current.end(),
+                    [&](const auto& value) { return value.id == parameter.id; });
+                if (found == current.end())
+                    return audio::Result::fail(audio::EngineError::InvalidArgument,
+                        "A VLT Pitch parameter is unavailable. No settings were changed.");
+                const double before = found->value;
                 if (before == parameter.value) continue;
                 if (parameter.id == "quality" && liveAudioActivity())
                     return audio::Result::fail(audio::EngineError::InvalidArgument,

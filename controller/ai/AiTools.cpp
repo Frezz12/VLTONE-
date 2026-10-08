@@ -530,7 +530,10 @@ json ToolResult::toJson() const {
         out["ok"] = true;
         return out;
     }
-    return json{{"ok", false}, {"error", error}};
+    json out = value.is_object() ? value : json::object();
+    out["ok"] = false;
+    out["error"] = error;
+    return out;
 }
 
 json projectSnapshot(const EngineController& c, const ToolContext& ctx) {

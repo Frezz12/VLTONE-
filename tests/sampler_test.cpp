@@ -880,7 +880,7 @@ int main() {
             recorder.writeWAVFile(wav, tone, 48000);
         }
 
-        EngineController controller;
+        EngineController controller{EngineController::TestRuntime{}};
         check(controller.initialize(48000, 512, /*openDevice=*/false).isOk(),
               "controller initialises offline");
 
@@ -915,7 +915,7 @@ int main() {
             // the sample are one gesture, so they must be one undo entry —
             // otherwise undoing a drag leaves an empty sampler behind.
             {
-                EngineController drop;
+                EngineController drop{EngineController::TestRuntime{}};
                 drop.initialize(48000, 512, /*openDevice=*/false);
                 const std::string lane =
                     drop.addTrack(TrackKind::Instrument, "Dropped");
@@ -1067,7 +1067,7 @@ int main() {
             const std::string package = (dir / "project.vlt").string();
             check(controller.saveProject(package).isOk(), "the project saves");
 
-            EngineController reopened;
+            EngineController reopened{EngineController::TestRuntime{}};
             reopened.initialize(48000, 512, false);
             const audio::Result reopenedResult = reopened.openProject(package);
             if (!reopenedResult)

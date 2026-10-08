@@ -93,6 +93,9 @@ struct Spec {
     /// so downstream/unrelated latency and faders cannot shift or truncate it.
     std::string independentTrackId;
     std::vector<std::string> sourceClipIds;
+    /// Internal channel analysis: apply Solo only to the captured document.
+    /// Routing, sends and bus contributions follow the normal Solo rules.
+    std::string soloChannelId;
     /// Render every channel as though nothing were muted or soloed.
     bool ignoreMuteSolo = false;
     /// Take stems from ahead of the fader, so each one arrives at unity with

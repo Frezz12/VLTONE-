@@ -21,7 +21,7 @@ bool MixerWidget::checkMasterDockForTest() {
         preferences.setChannelWidth(originalWidth);
     });
     preferences.setMasterVisible(true); preferences.setChannelWidth(100);
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear(); project.invalidateTrackIndex();
@@ -53,6 +53,10 @@ bool MixerWidget::checkMasterDockForTest() {
     settle();
     auto* initialMaster = master();
     if (!initialMaster) return false;
+    check(!mixer.findChild<QWidget*>(QStringLiteral("MasterFoldHandle")) &&
+          mixer.m_masterEdge->parentWidget() == mixer.m_masterDock &&
+          mixer.m_masterDock->x() == mixer.m_scroll->geometry().right() + 1,
+          "Master has no separate handle or extra gutter");
     auto* fader = initialMaster->findChild<ui::FaderWidget*>();
     const int masterHeight = initialMaster->height();
     const int faderTop = fader->mapTo(&mixer, QPoint()).y();
@@ -90,14 +94,14 @@ bool MixerWidget::checkMasterDockForTest() {
     presence.surface = {collab::SurfaceKind::Mixer, QStringLiteral("main"), {}};
     presence.targetId = "master_strip"; presence.laneFraction = .5;
     check(mixer.m_masterDock->width() == 0 && !mixer.m_masterColumn->isVisible() &&
-          mixer.m_masterHandle->isVisible() && !mixer.m_masterToggle->isChecked() &&
+          !mixer.m_masterEdge->isVisible() && !mixer.m_masterToggle->isChecked() &&
           mixer.m_scroll->viewport()->width() > openViewportWidth &&
           !mixer.collaborationPositionFor(presence), "button hides Master, releases space and removes hidden presence");
     shot("-hidden");
     MixerWidget peer(&controller);
     check(!peer.m_masterVisible && !QSettings().value(ui::MixerPreferences::kMasterVisibleSetting).toBool(),
           "hidden state persists and applies to newly opened consoles");
-    // Keyboard is a complete alternative to the narrow drag handle.
+    // Keyboard is a complete alternative to dragging the channel edge.
     QKeyEvent keyDown(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
     QKeyEvent keyUp(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
     QApplication::sendEvent(mixer.m_masterToggle, &keyDown);
@@ -105,18 +109,28 @@ bool MixerWidget::checkMasterDockForTest() {
     check(mixer.m_masterVisible && peer.m_masterVisible && master() == initialMaster &&
           mixer.collaborationPositionFor(presence).has_value(), "Space restores the same strip and synchronizes other consoles");
 
-    auto* handle = mixer.m_masterHandle;
+    auto* edge = mixer.m_masterEdge;
     QPoint origin;
     const auto mouse = [&](QEvent::Type type, int delta) {
         const QPoint global = origin + QPoint(delta, 0);
-        QMouseEvent event(type, QPointF(handle->mapFromGlobal(global)), QPointF(global),
+        QMouseEvent event(type, QPointF(edge->mapFromGlobal(global)), QPointF(global),
             type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
             type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(handle, &event);
+        QApplication::sendEvent(edge, &event);
         QApplication::processEvents();
     };
-    const auto press = [&] { origin = handle->mapToGlobal(handle->rect().center()); mouse(QEvent::MouseButtonPress, 0); };
+    const auto press = [&] {
+        const QPoint at = mixer.m_masterDock->mapTo(&mixer, QPoint(1, mixer.m_masterDock->height() / 2));
+        check(mixer.childAt(at) == edge, "the channel's left edge receives the grab");
+        origin = mixer.mapToGlobal(at);
+        mouse(QEvent::MouseButtonPress, 0);
+    };
     const int fullWidth = mixer.masterExpandedWidth();
+    press(); mouse(QEvent::MouseButtonRelease, 0); settle();
+    check(mixer.m_masterVisible && mixer.m_masterDock->width() == fullWidth,
+          "a click on the edge without dragging leaves Master open");
+    check(!edge->rect().contains(edge->mapFromGlobal(fader->mapToGlobal(fader->rect().center()))),
+          "the edge does not intercept the Master fader");
     press(); mouse(QEvent::MouseMove, 35);
     check(mixer.m_masterDock->width() == fullWidth - 35 && master()->width() == 100,
           "drag clips the strip one-to-one without shrinking its controls");
@@ -125,16 +139,17 @@ bool MixerWidget::checkMasterDockForTest() {
     mouse(QEvent::MouseButtonRelease, 15); settle();
     check(mixer.m_masterDock->width() == fullWidth, "a short drag settles open");
     press(); mouse(QEvent::MouseMove, fullWidth + 20); mouse(QEvent::MouseButtonRelease, fullWidth + 20); settle();
-    check(!mixer.m_masterVisible && mixer.m_masterDock->width() == 0, "dragging right collapses Master");
-    press(); mouse(QEvent::MouseMove, -60);
+    check(!mixer.m_masterVisible && mixer.m_masterDock->width() == 0 && !edge->isVisible(),
+          "dragging the left edge right collapses Master without leaving a handle");
+    mixer.m_masterToggle->click(); settle();
+    check(mixer.m_masterVisible && mixer.m_masterDock->width() == fullWidth && edge->isVisible(),
+          "the header button restores Master and its edge");
+    press(); mouse(QEvent::MouseMove, 35);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QApplication::sendEvent(handle, &escape);
-    mouse(QEvent::MouseButtonRelease, -60); settle();
-    check(!mixer.m_masterVisible && mixer.m_masterDock->width() == 0 && !preferences.masterVisible(),
+    QApplication::sendEvent(edge, &escape);
+    mouse(QEvent::MouseButtonRelease, 35); settle();
+    check(mixer.m_masterVisible && mixer.m_masterDock->width() == fullWidth && preferences.masterVisible(),
           "Escape cancels a drag without persisting the preview");
-    press(); mouse(QEvent::MouseMove, -fullWidth); mouse(QEvent::MouseButtonRelease, -fullWidth); settle();
-    check(mixer.m_masterVisible && mixer.m_masterDock->width() == fullWidth,
-          "dragging the remaining right-edge handle left restores Master");
 
     for (int width : {75, 180, 100}) {
         preferences.setChannelWidth(width); settle();

@@ -1,4 +1,6 @@
 #include "ScrollMotion.hpp"
+#include "MediaWorker.hpp"
+#include "plugins/PluginManager.hpp"
 #include "UiPerformanceChecks.hpp"
 #include "MainWindow.hpp"
 #include "ClipLibraryChecks.hpp"
@@ -45,6 +47,7 @@
 #include "PresenceStore.hpp"
 #include "MixerWidget.hpp"
 #include "TrackListWidget.hpp"
+#include "TimelineWidget.hpp"
 #include "RecordingLeaseCoordinator.hpp"
 #include "PianoRollWindow.hpp"
 #include "AutomationEditorWindow.hpp"
@@ -302,6 +305,20 @@ private:
 };
 
 namespace {
+class AudioApplication final : public QApplication {
+public:
+    using QApplication::QApplication;
+    bool notify(QObject* receiver, QEvent* event) override {
+        try { return QApplication::notify(receiver, event); }
+        catch (const daw::AudioEndpointError& error) {
+            // A compound edit may lose the process between its first command
+            // and rollback. Unwind the edit, keep Qt alive, and let the regular
+            // engine-health timer finalize captures and recover the session.
+            qWarning("Audio operation interrupted: %s", error.what());
+            return false;
+        }
+    }
+};
 std::atomic<bool> g_selftestQtFailure{false};
 QtMessageHandler g_previousMessageHandler = nullptr;
 
@@ -377,6 +394,7 @@ private:
 };
 
 int main(int argc, char** argv) {
+    daw::MediaWorker::install(daw::PluginManager::helperPath("daw_worker"));
 #if defined(Q_OS_MACOS)
     // Qt's raster pool dispatches even small span batches and synchronously
     // waits for its helpers. In our macOS timeline workload this adds wakeups
@@ -389,6 +407,7 @@ int main(int argc, char** argv) {
 #endif
     bool selftest = false;
     bool warpCheck = false;
+    bool timelineClipCheck = false;
     bool uiPerfCheck = false;
     bool audioScrollCheck = false;
     bool projectScrollCheck = false;
@@ -429,6 +448,7 @@ int main(int argc, char** argv) {
     QString projectArgument;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--timelineclipcheck") == 0) timelineClipCheck = true;
         else if (std::strcmp(argv[i], "--warpcheck") == 0) warpCheck = true;
         else if (std::strcmp(argv[i], "--uiperfcheck") == 0) uiPerfCheck = true;
         else if (std::strcmp(argv[i], "--audio-scroll-check") == 0) audioScrollCheck = true;
@@ -492,7 +512,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    const bool headless = creatorCheck || channelColorCheck || pianoWorkflowCheck || mixerContextCheck || midiAuditionCheck || slideCheck || stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || slicerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
+    const bool headless = creatorCheck || channelColorCheck || pianoWorkflowCheck || mixerContextCheck || midiAuditionCheck || slideCheck || stripSilenceCheck || clipLibraryCheck || headerCheck || warpCheck || timelineClipCheck || workspaceMotionCheck || mixerWheelCheck || tempoCheck || pluginBatchCheck || offlineCheck || pluginInteractionCheck || mixerScrollCheck || projectScrollCheck || audioScrollCheck || pluginPickerCheck || trackCreationCheck || samplerCheck || slicerCheck || editorCheck || patternCheck || uiPerfCheck || selftest || collaborationSelftest || screenshotPath ||
                           crashtest || recovercheck;
     if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) {
         QByteArray chromiumFlags;
@@ -525,7 +545,7 @@ int main(int argc, char** argv) {
 
     ui::registerFontUrlScheme();
     QtWebEngineQuick::initialize();
-    QApplication app(argc, argv);
+    AudioApplication app(argc, argv);
     // Readers may still be decoding a theme image when a window closes. Join
     // them while Qt's image plugins and queued-call receiver are still alive.
     const auto mediaTasks = qScopeGuard([] { ui::finishThemeMediaTasks(); });
@@ -672,6 +692,26 @@ int main(int argc, char** argv) {
     if (mixerScrollCheck) return ui::checkMixerPerformance() ? 0 : 63;
     if (workspaceMotionCheck) return ui::checkWorkspaceMotionPerformance() ? 0 : 65;
     if (pluginInteractionCheck) return ui::checkPluginInteractions() ? 0 : 64;
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_REMOTE_EDITOR_ONLY")) {
+        ThemeManager::instance().apply();
+        MainWindow window(false);
+        return window.checkRemoteEditorForTest(
+            qEnvironmentVariable("DAW_TEST_FAULT_CLAP_PATH").toStdString())
+            && !g_selftestQtFailure.load(std::memory_order_relaxed) ? 0 : 12;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_ISOLATION_ONLY")) {
+        ThemeManager::instance().apply();
+        return PluginEditorWindow::checkIsolationForTest(
+            qEnvironmentVariable("DAW_TEST_FAULT_CLAP_PATH").toStdString())
+            && !g_selftestQtFailure.load(std::memory_order_relaxed) ? 0 : 12;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_IDLE_ONLY")) {
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        if (!controller.initialize(48000, 256, false)) return 12;
+        return PluginEditorWindow::checkIdleForTest(
+            controller, qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())
+            && !g_selftestQtFailure.load(std::memory_order_relaxed) ? 0 : 12;
+    }
     if (selftest) {
         QString localizationError;
         if (!ui::LocalizationManager::instance().checkJsonPackForTest(
@@ -720,15 +760,24 @@ int main(int argc, char** argv) {
         MainWindow window(/*openDevice=*/false);
         return window.checkInspectorNormalizeForTest() ? 0 : 77;
     }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_VIEW_CONTROLS_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.populateDemo();
+        window.resize(1280, 800);
+        window.show();
+        QApplication::processEvents();
+        return window.checkTimelineClipGesturesForTest() ? 0 : 17;
+    }
     if (trackCreationCheck) {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         if (!controller.initialize(48000, 256, false)) return 66;
         return CreateTracksDialog::checkForTest(controller,
             screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 66;
     }
     // A focused chat run must reach the chat even when the platform-specific
     // popup image check fails. Full selftest and --pluginpickercheck retain it.
-    if (pluginPickerCheck || (selftest && !qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY"))) {
+    if (pluginPickerCheck || (selftest && !qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY") &&
+                             !qEnvironmentVariableIsSet("DAW_SELFTEST_AUTOMATION_ONLY"))) {
         QString error;
         if (!ui::checkPluginPickerForTest(&error,
                 pluginPickerCheck && screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString())) {
@@ -1309,6 +1358,12 @@ int main(int argc, char** argv) {
     if (!headless && !recoveredAtStartup && !externalLaunchRequest)
         window.openConfiguredStartupTemplate();
 
+    if (timelineClipCheck) {
+        window.populateDemo();
+        const bool ok = window.checkTimelineUndoDragForTest();
+        window.endRecoverySessionForTest();
+        return ok ? 0 : 17;
+    }
     if (warpCheck) {
         const bool ok = window.checkWarpForTest();
         window.endRecoverySessionForTest();
@@ -1323,7 +1378,15 @@ int main(int argc, char** argv) {
     bool shootEditor = false;
 
     if (screenshotPath) {
-        window.populateDemo();
+        // A positional project captures real arrangement content; an empty
+        // invocation keeps the existing UI-check demo.
+        if (!projectArgument.isEmpty()) {
+            if (!window.openExternalPath(projectArgument)) return 1;
+            if (auto* timeline = window.findChild<TimelineWidget*>())
+                timeline->zoomToFit();
+        } else {
+            window.populateDemo();
+        }
         if (const char* ruler = std::getenv("DAW_SHOT_RULER")) {
             if (auto* transport = window.findChild<TransportBar*>())
                 transport->setRulerFormat(
@@ -1422,11 +1485,19 @@ int main(int argc, char** argv) {
         // The piano roll is an internal editor, so the shell grab includes its
         // custom frame and the arrangement visible around it.
         const bool shootRoll = std::getenv("DAW_SHOT_PIANOROLL") != nullptr;
-        if (shootRoll) window.openFirstMidiClip();
+        if (shootRoll) window.openFirstMidiClip(qEnvironmentVariable("DAW_SHOT_SELECT"));
         if (shootRoll && qEnvironmentVariable("DAW_SHOT_PIANOROLL") == QLatin1String("maximized")) {
             if (auto* roll = window.findChild<PianoRollWindow*>())
                 if (auto* frame = qobject_cast<InternalEditorFrame*>(roll->parentWidget()))
                     frame->setMaximized(true);
+        }
+        if (shootRoll && qEnvironmentVariableIsSet("DAW_SHOT_PIANOROLL_FIT")) {
+            QTimer::singleShot(350, &window, [&window] {
+                if (auto* view = window.findChild<PianoRollView*>()) {
+                    view->setRowHeight(18.0);
+                    view->zoomToFit();
+                }
+            });
         }
         // DAW_SHOT_PIANOROLL=selected also selects every note, which is the
         // only way a still can show the context panel — it exists exactly when
@@ -1436,7 +1507,7 @@ int main(int argc, char** argv) {
             window.selectAllNotesForShot();
         }
         const bool shootClip = std::getenv("DAW_SHOT_CLIP_EDITOR") != nullptr;
-        if (shootClip) window.openFirstAudioClip();
+        if (shootClip) window.openFirstAudioClip(qEnvironmentVariable("DAW_SHOT_SELECT"));
         const char* shotPattern = std::getenv("DAW_SHOT_PATTERN");
         const bool patternTimeline = shotPattern != nullptr &&
             (std::strcmp(shotPattern, "timeline") == 0 ||
@@ -1857,10 +1928,17 @@ int main(int argc, char** argv) {
         // independently runnable.
         // the full UI selftest also exercises platform codecs, file watching
         // and WebEngine, which may be unavailable on a sanitizer machine.
-        if (qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_IDLE_ONLY")) {
-            if (!PluginEditorWindow::checkIdleForTest(
-                    *window.collaborationEngineController(),
-                    qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())) return 12;
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_AUTOMATION_ONLY")) {
+            window.populateDemo();
+            const auto check = [](bool passed, const char* name) {
+                std::fprintf(stderr, "%s Automation UI: %s\n", passed ? "PASS" : "FAIL", name);
+                return passed;
+            };
+            if (!check(window.checkAutomationFollowForTest(), "selection and plugin focus") ||
+                !check(window.checkAutomationForTest(), "timeline curve editing") ||
+                !check(window.checkAutomationEditorForTest(), "automation editor") ||
+                !check(window.checkKnobAutomationForTest(), "knob automation commands") ||
+                !check(window.checkParameterDockForTest(), "parameter dock")) return 22;
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_RULER_ONLY")) {
             window.populateDemo();
@@ -2085,7 +2163,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "track selection or folder packing failed\n");
             return 20;
         }
-        if (!window.checkAutomationForTest()) {
+        if (!window.checkAutomationFollowForTest() || !window.checkAutomationForTest()) {
             std::fprintf(stderr, "automation editing failed\n");
             return 22;
         }

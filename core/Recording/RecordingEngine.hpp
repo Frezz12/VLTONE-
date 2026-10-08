@@ -111,8 +111,14 @@ public:
     using RecordingCompleteCallback = std::function<void(const RecordingSession&)>;
     void setRecordingCompleteCallback(RecordingCompleteCallback cb);
 
-    Result writeWAVFile(const std::string& path, const AudioBuffer& buffer,
+    static Result writeWAVFile(const std::string& path, const AudioBuffer& buffer,
                         SampleRate rate);
+    /// Control thread only, after the writer joins or its owning process exits. Repair
+    /// only this recorder's float-WAV layout and only complete frames on disk.
+    /// The acknowledged capture path/format/start position identify the take;
+    /// no still-running writer may access it during this operation.
+    static Result recoverInterruptedFile(const RecordingSession& expected,
+                                         RecordingSession& closed);
 
 private:
     enum WriterFailure : std::uint32_t {

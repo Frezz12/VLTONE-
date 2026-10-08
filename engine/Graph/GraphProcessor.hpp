@@ -82,10 +82,15 @@ public:
     std::uint64_t lastBlockGraphGeneration() const noexcept { return m_lastBlockGraphGeneration; }
 
 private:
-    static void executeJob(void* context, std::uint32_t nodeIndex,
+    static bool executeJob(void* context, std::uint32_t nodeIndex,
                            unsigned workerIndex) noexcept;
-    void runNode(const CompiledGraph& graph, std::uint32_t nodeIndex,
+    static std::uint32_t pollJobs(void* context) noexcept;
+    bool runNode(const CompiledGraph& graph, std::uint32_t nodeIndex,
                  unsigned workerIndex) noexcept;
+    void releaseSuccessors(const CompiledGraph& graph,
+                           const CompiledGraph::CompiledNode& entry, unsigned workerIndex) noexcept;
+    void runScheduled(const CompiledGraph& graph, bool serial,
+                      std::span<double> nodeCosts = {}) noexcept;
     void prepareBlockState(const CompiledGraph& graph) noexcept;
     void prepareMidiTimeline(const CompiledGraph& graph, FrameCount frames,
                              SamplePos timelinePosition, bool playing,
@@ -125,6 +130,10 @@ private:
     bool m_offline = false;
     std::atomic<bool> m_taskFusion{true};
     bool m_fuseBlock = true;
+    std::atomic<std::uint32_t> m_deferredCount{0};
+    std::uint32_t m_pollCursor = 0;
+    std::uint64_t m_deadline = 0;
+    std::span<double> m_nodeCosts;
     TransportInfo m_transport;
     /// Audio-thread-owned continuity stamp. A seek or loop wrap invalidates
     /// queued PDC MIDI from the old playhead; ordinary stopped/live/offline

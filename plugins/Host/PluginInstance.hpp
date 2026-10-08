@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Host/PluginTypes.hpp"
+#include "Host/PluginEditorHost.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -57,24 +58,6 @@ public:
     virtual void onStateChanged() noexcept {}
 };
 
-/// Editor → host notifications, delivered on the control thread.
-///
-/// Separate from `PluginListener` because these are UI-thread-only and a
-/// plugin without an open editor never produces them, whereas the listener has
-/// to stay valid for as long as the plugin is loaded.
-class PluginEditorHost {
-public:
-    virtual ~PluginEditorHost() = default;
-
-    /// The plugin wants its window to be this size, in logical pixels. The
-    /// host is free to refuse, and must tell the plugin what it settled on.
-    virtual void onEditorResized(std::uint32_t width, std::uint32_t height) noexcept = 0;
-    /// The plugin closed its own editor. The host should destroy the window;
-    /// it must not call `closeEditor` from inside this callback.
-    virtual void onEditorClosed() noexcept = 0;
-    virtual double contentScaleFactor() const noexcept { return 1.0; }
-};
-
 /// One loaded plugin, whatever its format.
 ///
 /// The thread split is the same one all three formats impose, and is not
@@ -115,6 +98,8 @@ public:
     /// True only after the format accepted its processing transition. The
     /// default covers formats where active and processing are the same state.
     virtual bool isProcessing() const noexcept { return isActive(); }
+    /// Sticky failure of an isolated generation, including control/GUI faults.
+    virtual bool hasFailed() const noexcept { return false; }
     /// Bracket a run of blocks. Separate from activate because every format
     /// distinguishes "configured" from "currently rolling", and a plugin may
     /// clear its tails on the transition.
@@ -132,6 +117,9 @@ public:
     virtual bool supportsState() const noexcept { return true; }
     virtual bool saveState(std::vector<std::uint8_t>& out) const = 0;
     virtual bool loadState(std::span<const std::uint8_t> state) = 0;
+    /// A confirmed value newer than the cached state returned after a failure.
+    /// Project readers must replay this value even when that state loads.
+    virtual bool parameterNeedsStateRestore(std::uint32_t) const noexcept { return false; }
 
     /// Unprocessed editor/preset edits owned by the format rather than the
     /// node's host queue. Control thread with processing parked; non-consuming.
@@ -178,6 +166,13 @@ public:
 
     virtual PluginProcessDisposition process(
         const PluginProcessContext& context) noexcept = 0;
+    virtual bool hasDeferredProcess() const noexcept { return false; }
+    virtual bool beginProcess(const PluginProcessContext& context,
+                              PluginProcessDisposition& result) noexcept {
+        result = process(context); return true;
+    }
+    virtual bool finishProcess(const PluginProcessContext&,
+                               PluginProcessDisposition&, bool /*expired*/) noexcept { return true; }
     virtual void reset() noexcept = 0;
     /// Control thread with processing parked; legacy formats may need mains transitions.
     virtual void resetForTransport() noexcept { reset(); }

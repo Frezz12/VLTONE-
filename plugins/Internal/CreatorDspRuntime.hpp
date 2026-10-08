@@ -18,6 +18,7 @@ public:
   void reset() noexcept;
   unsigned latency() const noexcept;
   unsigned tail() const noexcept;
+  bool tailKnown() const noexcept;
   bool takeError(std::string &);
 
 private:

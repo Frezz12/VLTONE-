@@ -1009,7 +1009,7 @@ void testPortableAndController() {
     const auto source=root/"source.wav", preset=root/"portable.vltslicer", cache=root/"cache";
     const auto audio=tone(48000,440,.25f); const float* channels[]{audio->channel(0),audio->channel(1)};
     audio::platform::AudioFileWriter writer;check(writer.open(source.string(),48000,2).isOk() && writer.write(channels,48000).isOk() && writer.close().isOk(),"portable fixture WAV written");
-    daw::EngineController c;check(c.initialize(48000,512,false).isOk(),"slicer controller initialized");
+    daw::EngineController c{daw::EngineController::TestRuntime{}};check(c.initialize(48000,512,false).isOk(),"slicer controller initialized");
     const auto descriptor=c.pluginManager().find(daw::plugins::Format::Internal,"daw.slicer"); if(!descriptor){check(false,"slicer descriptor");return;}
     const auto track=c.addTrack(daw::TrackKind::Instrument,"Slicer");c.setTrackInstrumentPlugin(track,*descriptor);
     const auto slot=c.project().findTrack(track)->instrument.id;auto* instance=c.slicerInstance(track,slot);
@@ -1031,7 +1031,7 @@ void testPortableAndController() {
     {
         daw::recovery::RecoveryJournal journal;check(journal.start((root/"journal").string(),"slicer-test"),"Slicer recovery journal starts");
         journal.requestWrite(recovery);journal.flush();daw::ProjectModel recoveredDocument;
-        const auto session=fs::path(journal.sessionDir());daw::EngineController recovered;recovered.initialize(48000,512,false);
+        const auto session=fs::path(journal.sessionDir());daw::EngineController recovered{daw::EngineController::TestRuntime{}};recovered.initialize(48000,512,false);
         const auto documentResult=daw::ProjectSerializer::loadDocument(recoveredDocument,(session/"project.json").string(),"");
         check(documentResult.isOk() && recovered.restoreRecoveryProject(std::move(recoveredDocument),session.string(),package.string()).isOk(),"recovery journal reopens a Slicer instrument");
         auto* recoveredSlicer=recovered.slicerInstance(track,slot);
@@ -1042,7 +1042,7 @@ void testPortableAndController() {
     check(imported.audio && fs::exists(imported.path) && imported.table->slices[0].gain==.5f,"preset decodes into durable managed media cache");
     const auto oldState=imported;const auto damaged=root/"broken.vltslicer";{std::ofstream f(damaged,std::ios::binary);f<<"broken";}
     check(!slicing::loadPreset(damaged.string(),cache.string(),imported,error) && imported.audio==oldState.audio && !slicing::loadPreset(preset.string(),cache.string(),imported,error,[]{return false;}),"damaged and cancelled presets preserve prior state");
-    daw::EngineController reopened;reopened.initialize(48000,512,false);check(reopened.openProject(package.string()).isOk(),"portable project opens after source deletion");
+    daw::EngineController reopened{daw::EngineController::TestRuntime{}};reopened.initialize(48000,512,false);check(reopened.openProject(package.string()).isOk(),"portable project opens after source deletion");
     auto* restored=reopened.slicerInstance(track,slot);check(restored && restored->rawSample() && restored->sliceTable()->count==4 && restored->sliceTable()->slices[0].end==10000,"project restores audio, boundaries and sound settings");
     const auto raw=root/"raw.wav",processed=root/"processed.wav",loop=root/"loop.wav";
     auto processedState=oldState;processedState.parameters[p::indexOf(Param::Volume)]=.5;

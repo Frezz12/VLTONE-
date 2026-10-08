@@ -106,7 +106,8 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// watches. The timeline keeps owning and drawing its own selection; this
     /// only publishes it.
     void setSelectionModel(ui::SelectionModel* model) { m_selectionModel = model; }
-    /// Push the current clip selection into the shared SelectionModel. Cheap
+    /// Rebind clips to their current tracks, drop missing ids, then push the
+    /// current clip selection into the shared SelectionModel. Cheap
     /// and idempotent — the model drops a push that changes nothing — so it is
     /// called once per interaction rather than at each of the ~20 sites that
     /// touch the selection. Public because selecting a clip also selects its

@@ -11,6 +11,8 @@
 #include "TimelineWidget.hpp"
 #include "PianoRollWindow.hpp"
 #include "Controls.hpp"
+#include "CreatorStyle.hpp"
+#include "ToolPanel.hpp"
 #include "UiFrameClock.hpp"
 #include "UiConstants.hpp"
 #include "Theme.hpp"
@@ -67,7 +69,7 @@
 #include <cstdio>
 
 bool TimelineWidget::checkInterruptedPointerGestureForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     controller.initialize(48000.0, 512, false);
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.emplace_back();
@@ -183,7 +185,7 @@ bool TimelineWidget::checkGridAppearanceForTest() {
     {
         const Theme savedTheme = th();
         const auto savedTint = ui::selectionTint();
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000.0, 512, false);
         auto& project = const_cast<daw::ProjectModel&>(controller.project());
         project.tempo = 120.0;
@@ -404,7 +406,7 @@ bool TimelineWidget::checkGestureGridStabilityForTest() {
 }
 
 bool TimelineWidget::checkFileDropPreviewForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false)) return false;
     const std::string track = controller.addTrack(daw::TrackKind::Audio, "Drop preview");
     TimelineWidget timeline(&controller);
@@ -479,7 +481,7 @@ bool TimelineWidget::checkFileDropPreviewForTest() {
 }
 
 bool TimelineWidget::checkClipTrimPreviewForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000.0, 512, false)) return false;
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear();
@@ -569,7 +571,7 @@ bool TimelineWidget::checkClipTrimPreviewForTest() {
     // through the GPU workspace. Controller-only trim tests missed the MIDI
     // head being treated as a move, and an audio-only stretch lookup returned
     // zero for MIDI, magnifying its source offset by 100.
-    daw::EngineController gestures;
+    daw::EngineController gestures{daw::EngineController::TestRuntime{}};
     if (!gestures.initialize(48000, 512, false)) return false;
     auto& document = const_cast<daw::ProjectModel&>(gestures.project());
     document.tracks.clear(); document.invalidateTrackIndex();
@@ -807,7 +809,7 @@ bool checkMixerPerformance() {
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false)) return false;
     // Real mixer controls with deterministic slots; no device or vendor DSP.
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
@@ -899,7 +901,197 @@ bool checkMixerPerformance() {
     return !failed && scrollChanges - warmupChanges > 30 && (!surface || frames > 30);
 }
 
+bool checkViewScrubInput() {
+    bool ok = true;
+    const auto check = [&](bool result, const char* name) {
+        std::printf("%s  %s\n", result ? "PASS" : "FAIL", name);
+        ok = ok && result;
+    };
+    const QRect bounds = QGuiApplication::primaryScreen()->geometry();
+    const QPointF anchor = QPointF(bounds.center()) + QPointF(0.25, 0.75);
+    LockedCursorDrag pointer;
+    pointer.begin(anchor);
+    check(pointer.takeDelta(anchor).isNull() &&
+          pointer.takeDelta(anchor + QPointF(0.25, -0.5)) == QPointF(0.25, -0.5) &&
+          pointer.takeDelta(anchor + QPointF(0.25, -0.5)).isNull() &&
+          pointer.takeDelta(anchor + QPointF(0.5, -0.25)) == QPointF(0.25, 0.25),
+          "relative scrub preserves fractions, duplicate samples and reversal");
+    pointer.cancel();
+    check(pointer.takeDelta(anchor + QPointF(30, 30)).isNull(),
+          "cancelled pointer cannot apply late input");
+    for (const bool vertical : {false, true}) {
+        const QPointF edge = vertical ? QPointF(anchor.x(), bounds.top() + 1)
+                                     : QPointF(bounds.right() - 1, anchor.y());
+        const QPointF step = vertical ? QPointF(0, -4) : QPointF(4, 0);
+        pointer.begin(edge - step);
+        check(pointer.takeDelta(edge) == step, "screen-edge travel is counted once");
+        const QPointF destination(QCursor::pos());
+        check(pointer.takeDelta(edge).isNull() &&
+              pointer.takeDelta(edge - step / 8).isNull() &&
+              pointer.takeDelta(destination).isNull() &&
+              pointer.takeDelta(destination + step) == step,
+              "edge recenter ignores queued old positions and continues the drag");
+        pointer.finish(destination + step);
+    }
+
+    QPointingDevice touchpad(QStringLiteral("scrub-test-trackpad"), 37,
+        QInputDevice::DeviceType::TouchPad, QPointingDevice::PointerType::Finger,
+        QInputDevice::Capability::Position, 2, 1);
+    // Qt 6.8's QWidget dispatcher rounds global mouse positions. Observe the
+    // delivered coordinates so this check also works with Qt versions that
+    // preserve them; the direct pointer check above covers fractional deltas.
+    class DeliveredPointer final : public QObject {
+    public:
+        QPointF press, position;
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (auto* mouse = dynamic_cast<QMouseEvent*>(event)) {
+                if (event->type() == QEvent::MouseButtonPress) press = mouse->globalPosition();
+                position = mouse->globalPosition();
+            }
+            return false;
+        }
+    };
+    ToolPanel panel;
+    const auto mouse = [&](QWidget* control, QEvent::Type type, QPointF offset,
+                           const QPointingDevice* device,
+                           Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                           Qt::MouseButtons buttons = Qt::LeftButton) {
+        const auto button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+        QMouseEvent event(type, QPointF(control->rect().center()) + offset,
+                          anchor + offset, button,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : buttons,
+                          modifiers, device);
+        QApplication::sendEvent(control, &event);
+    };
+    for (const QPointingDevice* device : {QPointingDevice::primaryPointingDevice(),
+                                         static_cast<const QPointingDevice*>(&touchpad)}) {
+        for (const bool vertical : {false, true}) {
+            auto* slider = panel.findChild<QSlider*>(vertical
+                ? QStringLiteral("TimelineTrackHeightSlider")
+                : QStringLiteral("TimelineZoomSlider"));
+            if (!slider) return false;
+            DeliveredPointer delivered;
+            slider->installEventFilter(&delivered);
+            const auto offset = [vertical](double distance) {
+                return vertical ? QPointF(0, -distance) : QPointF(distance, 0);
+            };
+            const double perPixel = double(slider->maximum() - slider->minimum()) /
+                                    (vertical ? 90.0 : 180.0);
+            const int baseline = (slider->minimum() + slider->maximum()) / 2;
+            slider->setValue(baseline);
+            int starts = 0, finishes = 0;
+            const auto started = QObject::connect(slider, &QSlider::sliderPressed,
+                &panel, [&] { ++starts; });
+            const auto finished = QObject::connect(slider, &QSlider::sliderReleased,
+                &panel, [&] { ++finishes; });
+            mouse(slider, QEvent::MouseButtonPress, {}, device);
+            const QPoint cursor = QCursor::pos();
+            bool exact = true;
+            for (int sample = 1; sample <= 40; ++sample) {
+                const double distance = sample * 0.25;
+                // Touchpads can queue or repeat absolute positions before the
+                // next paint. Event frequency must not change the distance.
+                mouse(slider, QEvent::MouseMove, offset(distance), device);
+                const int beforeDuplicate = slider->value();
+                mouse(slider, QEvent::MouseMove, offset(distance), device);
+                const QPointF travel = delivered.position - delivered.press;
+                const double expected = baseline + (vertical ? -travel.y() : travel.x()) * perPixel;
+                exact = exact && std::abs(slider->value() - expected) <= 0.500001 &&
+                        slider->value() == beforeDuplicate &&
+                        QCursor::pos() == cursor;
+            }
+            mouse(slider, QEvent::MouseButtonRelease, offset(12.5), device);
+            const QPointF travel = delivered.position - delivered.press;
+            const double expected = baseline + (vertical ? -travel.y() : travel.x()) * perPixel;
+            if (!exact || std::abs(slider->value() - expected) > 0.500001 ||
+                slider->isSliderDown() || starts != 1 || finishes != 1)
+                std::fprintf(stderr, "scrub release (%s): exact=%d value=%d expected=%.6f pressed=%d starts=%d finishes=%d\n",
+                    vertical ? "vertical" : "horizontal", int(exact), slider->value(),
+                    expected, int(slider->isSliderDown()), starts, finishes);
+            check(exact && std::abs(slider->value() - expected) <= 0.500001 &&
+                  !slider->isSliderDown() && starts == 1 && finishes == 1,
+                  "view arrow tracks dense input and the final release without duplicate jumps");
+
+            slider->setValue(baseline);
+            mouse(slider, QEvent::MouseButtonPress, {}, device);
+            mouse(slider, QEvent::MouseMove, offset(1), device);
+            mouse(slider, QEvent::MouseMove, offset(2), device, Qt::ShiftModifier);
+            mouse(slider, QEvent::MouseMove, offset(2), device);
+            mouse(slider, QEvent::MouseMove, offset(1.75), device, Qt::ShiftModifier);
+            mouse(slider, QEvent::MouseButtonRelease, offset(1.75), device);
+            check(slider->value() == int(std::lround(baseline + 1.1875 * perPixel)),
+                  "Shift precision and direction changes do not jump");
+
+            slider->setValue(slider->maximum() - 1);
+            mouse(slider, QEvent::MouseButtonPress, {}, device);
+            mouse(slider, QEvent::MouseMove, offset(80), device);
+            mouse(slider, QEvent::MouseMove, offset(75), device);
+            mouse(slider, QEvent::MouseButtonRelease, offset(75), device);
+            check(slider->value() == int(std::lround(slider->maximum() - 5 * perPixel)),
+                  "scrub reverses immediately at the value limit");
+
+            for (const auto type : {QEvent::UngrabMouse, QEvent::Hide, QEvent::WindowDeactivate}) {
+                slider->setValue(baseline);
+                mouse(slider, QEvent::MouseButtonPress, {}, device);
+                mouse(slider, QEvent::MouseMove, offset(5), device);
+                const int before = slider->value();
+                if (type == QEvent::Hide) {
+                    QHideEvent hidden;
+                    QApplication::sendEvent(slider, &hidden);
+                } else {
+                    QEvent interrupted(type);
+                    QApplication::sendEvent(slider, &interrupted);
+                }
+                mouse(slider, QEvent::MouseMove, offset(50), device);
+                mouse(slider, QEvent::MouseButtonRelease, offset(50), device);
+                check(!slider->isSliderDown() && slider->value() == before,
+                      "interrupted view arrow ignores late move and release");
+            }
+            mouse(slider, QEvent::MouseButtonPress, {}, device);
+            mouse(slider, QEvent::MouseMove, offset(3), device);
+            const int beforeLostRelease = slider->value();
+            mouse(slider, QEvent::MouseMove, offset(40), device, Qt::NoModifier, Qt::NoButton);
+            check(!slider->isSliderDown() && slider->value() == beforeLostRelease,
+                  "trackpad drag ends when its release is lost");
+            QObject::disconnect(started);
+            QObject::disconnect(finished);
+            slider->removeEventFilter(&delivered);
+        }
+        auto* waveform = panel.findChild<QWidget*>(QStringLiteral("WaveformScaleButton"));
+        if (!waveform) return false;
+        double scale = 1.0;
+        const auto changed = QObject::connect(&panel, &ToolPanel::waveformScaleChanged,
+            &panel, [&](double value) { scale = value; });
+        mouse(waveform, QEvent::MouseButtonDblClick, {}, device);
+        mouse(waveform, QEvent::MouseButtonPress, {}, device);
+        for (int sample = 1; sample <= 40; ++sample) {
+            mouse(waveform, QEvent::MouseMove, QPointF(0, -sample * 0.5), device);
+            mouse(waveform, QEvent::MouseMove, QPointF(0, -sample * 0.5), device);
+        }
+        mouse(waveform, QEvent::MouseButtonRelease, QPointF(0, -20), device);
+        check(std::abs(scale - std::pow(2.0, 20.0 / 80.0)) < 1.0e-9,
+              "waveform arrow also counts physical travel instead of event count");
+        QObject::disconnect(changed);
+
+        CreatorNumberField number;
+        number.setRange(0, 100);
+        number.setDecimals(3);
+        number.setSingleStep(1);
+        number.setValue(50);
+        mouse(&number, QEvent::MouseButtonPress, {}, device);
+        for (int sample = 1; sample <= 40; ++sample)
+            mouse(&number, QEvent::MouseMove, QPointF(0, -sample * 0.25), device);
+        mouse(&number, QEvent::MouseButtonRelease, QPointF(0, -10), device);
+        check(std::abs(number.value() - 52.5) < 1.0e-9,
+              "shared numeric scrub retains small trackpad movements");
+    }
+    ValueBubble::dismiss();
+    return ok;
+}
+
 bool checkUiScaling() {
+    if (qEnvironmentVariableIsSet("VLT_VIEW_SCRUB_CHECK_ONLY"))
+        return checkViewScrubInput();
     if (qEnvironmentVariableIsSet("VLT_TRACK_PRESENTATION_CHECK_ONLY"))
         return TimelineWidget::checkTrackPresentationForTest();
     bool ok = true;
@@ -949,14 +1141,14 @@ bool checkUiScaling() {
     check(TimelineWidget::checkClipTrimPreviewForTest(),
           "live audio/MIDI/Pattern/automation trim stays visible across tile boundaries and reversals");
     if (qEnvironmentVariableIsSet("VLT_CLIP_TRIM_CHECK_ONLY")) {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         if (!controller.initialize(48000, 512, false)) return false;
         PianoRollWindow editor(&controller);
         check(editor.checkMidiFileActionsForTest(), "trimmed MIDI piano-roll source bounds, seeking and export");
         return ok;
     }
     const auto settle = [](int ms = 80) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     controller.initialize(48000.0, 512, false);
     TimelineWidget gridProbe(&controller);
     gridProbe.resize(200, 120);
@@ -1429,7 +1621,7 @@ bool ui::checkAudioTimelinePerformance() {
     audio::AudioRecorder writer;
     if (!writer.writeWAVFile(path, source, 48000).isOk()) return false;
     for (unsigned block : {32,64,128,512}) for (bool recording : {false,true}) {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         controller.initialize(48000,block,false);
         controller.setRecordDirectory(files.path().toStdString());
         const unsigned realtimeHelpers = controller.configureAudioWorkersForTest(true);
@@ -1841,8 +2033,12 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
         QPointer<PluginEditorWindow> nativeEditor;
         for (const auto& track : m_controller.project().tracks) {
             for (const auto& insert : track.inserts) {
-                auto* instance = m_controller.insertInstance(track.id, insert.id);
-                if (!instance || !instance->hasEditor()) continue;
+                auto editor = m_controller.insertEditorSnapshot(track.id, insert.id);
+                if (!editor) {
+                    run(100); // Subscribe before measuring; the first process readout is asynchronous.
+                    editor = m_controller.insertEditorSnapshot(track.id, insert.id);
+                }
+                if (!editor || !editor->hasEditor) continue;
                 const auto channel = QString::fromStdString(track.id), slot = QString::fromStdString(insert.id);
                 openPluginEditor(channel, slot);
                 nativeEditor = m_pluginEditors.value(channel + '/' + slot);

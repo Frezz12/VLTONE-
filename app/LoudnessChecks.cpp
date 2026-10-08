@@ -16,7 +16,7 @@ bool LoudnessDisplay::checkForTest(const QString& screenshotPrefix) {
         std::fprintf(stderr, "%s loudness display: %s\n", value ? "PASS" : "FAIL", message);
         ok &= value;
     };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     QTemporaryDir temporary;
     const auto path = temporary.filePath("Loudness reference.wav").toStdString();

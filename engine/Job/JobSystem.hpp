@@ -92,8 +92,11 @@ private:
 /// processor installs this; keeping it a plain function pointer + context keeps
 /// the realtime path free of std::function's indirection and allocation.
 struct JobSink {
-    void (*execute)(void* context, std::uint32_t item, unsigned workerIndex) = nullptr;
+    // False transfers completion to poll; the job still owes exactly one
+    // completion, and may not release its dependents until its result arrives.
+    bool (*execute)(void* context, std::uint32_t item, unsigned workerIndex) = nullptr;
     void* context = nullptr;
+    std::uint32_t (*poll)(void* context) = nullptr; // worker 0 only; completed jobs
 };
 
 /// Fixed thread pool that runs one dependency-driven pass at a time.
@@ -165,7 +168,7 @@ public:
     /// and workers that are already awake need no waking. Passing the width the
     /// graph can actually use keeps a narrow pass from waking eight threads that
     /// find nothing to steal and park again.
-    void beginPass(std::uint32_t items, unsigned helpers) noexcept;
+    void beginPass(std::uint32_t items, unsigned helpers, bool callerOnly = false) noexcept;
 
     /// Wake parked helpers when a running job exposes a new ready frontier.
     /// This uses the same lock-free generation/atomic-wait handshake as
@@ -175,17 +178,6 @@ public:
 
     /// Work alongside the pool until the open pass is finished. Audio thread.
     void waitForPass() noexcept { runUntilPassComplete(0); }
-
-    /// beginPass + waitForPass for callers that seed nothing.
-    void dispatch(std::uint32_t items) noexcept {
-        beginPass(items, m_workerCount);
-        waitForPass();
-    }
-
-    /// Signal completion of one item from inside a job.
-    void notifyCompleted() noexcept {
-        m_completed.fetch_add(1, std::memory_order_release);
-    }
 
 private:
     struct alignas(kCacheLine) Worker {
@@ -205,6 +197,7 @@ private:
 
     unsigned m_workerCount = 1;
     std::atomic<unsigned> m_activeWorkerCount{1};
+    std::atomic<unsigned> m_passWorkerCount{1};
     /// Slots reserved per deque. Monotonic, so the common rebuild — same
     /// project, same node count or fewer — never reallocates.
     std::size_t m_itemCapacity = 0;

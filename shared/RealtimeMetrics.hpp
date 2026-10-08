@@ -90,13 +90,16 @@ struct TimingSummary {
 // blocks, never from the transport's exponential DSP-load display.
 class TimingAccumulator {
 public:
+    void add(const BlockTiming& event) {
+        m_times.push_back(double(event.elapsedNs) / 1e6);
+        m_loads.push_back(event.budgetNs ? double(event.elapsedNs) / event.budgetNs : 0);
+        if (event.budgetNs && event.elapsedNs > event.budgetNs) ++m_overruns;
+    }
     void drain(BlockMetrics& metrics) {
         BlockTiming event;
         // Bound a drain even if a producer is continuously running offline.
         for (unsigned i = 0; i < 8192 && metrics.pop(event); ++i) {
-            m_times.push_back(double(event.elapsedNs) / 1e6);
-            m_loads.push_back(event.budgetNs ? double(event.elapsedNs) / event.budgetNs : 0);
-            if (event.budgetNs && event.elapsedNs > event.budgetNs) ++m_overruns;
+            add(event);
         }
     }
     TimingSummary summary() const {

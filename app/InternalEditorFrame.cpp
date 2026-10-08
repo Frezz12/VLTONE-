@@ -42,6 +42,9 @@ constexpr int kInteractiveResizeFrameMs = 16;
 QSize minimumFrameSize(const QWidget* content, const QRect& bounds) {
     QSize minimum(kMinimumWidth, kMinimumHeight);
     if (content && content->property("vlt.compactEditor").toBool()) minimum = QSize(340, 220);
+    // A vendor GUI owns its pixel dimensions, including editors smaller than
+    // the usual application-editor minimum. Keep only its explicit minimum.
+    if (content && content->property("vlt.nativeEditor").toBool()) minimum = QSize(0, 0);
     if (content)
         minimum = minimum.expandedTo(content->minimumSize() + QSize(2, kTitleHeight + 2));
     return minimum.boundedTo(bounds.size());

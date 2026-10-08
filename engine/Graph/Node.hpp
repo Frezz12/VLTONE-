@@ -119,6 +119,9 @@ struct ProcessContext {
     /// Where this node writes MIDI, if its MidiNodeRole includes Output. Cleared
     /// before every block; null for nodes which explicitly opt out.
     MidiBuffer* midiOutput = nullptr;
+    /// One absolute steady-clock deadline shared by the whole graph pass.
+    /// Zero is reserved for direct node callers without a graph scheduler.
+    std::uint64_t deadlineNanos = 0;
 };
 
 /// The single interface every unit of DSP implements — tracks, clips, plugins,
@@ -190,6 +193,13 @@ public:
 
     /// Realtime. No allocation, no locks, no I/O.
     virtual void process(const ProcessContext& context) = 0;
+
+    /// External DSP may finish after this worker has moved to another node.
+    /// A pending node owns its buffers until finishProcess returns true, even
+    /// on expiry. These calls must never wait; only the renderer polls finishes.
+    virtual bool hasDeferredProcess() const noexcept { return false; }
+    virtual bool beginProcess(const ProcessContext& context) { process(context); return true; }
+    virtual bool finishProcess(bool /*expired*/) noexcept { return true; }
 
     // ── Prepare bookkeeping, owned by AudioGraph::compile ──
     //

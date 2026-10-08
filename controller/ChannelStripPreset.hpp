@@ -16,7 +16,7 @@ class ChannelStripPreset {
 public:
     static constexpr const char* kExtension = "vlts";
     static constexpr const char* kFormat = "VLTS";
-    static constexpr int kFormatVersion = 5;
+    static constexpr int kFormatVersion = 6;
 
     static audio::Result save(const EngineController::ChannelSnapshot& snapshot,
                               const std::string& filePath);

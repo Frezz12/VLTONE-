@@ -61,6 +61,24 @@ struct AudioFileInfo {
 /// "3:24 · 48 kHz · stereo" without pulling every file into memory.
 Result probeAudioFile(const std::string& path, AudioFileInfo& out);
 
+// Production installs an isolated service at startup. The same reader facade
+// then reads validated immutable PCM; codecs stay inside the disposable worker.
+// No implicit native fallback is performed when the service fails.
+class AudioFileSource {
+public:
+    virtual ~AudioFileSource() = default;
+    virtual AudioFileInfo info() const = 0;
+    virtual Result seek(FrameCount frame) = 0;
+    virtual FrameCount read(float* destination, FrameCount frames) = 0;
+    virtual Result readStatus() const = 0;
+};
+struct AudioFileServices {
+    std::function<Result(const std::string&, AudioFileInfo&)> probe;
+    std::function<Result(const std::string&, std::unique_ptr<AudioFileSource>&,
+        const std::function<bool()>&)> open;
+};
+void setAudioFileServices(std::shared_ptr<const AudioFileServices> services);
+
 /// Incremental decoder for analysis and other jobs that should not retain a
 /// whole song in memory. The reader always returns interleaved float frames,
 /// exactly like `decodeAudioFile`, and supports sample-accurate seeks into a
@@ -74,7 +92,7 @@ public:
     AudioFileReader(const AudioFileReader&) = delete;
     AudioFileReader& operator=(const AudioFileReader&) = delete;
 
-    Result open(const std::string& path);
+    Result open(const std::string& path, const std::function<bool()>& keepGoing = {});
     void close();
     bool isOpen() const noexcept;
     const AudioFileInfo& info() const noexcept;

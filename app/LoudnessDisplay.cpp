@@ -62,8 +62,4 @@ void LoudnessDisplay::paintEvent(QPaintEvent*) {
         p.setFont(number); p.setPen(row == 1 ? theme.textPrimary : theme.textSecondary);
         p.drawText(line, Qt::AlignRight | Qt::AlignVCenter, reading(values[row]));
     }
-    if (hasFocus()) {
-        p.setPen(QPen(theme.accent, 1)); p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(face.adjusted(2, 2, -2, -2), radius - 2, radius - 2);
-    }
 }

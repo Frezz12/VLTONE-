@@ -577,7 +577,7 @@ bool ui::checkPluginInteractions() {
     daw::plugins::VstFactory factory;
     const auto descriptors = factory.inspect(path.toStdString());
     if (descriptors.empty()) return false;
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false)) return false;
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Editor check");
     const auto slot = controller.addInsert(track, descriptors.front());

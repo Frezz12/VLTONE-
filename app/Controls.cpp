@@ -1,3 +1,4 @@
+#include "PluginStyle.hpp"
 #include "Controls.hpp"
 #include "UiFrameClock.hpp"
 #include "EngineController.hpp"
@@ -12,6 +13,7 @@
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QFontMetrics>
+#include <QGuiApplication>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QHideEvent>
@@ -21,7 +23,6 @@
 #include <QPainterPath>
 #include <QCursor>
 #include <QScreen>
-#include <QStyleOption>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QWheelEvent>
@@ -91,13 +92,6 @@ void paintViewControl(QPainter& painter, const QWidget* control,
         painter.setBrush(fill);
         painter.drawRoundedRect(cell, 2, 2);
     }
-    QStyleOption option;
-    option.initFrom(control);
-    if (control->hasFocus() && (option.state & QStyle::State_KeyboardFocusChange)) {
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(theme.textPrimary, 1.0, Qt::DotLine));
-        painter.drawRoundedRect(cell, 2, 2);
-    }
     const QPointF centre = QRectF(control->rect()).center();
     icons::paint(painter, glyph,
                  QRectF(centre.x() - 7.0, centre.y() - 7.0, 14.0, 14.0),
@@ -112,6 +106,16 @@ ViewScrubSlider::ViewScrubSlider(icons::Glyph glyph, Axis axis, int resetValue,
     setCursor(axis == Axis::Vertical ? Qt::SizeVerCursor : Qt::SizeHorCursor);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+}
+
+bool ViewScrubSlider::event(QEvent* event) {
+    if (event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::WindowDeactivate) {
+        m_cursorDrag.cancel();
+        if (isSliderDown()) setSliderDown(false);
+        update();
+    }
+    return QSlider::event(event);
 }
 
 void ViewScrubSlider::paintEvent(QPaintEvent*) {
@@ -190,28 +194,62 @@ bool g_automationCreationMode = false;
 }
 
 void LockedCursorDrag::begin(const QPointF& globalPosition) {
-    m_anchor = globalPosition.toPoint();
+    m_anchor = m_lastPosition = globalPosition;
+    m_warpPending = false;
     m_active = true;
 }
 
-QPointF LockedCursorDrag::takeDelta(const QPointF& globalPosition) {
+QPointF LockedCursorDrag::takeDelta(const QPointF& globalPosition, bool wrapAtEdge) {
     if (!m_active) return {};
-    const QPointF delta = globalPosition - QPointF(m_anchor);
-    // setPos produces a zero-delta move on some platforms.  Avoid issuing it
-    // again for that event, otherwise a locked pointer can create an event
-    // loop while the application is under load.
-    if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y()))
-        QCursor::setPos(m_anchor);
+    if (m_warpPending) {
+        // Native input can already have several old-edge samples queued when
+        // setPos runs. Wait for the destination instead of counting them again.
+        if ((globalPosition - m_lastPosition).manhattanLength() >
+            (globalPosition - m_warpFrom).manhattanLength()) return {};
+        m_warpPending = false;
+    }
+    const QPointF delta = globalPosition - m_lastPosition;
+    m_lastPosition = globalPosition;
+    if (wrapAtEdge && !delta.isNull()) {
+        if (const auto* screen = QGuiApplication::screenAt(globalPosition.toPoint())) {
+            const QRect bounds = screen->geometry();
+            QPointF destination = globalPosition;
+            if ((delta.x() < 0 && globalPosition.x() <= bounds.left() + 2) ||
+                (delta.x() > 0 && globalPosition.x() >= bounds.right() - 2))
+                destination.setX(bounds.center().x());
+            if ((delta.y() < 0 && globalPosition.y() <= bounds.top() + 2) ||
+                (delta.y() > 0 && globalPosition.y() >= bounds.bottom() - 2))
+                destination.setY(bounds.center().y());
+            if (destination != globalPosition) {
+                m_warpFrom = globalPosition;
+                m_lastPosition = destination.toPoint();
+                m_warpPending = true;
+                QCursor::setPos(m_lastPosition.toPoint());
+                // A backend without pointer warping must keep ordinary input
+                // working instead of waiting for a move that cannot arrive.
+                if (QCursor::pos() != m_lastPosition.toPoint()) {
+                    m_lastPosition = globalPosition;
+                    m_warpPending = false;
+                }
+            }
+        }
+    }
     return delta;
 }
 
 QPointF LockedCursorDrag::finish(const QPointF& globalPosition) {
-    const QPointF delta = takeDelta(globalPosition);
+    if (!m_active) return {};
+    const QPointF delta = takeDelta(globalPosition, false);
     m_active = false;
+    m_warpPending = false;
+    if (QCursor::pos() != m_anchor.toPoint()) QCursor::setPos(m_anchor.toPoint());
     return delta;
 }
 
-void LockedCursorDrag::cancel() { m_active = false; }
+void LockedCursorDrag::cancel() {
+    m_active = false;
+    m_warpPending = false;
+}
 
 void setAutomationCreationMode(bool enabled) {
     g_automationCreationMode = enabled;
@@ -533,7 +571,7 @@ void GlassSlider::paintEvent(QPaintEvent*) {
     spec.position = visualFraction();
     spec.fillFrom = m_fillFrom;
     spec.detent = m_detent;
-    spec.active = isSliderDown() || underMouse() || hasFocus();
+    spec.active = isSliderDown() || underMouse();
     paintSlider(painter, interactionTrack(), spec);
 }
 
@@ -878,12 +916,8 @@ void IconButton::paintEvent(QPaintEvent*) {
             p.drawLine(QPointF(r.center().x() - 3, r.bottom() - 3),
                        QPointF(r.center().x() + 3, r.bottom() - 3));
         }
-        QStyleOption focus;
-        focus.initFrom(this);
-        const bool keyboardFocus = hasFocus() &&
-            (focus.state & QStyle::State_KeyboardFocusChange);
-        if (m_pulse || keyboardFocus) {
-            p.setPen(QPen(keyboardFocus ? t.textSecondary : active, 1.5));
+        if (m_pulse) {
+            p.setPen(QPen(active, 1.5));
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1),
                               Theme::cornerRadius - 1, Theme::cornerRadius - 1);
@@ -988,17 +1022,6 @@ void IconButton::paintEvent(QPaintEvent*) {
                      isChecked() ? QIcon::On : QIcon::Off);
     }
 
-    // Most dense DAW controls deliberately opt out of Tab focus, but panels
-    // with form-like navigation can opt back in. When they do, the focus must
-    // be as visible as the hover state rather than existing only to Qt.
-    if (hasFocus()) {
-        QColor ring = t.accentHighlight;
-        ring.setAlphaF(0.9);
-        p.setPen(QPen(ring, 1.5));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), radius - 1.0,
-                          radius - 1.0);
-    }
 }
 
 // ── MsrButton ──
@@ -1082,11 +1105,6 @@ void MsrButton::paintEvent(QPaintEvent*) {
             p.setBrush(t.accentHighlight);
             p.drawEllipse(QPointF(r.right() - 3, r.top() + 3), 1.5, 1.5);
         }
-        if (hasFocus()) {
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(t.accentHighlight, 1));
-            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4);
-        }
         return;
     }
     m_pressFade.setTarget(isDown() ? 1.0 : 0.0);
@@ -1149,9 +1167,9 @@ constexpr double kFaderScale[] = {6, 3, 0, -3, -6, -9, -12, -18,
 /// Width the printed scale takes: labels, then the ticks against the slot.
 constexpr double kScaleWidth = 24.0;
 constexpr double kTickLength = 5.0;
-/// A broad console grip; its single inlay marks the exact gain position.
-constexpr double kCapAlong = 20.0;
-constexpr double kCapAcross = 28.0;
+/// A ribbed console grip; its centre inlay marks the exact gain position.
+constexpr double kCapAlong = 34.0;
+constexpr double kCapAcross = 24.0;
 /// The slot the cap rides in.
 constexpr double kSlotThickness = 4.0;
 /// Closest two printed numbers may come. Both the thinning in `paintScale` and
@@ -1253,7 +1271,7 @@ QSizeF FaderWidget::capSize() const {
     // The header row is shorter than the mixer grip is wide, so narrow the
     // shoulders for the horizontal version.
     const double across = std::min(kCapAcross, double(height()) - 2.0);
-    return QSizeF(kCapAlong - 2.0, across);
+    return QSizeF(18.0, across);
 }
 
 QRectF FaderWidget::trackRect() const {
@@ -1367,89 +1385,126 @@ void FaderWidget::paintScale(QPainter& p) const {
 void FaderWidget::paintCap(QPainter& p, const QRectF& cap) const {
     const Theme& t = th();
     const bool vertical = m_orientation == Qt::Vertical;
-    const bool lit = m_dragging || m_hovered;
+    const bool lit = isEnabled() && (m_dragging || m_hovered);
     p.save();
     p.translate(cap.topLeft());
     // The same sculpted grip in both orientations, lit from the upper left.
     if (!vertical) p.setTransform(QTransform(0, 1, 1, 0, 0, 0), true);
     const double width = vertical ? cap.width() : cap.height();
     const double height = vertical ? cap.height() : cap.width();
-    const QRectF shell(0.6, 0.6, width - 1.2, height - 2.2);
-    const QRectF face = shell.adjusted(1.4, 1.0, -1.4, -3.0);
-    const QColor graphite = mixColors(QColor(72, 80, 90), t.accent,
-                                      isEnabled() && lit ? 0.14 : 0.025);
-    const auto metal = [&](int lightness) {
-        return mixColors(QColor(lightness, lightness, lightness), graphite, 0.20);
+    const QRectF shell(0.8, 0.6, width - 1.6, height - 2.2);
+    const QRectF face = shell.adjusted(2.0, 1.2, -2.0, -2.6);
+    // Use the same raised-control material as the surrounding theme. Lighting
+    // shapes the grip without giving it a separate graphite/silver palette.
+    const QColor body = mixColors(t.controlBottom(), t.accent, lit ? 0.12 : 0.0);
+    const QColor shade = t.edgeDark(body);
+    const QColor highlight = t.edgeLight(
+        mixColors(t.controlTop(), t.accent, lit ? 0.10 : 0.0));
+    const auto material = [&](double lightness) {
+        return mixColors(shade, highlight, lightness);
     };
 
-    // The lower casting is visible below the curved grip. Contact and cast
-    // shadows are local to the cap, including at the rail's end stops.
+    // A narrow waist and flared ends give the cap its moulded console profile.
+    QPainterPath outline;
+    outline.moveTo(shell.left() + 3.0, shell.top());
+    outline.lineTo(shell.right() - 3.0, shell.top());
+    outline.quadTo(shell.right() - 0.5, shell.top(), shell.right() - 0.5, shell.top() + 2.5);
+    outline.cubicTo(shell.right() - 1.8, height * 0.4,
+                    shell.right() - 1.8, height * 0.6, shell.right(), shell.bottom() - 2.5);
+    outline.quadTo(shell.right(), shell.bottom(), shell.right() - 2.5, shell.bottom());
+    outline.lineTo(shell.left() + 2.5, shell.bottom());
+    outline.quadTo(shell.left(), shell.bottom(), shell.left(), shell.bottom() - 2.5);
+    outline.cubicTo(shell.left() + 1.8, height * 0.6,
+                    shell.left() + 1.8, height * 0.4, shell.left() + 0.5, shell.top() + 2.5);
+    outline.quadTo(shell.left() + 0.5, shell.top(), shell.left() + 3.0, shell.top());
+    outline.closeSubpath();
+
+    // Keep both shadows inside the cap envelope, even at the end stops.
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0, 0, 0, t.dark ? 60 : 28));
-    p.drawRoundedRect(shell.adjusted(-0.5, 0.5, 0.5, 1.4), 4.2, 4.2);
+    p.drawRoundedRect(shell.adjusted(-0.5, 0.5, 0.5, 1.4), 3.0, 3.0);
     p.setBrush(QColor(0, 0, 0, t.dark ? 205 : 120));
-    p.drawRoundedRect(shell.translated(0.3, m_dragging ? 0.5 : 1.0), 3.5, 3.5);
+    p.drawPath(outline.translated(0.0, m_dragging ? 0.5 : 1.0));
 
     QLinearGradient casting(shell.topLeft(), shell.bottomLeft());
-    casting.setColorAt(0.0, metal(141));
-    casting.setColorAt(0.34, metal(69));
-    casting.setColorAt(0.75, metal(34));
-    casting.setColorAt(1.0, metal(14));
+    casting.setColorAt(0.0, material(lit ? 0.72 : 0.62));
+    casting.setColorAt(0.18, material(0.28));
+    casting.setColorAt(0.50, material(0.06));
+    casting.setColorAt(0.84, material(0.25));
+    casting.setColorAt(1.0, shade);
     p.setBrush(casting);
-    p.setPen(QPen(QColor(8, 12, 17), 0.9));
-    p.drawRoundedRect(shell, 3.4, 3.4);
+    p.setPen(QPen(t.edgeDark(t.well()), 0.9));
+    p.drawPath(outline);
 
-    // The face rolls over at the top and falls into a shallow finger bed.
-    // A continuous reflection models the curvature without adding grip ribs.
+    // Raised ends roll down into a shallow, darker finger bed.
     QLinearGradient crown(face.topLeft(), face.bottomLeft());
-    crown.setColorAt(0.00, metal(m_dragging ? 132 : 166));
-    crown.setColorAt(0.16, metal(m_dragging ? 105 : 133));
-    crown.setColorAt(0.40, metal(77));
-    crown.setColorAt(0.68, metal(45));
-    crown.setColorAt(1.00, metal(58));
+    crown.setColorAt(0.00, material(m_dragging ? 0.52 : 0.66));
+    crown.setColorAt(0.12, material(0.38));
+    crown.setColorAt(0.38, material(0.16));
+    crown.setColorAt(0.58, material(0.11));
+    crown.setColorAt(0.86, material(0.34));
+    crown.setColorAt(1.00, material(m_dragging ? 0.32 : 0.53));
     p.setPen(Qt::NoPen);
     p.setBrush(crown);
-    p.drawRoundedRect(face, 2.5, 2.5);
+    p.drawRoundedRect(face, 1.7, 1.7);
 
     QPainterPath faceClip;
-    faceClip.addRoundedRect(face, 2.5, 2.5);
+    faceClip.addRoundedRect(face, 1.7, 1.7);
     p.save();
     p.setClipPath(faceClip, Qt::IntersectClip);
     QLinearGradient shoulders(face.topLeft(), face.topRight());
-    shoulders.setColorAt(0.00, QColor(0, 0, 0, 80));
-    shoulders.setColorAt(0.13, QColor(255, 255, 255, 18));
+    shoulders.setColorAt(0.00, QColor(0, 0, 0, t.dark ? 55 : 18));
+    shoulders.setColorAt(0.15, QColor(255, 255, 255, t.dark ? 24 : 90));
     shoulders.setColorAt(0.35, QColor(255, 255, 255, 0));
-    shoulders.setColorAt(0.82, QColor(0, 0, 0, 12));
-    shoulders.setColorAt(1.00, QColor(0, 0, 0, 110));
+    shoulders.setColorAt(0.82, QColor(0, 0, 0, t.dark ? 12 : 6));
+    shoulders.setColorAt(1.00, QColor(0, 0, 0, t.dark ? 75 : 35));
     p.fillRect(face, shoulders);
+
+    // Transverse grip ribs catch light above a small recessed shadow. Leave
+    // the centre clear so only the contrasting inlay reads as the gain indicator.
+    const int ribsPerSide = vertical ? 3 : 1;
+    for (int side : {-1, 1}) {
+        for (int rib = 0; rib < ribsPerSide; ++rib) {
+            const double y = height / 2.0 + side * (4.5 + rib * 3.4);
+            const double inset = rib == 0 ? 1.0 : 0.5;
+            const QRectF ridge(face.left() + inset, y - 0.6,
+                               face.width() - 2.0 * inset, 1.2);
+            p.setBrush(QColor(0, 0, 0, t.dark ? 100 : 45));
+            p.drawRoundedRect(ridge.translated(0.0, 0.9), 0.5, 0.5);
+            QLinearGradient ribLight(ridge.topLeft(), ridge.bottomLeft());
+            ribLight.setColorAt(0.0, material(lit ? 0.82 : 0.70));
+            ribLight.setColorAt(1.0, material(0.27));
+            p.setBrush(ribLight);
+            p.drawRoundedRect(ridge, 0.5, 0.5);
+        }
+    }
     p.restore();
 
     // A narrow rim catches light at the crown and down the two rounded ends.
     QPainterPath rim;
-    rim.moveTo(shell.left() + 0.9, shell.bottom() - 4.2);
-    rim.lineTo(shell.left() + 0.9, shell.top() + 3.5);
-    rim.quadTo(shell.left() + 0.9, shell.top() + 0.7,
-               shell.left() + 3.7, shell.top() + 0.7);
-    rim.lineTo(shell.right() - 3.7, shell.top() + 0.7);
-    rim.quadTo(shell.right() - 0.9, shell.top() + 0.7,
-               shell.right() - 0.9, shell.top() + 3.5);
+    rim.moveTo(shell.left() + 1.1, shell.top() + 3.0);
+    rim.quadTo(shell.left() + 1.1, shell.top() + 0.7,
+               shell.left() + 3.4, shell.top() + 0.7);
+    rim.lineTo(shell.right() - 3.4, shell.top() + 0.7);
+    rim.quadTo(shell.right() - 1.1, shell.top() + 0.7,
+               shell.right() - 1.1, shell.top() + 3.0);
     QLinearGradient rimLight(shell.topLeft(), shell.bottomRight());
-    rimLight.setColorAt(0.0, metal(lit ? 225 : 192));
-    rimLight.setColorAt(0.45, metal(111));
-    rimLight.setColorAt(1.0, metal(45));
+    rimLight.setColorAt(0.0, material(lit ? 1.0 : 0.88));
+    rimLight.setColorAt(0.45, material(0.56));
+    rimLight.setColorAt(1.0, material(0.12));
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(rimLight, 0.8));
     p.drawPath(rim);
 
-    // One inset ivory inlay, centred on the actual gain. It stops before the
+    // One inset inlay, centred on the actual gain. It stops before the
     // shoulders so the handle reads as one solid piece, including at 100% DPI.
-    const QRectF inlay(4.0, height / 2.0 - 0.65, width - 8.0, 1.3);
+    const QRectF inlay(3.4, height / 2.0 - 0.75, width - 6.8, 1.5);
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(13, 17, 22));
+    p.setBrush(t.wellTop());
     p.drawRoundedRect(inlay.adjusted(-0.6, -0.6, 0.6, 0.6), 1.0, 1.0);
-    p.setBrush(isEnabled() ? (lit ? mixColors(QColor(236, 241, 245), t.accent, 0.22)
-                                : QColor(223, 230, 234))
-                           : QColor(151, 158, 164));
+    p.setBrush(isEnabled() ? (lit ? mixColors(t.textPrimary, t.accent, 0.22)
+                                : t.textPrimary)
+                           : t.textSecondary);
     p.drawRoundedRect(inlay, 0.35, 0.35);
     p.restore();
 }
@@ -2216,13 +2271,6 @@ void PanKnob::paintEvent(QPaintEvent*) {
     p.drawLine(QPointF(centre.x(), bounds.top() + 0.3),
                QPointF(centre.x(), bounds.top() + std::max(2.0, side * 0.08)));
 
-    if (hasFocus()) {
-        QColor focus = t.accent;
-        focus.setAlpha(220);
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(focus, 1.4, Qt::SolidLine));
-        p.drawEllipse(bounds.adjusted(0.4, 0.4, -0.4, -0.4));
-    }
 }
 
 void PanKnob::mousePressEvent(QMouseEvent* ev) {
@@ -2489,7 +2537,7 @@ void Knob::setCaption(const QString& caption) {
 
 void Knob::setCompact(bool compact) {
     m_compact = compact;
-    if (m_visualStyle == VisualStyle::SamplerDigital) {
+    if (m_visualStyle == VisualStyle::SamplerDigital || m_visualStyle == VisualStyle::Slicer) {
         setFixedSize(kSamplerKnobWidth, kSamplerKnobHeight);
     } else {
         const int size = compact ? kKnobCompactSize : kKnobSize;
@@ -2518,7 +2566,7 @@ void Knob::setDetent(std::function<double(double)> detent) {
 void Knob::setVisualStyle(VisualStyle style) {
     m_visualStyle = style;
     if (!m_bare) {
-        if (style == VisualStyle::SamplerDigital) {
+        if (style == VisualStyle::SamplerDigital || style == VisualStyle::Slicer) {
             setFixedSize(kSamplerKnobWidth, kSamplerKnobHeight);
         } else {
             const int size = m_compact ? kKnobCompactSize : kKnobSize;
@@ -2610,6 +2658,19 @@ void Knob::paintEvent(QPaintEvent*) {
     const QPointF centre = ring.center();
     const double radius = ring.width() / 2.0;
     const double pen = m_bare ? 2.0 : (digital ? 2.4 : (m_compact ? 2.5 : 3.0));
+
+    if (m_visualStyle == VisualStyle::Slicer) {
+        const QRectF face = m_bare ? QRectF(rect()) : QRectF((width()-52.)/2.,0,52,52);
+        pluginStyle::knob(p, face, fraction(), m_dragging, isEnabled(), hasFocus());
+        if (!m_bare && !m_caption.isEmpty()) {
+            auto f = font(); f.setPixelSize(10); f.setWeight(QFont::Medium); p.setFont(f);
+            p.setPen(t.textPrimary);
+            p.drawText(QRect(0,52,width(),13),Qt::AlignCenter,elidedCaption(p,m_caption,width()));
+            p.setPen(pluginStyle::accent());
+            p.drawText(QRect(0,65,width(),13),Qt::AlignCenter,elidedCaption(p,text(),width()));
+        }
+        return;
+    }
 
     if (graphiteStyle) {
         // Graphit's dial, scaled down. That control is a single 220 px machined
@@ -2713,13 +2774,6 @@ void Knob::paintEvent(QPaintEvent*) {
                    QPointF(centre.x() + std::cos(angle) * body.width() * 0.42,
                            centre.y() - std::sin(angle) * body.width() * 0.42));
 
-        if (hasFocus()) {
-            QColor focus = accent;
-            focus.setAlpha(230);
-            p.setPen(QPen(focus, 1.6, Qt::SolidLine));
-            p.setBrush(Qt::NoBrush);
-            p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
-        }
         return;
     }
 
@@ -2783,12 +2837,6 @@ void Knob::paintEvent(QPaintEvent*) {
                       Qt::RoundCap));
         p.drawLine(start, end);
 
-        if (hasFocus()) {
-            QColor focus = accent;
-            focus.setAlpha(230);
-            p.setPen(QPen(focus, 2.0, Qt::SolidLine));
-            p.drawEllipse(ring.adjusted(-1.0, -1.0, 1.0, 1.0));
-        }
         return;
     }
 
@@ -2818,11 +2866,6 @@ void Knob::paintEvent(QPaintEvent*) {
         const QPointF direction(std::cos(angle), -std::sin(angle));
         p.setPen(QPen(t.textPrimary, 2, Qt::SolidLine, Qt::RoundCap));
         p.drawLine(centre + direction * 3, centre + direction * 10);
-        if (hasFocus()) {
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(accent, 1.5));
-            p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
-        }
         if (!m_bare) {
             QFont labelFont = font();
             labelFont.setPixelSize(10);
@@ -3177,12 +3220,6 @@ void ModeSwitch::paintEvent(QPaintEvent*) {
     p.setPen(mixColors(t.textSecondary, onKnob, slide));
     p.drawText(rightHalf, Qt::AlignCenter, m_rightLabel);
 
-    if (hasFocus()) {
-        p.setPen(QPen(mixColors(t.accent, t.textPrimary, 0.3), 1,
-                      Qt::SolidLine));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(track.adjusted(1, 1, -1, -1), radius, radius);
-    }
 }
 
 // ── LevelMeter ──

@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
         profile << "block,generation,position,worker,kind,node,nanoseconds\n";
         nodeMap << "generation,node,name\n";
     }
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (auto result = controller.initialize(rate, 512, /*openDevice=*/true); !result) {
         std::fprintf(stderr, "initialize failed: %s\n", result.message().c_str());
         return 1;
@@ -156,13 +156,10 @@ int main(int argc, char** argv) {
         }
         const std::uint32_t actual = controller.bufferSizeFrames();
         controller.seekSeconds(0.0);
-        auto drainDiscard = [](daw::rt::BlockMetrics& metrics) {
-            daw::rt::BlockTiming event;
-            while (metrics.pop(event)) {}
-        };
-        drainDiscard(controller.callbackMetrics()); drainDiscard(controller.graphMetrics());
-        const auto callbackBefore = controller.callbackMetrics().counters();
-        const auto graphBefore = controller.graphMetrics().counters();
+        (void)controller.callbackMetrics(true);
+        (void)controller.graphMetrics(true);
+        const auto callbackBefore = controller.callbackMetrics().counters;
+        const auto graphBefore = controller.graphMetrics().counters;
         const auto xrunsBefore = controller.audioXruns();
         const auto gatesBefore = controller.gatedAudioBlocks();
         auto* cache = daw::engine::PcmReadCache::existing();
@@ -187,7 +184,8 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            callback.drain(controller.callbackMetrics()); graph.drain(controller.graphMetrics());
+            for (const auto& event : controller.callbackMetrics(true).events) callback.add(event);
+            for (const auto& event : controller.graphMetrics(true).events) graph.add(event);
             if (profile.is_open()) for (unsigned worker = 0; worker < controller.audioWorkerCount(); ++worker) {
                 daw::rt::ProfileEvent event;
                 for (unsigned n = 0; n < 8192 && controller.popAudioProfile(worker, event); ++n)
@@ -203,8 +201,8 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         drain();
-        const auto callbackAfter = controller.callbackMetrics().counters();
-        const auto graphAfter = controller.graphMetrics().counters();
+        const auto callbackAfter = controller.callbackMetrics().counters;
+        const auto graphAfter = controller.graphMetrics().counters;
         const auto xrunsAfter = controller.audioXruns();
         const auto gated = controller.gatedAudioBlocks() - gatesBefore;
         const auto cacheAfter = cache ? cache->counters() : daw::engine::PcmReadCache::Counters{};

@@ -1,3 +1,4 @@
+#include "PluginStyle.hpp"
 #include "ScrollMotion.hpp"
 #include "SlicerPanel.hpp"
 #include "AudioImportPreparation.hpp"
@@ -95,19 +96,15 @@ const daw::plugins::ParameterInfo* infoFor(const QString& id) {
 }
 // Local materials: the editor's controls share the same rubber housing while
 // retaining the host knob's keyboard, numeric entry and accessibility support.
-QColor shellColor() { return mixColors(th().surfaceElevated, th().textPrimary, th().dark?.08:.025); }
-QColor slicerAccent() { return mixColors(th().accent,th().dark?QColor(221,181,122):QColor(126,87,36),.72); }
+QColor shellColor() { return pluginStyle::shell(); }
+QColor slicerAccent() { return pluginStyle::accent(); }
 class SlicerSurface final : public QWidget {
 public:
     using QWidget::QWidget;
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
-        const auto r=QRectF(rect()).adjusted(1,1,-1,-2); const auto base=shellColor();
-        p.setPen(Qt::NoPen); p.setBrush(QColor(0,0,0,th().dark?65:20)); p.drawRoundedRect(r.translated(0,2),15,15);
-        QLinearGradient material(r.topLeft(),r.bottomRight());
-        material.setColorAt(0,th().edgeLight(base)); material.setColorAt(.45,base); material.setColorAt(1,th().edgeDark(base));
-        p.setBrush(material); p.setPen(QPen(th().edgeLight(base),1)); p.drawRoundedRect(r,15,15);
+        pluginStyle::surface(p, QRectF(rect()).adjusted(1,1,-1,-2));
     }
 };
 class SlicerKnob final : public ui::Knob {
@@ -122,30 +119,12 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this); painter.setRenderHint(QPainter::Antialiasing);
-        const auto& t=th(); const auto base=shellColor();
-        const QPointF center=headCenter();
-        const QRectF body(center.x()-22,center.y()-22,44,44);
-        painter.setPen(Qt::NoPen);
-        // Preserve the original material; the layout reserves its full blur.
-        const auto shade=shadowRect(), highlight=lightRect();
-        QRadialGradient shadow(shade.center(),shade.width()/2);
-        shadow.setColorAt(.48,QColor(0,0,0,t.dark?130:52)); shadow.setColorAt(1,Qt::transparent);
-        painter.setBrush(shadow); painter.drawEllipse(shade);
-        QRadialGradient light(highlight.center(),highlight.width()/2);
-        light.setColorAt(.55,QColor(255,255,255,t.dark?22:170)); light.setColorAt(1,Qt::transparent);
-        painter.setBrush(light); painter.drawEllipse(highlight);
-        QRadialGradient rubber(center-QPointF(10,13),53);
-        rubber.setColorAt(0,mixColors(base,t.textPrimary,t.dark?.15:.06));
-        rubber.setColorAt(.6,base); rubber.setColorAt(1,t.edgeDark(base));
-        painter.setBrush(rubber); painter.drawEllipse(body);
+        const auto& t=th();
         const double fraction=m_logarithmic && minimumValue()>0
             ? std::log(value()/minimumValue())/std::log(maximumValue()/minimumValue())
             : (value()-minimumValue())/std::max(1e-9,maximumValue()-minimumValue());
-        const double angle=(225-270*fraction)*std::numbers::pi/180.0;
-        const QPointF direction(std::cos(angle),-std::sin(angle));
-        painter.setPen(QPen(isEnabled()?t.textPrimary:t.textSecondary,2.6,Qt::SolidLine,Qt::RoundCap));
-        painter.drawLine(center+direction*11,center+direction*18);
-        if (hasFocus()) { painter.setBrush(Qt::NoBrush); painter.setPen(QPen(t.accent,1.5)); painter.drawEllipse(body.adjusted(-6,-6,6,6)); }
+        pluginStyle::knob(painter, QRectF(width()/2.-36,0,72,72), fraction,
+                          isEditing(), isEnabled(), hasFocus());
         auto face=font(); face.setPixelSize(11); face.setWeight(QFont::Medium); painter.setFont(face);
         painter.setPen(isEnabled()?t.textPrimary:t.textSecondary);
         painter.drawText(QRect(2,74,width()-4,13),Qt::AlignCenter,painter.fontMetrics().elidedText(accessibleName(),Qt::ElideRight,width()-4));
@@ -207,7 +186,6 @@ void SlicerEffectPad::paintEvent(QPaintEvent*) {
         painter.setBrush(t.well()); painter.setPen(QPen(slicerAccent(),2)); painter.drawEllipse(handle,7,7);
         painter.setBrush(t.textPrimary); painter.setPen(Qt::NoPen); painter.drawEllipse(handle,2,2);
     }
-    if (hasFocus()) { painter.setBrush(Qt::NoBrush); painter.setPen(QPen(t.accent,1.5)); painter.drawRoundedRect(r.adjusted(2,2,-2,-2),10,10); }
 }
 void SlicerEffectPad::editPosition(QPointF next) {
     next.setX(std::clamp(next.x(),0.0,1.0)); next.setY(std::clamp(next.y(),0.0,1.0));
@@ -429,8 +407,6 @@ void SlicerWaveform::paintScene(QPainter& painter, const QRegion&) {
         }
     }
     painter.restore();
-    painter.setPen(QPen(t.accent, 2));
-    if (hasFocus()) painter.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), 7, 7);
     painter.setPen(t.textSecondary); painter.drawText(QRectF(12, height() - 14, width() - 24, 13), Qt::AlignRight, tr("%1× zoom").arg(total / m_viewSpan, 0, 'f', 1));
 }
 void SlicerWaveform::mousePressEvent(QMouseEvent* e) {
@@ -549,10 +525,6 @@ void SlicerPad::paintEvent(QPaintEvent*) {
     }
     painter.setPen(QPen(color,2,Qt::SolidLine,Qt::RoundCap));
     painter.drawLine(QPointF(face.center().x()-4,face.bottom()-4),QPointF(face.center().x()+4,face.bottom()-4));
-    if (hasFocus()) {
-        painter.setBrush(Qt::NoBrush); painter.setPen(QPen(t.textPrimary, 1, Qt::DotLine));
-        painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 6, 6);
-    }
 }
 bool SlicerPad::event(QEvent* event) {
     if (event->type() == QEvent::HoverEnter || event->type() == QEvent::HoverLeave) update();
@@ -620,9 +592,10 @@ SlicerPanel::SlicerPanel(daw::EngineController* controller, QString channelId, Q
         commitField(); cancelWork(); m_dragFiles.clear(); releaseAudition(); m_boundaryGesture = m_controller && m_controller->beginSlicerEdit(m_channelId.toStdString(), m_slotId.toStdString());
     });
     connect(m_waveform, &SlicerWaveform::boundaryMoved, this, [this](int right, quint32 frame) {
-        if (!m_boundaryGesture || !slicer() || !slicer()->sliceTable()) return;
-        auto table = std::make_shared<Table>(*slicer()->sliceTable());
-        const auto settings = slicer()->analysisSettings(); const auto source = slicer()->rawSample();
+        const auto snapshot = slicer();
+        if (!m_boundaryGesture || !snapshot || !snapshot->state.table || !snapshot->state.audio) return;
+        auto table = std::make_shared<Table>(*snapshot->state.table);
+        const auto settings = snapshot->state.analysis; const auto source = snapshot->state.audio;
         const auto minimum = quint32(std::clamp(settings.minimumMs * source->sampleRate() / 1000, 1.0, double(source->frames())));
         if (settings.zeroCrossing && right > 0 && right < int(table->count)) frame = slicing::snapToZero(*source, frame, table->slices[right-1].start+1, table->slices[right].end-1);
         if (slicing::moveBoundary(*table, right, frame, minimum)) { m_controller->updateSlicerEdit(table, settings); refresh(); }
@@ -683,7 +656,7 @@ void SlicerPanel::showMenu() {
     auto* file = menu.addMenu(tr("File / preset"));
     file->addAction(tr("Load sample"), this, [this] { loadSample(); });
     file->addAction(tr("Show source file"), this, [this] {
-        if (slicer()) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(QString::fromStdString(slicer()->samplePath())).absolutePath()));
+        if (const auto snapshot = slicer()) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(QString::fromStdString(snapshot->state.path)).absolutePath()));
     });
     file->addSeparator();
     file->addAction(tr("Save portable preset…"), this, [this] { preset(false); });
@@ -694,10 +667,13 @@ void SlicerPanel::showMenu() {
         m_controller->clearSlicerSample(m_channelId.toStdString(), m_slotId.toStdString()); refresh(); emit projectEdited();
     });
     auto* edit = menu.addMenu(tr("Edit"));
-    edit->setEnabled(slicer() && slicer()->sliceTable() && slicer()->sliceTable()->count);
+    const auto snapshot = slicer();
+    edit->setEnabled(snapshot && snapshot->state.table && snapshot->state.table->count);
     edit->addAction(tr("Select all"), this, [this] {
-        if (!slicer() || !slicer()->sliceTable()) return;
-        for (quint32 i = 0; i < slicer()->sliceTable()->count; ++i) m_selected.insert(slicer()->sliceTable()->slices[i].id);
+        const auto snapshot = slicer();
+        if (!snapshot || !snapshot->state.table) return;
+        const auto& table = *snapshot->state.table;
+        for (quint32 i = 0; i < table.count; ++i) m_selected.insert(table.slices[i].id);
         refreshSelection();
     });
     edit->addAction(tr("Copy"), this, &SlicerPanel::copySettings);
@@ -705,13 +681,15 @@ void SlicerPanel::showMenu() {
     edit->addAction(tr("Reset"), this, &SlicerPanel::resetSettings);
     edit->addSeparator();
     edit->addAction(tr("Split"), this, [this] {
-        if (!slicer() || !slicer()->sliceTable()) return;
-        const auto table = slicer()->sliceTable(); const int i = table->indexForId(m_primary);
+        const auto snapshot = slicer();
+        if (!snapshot || !snapshot->state.table) return;
+        const auto table = snapshot->state.table; const int i = table->indexForId(m_primary);
         if (i >= 0) splitAt(table->slices[i].start + (table->slices[i].end - table->slices[i].start) / 2);
     });
     edit->addAction(tr("Merge"), this, [this] {
-        if (!slicer() || !slicer()->sliceTable()) return;
-        const int i = slicer()->sliceTable()->indexForId(m_primary); if (i >= 0) mergeAt(i > 0 ? i : 1);
+        const auto snapshot = slicer();
+        if (!snapshot || !snapshot->state.table) return;
+        const int i = snapshot->state.table->indexForId(m_primary); if (i >= 0) mergeAt(i > 0 ? i : 1);
     });
     menu.addSeparator();
     menu.addAction(tr("Fit selection"), m_waveform, &SlicerWaveform::fitSelection);
@@ -743,8 +721,8 @@ QWidget* SlicerPanel::buildExport() {
     });
     layout->addStretch(); return page;
 }
-p::SlicerInstance* SlicerPanel::slicer() const {
-    return m_controller ? dynamic_cast<p::SlicerInstance*>(m_controller->insertInstance(m_channelId.toStdString(), m_slotId.toStdString())) : nullptr;
+std::optional<daw::SlicerSnapshot> SlicerPanel::slicer(bool includeActivity) const {
+    return m_controller ? m_controller->slicerSnapshot(m_channelId.toStdString(), m_slotId.toStdString(), includeActivity) : std::nullopt;
 }
 QDoubleSpinBox* SlicerPanel::number(QFormLayout* layout, const QString& caption, const QString& name, double lo, double hi, int decimals, const QString& suffix) {
     auto* box = new QDoubleSpinBox(this); box->setObjectName("Slicer_" + name); box->setRange(lo, hi); box->setDecimals(decimals);
@@ -787,8 +765,9 @@ QWidget* SlicerPanel::buildAnalysis() {
     for (int n : {1, 2, 4, 8}) {
         auto* b = new QPushButton(tr("%1 bars").arg(n), bars); barRow->addWidget(b);
         connect(b, &QPushButton::clicked, this, [this, n] {
-            if (!slicer() || !slicer()->rawSample()) return;
-            const auto a = slicer()->rawSample(); const auto s = slicer()->analysisSettings();
+            const auto snapshot = slicer();
+            if (!snapshot || !snapshot->state.audio) return;
+            const auto a = snapshot->state.audio; const auto s = snapshot->state.analysis;
             const auto span = (s.rangeEnd > s.rangeStart ? s.rangeEnd : a->frames()) - s.rangeStart;
             const auto& doc = m_controller->project();
             setAnalysis([=](Analysis& v) { v.sourceBpm = std::clamp(double(n) * doc.timeSigNumerator * 4.0 / doc.timeSigDenominator * 60.0 * a->sampleRate() / std::max(1u, span), 20.0, 999.0); });
@@ -802,11 +781,13 @@ QWidget* SlicerPanel::buildAnalysis() {
     auto* begin = number(f, tr("Range start"), "rangeStart", 0, 36000000, 2, tr(" ms"));
     auto* end = number(f, tr("Range end"), "rangeEnd", 0, 36000000, 2, tr(" ms"));
     connect(begin, &QDoubleSpinBox::valueChanged, this, [this](double v) {
-        if (!slicer() || !slicer()->rawSample()) return; const auto audio = slicer()->rawSample();
+        const auto snapshot = slicer();
+        if (!snapshot || !snapshot->state.audio) return; const auto audio = snapshot->state.audio;
         setAnalysis([=](Analysis& s) { const auto end = s.rangeEnd > 0 ? s.rangeEnd : audio->frames(); s.rangeStart = std::min(quint32(v * audio->sampleRate() / 1000.0), end - 1); });
     });
     connect(end, &QDoubleSpinBox::valueChanged, this, [this](double v) {
-        if (!slicer() || !slicer()->rawSample()) return; const auto audio = slicer()->rawSample();
+        const auto snapshot = slicer();
+        if (!snapshot || !snapshot->state.audio) return; const auto audio = snapshot->state.audio;
         setAnalysis([=](Analysis& s) { s.rangeEnd = std::clamp(quint32(v * audio->sampleRate() / 1000.0), s.rangeStart + 1, audio->frames()); });
     });
     auto* root = number(f, tr("Layout root"), "layoutRoot", 0, 127, 0);
@@ -1018,6 +999,7 @@ ui::Knob* SlicerPanel::knob(const QString& id, const QString& caption) {
         return QString::fromStdString(p::parameterText(index, value));
     };
     control->setToolTip(caption + tr(" · Right-click for automation"));
+    control->setProperty("parameterId", id);
     connect(control, &ui::Knob::valueChanged, this, [this, id](double v) { if (m_refreshing) return; beginGesture(id); writeParameter(id, v); });
     connect(control, &ui::Knob::editFinished, this, [this, id] { endGesture(id); });
     connect(control, &ui::Knob::automateRequested, this, [this, id] { emit automationRequested(id); });
@@ -1072,12 +1054,12 @@ void SlicerPanel::commitField() {
 }
 void SlicerPanel::editTable(const QString& label, const std::function<void(Table&)>& edit) {
     if (m_refreshing || !slicer() || !m_controller) return;
-    cancelWork(); m_dragFiles.clear(); auto* instance = slicer(); auto table = std::make_shared<Table>();
-    if (instance->sliceTable()) *table = *instance->sliceTable();
+    cancelWork(); m_dragFiles.clear(); const auto instance = slicer(); auto table = std::make_shared<Table>();
+    if (instance->state.table) *table = *instance->state.table;
     edit(*table); table->rebuild();
     const bool field = m_fieldEditor != nullptr;
     if (!field && !m_controller->beginSlicerEdit(m_channelId.toStdString(), m_slotId.toStdString())) return;
-    m_controller->updateSlicerEdit(table, instance->analysisSettings());
+    m_controller->updateSlicerEdit(table, instance->state.analysis);
     if (!field && m_controller->commitSlicerEdit(label.toStdString())) emit projectEdited();
     refresh();
 }
@@ -1087,9 +1069,9 @@ void SlicerPanel::editSelected(const QString& label, const std::function<void(Sl
 }
 void SlicerPanel::setAnalysis(const std::function<void(Analysis&)>& edit, bool remap) {
     if (m_refreshing || !slicer() || !m_controller) return;
-    cancelWork(); m_dragFiles.clear(); auto* instance = slicer(); auto settings = instance->analysisSettings(); edit(settings);
+    cancelWork(); m_dragFiles.clear(); const auto instance = slicer(); auto settings = instance->state.analysis; edit(settings);
     if (!m_fieldEditor && !m_controller->beginSlicerEdit(m_channelId.toStdString(), m_slotId.toStdString())) return;
-    std::shared_ptr<const Table> table = instance->sliceTable();
+    std::shared_ptr<const Table> table = instance->state.table;
     if (remap && table && table->count) {
         auto next = std::make_shared<Table>(*table); const bool fallback = slicing::assignKeys(*next, settings); table = std::move(next);
         if (fallback) status(tr("Scale has too few notes; chromatic MIDI layout used"));
@@ -1099,13 +1081,20 @@ void SlicerPanel::setAnalysis(const std::function<void(Analysis&)>& edit, bool r
     refresh();
 }
 std::vector<std::uint32_t> SlicerPanel::selectedIds() const {
-    std::vector<std::uint32_t> ids; if (!slicer() || !slicer()->sliceTable()) return ids;
-    for (quint32 i = 0; i < slicer()->sliceTable()->count; ++i) if (m_selected.contains(slicer()->sliceTable()->slices[i].id)) ids.push_back(slicer()->sliceTable()->slices[i].id);
+    std::vector<std::uint32_t> ids;
+    const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table) return ids;
+    const auto& table = *snapshot->state.table;
+    ids.reserve(m_selected.size());
+    for (quint32 i = 0; i < table.count; ++i)
+        if (m_selected.contains(table.slices[i].id)) ids.push_back(table.slices[i].id);
     return ids;
 }
 void SlicerPanel::selectSlice(int index, Qt::KeyboardModifiers modifiers, bool play) {
-    if (!slicer() || !slicer()->sliceTable() || index < 0 || index >= int(slicer()->sliceTable()->count)) return;
-    commitField(); const auto table = slicer()->sliceTable(); const auto id = table->slices[index].id;
+    commitField();
+    const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table || index < 0 || index >= int(snapshot->state.table->count)) return;
+    const auto table = snapshot->state.table; const auto id = table->slices[index].id;
     if (modifiers.testFlag(Qt::ShiftModifier) && m_selectionAnchor >= 0) {
         for (int i = std::min(index, m_selectionAnchor); i <= std::max(index, m_selectionAnchor) && i < int(table->count); ++i) m_selected.insert(table->slices[i].id);
     } else if (modifiers.testFlag(Qt::ControlModifier)) {
@@ -1116,13 +1105,14 @@ void SlicerPanel::selectSlice(int index, Qt::KeyboardModifiers modifiers, bool p
     refreshSelection(); if (play && modifiers == Qt::NoModifier) audition(index);
 }
 void SlicerPanel::editBoundary(bool end, double ms) {
-    if (m_refreshing || !slicer() || !slicer()->rawSample()) return;
+    const auto snapshot = slicer();
+    if (m_refreshing || !snapshot || !snapshot->state.audio) return;
     const bool ownsGesture = !m_fieldEditor;
     if (ownsGesture) {
         if (!m_controller->beginSlicerEdit(m_channelId.toStdString(), m_slotId.toStdString())) return;
         m_fieldEditor = this;
     }
-    const auto audio = slicer()->rawSample(); const auto analysis = slicer()->analysisSettings();
+    const auto audio = snapshot->state.audio; const auto analysis = snapshot->state.analysis;
     const quint32 frame = quint32(std::clamp(ms * audio->sampleRate() / 1000.0,0.0,double(audio->frames())));
     const quint32 minimum = quint32(std::clamp(analysis.minimumMs * audio->sampleRate() / 1000.0, 1.0, double(audio->frames())));
     editTable(tr("Move slice boundary"), [this, end, frame, audio, analysis, minimum](Table& t) {
@@ -1136,8 +1126,10 @@ void SlicerPanel::editBoundary(bool end, double ms) {
             if (i > 0) slicing::moveBoundary(t, i, snapped, minimum); else t.slices[i].start = std::min(frame, t.slices[i].end - std::min(minimum, t.slices[i].end));
         }
     });
-    if (slicer()->sliceTable() && slicer()->sliceTable()->count)
-        setAnalysis([this](Analysis& a) { a.rangeStart = slicer()->sliceTable()->slices[0].start; a.rangeEnd = slicer()->sliceTable()->slices[slicer()->sliceTable()->count - 1].end; });
+    if (const auto updated = slicer(); updated && updated->state.table && updated->state.table->count) {
+        const auto table = updated->state.table;
+        setAnalysis([table](Analysis& a) { a.rangeStart = table->slices[0].start; a.rangeEnd = table->slices[table->count - 1].end; });
+    }
     if (ownsGesture) commitField();
 }
 
@@ -1146,8 +1138,9 @@ void SlicerPanel::swapKeys(quint32 from, quint32 to) {
     editTable(tr("Exchange slice MIDI notes"), [=](Table& table) { const int a = table.indexForId(from), b = table.indexForId(to); if (a >= 0 && b >= 0) std::swap(table.slices[a].key, table.slices[b].key); });
 }
 void SlicerPanel::splitAt(quint32 frame) {
-    commitField(); if (!slicer() || !slicer()->rawSample()) return;
-    const auto settings = slicer()->analysisSettings(); const auto source = slicer()->rawSample();
+    commitField(); const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.audio) return;
+    const auto settings = snapshot->state.analysis; const auto source = snapshot->state.audio;
     const auto minimum = quint32(std::clamp(settings.minimumMs * source->sampleRate() / 1000, 1.0, double(source->frames())));
     editTable(tr("Split slice"), [=](Table& table) mutable {
         if (settings.zeroCrossing) for (quint32 i=0;i<table.count;++i) if (frame > table.slices[i].start && frame < table.slices[i].end)
@@ -1159,7 +1152,8 @@ void SlicerPanel::mergeAt(int index) {
     commitField(); editTable(tr("Merge slices"), [=](Table& table) { slicing::merge(table, index); });
 }
 void SlicerPanel::copySettings() {
-    if (!slicer() || !slicer()->sliceTable()) return; const auto t = slicer()->sliceTable(); const int i = t->indexForId(m_primary);
+    const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table) return; const auto t = snapshot->state.table; const int i = t->indexForId(m_primary);
     if (i >= 0) { m_copied = t->slices[i]; status(tr("Slice settings copied")); }
 }
 void SlicerPanel::pasteSettings() {
@@ -1170,8 +1164,9 @@ void SlicerPanel::resetSettings() {
     commitField(); editSelected(tr("Reset slice settings"), [](Slice& s) { const auto id = s.id, start = s.start, end = s.end; const auto key = s.key; s = Slice{}; s.id = id; s.start = start; s.end = end; s.key = key; });
 }
 void SlicerPanel::audition(int index) {
-    releaseAudition(); if (!slicer() || !slicer()->sliceTable()) return;
-    const auto* slice = slicer()->sliceTable()->forIndex(quint32(index)); if (!slice) return;
+    releaseAudition(); const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table) return;
+    const auto* slice = snapshot->state.table->forIndex(quint32(index)); if (!slice) return;
     if (m_controller->liveNoteOn(m_channelId.toStdString(), slice->key, 127)) { m_auditionKey = slice->key; m_auditionOutstanding = true; }
 }
 void SlicerPanel::releaseAudition(bool panic) {
@@ -1195,7 +1190,9 @@ void SlicerPanel::writeParameter(const QString& id, double value) {
     if (m_controller) m_controller->setInsertParameter(m_channelId.toStdString(), m_slotId.toStdString(), id.toStdString(), value);
 }
 double SlicerPanel::readParameter(const QString& id) const {
-    const auto* info = infoFor(id); return info && slicer() ? slicer()->parameterValue(info->index) : (info ? info->defaultValue : 0);
+    const auto* info = infoFor(id);
+    return info && m_controller ? m_controller->insertParameter(m_channelId.toStdString(), m_slotId.toStdString(), info->id)
+                                : (info ? info->defaultValue : 0);
 }
 void SlicerPanel::status(const QString& message) {
     m_statusLabel->setText(message); m_fileLabel->setText(message); m_fileLabel->setToolTip(message);
@@ -1207,18 +1204,18 @@ void SlicerPanel::status(const QString& message) {
 }
 
 void SlicerPanel::refresh() {
-    auto* instance = slicer();
-    if (instance != m_seenInstance || (instance && (instance->rawSample() != m_seenAudio || instance->sourceRevision() != m_seenSource))) {
+    const auto instance = slicer();
+    if ((instance ? instance->identity : daw::PluginIdentity{}) != m_seenInstance || (instance && (instance->state.audio != m_seenAudio || instance->sourceRevision != m_seenSource))) {
         cancelWork(); releaseAudition(true); m_waveform->cancelDrag(); m_fieldEditor = nullptr;
-        m_seenInstance = instance; m_seenAudio = instance ? instance->rawSample() : nullptr; m_seenSource = instance ? instance->sourceRevision() : 0;
+        m_seenInstance = instance ? instance->identity : daw::PluginIdentity{}; m_seenAudio = instance ? instance->state.audio : nullptr; m_seenSource = instance ? instance->sourceRevision : 0;
         m_seenTable.reset(); m_selected.clear(); m_primary = 0; m_selectionAnchor = -1; m_dragFiles.clear(); m_dragToken = QUuid::createUuid().toString();
         m_waveform->setSample(m_seenAudio);
-        m_fileLabel->setText(instance && m_seenAudio ? QString::fromStdString(instance->sampleName()) : tr("No sample loaded"));
-        m_fileLabel->setToolTip(m_seenAudio ? QString::fromStdString(instance->samplePath()) + "\n" + tr("%1 · %2 Hz · %3 channels · up to 128 slices").arg(msText(double(m_seenAudio->frames()) / m_seenAudio->sampleRate())).arg(m_seenAudio->sampleRate(), 0, 'f', 0).arg(m_seenAudio->channels()) : tr("Load audio to start chopping and remixing"));
+        m_fileLabel->setText(instance && m_seenAudio ? QString::fromStdString(instance->name) : tr("No sample loaded"));
+        m_fileLabel->setToolTip(m_seenAudio ? QString::fromStdString(instance->state.path) + "\n" + tr("%1 · %2 Hz · %3 channels · up to 128 slices").arg(msText(double(m_seenAudio->frames()) / m_seenAudio->sampleRate())).arg(m_seenAudio->sampleRate(), 0, 'f', 0).arg(m_seenAudio->channels()) : tr("Load audio to start chopping and remixing"));
         m_fileLabel->setProperty("sourceName", m_fileLabel->text()); m_fileLabel->setProperty("sourceInfo", m_fileLabel->toolTip());
     }
     m_refreshing = true;
-    const auto table = instance ? instance->sliceTable() : nullptr;
+    const auto table = instance ? instance->state.table : nullptr;
     if (table != m_seenTable) {
         m_seenTable = table; m_waveform->setTable(table);
         for (auto it = m_selected.begin(); it != m_selected.end();) { if (!table || table->indexForId(*it) < 0) it = m_selected.erase(it); else ++it; }
@@ -1235,7 +1232,7 @@ void SlicerPanel::refresh() {
         auto* box = m_numbers.value(name); if (box && box != m_fieldEditor && !box->hasFocus() && (!box->focusWidget() || !box->focusWidget()->hasFocus())) box->setValue(v);
     };
     if (instance) {
-        const auto a = instance->analysisSettings();
+        const auto a = instance->state.analysis;
         m_quickMode->setCurrentIndex(int(a.mode)); m_quickCount->setValue(a.targetCount);
         m_quickCount->setEnabled(a.mode!=p::SliceMode::Manual && (a.mode!=p::SliceMode::Grid || a.gridBeats==0));
         m_choices["mode"]->setCurrentIndex(int(a.mode)); setNumber("count", a.targetCount); setNumber("threshold", a.sensitivity);
@@ -1259,7 +1256,8 @@ void SlicerPanel::refresh() {
 }
 void SlicerPanel::refreshSelection() {
     const bool previous = m_refreshing; m_refreshing = true;
-    const auto table = slicer() ? slicer()->sliceTable() : nullptr;
+    const auto snapshot = slicer(true);
+    const auto table = snapshot ? snapshot->state.table : nullptr;
     const int index = table ? table->indexForId(m_primary) : -1; const auto* s = index >= 0 ? &table->slices[index] : nullptr;
     const double rate = m_seenAudio ? std::max(1.0, m_seenAudio->sampleRate()) : 48000.0;
     m_waveform->setSelection(m_selected, m_primary);
@@ -1277,7 +1275,7 @@ void SlicerPanel::refreshSelection() {
     for (int i = 0; i < 16; ++i) {
         const int padIndex = std::max(0, m_bank->currentIndex()) * 16 + i;
         const auto* slice = table ? table->forIndex(quint32(padIndex)) : nullptr;
-        m_pads[i]->configure(slice, padIndex, rate, slice && m_selected.contains(slice->id), slice && slicer()->keyActive(slice->key), m_dragToken);
+        m_pads[i]->configure(slice, padIndex, rate, slice && m_selected.contains(slice->id), slice && (slice->key >= 0 && slice->key < 128 && snapshot->activeKeys[std::size_t(slice->key)]), m_dragToken);
     }
     const auto setNumber = [this](const QString& name, double value) { auto* box = m_numbers.value(name); if (box && box != m_fieldEditor && !box->hasFocus() && (!box->focusWidget() || !box->focusWidget()->hasFocus())) box->setValue(value); };
     if (s) {
@@ -1304,23 +1302,24 @@ QString SlicerPanel::mediaCache() const {
 void SlicerPanel::cancelWork() {
     ++m_workGeneration; if (m_cancelled) m_cancelled->store(true, std::memory_order_relaxed); m_cancelled.reset(); m_busy = false;
     if (m_cancelButton) m_cancelButton->hide();
-    if (m_sliceButton) m_sliceButton->setEnabled(slicer() && slicer()->rawSample());
+    if (m_sliceButton) { const auto snapshot = slicer(); m_sliceButton->setEnabled(snapshot && snapshot->state.audio); }
 }
 void SlicerPanel::startWork(const QString& message, std::function<WorkResult(const std::function<bool()>&)> work, std::function<void(WorkResult)> finish) {
-    commitField(); cancelWork(); m_dragFiles.clear(); auto* instance = slicer(); if (!instance) return;
+    commitField(); cancelWork(); m_dragFiles.clear(); const auto instance = slicer(); if (!instance) return;
     m_busy = true; m_cancelButton->show(); m_sliceButton->setEnabled(false); status(message);
     const auto cancelled = m_cancelled = std::make_shared<std::atomic<bool>>(false);
-    const auto generation = m_workGeneration, sourceRevision = instance->sourceRevision(); const auto source = instance->rawSample(); const auto table = instance->sliceTable(); const auto analysis = instance->analysisSettings();
+    const auto generation = m_workGeneration, sourceRevision = instance->sourceRevision; const auto source = instance->state.audio; const auto table = instance->state.table; const auto analysis = instance->state.analysis;
+    const auto identity = instance->identity;
     const QPointer<SlicerPanel> guard(this);
-    QThreadPool::globalInstance()->start([work = std::move(work), finish = std::move(finish), cancelled, generation, sourceRevision, source, table, analysis, instance, guard] {
+    QThreadPool::globalInstance()->start([work = std::move(work), finish = std::move(finish), cancelled, generation, sourceRevision, source, table, analysis, identity, guard] {
         WorkResult result;
         try { result = work([cancelled] { return !cancelled->load(std::memory_order_relaxed); }); }
         catch (const std::exception& e) { result.error = e.what(); }
         catch (...) { result.error = "Operation failed."; }
-        QMetaObject::invokeMethod(qApp, [guard, cancelled, generation, sourceRevision, source, table, analysis, instance, finish = std::move(finish), result = std::move(result)]() mutable {
+        QMetaObject::invokeMethod(qApp, [guard, cancelled, generation, sourceRevision, source, table, analysis, identity, finish = std::move(finish), result = std::move(result)]() mutable {
             if (!guard || cancelled->load(std::memory_order_relaxed) || guard->m_workGeneration != generation) return;
-            auto* current = guard->slicer();
-            if (current != instance || current->sourceRevision() != sourceRevision || current->rawSample() != source || current->sliceTable() != table || current->analysisSettings() != analysis) {
+            const auto current = guard->slicer();
+            if (!current || current->identity != identity || current->sourceRevision != sourceRevision || current->state.audio != source || current->state.table != table || current->state.analysis != analysis) {
                 guard->cancelWork(); guard->status(tr("Source or instrument changed; result discarded")); return;
             }
             guard->m_busy = false; guard->m_cancelled.reset(); guard->m_cancelButton->hide();
@@ -1331,8 +1330,9 @@ void SlicerPanel::startWork(const QString& message, std::function<WorkResult(con
 }
 void SlicerPanel::loadSample(const QString& supplied) {
     const auto path = supplied.isEmpty() ? QFileDialog::getOpenFileName(this, tr("Load Slicer sample"), {}, ui::audioNameFilter()) : supplied;
-    if (path.isEmpty() || !slicer()) return;
-    auto state = slicer()->captureState(); state.path = path.toStdString(); state.analysis.rangeStart = state.analysis.rangeEnd = 0; state.analysis.sourceBpm = m_controller->tempo();
+    const auto snapshot = slicer();
+    if (path.isEmpty() || !snapshot) return;
+    auto state = snapshot->state; state.path = path.toStdString(); state.analysis.rangeStart = state.analysis.rangeEnd = 0; state.analysis.sourceBpm = m_controller->tempo();
     startWork(tr("Loading and analysing sample…"), [state](const auto& keepGoing) mutable {
         WorkResult result; audio::platform::DecodedAudio decoded; audio::platform::DecodeOptions opts; opts.keepGoing = keepGoing;
         const auto rc = audio::platform::decodeAudioFile(state.path, decoded, opts);
@@ -1342,13 +1342,14 @@ void SlicerPanel::loadSample(const QString& supplied) {
         if (!keepGoing() || state.table->count == 0) return result;
         result.state = std::move(state); result.ok = true; return result;
     }, [this](WorkResult result) {
-        result.state.parameters = slicer()->captureState().parameters;
+        result.state.parameters = slicer()->state.parameters;
         releaseAudition(true); if (m_controller->applySlicerState(m_channelId.toStdString(), m_slotId.toStdString(), result.state, "Load Slicer sample")) emit projectEdited();
         status(result.state.table->chromaticFallback ? tr("Scale has too few notes; chromatic MIDI layout used") : tr("Sample loaded and sliced"));
     });
 }
 void SlicerPanel::runSlice(bool newSeed) {
-    if (!slicer() || !slicer()->rawSample()) return; auto state = slicer()->captureState();
+    const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.audio) return; auto state = snapshot->state;
     if (newSeed) ++state.analysis.seed;
     startWork(tr("Analysing slice boundaries…"), [state](const auto& keepGoing) mutable {
         WorkResult result; auto table = std::make_shared<Table>(slicing::cut(*state.audio, state.analysis, keepGoing));
@@ -1366,8 +1367,9 @@ void SlicerPanel::runSlice(bool newSeed) {
     });
 }
 void SlicerPanel::normalizeSelection() {
-    if (!slicer() || !slicer()->sliceTable() || m_selected.empty()) return;
-    const auto state = slicer()->captureState(); const auto ids = selectedIds();
+    const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table || m_selected.empty()) return;
+    const auto state = snapshot->state; const auto ids = selectedIds();
     startWork(tr("Measuring slice peaks…"), [state, ids](const auto& keepGoing) {
         WorkResult result; auto table = std::make_shared<Table>(*state.table);
         result.ok = slicing::normalize(*state.audio, *table, ids, keepGoing); result.table = std::move(table); return result;
@@ -1388,7 +1390,8 @@ void SlicerPanel::randomizeSelection(bool newSeed) {
 void SlicerPanel::preset(bool load) {
     if (!slicer()) return;
     const auto path = load ? QFileDialog::getOpenFileName(this, tr("Load portable Slicer preset"), {}, "Slicer (*.vltslicer)") : QFileDialog::getSaveFileName(this, tr("Save portable Slicer preset"), {}, "Slicer (*.vltslicer)");
-    if (path.isEmpty()) return; const auto state = slicer()->captureState(); const auto cache = mediaCache();
+    const auto snapshot = slicer();
+    if (path.isEmpty() || !snapshot) return; const auto state = snapshot->state; const auto cache = mediaCache();
     const QString destination = load || path.endsWith(".vltslicer", Qt::CaseInsensitive) ? path : path + ".vltslicer";
     startWork(load ? tr("Importing portable preset…") : tr("Saving portable preset…"), [=](const auto& keepGoing) {
         WorkResult result;
@@ -1400,8 +1403,9 @@ void SlicerPanel::preset(bool load) {
     });
 }
 void SlicerPanel::exportMidi(bool toFile) {
-    if (!slicer() || !slicer()->sliceTable() || !m_seenAudio) return; commitField();
-    const auto phrase = slicing::midiPhrase(slicer()->captureState(), slicing::PhraseOrder(m_phraseOrder->currentIndex()), quint64(m_numbers["randSeed"]->value()));
+    commitField(); const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table || !snapshot->state.audio) return;
+    const auto phrase = slicing::midiPhrase(snapshot->state, slicing::PhraseOrder(m_phraseOrder->currentIndex()), quint64(m_numbers["randSeed"]->value()));
     if (!toFile) {
         const auto group = m_controller->beginUndoGroup(); const auto tempo = m_controller->tempo(); const auto position = m_controller->positionSeconds();
         const auto id = m_controller->addMidiClip(m_channelId.toStdString(), position, phrase.lengthBeats * 60 / tempo);
@@ -1418,7 +1422,8 @@ void SlicerPanel::exportMidi(bool toFile) {
     }, [this](WorkResult) { status(tr("MIDI saved; project tempo unchanged")); });
 }
 void SlicerPanel::exportWav(bool all, bool processed, bool prepareDrag) {
-    if (!slicer() || !slicer()->sliceTable() || !m_seenAudio) return; commitField(); const auto state = slicer()->captureState();
+    commitField(); const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table || !snapshot->state.audio) return; const auto state = snapshot->state;
     auto ids = selectedIds(); if (all) { ids.clear(); for (quint32 i = 0; i < state.table->count; ++i) ids.push_back(state.table->slices[i].id); }
     if (ids.empty()) return;
     QString destination;
@@ -1469,7 +1474,6 @@ QTabWidget::pane { border: 1px solid %BORDER%; border-radius: 7px; }
 QTabBar::tab { padding: 8px 6px; }
 QDoubleSpinBox, QSpinBox, QComboBox { color: %TEXT%; background: %WELL%; border: 1px solid %BORDER%; border-radius: 7px; min-height: 25px; padding: 2px 6px; }
 QLabel { background: transparent; }
-QDoubleSpinBox:focus, QComboBox:focus, QPushButton:focus { border-color: %FOCUS%; }
 )").replace("%BG%", shellColor().name()).replace("%TEXT%", t.textPrimary.name()).replace("%DIM%", t.textSecondary.name())
         .replace("%FACE%",t.edgeLight(shellColor()).name()).replace("%EDGE%",t.edgeLight(shellColor()).name()).replace("%WELL%",t.well().name())
         .replace("%ACCENT%", slicerAccent().name()).replace("%INK%", accentTheme.accentText().name())
@@ -1501,8 +1505,9 @@ void SlicerPanel::handleKey(QKeyEvent* e) {
     }
     if (e->matches(QKeySequence::Undo)) { commitField(); cancelWork(); m_controller->undo(); refresh(); e->accept(); return; }
     if (e->matches(QKeySequence::Redo)) { commitField(); cancelWork(); m_controller->redo(); refresh(); e->accept(); return; }
-    if (!slicer() || !slicer()->sliceTable()) return;
-    const auto table = slicer()->sliceTable(); const int i = table->indexForId(m_primary);
+    const auto snapshot = slicer();
+    if (!snapshot || !snapshot->state.table) return;
+    const auto table = snapshot->state.table; const int i = table->indexForId(m_primary);
     if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) { audition(i); e->accept(); return; }
     int next = i;
     if (e->key() == Qt::Key_Left) --next; else if (e->key() == Qt::Key_Right) ++next;
@@ -1552,7 +1557,7 @@ bool SlicerPanel::eventFilter(QObject* object, QEvent* event) {
 }
 
 bool SlicerPanel::checkLayoutForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.slicer");
     if (!descriptor) return false;
@@ -1706,6 +1711,17 @@ bool SlicerPanel::checkLayoutForTest() {
     panel.startWork("Fixture", [state](const auto&) { WorkResult result; result.ok = true; result.state = state; return result; }, [&ok](WorkResult) { ok = false; });
     panel.cancelWork(); QThreadPool::globalInstance()->waitForDone(10000); QApplication::processEvents();
     ok &= require(!panel.m_busy, "cancelled work keeps previous state");
+    // No refresh/cancel before completion: the result must check identity itself.
+    panel.m_poll->stop();
+    const auto oldIdentity = panel.slicer()->identity;
+    bool staleFinished = false;
+    panel.startWork("Fixture", [state](const auto&) { WorkResult result; result.ok=true; result.state=state; return result; }, [&staleFinished](WorkResult) { staleFinished=true; });
+    controller.setTrackInstrumentPlugin(track, {});
+    controller.undo();
+    const auto restored = panel.slicer();
+    ok &= require(restored && restored->identity != oldIdentity, "Undo assigns a fresh Slicer identity");
+    QThreadPool::globalInstance()->waitForDone(10000); QApplication::processEvents();
+    ok &= require(!staleFinished && !panel.m_busy, "completion rejects an instrument recreated in the same slot");
     panel.startWork("Fixture", [state](const auto&) { WorkResult result; result.ok=true; result.state=state; return result; }, [&ok](WorkResult) { ok=false; });
     controller.setTrackInstrumentPlugin(track, {}); panel.refresh();
     QThreadPool::globalInstance()->waitForDone(10000); QApplication::processEvents();

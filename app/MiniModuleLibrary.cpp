@@ -26,7 +26,7 @@ MiniModuleFile MiniModuleLibrary::read(const QString &path) {
   if (!json.is_object() || !json.contains("format") ||
       !json["format"].is_string() || json["format"] != "vltmini" ||
       !json.contains("version") ||
-      (json["version"] != 1 && json["version"] != 2 && json["version"] != 3 && json["version"] != 4) ||
+      (json["version"] != 1 && json["version"] != 2 && json["version"] != 3 && json["version"] != 4 && json["version"] != 5) ||
       !json.contains("definition")) {
     result.error = QStringLiteral("Unsupported .vltmini file");
     return result;
@@ -55,7 +55,7 @@ bool MiniModuleLibrary::write(
     return false;
   const auto bytes =
       nlohmann::json{{"format", "vltmini"},
-                     {"version", 4},
+                     {"version", 5},
                      {"definition", daw::plugins::mini::toJson(definition)}}
           .dump(2);
   QSaveFile file(path);

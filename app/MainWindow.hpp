@@ -215,11 +215,11 @@ public:
     /// Open the piano roll on the first MIDI clip in the project. Public for
     /// the same reason as the two above: a screenshot run has no other way to
     /// reach a window that normally opens by double-clicking a clip.
-    void openFirstMidiClip();
+    void openFirstMidiClip(const QString& trackName = {});
     /// Headless screenshot only: select every note in the open piano roll, so a
     /// grab shows the note context panel rather than the empty state.
     void selectAllNotesForShot();
-    void openFirstAudioClip();
+    void openFirstAudioClip(const QString& trackName = {});
     /// Build and open a representative Pattern editor (screenshot hook).
     void openDemoPattern(bool showEditor = true);
 
@@ -235,6 +235,7 @@ public:
     /// request raises the window that is already open rather than parenting the
     /// plugin's view twice, which no format allows.
     void openPluginEditor(const QString& channelId, const QString& insertId);
+    void openPluginHostControls(const QString& channelId, const QString& insertId);
     void openSampleEditor(const QString& trackId, const QString& clipId);
     /// Show one automation clip's editor — the generators, and the three fields
     /// that re-point a curve at something else.
@@ -418,12 +419,15 @@ public:
     bool checkProjectScrollForTest(const QString& path);
     bool checkWorkspaceMotionForTest();
     bool checkPluginWindowPolicyForTest();
+    bool checkRemoteEditorForTest(const std::string& fixturePath);
     bool checkPluginKeyboardForTest();
     bool checkPluginSidechainForTest();
     bool checkInspectorNormalizeForTest();
     /// Exercise multi-lane clip movement, Shift-add/duplicate and marquee
     /// auto-scroll with real mouse events.
     bool checkTimelineClipGesturesForTest();
+    /// Grab selected or restored clips immediately after Undo/Redo.
+    bool checkTimelineUndoDragForTest();
     /// Drag a cycle region out of the ruler's top strip with real mouse events,
     /// then arm it the way C does, and prove the playhead is held inside it.
     /// The strip, the snap, the two-step arming and the transport's jump-in are
@@ -434,6 +438,7 @@ public:
     /// on with Alt. All of it is gesture handling that no controller test can
     /// see, and all of it has to land as one undo entry per gesture.
     bool checkAutomationForTest();
+    bool checkAutomationFollowForTest();
     /// The automation editor: the three re-target fields, and the transforms
     /// that act through them. Gesture-level, so the headless controller tests
     /// cannot reach it.
@@ -722,6 +727,9 @@ private:
 
     /// Close editor windows whose slot no longer exists in the document.
     void closeOrphanedPluginEditors();
+    void showPluginEditorPanel(const QString& channelId, const QString& insertId);
+    void serviceRemotePluginEditors();
+    void closeRemotePluginEditor(const QString& key);
     /// The controller's warning that a slot's plugin is about to be destroyed.
     void retirePluginEditor(const QString& channelId, const QString& insertId);
     /// Show the piano roll for a MIDI clip, creating the window on first use.
@@ -791,7 +799,7 @@ private:
     /// Apply the preferred track-header width against the live arrangement
     /// bounds, and keep the tool strip aligned with it.
     void applyTrackHeaderWidth();
-    /// Keep the global automation button in step with per-track toggles, undo
+    /// Keep the selected-track automation button in step with toggles, undo
     /// and project loading without emitting a second command.
     void syncAutomationVisibilityButton();
     void showNextDownloadedAudioPrompt();
@@ -1041,6 +1049,15 @@ private:
     /// Open editors, keyed by "<channelId>/<insertId>". Not a single instance:
     /// several plugins are routinely open side by side.
     QHash<QString, PluginEditorWindow*> m_pluginEditors;
+    struct RemotePluginEditor {
+        QString channelId;
+        QString insertId;
+        daw::PluginIdentity identity;
+        bool seenOpen = false;
+        bool shortcutsEnabled = false;
+    };
+    QHash<QString, RemotePluginEditor> m_remotePluginEditors;
+    QString m_liveRemoteInputEditor;
     QPointer<PluginEditorWindow> m_liveInputEditor;
     QHash<QString, SampleEditorWindow*> m_sampleEditors;
     QHash<QString, class AutomationEditorWindow*> m_automationEditors;

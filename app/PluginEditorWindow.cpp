@@ -1,3 +1,4 @@
+#include "PluginStyle.hpp"
 #include "PluginEditorWindow.hpp"
 
 #include "Controls.hpp"
@@ -11,6 +12,9 @@
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
+#include "Internal/EqualizerInstance.hpp"
+#include <QPushButton>
+#include <QDir>
 #include "SamplerPanel.hpp"
 #include "SlicerPanel.hpp"
 #include "Theme.hpp"
@@ -19,17 +23,12 @@
 #include "PluginEditorWindowMac.hpp"
 #endif
 
-#include "Internal/SamplerInstance.hpp"
-#include "Internal/SlicerInstance.hpp"
-#include "Internal/EqualizerInstance.hpp"
-#include "Internal/GraphitInstance.hpp"
-#include "Internal/PitchCorrectorInstance.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <QCloseEvent>
 #include <QEvent>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QHideEvent>
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +39,7 @@
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QScreen>
+#include <QSettings>
 #include <QStyle>
 #include <QStyleOption>
 #include <QHBoxLayout>
@@ -50,12 +50,16 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDoubleSpinBox>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QFormLayout>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSlider>
 #include <QToolButton>
 #include <QTimer>
+#include <QUuid>
 #include <QVBoxLayout>
 #include <QWindow>
 #ifdef Q_OS_WIN
@@ -127,6 +131,12 @@ private:
                 GetClassNameW(message->hwnd, name, 128);
                 const QString control = QString::fromWCharArray(name);
                 const auto* nativeWidget = QWidget::find(WId(message->hwnd));
+                // Alien Qt children share their parent's HWND. Inspect the
+                // focused child only when this message is addressed to that
+                // same native surface; a vendor HWND can retain stale Qt focus.
+                if (const auto* focus = QApplication::focusWidget(); focus &&
+                    focus->effectiveWinId() == WId(message->hwnd))
+                    nativeWidget = focus;
                 const bool textEntry = control.compare(QStringLiteral("Edit"), Qt::CaseInsensitive) == 0 ||
                     control.startsWith(QStringLiteral("RichEdit"), Qt::CaseInsensitive) ||
                     (nativeWidget && nativeWidget->testAttribute(Qt::WA_InputMethodEnabled));
@@ -203,7 +213,7 @@ public:
         const bool connected = m_glyph == icons::Glyph::Link &&
                                !currentData().toString().isEmpty() && isEnabled();
         if ((isEnabled() && (underMouse() || (option.state & QStyle::State_On))) || focus) {
-            painter.setPen(focus ? QPen(t.accentHighlight, 1) : QPen(Qt::NoPen));
+            painter.setPen(Qt::NoPen);
             painter.setBrush(mixColors(t.well(), t.textPrimary, 0.07));
             painter.drawRoundedRect(bounds, 4, 4);
         }
@@ -282,7 +292,7 @@ private:
 class PluginSidechainCombo final : public PluginHeaderCombo {
 public:
     explicit PluginSidechainCombo(QWidget* parent)
-        : PluginHeaderCombo(icons::Glyph::Link, 186, 128, parent),
+        : PluginHeaderCombo(icons::Glyph::Link, 186, 52, parent),
           m_menu(new SidechainSourceMenu(this)) {
         m_menu->setObjectName(QStringLiteral("PluginSidechainMenu"));
         m_menu->setToolTipsVisible(true);
@@ -439,14 +449,19 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
     showLoadingState();
     resize(720, 480);
 
-    if (daw::plugins::PluginInstance* plugin = instance()) {
-        setWindowTitle(QString::fromStdString(plugin->descriptor().name));
-        m_pluginUid = QString::fromStdString(plugin->descriptor().uid);
-        setProperty("vlt.pitchChrome", plugin->descriptor().format == daw::plugins::Format::Internal &&
-                    plugin->descriptor().uid == "daw.pitch-corrector");
+    // The document already owns the slot identity. The first process readout
+    // may still be pending; an empty UID would make the orphan sweep close
+    // this valid editor before its asynchronous initialization can finish.
+    if (const auto* plugin = m_controller
+            ? m_controller->insertModel(m_channelKey, m_insertKey) : nullptr) {
+        setWindowTitle(QString::fromStdString(plugin->name));
+        m_pluginUid = QString::fromStdString(plugin->uid);
+        setProperty("vlt.pitchChrome", plugin->format == daw::PluginFormat::Internal &&
+                    plugin->uid == "daw.pitch-corrector");
     } else {
         setWindowTitle(tr("Plugin"));
     }
+    if (const auto plugin = editorSnapshot()) m_contentIdentity = plugin->identity;
 
     m_poll = new QTimer(this);
     m_poll->setInterval(kPollMs);
@@ -457,15 +472,11 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
     m_editorIdle->setTimerType(Qt::PreciseTimer);
     m_editorIdle->setInterval(kEditorIdleMs);
     connect(m_editorIdle, &QTimer::timeout, this, [this] {
-        // Re-resolve the slot: replacement/undo can retire the old instance
-        // before this window is detached. Never pump the cached pointer.
-        auto* plugin = instance();
         if (m_closing || !m_embedded || !isVisible() || isMinimized() ||
-            !plugin || plugin != m_openedOn || !plugin->isEditorOpen()) {
+            !m_controller || !m_controller->pumpInsertEditor(
+                m_channelKey, m_insertKey, m_openedOn)) {
             m_editorIdle->stop();
-            return;
         }
-        plugin->pumpMainThread();
     });
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
@@ -507,6 +518,8 @@ void PluginEditorWindow::prepareNativeHostHierarchy() {
     // only reorders the *native* view of a widget that carries it, and the
     // frame around this editor has to be able to come to the front of the
     // workspace once a foreign view lives inside it.
+    if (auto* frame = qobject_cast<InternalEditorFrame*>(parentWidget()))
+        frame->prepareForNativeSurface();
     QWidget* nativeOverlay = nullptr;
     for (QWidget* widget = m_content; widget && !widget->isWindow();
          widget = widget->parentWidget()) {
@@ -528,15 +541,22 @@ void PluginEditorWindow::prepareNativeHostHierarchy() {
 
 bool PluginEditorWindow::requiresNativeSurface() const {
     if ((m_controller && !m_controller->sharedEditingAllowed()) || (m_editAccessCheck && !m_editAccessCheck())) return false;
-    const auto* plugin = instance();
-    return plugin && plugin->hasEditor();
+    const auto plugin = editorSnapshot();
+    return plugin && plugin->hasEditor && !plugin->remote;
+}
+
+bool PluginEditorWindow::canResizeNativeEditor() const {
+    const auto size = m_controller
+        ? m_controller->insertEditorSize(m_channelKey, m_insertKey, m_openedOn)
+        : std::nullopt;
+    return !size || size->resizable;
 }
 
 void PluginEditorWindow::scheduleEditorInitialization(int delayMs) {
     if (m_closing) return;
     const std::uint64_t generation = ++m_loadGeneration;
     m_editorReady = false;
-    m_pendingEditorPlugin = nullptr;
+    m_pendingEditor = {};
     showLoadingState();
     QTimer::singleShot(std::max(0, delayMs), this, [this, generation] {
         if (generation != m_loadGeneration || !m_editorInitialized) return;
@@ -639,7 +659,7 @@ void PluginEditorWindow::buildWrapper() {
     routingRow->setSpacing(0);
     row->addWidget(routing, 1);
 
-    m_channelMode = new PluginHeaderCombo(icons::Glyph::StereoRings, 108, 82, routing);
+    m_channelMode = new PluginHeaderCombo(icons::Glyph::StereoRings, 108, 52, routing);
     m_channelMode->setObjectName(QStringLiteral("PluginMode"));
     m_channelMode->setAccessibleName(tr("Plugin channel mode"));
     m_channelMode->setToolTip(
@@ -731,7 +751,23 @@ void PluginEditorWindow::buildWrapper() {
 void PluginEditorWindow::clearEditorContent() {
     detachFromPlugin();
     m_nativeEditorSize = {};
+    setProperty("vlt.nativeEditor", false);
+    m_layout->setSizeConstraint(QLayout::SetDefaultConstraint);
     m_genericControls.clear();
+    m_genericValues.clear();
+    m_dockControls.clear();
+    m_dockValues.clear();
+    m_dockCells.clear();
+    m_dockActive.clear();
+    if (m_dock) {
+        m_contentRow->removeWidget(m_dock);
+        delete m_dock;
+        m_dock = nullptr;
+        m_dockGrid = nullptr;
+    }
+    m_remoteStatus = nullptr;
+    m_remoteOpen = nullptr;
+    m_remoteRestart = nullptr;
     setMinimumSize(0, 0);
     setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
     if (m_container) {
@@ -756,11 +792,12 @@ void PluginEditorWindow::rebuildEditorContent() {
     const std::uint64_t generation = m_loadGeneration;
     m_fallbackContentSize = {};
     m_nativeEditorFailed = false;
-    daw::plugins::PluginInstance* plugin = instance();
+    const auto plugin = editorSnapshot();
+    m_contentIdentity = plugin ? plugin->identity : daw::PluginIdentity{};
     QString title = tr("Plugin");
     if (plugin) {
-        title = QString::fromStdString(plugin->descriptor().name);
-        m_pluginUid = QString::fromStdString(plugin->descriptor().uid);
+        title = QString::fromStdString(plugin->name);
+        m_pluginUid = QString::fromStdString(plugin->uid);
     }
     setWindowTitle(title);
 
@@ -778,23 +815,31 @@ void PluginEditorWindow::rebuildEditorContent() {
     if (m_dock) m_dock->setEnabled(true);
     setToolTip({});
 
-    const bool hasNativeEditor = plugin && plugin->hasEditor();
+    const bool hasNativeEditor = plugin && plugin->hasEditor;
     const bool trustedInternal =
-        plugin && plugin->descriptor().format == daw::plugins::Format::Internal;
+        plugin && plugin->format == daw::plugins::Format::Internal;
     const std::string descriptorUid =
-        plugin ? plugin->descriptor().uid : std::string{};
+        plugin ? plugin->uid : std::string{};
     if (std::getenv("DAW_PLUGIN_DIAGNOSTICS")) {
         std::fprintf(stderr,
                      "editor for '%s' (%s): instance %s, hasEditor %s\n",
                      title.toUtf8().constData(),
                      plugin ? std::string(daw::plugins::toString(
-                                              plugin->descriptor().format)).c_str()
+                                              plugin->format)).c_str()
                             : "-",
                      plugin ? "yes" : "NO",
                      hasNativeEditor ? "yes" : "no");
     }
 
-    if (hasNativeEditor) {
+    if (plugin && plugin->remote) {
+        buildRemoteStatusPanel();
+        finishEditorContent();
+        if (!plugin->hasEditor) m_dockToggle->setChecked(true);
+        return;
+    } else if (hasNativeEditor) {
+        // A capability snapshot may arrive after the initial presentation.
+        // Protect the workspace before promoting the final native hierarchy.
+        prepareNativeHostHierarchy();
         m_container = new QWidget(m_content);
         m_container->setProperty("vlt.foreignSurface", true);
         m_container->setAttribute(Qt::WA_NativeWindow);
@@ -813,7 +858,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         m_contentRow->activate();
         m_container->show();
         (void)m_container->winId();
-        m_pendingEditorPlugin = plugin;
+        m_pendingEditor = plugin->identity;
         m_rebuildingEditorContent = false;
         showLoadingState();
         QTimer::singleShot(kNativeMapRetryMs, this,
@@ -823,8 +868,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (trustedInternal && descriptorUid == "daw.equalizer" &&
-        dynamic_cast<daw::plugins::equalizer::EqualizerInstance*>(plugin)) {
+    if (trustedInternal && descriptorUid == "daw.equalizer") {
         auto* equalizerPanel =
             new EqualizerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = equalizerPanel;
@@ -842,9 +886,8 @@ void PluginEditorWindow::rebuildEditorContent() {
         m_fallbackContentSize = QSize(1040, 680);
         resize(m_fallbackContentSize);
     } else if (trustedInternal &&
-               ((daw::plugins::modulation::isModulationUid(descriptorUid) &&
-                 dynamic_cast<daw::plugins::modulation::ModulationInstance*>(plugin)) ||
-                dynamic_cast<daw::plugins::modulation::ModulationRackInstance*>(plugin))) {
+               (daw::plugins::modulation::isModulationUid(descriptorUid) ||
+                descriptorUid == "daw.modulation")) {
         auto* panel = new ModulationPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &ModulationPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
@@ -862,8 +905,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(rack ? 800 : 360, pro ? 659 : 529);
         m_fallbackContentSize = QSize(rack ? 1040 : 440, pro ? 700 : 570);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.delay" &&
-               dynamic_cast<daw::plugins::delay::DelayInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.delay") {
         auto* panel = new DelayPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &DelayPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
@@ -874,8 +916,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(960, 459);
         m_fallbackContentSize = QSize(1100, 499);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.cla2a" &&
-               dynamic_cast<daw::plugins::cla2a::Cla2aInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.cla2a") {
         auto* panel = new Cla2aPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &Cla2aPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
@@ -886,8 +927,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(688, 325);
         m_fallbackContentSize = QSize(820, 349);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.compressor" &&
-               dynamic_cast<daw::plugins::compressor::CompressorInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.compressor") {
         auto* panel = new CompressorPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &CompressorPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
@@ -898,8 +938,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(800, 379);
         m_fallbackContentSize = QSize(920, 399);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.pitch-corrector" &&
-               dynamic_cast<daw::plugins::pitch::PitchCorrectorInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.pitch-corrector") {
         auto* panel = new PitchCorrectorPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &PitchCorrectorPanel::projectEdited, this,
@@ -913,8 +952,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(560, 399);
         m_fallbackContentSize = QSize(640, 449);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.graphit" &&
-               dynamic_cast<daw::plugins::graphit::GraphitInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.graphit") {
         auto* graphitPanel =
             new GraphitPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = graphitPanel;
@@ -929,8 +967,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(440, 499);
         m_fallbackContentSize = QSize(480, 539);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.gravity" &&
-               dynamic_cast<daw::plugins::gravity::GravityInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.gravity") {
         auto* gravityPanel =
             new GravityPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = gravityPanel;
@@ -945,8 +982,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(820, 638);
         m_fallbackContentSize = QSize(920, 718);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.sampler" &&
-               dynamic_cast<daw::plugins::sampler::SamplerInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.sampler") {
         auto* samplerPanel =
             new SamplerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = samplerPanel;
@@ -963,8 +999,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(860, 558);
         m_fallbackContentSize = QSize(1040, 760);
         resize(m_fallbackContentSize);
-    } else if (trustedInternal && descriptorUid == "daw.slicer" &&
-               dynamic_cast<daw::plugins::slicer::SlicerInstance*>(plugin)) {
+    } else if (trustedInternal && descriptorUid == "daw.slicer") {
         auto* slicerPanel = new SlicerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = slicerPanel;
         connect(slicerPanel, &SlicerPanel::projectEdited, this,
@@ -992,8 +1027,7 @@ void PluginEditorWindow::tryAttachNativeEditor(std::uint64_t generation,
         return;
     }
 
-    daw::plugins::PluginInstance* plugin = instance();
-    if (!plugin || plugin != m_pendingEditorPlugin) {
+    if (!m_controller || m_controller->insertIdentity(m_channelKey, m_insertKey) != m_pendingEditor) {
         // The slot was replaced while its old GUI was loading. Never call a
         // retired instance; start again against the live slot instead.
         scheduleEditorInitialization(0);
@@ -1022,12 +1056,13 @@ void PluginEditorWindow::tryAttachNativeEditor(std::uint64_t generation,
         // Drain callbacks queued by the format-specific editor probe before
         // entering vendor code. GUI creation itself must remain on this thread.
         if (m_controller) (void)m_controller->pumpPluginEvents();
-        m_embedded = plugin->openEditor(reinterpret_cast<void*>(handle), this);
+        m_embedded = m_controller->openInsertEditor(
+            m_channelKey, m_insertKey, m_pendingEditor, reinterpret_cast<void*>(handle), this);
     }
 
     if (m_embedded) {
-        m_openedOn = plugin;
-        finishNativeEditorOpen(plugin);
+        m_openedOn = m_pendingEditor;
+        finishNativeEditorOpen();
     } else {
         m_nativeEditorFailed = true;
         if (std::getenv("DAW_PLUGIN_DIAGNOSTICS")) {
@@ -1043,26 +1078,32 @@ void PluginEditorWindow::tryAttachNativeEditor(std::uint64_t generation,
     finishEditorContent();
 }
 
-void PluginEditorWindow::finishNativeEditorOpen(
-    daw::plugins::PluginInstance* plugin) {
-    if (!plugin || !m_container) return;
-    std::uint32_t width = 0, height = 0;
-    if (!plugin->editorSize(width, height) || width == 0 || height == 0) return;
+void PluginEditorWindow::finishNativeEditorOpen() {
+    if (!m_controller || !m_container) return;
+    const auto size = m_controller->insertEditorSize(m_channelKey, m_insertKey, m_openedOn);
+    if (!size || size->width == 0 || size->height == 0) return;
+    auto width = size->width, height = size->height;
 
+    // The wrapper may elide its labels, but must never widen a small native
+    // GUI. The plugin's reported size is authoritative for both host modes.
+    setProperty("vlt.nativeEditor", true);
+    m_layout->setSizeConstraint(QLayout::SetNoConstraint);
+    setMinimumSize(0, 0);
     QSize wanted(int(width) + dockWidth(),
                  int(height) + m_wrapper->height());
     QSize bounded = boundedWindowSize(wanted);
 
     // If the GUI supports resizing, give it the compact content size before
     // its first uncovered frame. Fixed-size GUIs retain their natural pixels.
-    if (plugin->editorCanResize() && bounded != wanted) {
+    if (size->resizable && bounded != wanted) {
         std::uint32_t boundedWidth = std::uint32_t(
             std::max(1, bounded.width() - dockWidth()));
         std::uint32_t boundedHeight = std::uint32_t(
             std::max(1, bounded.height() - m_wrapper->height()));
-        if (plugin->setEditorSize(boundedWidth, boundedHeight)) {
-            width = boundedWidth;
-            height = boundedHeight;
+        if (const auto accepted = m_controller->resizeInsertEditor(
+                m_channelKey, m_insertKey, m_openedOn, {boundedWidth, boundedHeight})) {
+            width = accepted->width;
+            height = accepted->height;
             wanted = QSize(int(width) + dockWidth(),
                            int(height) + m_wrapper->height());
             bounded = boundedWindowSize(wanted);
@@ -1076,16 +1117,17 @@ void PluginEditorWindow::finishNativeEditorOpen(
 }
 
 void PluginEditorWindow::finishEditorContent() {
-    // The dock exists to reach parameters *through* a foreign native view. With
-    // no such view there is nothing it can do that the panel on screen does not
-    // already do, so it is not offered.
-    if (m_dockToggle) m_dockToggle->setVisible(m_embedded);
-    if (!m_embedded && m_dock) {
+    // Native and remote editors share the parameter dock. Local generic
+    // editors already expose these controls in their main panel.
+    const auto plugin = editorSnapshot();
+    const bool remote = plugin && plugin->remote;
+    if (m_dockToggle) m_dockToggle->setVisible(m_embedded || remote);
+    if (!m_embedded && !remote) {
         m_dockToggle->setChecked(false);
-        m_dock->setVisible(false);
     }
+    if (m_dockToggle->isChecked()) setParameterDockVisible(true);
     refreshWrapper();
-    m_pendingEditorPlugin = nullptr;
+    m_pendingEditor = {};
     m_editorReady = true;
     m_rebuildingEditorContent = false;
     hideLoadingState();
@@ -1112,11 +1154,7 @@ void PluginEditorWindow::refreshWrapper() {
     m_rightChannel->setChecked(model->editorChannel ==
                                daw::PluginEditorChannel::Right);
 
-    if (daw::plugins::PluginInstance* plugin = instance()) {
-        m_pluginName->setText(QString::fromStdString(plugin->descriptor().name));
-    } else {
-        m_pluginName->setText(QString::fromStdString(model->name));
-    }
+    m_pluginName->setText(QString::fromStdString(model->name));
     m_pluginName->setToolTip(m_pluginName->text());
 
     const bool supports =
@@ -1150,38 +1188,204 @@ void PluginEditorWindow::refreshWrapper() {
 void PluginEditorWindow::detachFromPlugin() {
     if (m_editorIdle) m_editorIdle->stop();
     ++m_loadGeneration;
-    m_pendingEditorPlugin = nullptr;
     m_editorReady = false;
-    if (!m_embedded) {
-        // VST3 capability checks may retain an unattached view while this
-        // window is still loading. Cancel it too, without closing another
-        // host's already attached editor.
-        if (auto* plugin = instance(); plugin && !plugin->isEditorOpen())
-            plugin->closeEditor();
-        return;
-    }
+    const auto opened = m_openedOn;
+    const auto probe = m_pendingEditor ? m_pendingEditor : m_contentIdentity;
+    m_openedOn = {};
+    m_pendingEditor = {};
+    m_contentIdentity = {};
     m_embedded = false;
-    // Only the instance the view was opened on may be told to close it. After a
-    // Replace the slot holds a different plugin, and `closeEditor` on that one
-    // would be a call about a window it never opened.
-    daw::plugins::PluginInstance* plugin = instance();
-    const bool ownsEditor = plugin && plugin == m_openedOn;
-    m_openedOn = nullptr;
-    if (ownsEditor) {
-        plugin->closeEditor();
-    }
+    if (!m_controller) return;
+    // Clear our tokens before vendor callbacks. A late detach must neither
+    // close a successor's window nor discard its pending VST3 capability probe.
+    // The content token is a probe too: closeEvent and the deferred destructor
+    // both detach, and an isolated successor may still be waiting to open.
+    if (opened) m_controller->closeInsertEditor(m_channelKey, m_insertKey, opened);
+    else if (probe) m_controller->closeInsertEditor(m_channelKey, m_insertKey, probe, true);
 }
 
-daw::plugins::PluginInstance* PluginEditorWindow::instance() const {
-    if (!m_controller) return nullptr;
-    return m_controller->insertInstance(m_channelKey, m_insertKey);
+std::optional<daw::PluginEditorSnapshot> PluginEditorWindow::editorSnapshot() const {
+    if (!m_controller) return std::nullopt;
+    return m_controller->insertEditorSnapshot(m_channelKey, m_insertKey);
 }
 
 void PluginEditorWindow::pollEditorState() {
     refreshAccessPolicy();
+    if (m_editorReady && m_reopenRemoteAfterRestart && m_controller) {
+        const auto plugin = editorSnapshot();
+        if (plugin && plugin->identity == m_controller->insertIdentity(m_channelKey, m_insertKey) &&
+            m_controller->insertRuntimeStatus(m_channelKey, m_insertKey).state ==
+                daw::EngineController::PluginRuntimeState::Running) {
+            m_reopenRemoteAfterRestart = false;
+            if (plugin->hasEditor) {
+                QTimer::singleShot(0, this, [this] {
+                    if (!m_closing) emit nestedPluginEditorRequested(m_channelId, m_insertId);
+                });
+                return;
+            }
+        }
+    }
+    if (m_editorReady && m_controller &&
+        m_contentIdentity != m_controller->insertIdentity(m_channelKey, m_insertKey)) {
+        scheduleEditorInitialization(0);
+        return;
+    }
     refreshWrapper();
     refreshGenericEditor();
     refreshParameterDock();
+    refreshRemoteStatus();
+}
+
+void PluginEditorWindow::pollHostShortcuts() {
+    if (m_closing || !m_controller) return;
+    const auto count = m_controller->pollInsertEditorShortcuts(
+        m_channelKey, m_insertKey, m_openedOn,
+        isVisible() && m_automationShortcutEnabled && m_automationShortcutEnabled());
+    for (std::uint32_t i = 0; i < count; ++i) {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+        routeHostKey(&press, false);
+    }
+}
+
+void PluginEditorWindow::buildRemoteStatusPanel() {
+    m_generic = new QWidget(m_content);
+    auto* column = new QVBoxLayout(m_generic);
+    column->setContentsMargins(20, 20, 20, 20);
+    column->setSpacing(12);
+    m_remoteStatus = new QLabel(m_generic);
+    m_remoteStatus->setObjectName(QStringLiteral("PluginRuntimeStatus"));
+    m_remoteStatus->setWordWrap(true);
+    column->addWidget(m_remoteStatus);
+    auto* actions = new QHBoxLayout;
+    m_remoteOpen = new QPushButton(tr("Open plugin window"), m_generic);
+    m_remoteOpen->setObjectName(QStringLiteral("OpenIsolatedPlugin"));
+    m_remoteOpen->setMinimumHeight(28);
+    m_remoteRestart = new QPushButton(tr("Restart plugin"), m_generic);
+    m_remoteRestart->setObjectName(QStringLiteral("RestartIsolatedPlugin"));
+    m_remoteRestart->setMinimumHeight(28);
+    actions->addWidget(m_remoteOpen);
+    actions->addWidget(m_remoteRestart);
+    actions->addStretch();
+    column->addLayout(actions);
+    column->addStretch();
+    connect(m_remoteOpen, &QPushButton::clicked, this, [this] {
+        // Release this panel before opening the helper-owned editor.
+        emit nestedPluginEditorRequested(m_channelId, m_insertId);
+    });
+    connect(m_remoteRestart, &QPushButton::clicked, this, [this] {
+        m_reopenRemoteAfterRestart = m_controller->restartInsert(m_channelKey, m_insertKey);
+        refreshRemoteStatus();
+    });
+    m_contentRow->insertWidget(0, m_generic, 1);
+    m_fallbackContentSize = QSize(520, 220);
+    resize(m_fallbackContentSize);
+    refreshRemoteStatus();
+}
+
+void PluginEditorWindow::refreshRemoteStatus() {
+    if (!m_remoteStatus || !m_controller) return;
+    const auto status = m_controller->insertRuntimeStatus(m_channelKey, m_insertKey);
+    using State = daw::EngineController::PluginRuntimeState;
+    const bool failed = status.state == State::Failed;
+    const bool restarting = status.state == State::Restarting;
+    const auto remote = editorSnapshot();
+    QString message;
+    if (restarting) message = tr("Restarting plugin… Other tracks can keep playing.");
+    else if (failed) message = tr("The plugin stopped responding or failed. Restart it to restore the last confirmed settings.");
+    else if (remote && remote->openFailed)
+        message = tr("The plugin window could not be opened. You can retry or use the parameter panel.");
+    else if (remote && !remote->hasEditor)
+        message = tr("This plugin runs in a separate process. Use the parameter panel to edit it.");
+    else message = tr("This plugin runs in a separate process. Its editor opens in its own window.");
+    if (m_remoteStatus->text() != message) m_remoteStatus->setText(message);
+    m_remoteStatus->setToolTip(QString::fromStdString(status.detail));
+    m_remoteRestart->setVisible(failed || restarting);
+    m_remoteRestart->setEnabled(failed);
+    m_remoteOpen->setVisible(remote && remote->remote && remote->hasEditor);
+    m_remoteOpen->setEnabled(status.state == State::Running);
+    if (m_dock) m_dock->setEnabled(status.state == State::Running && !m_readOnly);
+}
+
+bool PluginEditorWindow::checkIsolationForTest(const std::string& fixturePath) {
+    // Exercise both boundaries used by the app: UI -> audio process -> plugin
+    // process. Native pointers bypass the first boundary and hide cache races.
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 1024, false)) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Isolated plugin");
+    daw::plugins::PluginDescriptor descriptor;
+    descriptor.format = daw::plugins::Format::Clap;
+    descriptor.path = fixturePath; descriptor.uid = "com.daw.test.fault";
+    descriptor.name = "Recovery test";
+    const auto slot = controller.addInsert(track, descriptor);
+    if (slot.empty()) return false;
+    using State = daw::EngineController::PluginRuntimeState;
+    const auto originalIdentity = controller.insertIdentity(track, slot);
+    if (!originalIdentity || controller.insertRuntimeStatus(track, slot).state != State::Running) return false;
+    auto* editor = new PluginEditorWindow(&controller, QString::fromStdString(track), QString::fromStdString(slot));
+    editor->show(); editor->initializeEditor();
+    const auto wait = [&](int ms) {
+        QEventLoop loop;
+        QTimer pump;
+        QObject::connect(&pump, &QTimer::timeout, &loop, [&] { controller.pumpPreviewPluginEvents(); });
+        pump.start(5);
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+        editor->pollForTest();
+    };
+    const auto waitUntil = [&](const auto& condition) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!condition() && timer.elapsed() < 3000) wait(20);
+        return condition();
+    };
+    bool ok = waitUntil([&] {
+        return editor->m_editorReady && editor->m_remoteStatus && editor->m_remoteRestart &&
+            editor->m_contentIdentity == originalIdentity && !editor->requiresNativeSurface();
+    });
+    if (!ok) { delete editor; return false; }
+    controller.setInsertParameter(track, slot, "0", 1);
+    ok &= waitUntil([&] {
+        return controller.insertRuntimeStatus(track, slot).state == State::Failed &&
+            editor->m_remoteRestart->isVisible() && editor->m_remoteRestart->isEnabled();
+    });
+    const auto folder = qEnvironmentVariable("DAW_ISOLATION_SCREENSHOT_DIR");
+    if (!folder.isEmpty()) {
+        QDir().mkpath(folder);
+        ok &= editor->grab().save(folder + QStringLiteral("/failed.png"));
+    }
+    editor->m_remoteRestart->click();
+    ok &= waitUntil([&] {
+        return controller.insertRuntimeStatus(track, slot).state == State::Running &&
+            controller.insertIdentity(track, slot) != originalIdentity && editor->m_editorReady &&
+            editor->m_contentIdentity == controller.insertIdentity(track, slot) &&
+            editor->m_remoteRestart &&
+            !editor->m_remoteRestart->isVisible() && editor->m_dockToggle->isVisible();
+    });
+    editor->setParameterDockVisibleForTest(true);
+    wait(30);
+    ok &= editor->m_dock && editor->m_dock->isVisible() && editor->m_dock->isEnabled();
+    if (!folder.isEmpty()) ok &= editor->grab().save(folder + QStringLiteral("/recovered.png"));
+    ok &= editor->m_contentIdentity == controller.insertIdentity(track, slot);
+    editor->setEditAccessCheck([] { return false; });
+    editor->refreshAccessPolicy();
+    ok &= waitUntil([&] {
+        return editor->m_generic && !editor->m_generic->isEnabled() &&
+            !editor->m_genericControls.empty() &&
+            std::all_of(editor->m_genericControls.begin(), editor->m_genericControls.end(),
+                        [](const auto& control) { return !control.value->text().isEmpty(); });
+    });
+    delete editor;
+    const auto internal = controller.addInsert(track, daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
+    if (internal.empty()) return false;
+    editor = new PluginEditorWindow(&controller, QString::fromStdString(track), QString::fromStdString(internal));
+    editor->show(); editor->initializeEditor();
+    ok &= waitUntil([&] {
+        return editor->m_editorReady && dynamic_cast<EqualizerPanel*>(editor->m_generic) &&
+            editor->m_contentIdentity == controller.insertIdentity(track, internal);
+    });
+    delete editor;
+    std::fprintf(stderr, "%s isolated plugin recovery UI\n", ok ? "PASS" : "FAIL");
+    return ok;
 }
 
 void PluginEditorWindow::refreshAccessPolicy() {
@@ -1195,10 +1399,10 @@ void PluginEditorWindow::refreshAccessPolicy() {
 void PluginEditorWindow::syncPollTimer() {
     if (!m_poll) return;
     const bool shouldPoll = isVisible() && !isMinimized();
-    auto* plugin = instance();
+    const auto plugin = editorSnapshot();
     const bool needsIdle = shouldPoll && !m_closing && m_editorReady &&
-        m_embedded && plugin && plugin == m_openedOn && plugin->isEditorOpen() &&
-        plugin->descriptor().format == daw::plugins::Format::Vst;
+        m_embedded && plugin && plugin->identity == m_openedOn && plugin->open &&
+        !plugin->remote && plugin->format == daw::plugins::Format::Vst;
     // This is deliberately independent of pumpPluginEvents' wake-generation
     // fast path and of the slow wrapper/parameter poll. Only the live VST
     // editor needs a periodic turn; the rest of the project stays event-driven.
@@ -1246,11 +1450,25 @@ bool PluginEditorWindow::eventFilter(QObject* watched, QEvent* event) {
     if (!belongs) return false;
     if (event->type() == QEvent::FocusIn || event->type() == QEvent::MouseButtonPress)
         emit keyboardFocusReceived();
+    if (event->type() == QEvent::MouseButtonPress && m_controller &&
+        static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+        const QString parameter = widget->property("parameterId").toString();
+        if (!parameter.isEmpty())
+            m_controller->touchInsertParameter(m_channelKey, m_insertKey,
+                                               parameter.toStdString());
+    }
     if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress ||
         event->type() == QEvent::KeyRelease) {
         auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Space && !(key->modifiers() & ~Qt::KeypadModifier))
-            return routeHostKey(key, false);
+        bool textEntry = false;
+        for (auto* current = widget; current && current != this; current = current->parentWidget()) {
+            const auto* combo = qobject_cast<QComboBox*>(current);
+            textEntry = textEntry || qobject_cast<QLineEdit*>(current) ||
+                qobject_cast<QAbstractSpinBox*>(current) || qobject_cast<QTextEdit*>(current) ||
+                qobject_cast<QPlainTextEdit*>(current) || (combo && combo->isEditable()) ||
+                current->testAttribute(Qt::WA_InputMethodEnabled);
+        }
+        return routeHostKey(key, textEntry);
     }
     return false;
 }
@@ -1291,14 +1509,15 @@ void PluginEditorWindow::resizeEvent(QResizeEvent* event) {
     // bookkeeping, not a user resize, and must not be offered back to a
     // resizable plugin as its new preferred size.
     if (m_rebuildingEditorContent || (!isWindow() && !m_hasBeenPresented)) return;
-    daw::plugins::PluginInstance* plugin = instance();
-    if (!plugin || !plugin->editorCanResize()) return;
+    if (!m_controller) return;
 
     // Offer the new size; the plugin snaps it to something it can draw and
     // writes back what it settled on, which the container then takes.
-    std::uint32_t width = std::uint32_t(m_container->width());
-    std::uint32_t height = std::uint32_t(m_container->height());
-    if (!plugin->setEditorSize(width, height)) return;
+    const auto accepted = m_controller->resizeInsertEditor(
+        m_channelKey, m_insertKey, m_openedOn,
+        {std::uint32_t(m_container->width()), std::uint32_t(m_container->height())});
+    if (!accepted) return;
+    const auto width = accepted->width, height = accepted->height;
     m_nativeEditorSize = QSize(int(width), int(height));
     if (int(width) == m_container->width() && int(height) == m_container->height()) {
         return;
@@ -1380,7 +1599,9 @@ QSize PluginEditorWindow::requestedContentSize() const {
 
 void PluginEditorWindow::onEditorResized(std::uint32_t width,
                                          std::uint32_t height) noexcept {
-    if (!m_container || width == 0 || height == 0) return;
+    const auto identity = m_openedOn ? m_openedOn : m_pendingEditor;
+    if (!m_container || width == 0 || height == 0 || !identity || !m_controller ||
+        m_controller->insertIdentity(m_channelKey, m_insertKey) != identity) return;
     m_applyingPluginSize = true;
     m_nativeEditorSize = QSize(int(width), int(height));
     m_container->resize(int(width), int(height));
@@ -1460,8 +1681,11 @@ void PluginEditorWindow::onEditorClosed() noexcept {
     // callback would destroy the very object still on the stack, so it is
     // deferred to the event loop.
     const auto generation = m_loadGeneration;
-    QMetaObject::invokeMethod(this, [this, generation] {
-        if (!m_closing && generation == m_loadGeneration) close();
+    const auto identity = m_openedOn ? m_openedOn : m_pendingEditor;
+    QMetaObject::invokeMethod(this, [this, generation, identity] {
+        if (!m_closing && identity && identity == m_openedOn &&
+            generation == m_loadGeneration && m_controller &&
+            m_controller->insertIdentity(m_channelKey, m_insertKey) == identity) close();
     }, Qt::QueuedConnection);
 }
 
@@ -1498,7 +1722,6 @@ QWidget* PluginEditorWindow::buildParameterDock() {
     m_dockGrid->setHorizontalSpacing(4);
     m_dockGrid->setVerticalSpacing(6);
 
-    daw::plugins::PluginInstance* live = instance();
     const std::vector<daw::plugins::ParameterInfo> parameters =
         m_controller ? m_controller->insertParameters(m_channelKey, m_insertKey)
                      : std::vector<daw::plugins::ParameterInfo>{};
@@ -1508,8 +1731,7 @@ QWidget* PluginEditorWindow::buildParameterDock() {
         if (!parameter.isAutomatable) continue;
         const QString parameterId = QString::fromStdString(parameter.id);
         const std::string parameterKey = parameter.id;
-        const std::int32_t parameterIndex =
-            live ? live->parameterIndexForId(parameterKey) : -1;
+        const auto parameterIndex = std::int32_t(parameter.index);
 
         // One cell per parameter: a badge that says when the plugin is moving
         // this one, the knob, and the value in the plugin's own words. The
@@ -1556,13 +1778,11 @@ QWidget* PluginEditorWindow::buildParameterDock() {
                 if (picked == remove) m_controller->removeMidiLearn(m_channelKey, parameterKey);
             });
         }
-        knob->setValue(parameterIndex >= 0
-                           ? live->parameterValue(std::uint32_t(parameterIndex))
-                           : parameter.defaultValue);
+        knob->setValue(m_controller->insertParameter(m_channelKey, m_insertKey, parameterKey));
         // The plugin's own words for the value — "440 Hz", "2:1" — rather than
         // a raw number, which is often meaningless.
-        knob->setFormatter([this, parameterId](double plain) -> QString {
-            return parameterText(parameterId, plain);
+        knob->setFormatter([this, parameterKey, parameterIndex](double plain) -> QString {
+            return parameterText(parameterKey, plain, parameterIndex);
         });
         connect(knob, &ui::Knob::valueChanged, this,
                 [this, parameterKey](double plain) {
@@ -1579,13 +1799,13 @@ QWidget* PluginEditorWindow::buildParameterDock() {
         auto* value = new QLabel(cell);
         value->setObjectName(QStringLiteral("PluginParamValue"));
         value->setAlignment(Qt::AlignCenter);
-        value->setText(parameterText(live, parameterIndex, knob->value()));
+        value->setText(parameterText(parameterKey, knob->value(), parameterIndex));
         column->addWidget(value);
 
         m_dockCells.append(cell);
         m_dockControls.push_back(
-            DockControl{cell, knob, value, badge, parameterId, parameterKey,
-                        parameterIndex, knob->value()});
+            DockControl{cell, knob, value, badge, parameterId, knob->value()});
+        m_dockValues.push_back({parameterKey, parameterIndex, knob->value(), true});
     }
     if (m_dockCells.isEmpty()) {
         auto* empty = new QLabel(tr("Nothing here can be automated."), grid);
@@ -1599,22 +1819,11 @@ QWidget* PluginEditorWindow::buildParameterDock() {
     return dock;
 }
 
-QString PluginEditorWindow::parameterText(const QString& parameterId,
-                                          double plain) const {
-    if (daw::plugins::PluginInstance* live = instance()) {
-        const std::int32_t index =
-            live->parameterIndexForId(parameterId.toStdString());
-        return parameterText(live, index, plain);
-    }
-    return QString::number(plain, 'g', 4);
-}
-
-QString PluginEditorWindow::parameterText(
-    daw::plugins::PluginInstance* live, std::int32_t parameterIndex,
-    double plain) const {
-    if (live && parameterIndex >= 0) {
-        const std::string text =
-            live->parameterText(std::uint32_t(parameterIndex), plain);
+QString PluginEditorWindow::parameterText(const std::string& parameterId,
+    double plain, std::int32_t indexHint) const {
+    if (m_controller) {
+        const auto text = m_controller->insertParameterText(
+            m_channelKey, m_insertKey, parameterId, plain, indexHint);
         if (!text.empty()) return QString::fromStdString(text);
     }
     return QString::number(plain, 'g', 4);
@@ -1633,28 +1842,15 @@ void PluginEditorWindow::layOutParameterDock() {
 
 void PluginEditorWindow::refreshParameterDock() {
     if (!m_dock || !m_dock->isVisible() || !m_controller) return;
-    daw::plugins::PluginInstance* live = instance();
+    m_controller->readInsertParameters(m_channelKey, m_insertKey, m_dockValues);
 
     QString touched;
-    for (DockControl& control : m_dockControls) {
+    for (std::size_t i = 0; i < m_dockControls.size(); ++i) {
+        auto& control = m_dockControls[i];
+        const auto& value = m_dockValues[i];
         if (control.knob->isEditing()) continue;
-
-        std::int32_t index = -1;
-        if (live) {
-            const auto parameters = live->parameters();
-            const bool cachedIndexValid =
-                control.parameterIndex >= 0 &&
-                std::size_t(control.parameterIndex) < parameters.size() &&
-                parameters[std::size_t(control.parameterIndex)].id ==
-                    control.parameterKey;
-            if (!cachedIndexValid) {
-                control.parameterIndex =
-                    live->parameterIndexForId(control.parameterKey);
-            }
-            index = control.parameterIndex;
-        }
-        const double plain =
-            index >= 0 ? live->parameterValue(std::uint32_t(index)) : 0.0;
+        if (!value.available) continue;
+        const double plain = value.value;
         const bool knobChanged =
             std::abs(plain - control.knob->value()) > 1e-9;
         const bool valueChanged = !std::isfinite(control.lastPlain) ||
@@ -1671,7 +1867,7 @@ void PluginEditorWindow::refreshParameterDock() {
         // Some vendor formatters are surprisingly expensive. Ask only for a
         // parameter whose plain value actually changed (or whose control had
         // to be corrected), not for every parameter on every 200 ms poll.
-        const QString text = parameterText(live, index, plain);
+        const QString text = parameterText(value.id, plain, value.index);
         if (control.value->text() != text) {
             control.value->setText(text);
         }
@@ -1697,6 +1893,10 @@ void PluginEditorWindow::refreshParameterDock() {
         break;
     }
     layOutParameterDock();
+}
+
+void PluginEditorWindow::showParameterPanel() {
+    if (m_dockToggle) m_dockToggle->setChecked(true);
 }
 
 void PluginEditorWindow::setParameterDockVisibleForTest(bool visible) {
@@ -1725,16 +1925,53 @@ bool PluginEditorWindow::checkIdleForTest(daw::EngineController& controller,
     if (!plugin) return false;
     auto* editor = new PluginEditorWindow(&controller, QString::fromStdString(track),
                                           QString::fromStdString(slot));
+    const QString placementKey = QStringLiteral("tests/pluginEditorSize/") +
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QWidget workspace;
+    workspace.resize(1000, 700);
+    workspace.show();
+    InternalEditorFrame frame(placementKey, &workspace);
+    frame.setContent(editor);
+    frame.present();
     const auto wait = [](int ms) {
         QEventLoop loop;
         QTimer::singleShot(ms, &loop, &QEventLoop::quit);
         loop.exec();
     };
     const auto calls = [&] { return int(std::lround(plugin->parameterValue(4) * 1000)); };
-    editor->show();
     editor->initializeEditor();
     wait(1000);
     bool ok = editor->isEmbedded() && editor->m_editorIdle->isActive();
+    const auto fitsNativeSize = [&](const QSize& nativeSize) {
+        const QSize contentSize(nativeSize.width() + editor->dockWidth(),
+                                nativeSize.height() + editor->m_wrapper->height());
+        return editor->size() == contentSize &&
+               editor->m_container && editor->m_container->size() == nativeSize &&
+               frame.size() == contentSize + QSize(2, 24);
+    };
+    const bool smallEditorFits = fitsNativeSize(QSize(320, 120));
+    // Simulate the same host callback a plugin sends when it changes its GUI.
+    editor->onEditorResized(240, 100);
+    wait(20);
+    const bool smallerEditorFits = fitsNativeSize(QSize(240, 100));
+    editor->setParameterDockVisibleForTest(true);
+    wait(20);
+    const bool dockFits = fitsNativeSize(QSize(240, 100));
+    editor->setParameterDockVisibleForTest(false);
+    wait(20);
+    const bool dockClosedFits = fitsNativeSize(QSize(240, 100));
+    frame.hide();
+    frame.present();
+    editor->prepareForPresentation();
+    wait(20);
+    const bool reopenedFits = fitsNativeSize(QSize(240, 100));
+    editor->onEditorResized(320, 120);
+    wait(20);
+    ok &= smallEditorFits && smallerEditorFits && dockFits && dockClosedFits && reopenedFits;
+    std::fprintf(stderr,
+        "%s plugin editor native size: small=%d, resize=%d, dock=%d/%d, reopen=%d\n",
+        ok ? "PASS" : "FAIL", int(smallEditorFits), int(smallerEditorFits),
+        int(dockFits), int(dockClosedFits), int(reopenedFits));
 
     // Same stopped-transport scenario as a plugin's own groove preview. With
     // the dedicated timer paused, only the old generation-gated path remains.
@@ -1770,7 +2007,48 @@ bool PluginEditorWindow::checkIdleForTest(daw::EngineController& controller,
         "restored=%d/400ms, full slot scans=%llu\n", ok ? "PASS" : "FAIL",
         oldPathCalls, visibleCalls, hiddenCalls, restoredCalls,
         static_cast<unsigned long long>(fullScans));
+
+    // Keep an old wrapper alive across remove/Undo, then open the recreated
+    // slot in a new wrapper. A late close/idle/resize from the old host must
+    // never reach the new native view, even if the allocator reused an address.
+    editor->scheduleEditorInitialization(0);
+    wait(250);
+    editor->m_poll->stop();
+    editor->m_editorIdle->stop();
+    const auto retired = editor->m_openedOn;
+    editor->onEditorClosed();
+    controller.removeInsert(track, slot);
+    controller.undo();
+    ok &= controller.setInsertChannelMode(track, slot, daw::PluginChannelMode::DualMono);
+    auto* successor = new PluginEditorWindow(&controller, QString::fromStdString(track),
+                                              QString::fromStdString(slot));
+    successor->show();
+    successor->initializeEditor();
+    wait(500);
+    const auto current = controller.insertEditorSnapshot(track, slot);
+    const bool rejectsRetired = retired && current && retired != current->identity &&
+        successor->isEmbedded() && current->open && !editor->isClosing() &&
+        !controller.closeInsertEditor(track, slot, retired) &&
+        !controller.pumpInsertEditor(track, slot, retired) &&
+        !controller.insertEditorSize(track, slot, retired) &&
+        !controller.resizeInsertEditor(track, slot, retired, {600, 400}) &&
+        !controller.openInsertEditor(track, slot, retired);
+    editor->detachFromPlugin();
+    const auto afterLateDetach = controller.insertEditorSnapshot(track, slot);
+    const bool keepsSuccessor = afterLateDetach && afterLateDetach->open && successor->isEmbedded();
+    ok &= rejectsRetired && keepsSuccessor;
+    std::fprintf(stderr, "%s retired editor cannot close or service its successor\n",
+                 rejectsRetired && keepsSuccessor ? "PASS" : "FAIL");
+    auto* leftInstance = controller.insertInstance(track, slot);
+    controller.setInsertEditorChannel(track, slot, daw::PluginEditorChannel::Right);
+    successor->detachFromPlugin();
+    const bool closesOwnSide = leftInstance && !leftInstance->isEditorOpen();
+    ok &= closesOwnSide;
+    std::fprintf(stderr, "%s native editor detaches its own side after selection changes\n",
+                 closesOwnSide ? "PASS" : "FAIL");
+    delete successor;
     delete editor;
+    QSettings().remove(placementKey);
     controller.removeTrack(track);
     return ok;
 }
@@ -1814,11 +2092,15 @@ void PluginEditorWindow::setParameterDockVisible(bool visible) {
 
 void PluginEditorWindow::buildGenericEditor() {
     m_generic = new QWidget(this);
+    if (const auto plugin = editorSnapshot(); plugin && plugin->format == daw::plugins::Format::Internal) {
+        pluginStyle::bind(m_generic);
+        m_generic->setAutoFillBackground(true);
+    }
     auto* outer = new QVBoxLayout(m_generic);
     outer->setContentsMargins(12, 12, 12, 12);
     outer->setSpacing(8);
 
-    daw::plugins::PluginInstance* plugin = instance();
+    const bool loaded = m_controller && m_controller->hasInsert(m_channelKey, m_insertKey);
     const std::vector<daw::plugins::ParameterInfo> parameters =
         m_controller ? m_controller->insertParameters(m_channelKey, m_insertKey)
                      : std::vector<daw::plugins::ParameterInfo>{};
@@ -1826,7 +2108,7 @@ void PluginEditorWindow::buildGenericEditor() {
     auto* header = ui::sectionLabel(
         m_nativeEditorFailed
             ? tr("PLUGIN GUI FAILED — GENERIC CONTROLS")
-            : (plugin ? tr("NO EDITOR — GENERIC CONTROLS")
+            : (loaded ? tr("NO EDITOR — GENERIC CONTROLS")
                       : tr("PLUGIN NOT LOADED")),
         m_generic);
     outer->addWidget(header);
@@ -1880,18 +2162,15 @@ void PluginEditorWindow::buildGenericEditor() {
         slider->setProperty("maxValue", parameter.maxValue);
         slider->setProperty("valueLabel", QVariant::fromValue<QObject*>(value));
 
-        const std::int32_t parameterIndex =
-            plugin ? plugin->parameterIndexForId(parameterKey) : -1;
-        const double current = parameterIndex >= 0
-                                   ? plugin->parameterValue(
-                                         std::uint32_t(parameterIndex))
-                                   : parameter.defaultValue;
+        const auto parameterIndex = std::int32_t(parameter.index);
+        const double current = m_controller->insertParameter(m_channelKey, m_insertKey, parameterKey);
+        value->setText(parameterText(parameterKey, current, parameterIndex));
         const double span = parameter.maxValue - parameter.minValue;
         const double fraction = span > 0.0 ? (current - parameter.minValue) / span : 0.0;
         slider->setValue(int(fraction * kSliderSteps));
 
         connect(slider, &QSlider::valueChanged, this,
-                [this, value, parameterKey, minimum = parameter.minValue,
+                [this, value, parameterKey, parameterIndex, minimum = parameter.minValue,
                  maximum = parameter.maxValue](int position) {
                     if (!m_controller) return;
                     const double plain = minimum + (maximum - minimum) *
@@ -1899,15 +2178,8 @@ void PluginEditorWindow::buildGenericEditor() {
                                                         kSliderSteps);
                     m_controller->setInsertParameter(
                         m_channelKey, m_insertKey, parameterKey, plain);
-                    if (daw::plugins::PluginInstance* live = instance()) {
-                        const std::int32_t index =
-                            live->parameterIndexForId(parameterKey);
-                        if (index >= 0) {
-                            const QString text = QString::fromStdString(
-                                live->parameterText(std::uint32_t(index), plain));
-                            if (value->text() != text) value->setText(text);
-                        }
-                    }
+                    const auto text = parameterText(parameterKey, plain, parameterIndex);
+                    if (value->text() != text) value->setText(text);
                 });
         // Undo gets one entry per gesture, not one per pixel of drag — the
         // same split `commitLaneEdit` uses for automation.
@@ -1947,8 +2219,8 @@ void PluginEditorWindow::buildGenericEditor() {
         grid->addWidget(value, row, 2);
         grid->addWidget(automate, row, 3);
         m_genericControls.push_back(GenericControl{
-            slider, value, parameterKey, parameter.minValue,
-            parameter.maxValue, parameterIndex, current});
+            slider, value, parameter.minValue, parameter.maxValue, current});
+        m_genericValues.push_back({parameterKey, parameterIndex, current, true});
         ++row;
     }
 
@@ -1962,26 +2234,14 @@ void PluginEditorWindow::buildGenericEditor() {
 
 void PluginEditorWindow::refreshGenericEditor() {
     if (!m_generic || !m_controller) return;
-    daw::plugins::PluginInstance* plugin = instance();
-    if (!plugin) return;
+    m_controller->readInsertParameters(m_channelKey, m_insertKey, m_genericValues);
 
-    for (GenericControl& control : m_genericControls) {
+    for (std::size_t i = 0; i < m_genericControls.size(); ++i) {
+        auto& control = m_genericControls[i];
+        const auto& value = m_genericValues[i];
         // Never fight the user: a slider being dragged owns its own value.
-        if (control.slider->isSliderDown()) continue;
-        const auto parameters = plugin->parameters();
-        const bool cachedIndexValid =
-            control.parameterIndex >= 0 &&
-            std::size_t(control.parameterIndex) < parameters.size() &&
-            parameters[std::size_t(control.parameterIndex)].id ==
-                control.parameterKey;
-        if (!cachedIndexValid) {
-            control.parameterIndex =
-                plugin->parameterIndexForId(control.parameterKey);
-        }
-        const std::int32_t index = control.parameterIndex;
-        const double plain = index >= 0
-                                 ? plugin->parameterValue(std::uint32_t(index))
-                                 : 0.0;
+        if (control.slider->isSliderDown() || !value.available) continue;
+        const double plain = value.value;
         const double span = control.maximum - control.minimum;
         const int position =
             span > 0.0
@@ -1995,11 +2255,8 @@ void PluginEditorWindow::refreshGenericEditor() {
             const QSignalBlocker block(control.slider);
             control.slider->setValue(position);
         }
-        if (index >= 0) {
-            const QString text = QString::fromStdString(
-                plugin->parameterText(std::uint32_t(index), plain));
-            if (control.value->text() != text) control.value->setText(text);
-        }
+        const auto text = parameterText(value.id, plain, value.index);
+        if (control.value->text() != text) control.value->setText(text);
         control.lastPlain = plain;
     }
 }
@@ -2043,13 +2300,13 @@ PluginEditorWindow { background: %BG%; }
     background: %SELECTION%;
     border-color: %SEPARATOR%;
 }
-#PluginWrapper QToolButton:focus { border-color: %ACCENT%; }
 #PluginEditorLoading {
     color: %TEXT2%;
     background: %BG%;
     font-size: 12px;
 }
 #PluginHint { color: %TEXT2%; font-size: 11px; }
+#PluginRuntimeStatus { color: %TEXT%; font-size: 12px; }
 #PluginParamDock {
     background: %SURFACE%;
     border-left: 1px solid %SEPARATOR%;

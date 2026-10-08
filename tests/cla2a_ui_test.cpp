@@ -59,11 +59,13 @@ int main(int argc, char** argv) {
     if (pointerCheck && !qEnvironmentVariableIntValue("VLT_GPU_WORKSPACE")) {
         check(false, "pointer check requires VLT_GPU_WORKSPACE=1"); return 1;
     }
-    daw::EngineController controller; check(bool(controller.initialize(48000, 257, false)), "headless engine initializes");
+    daw::EngineController controller{daw::EngineController::TestRuntime{}}; check(bool(controller.initialize(48000, 257, false)), "headless engine initializes");
     const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.cla2a");
     check(descriptor.has_value() && descriptor->name == "VLT 2A", "plugin browser discovers built-in VLT 2A"); if (!descriptor) return 1;
-    audio::AudioBuffer source(2, 48000);
-    for (unsigned i = 0; i < 48000; ++i) source.getChannel(0)[i] = source.getChannel(1)[i] = float(.3 * std::sin(2 * std::numbers::pi * 431 * i / 48000));
+    // The comparison exports the first second. Keep the clip's live-only
+    // boundary de-click beyond that range so this measures the effect/PDC.
+    audio::AudioBuffer source(2, 96000);
+    for (unsigned i = 0; i < source.numFrames(); ++i) source.getChannel(0)[i] = source.getChannel(1)[i] = float(.3 * std::sin(2 * std::numbers::pi * 431 * i / 48000));
     const auto sourcePath = temporary.path().toStdString() + "/source.wav";
     audio::AudioRecorder writer; writer.initialize(48000, 2); writer.writeWAVFile(sourcePath, source, 48000);
     const auto track = controller.importAudioToNewTrack(sourcePath, 0); const auto insert = controller.addInsert(track, *descriptor);
@@ -213,7 +215,7 @@ int main(int argc, char** argv) {
     controller.setInsertBypassed(track, insert, true);
     const auto projectPath = temporary.path().toStdString() + "/cla2a.vlt"; check(bool(controller.saveProject(projectPath)), "CLA-2A project saves");
     {
-        daw::EngineController reopened; reopened.initialize(48000, 257, false);
+        daw::EngineController reopened{daw::EngineController::TestRuntime{}}; reopened.initialize(48000, 257, false);
         check(bool(reopened.openProject(projectPath)) && reopened.insertParameter(track, insert, "gain") == 48.25 &&
               reopened.insertParameter(track, insert, "peakReduction") == 57 && reopened.insertParameter(track, insert, "mode") == 1 && reopened.insertModel(track, insert)->bypassed,
               "project restores state and host bypass");
@@ -232,23 +234,35 @@ int main(int argc, char** argv) {
     }
 
     {
-        daw::EngineController render; render.initialize(48000, 257, false);
+        daw::EngineController render{daw::EngineController::TestRuntime{}}; render.initialize(48000, 257, false);
         const auto audio = render.importAudioToNewTrack(sourcePath, 0); const auto fx = render.addInsert(audio, *descriptor);
         render.setInsertParameter(audio, fx, "peakReduction", 50); render.pumpPluginEvents();
         audio::AudioBuffer in(2, 257), out(2, 257); in.clear();
         const auto captureDevice = [&] {
             render.stop(); render.seekSeconds(0); render.pumpPluginEvents();
-            // Reset the complete channel, including fixed-stage bypass delay,
-            // to the same initial history as an isolated export.
-            for (const auto& entry : render.routingGraph()->nodes) entry.node->reset();
-            std::vector<float> captured(48544 * 2); render.play();
-            bool deviceRendered = true;
+            // Both paths start from the same saved state. Reusing the previous
+            // live engine carries transport de-click and automation history
+            // that a fresh export deliberately does not inherit.
+            const auto comparisonProject = temporary.path().toStdString() + "/comparison.vlt";
+            daw::EngineController playback{daw::EngineController::TestRuntime{}};
+            bool deviceRendered = bool(render.saveProject(comparisonProject)) &&
+                bool(playback.initialize(48000, 257, false)) && bool(playback.openProject(comparisonProject));
+            playback.pumpPluginEvents();
+            const auto graph = playback.routingGraph();
+            check(graph && graph->totalLatency == render.routingGraph()->totalLatency,
+                  "fresh playback preserves the graph latency");
+            if (graph) {
+                for (const auto& entry : graph->nodes) entry.node->reset();
+                for (const auto& delay : graph->delays) delay->reset();
+                for (const auto& delay : graph->midiDelays) delay->reset();
+            }
+            std::vector<float> captured(48544 * 2); playback.play();
             for (unsigned startFrame = 0; startFrame < 48544; startFrame += 257) {
                 const unsigned frames = std::min(257u, 48544 - startFrame);
-                deviceRendered &= render.processDeviceBlockForTest(in, out, frames);
+                deviceRendered &= playback.processDeviceBlockForTest(in, out, frames);
                 for (unsigned i = 0; i < frames; ++i) for (unsigned ch = 0; ch < 2; ++ch) captured[(startFrame + i) * 2 + ch] = out.getChannel(ch)[i];
             }
-            check(deviceRendered, "device comparison renders every block"); render.stop(); return captured;
+            check(deviceRendered, "device comparison renders every block"); playback.stop(); return captured;
         };
         const auto latency = render.routingGraph()->totalLatency;
         const auto live = captureDevice();
@@ -259,12 +273,15 @@ int main(int argc, char** argv) {
         audio::platform::DecodedAudio wet;
         if (!report.files.empty()) audio::platform::decodeAudioFile(report.files.front(), wet);
         double liveError = 1e9;
+        unsigned liveErrorFrame = 0;
         if (wet.frames == 48000) {
             liveError = 0;
-            for (unsigned i = 0; i < 48000; ++i) for (unsigned ch = 0; ch < 2; ++ch)
-                liveError = std::max(liveError, std::abs(double(live[(i + latency) * 2 + ch]) - wet.interleaved[i * 2 + ch]));
+            for (unsigned i = 0; i < 48000; ++i) for (unsigned ch = 0; ch < 2; ++ch) {
+                const auto error = std::abs(double(live[(i + latency) * 2 + ch]) - wet.interleaved[i * 2 + ch]);
+                if (error > liveError) { liveError = error; liveErrorFrame = i; }
+            }
         }
-        std::printf("MEASURE device/export maximum error %.9g\n", liveError);
+        std::printf("MEASURE device/export maximum error %.9g at frame %u\n", liveError, liveErrorFrame);
         check(liveError < 2e-5, "device playback and export match after the declared graph latency");
         audio::platform::DecodedAudio stem; if (report.files.size() > 1) audio::platform::decodeAudioFile(report.files[1], stem);
         check(difference(wet.interleaved, stem.interleaved) < 2e-5, "single-track master and stem are aligned");
@@ -290,12 +307,15 @@ int main(int argc, char** argv) {
         bool automatedMatch = bool(render.renderProject(spec, {}, automatedReport)) && !automatedReport.files.empty();
         if (automatedMatch) automatedMatch = bool(audio::platform::decodeAudioFile(automatedReport.files.front(), automatedAudio));
         double automationError = 1e9;
+        unsigned automationErrorFrame = 0;
         if (automatedMatch && automatedAudio.frames == 48000) {
             automationError = 0;
-            for (unsigned i = 0; i < 48000; ++i) for (unsigned ch = 0; ch < 2; ++ch)
-                automationError = std::max(automationError, std::abs(double(automatedLive[(i + latency) * 2 + ch]) - automatedAudio.interleaved[i * 2 + ch]));
+            for (unsigned i = 0; i < 48000; ++i) for (unsigned ch = 0; ch < 2; ++ch) {
+                const auto error = std::abs(double(automatedLive[(i + latency) * 2 + ch]) - automatedAudio.interleaved[i * 2 + ch]);
+                if (error > automationError) { automationError = error; automationErrorFrame = i; }
+            }
         }
-        std::printf("MEASURE automated device/export maximum error %.9g\n", automationError);
+        std::printf("MEASURE automated device/export maximum error %.9g at frame %u\n", automationError, automationErrorFrame);
         check(automationError < 2e-5 && difference(wet.interleaved, automatedAudio.interleaved) > .001,
               "Gain, Peak Reduction and mode automation affect audio identically in playback and export");
         daw::rendering::Report guardedFreeze;

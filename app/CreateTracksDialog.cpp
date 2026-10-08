@@ -68,7 +68,8 @@ void clearLayout(QVBoxLayout* layout) {
 }
 
 CreateTracksDialog::CreateTracksDialog(daw::EngineController& controller, QWidget* parent)
-    : QDialog(parent), m_controller(controller) {
+    : QDialog(parent), m_controller(controller),
+      m_draft(daw::EngineController::SecondaryRuntime{}, controller) {
     setObjectName(QStringLiteral("CreateTracksDialog"));
     setWindowTitle(tr("Create tracks"));
     setWindowModality(Qt::WindowModal);
@@ -454,7 +455,7 @@ void CreateTracksDialog::moveSlot(int index, int direction) {
 
 void CreateTracksDialog::openEditor(const QString& slotId) {
     if (auto existing = m_editors.value(slotId)) { existing->show(); existing->raise(); existing->activateWindow(); return; }
-    if (!m_draft.insertInstance(m_draftTrack, slotId.toStdString())) {
+    if (!m_draft.hasInsert(m_draftTrack, slotId.toStdString())) {
         showError(tr("This plugin is not available.")); return;
     }
     auto* window = new QDialog(this);
@@ -486,8 +487,7 @@ bool CreateTracksDialog::eventFilter(QObject* watched, QEvent* event) {
             // Keep its outer dialog in sync so a layout cannot crop that view.
             if (auto* window = qobject_cast<QDialog*>(editor->parentWidget())) {
                 const auto requested = static_cast<QResizeEvent*>(event)->size();
-                const auto* plugin = m_draft.insertInstance(m_draftTrack, editor->insertId().toStdString());
-                if (editor->isEmbedded() && plugin && !plugin->editorCanResize())
+                if (editor->isEmbedded() && !editor->canResizeNativeEditor())
                     window->setFixedSize(requested);
                 else window->resize(requested);
             }
@@ -537,43 +537,25 @@ bool CreateTracksDialog::capture(daw::EngineController::TrackCreationRequest& re
     if (!daw::carriesAudio(model)) return true;
     request.outputBusId = m_output->currentData().toString().toStdString();
     if (m_controller.hasCloudProjectBinding()) return true;
-    auto chain = m_draft.copyChannelStrip(m_draftTrack, false);
-    request.inserts = std::move(chain.inserts);
     const auto* track = m_draft.project().findTrack(m_draftTrack);
-    if (kind() == daw::TrackKind::Midi && track && track->instrument.isLoaded()) {
-        request.instrument.emplace();
-        request.instrument->model = track->instrument;
+    if (!track) return false;
+    std::vector<std::string> slotIds;
+    for (const auto& slot : track->inserts) slotIds.push_back(slot.id);
+    const bool instrument = kind() == daw::TrackKind::Midi && track->instrument.isLoaded();
+    if (instrument) slotIds.push_back(track->instrument.id);
+    std::vector<daw::EngineController::ChainSlotSnapshot> captured;
+    if (const auto result = m_draft.captureInsertChain(m_draftTrack, slotIds, captured); !result) {
+        showError(tr("Could not save plugin settings: %1. The tracks have not been created.")
+                      .arg(QString::fromStdString(result.message())));
+        return false;
     }
-    const auto save = [this](daw::EngineController::ChainSlotSnapshot& slot) {
-        const auto original = slot.model.editorChannel;
-        m_draft.setInsertEditorChannel(m_draftTrack, slot.model.id, daw::PluginEditorChannel::Left);
-        auto* plugin = m_draft.insertInstance(m_draftTrack, slot.model.id);
-        bool ok = plugin && plugin->saveState(slot.state);
-        // AU native controls do not necessarily emit host parameter events.
-        // Capture their current values rather than replay stale mirrors over
-        // the freshly saved native state when constructing the new instances.
-        const auto refreshAu = [&](auto& parameters) {
-            if (!plugin || slot.model.format != daw::PluginFormat::AudioUnit) return;
-            parameters.clear();
-            const auto& infos = plugin->parameters();
-            for (std::size_t i = 0; i < infos.size(); ++i) {
-                const double value = plugin->parameterValue(std::uint32_t(i));
-                if (std::isfinite(value)) parameters.push_back({infos[i].id, value});
-            }
-        };
-        refreshAu(slot.model.parameters);
-        if (ok && slot.model.channelMode == daw::PluginChannelMode::DualMono) {
-            m_draft.setInsertEditorChannel(m_draftTrack, slot.model.id, daw::PluginEditorChannel::Right);
-            plugin = m_draft.insertInstance(m_draftTrack, slot.model.id);
-            ok = plugin && plugin->saveState(slot.rightState);
-            refreshAu(slot.model.rightParameters);
-        }
-        m_draft.setInsertEditorChannel(m_draftTrack, slot.model.id, original);
-        if (!ok) showError(tr("Could not save the settings for %1. The tracks have not been created.").arg(QString::fromStdString(slot.model.name)));
-        return ok;
-    };
-    for (auto& slot : request.inserts) if (!save(slot)) return false;
-    return !request.instrument || save(*request.instrument);
+    request.instrument.reset();
+    if (instrument) {
+        request.instrument = std::move(captured.back());
+        captured.pop_back();
+    }
+    request.inserts = std::move(captured);
+    return true;
 }
 
 void CreateTracksDialog::create() {
@@ -613,7 +595,7 @@ QLabel[role="fieldLabel"], QLabel[role="sectionTitle"] { color: %2; font-weight:
 #CreationSlot { border-bottom: 1px solid %5; }
 #CreationSlotName { text-align: left; background: transparent; border: none; padding: 4px; }
 #CreationSlotName:hover { background: %6; border-radius: 5px; }
-#CreationSlotName:focus { border: 1px solid %7; border-radius: 5px; }
+#CreationSlotName:focus {  border-radius: 5px; }
 #CreationError { color: %2; background: %6; border: 1px solid %7; border-radius: 6px; padding: 8px; }
 #ConfirmCreateTracks { padding: 7px 18px; }
 )").arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),

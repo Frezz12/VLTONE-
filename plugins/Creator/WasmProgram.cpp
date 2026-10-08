@@ -274,9 +274,12 @@ bool WasmProgram::prepare(const MiniModuleDefinition &d,
     error = "C++ block size exceeds its memory limit";
     return false;
   }
-  for (unsigned i = 0; i < d.nodes.size(); ++i)
-    if (d.nodes[i].function) {
-      const auto &f = *d.nodes[i].function;
+  unsigned slot = 0;
+  for (unsigned node = 0; node < d.nodes.size(); ++node)
+    if (d.nodes[node].function) {
+      const unsigned i = d.version >= 5 ? slot++ : node;
+      if (i >= m->slots.size()) { error = "C++ exceeds 64 runtime slots"; return false; }
+      const auto &f = *d.nodes[node].function;
       // Function-only nodes have no scheduled slot and own state through
       // callers.
       if (!m->slots[i].outputs[0])

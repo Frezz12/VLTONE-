@@ -136,7 +136,7 @@ int main() {
               "decoder rejects allocations over budget without changing output");
     }
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         check(bool(controller.initialize(48000, 64, false)), "controller initializes");
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Source");
         check(!controller.importAudio(sourcePath, track, 0).empty(), "source imports");
@@ -146,6 +146,30 @@ int main() {
         daw::rendering::Report first;
         check(bool(controller.renderProject(spec, {}, first)) && first.files.size() == 1,
               "first export completes");
+        {
+            const auto exact = (dir / "exact-output.wav").string();
+            { std::ofstream previous(exact); previous << "previous export"; }
+            controller.seekSeconds(1.25);
+            const auto position = controller.positionSeconds();
+            const auto revision = controller.projectRevision();
+            check(bool(controller.exportMixdown(exact, true)), "exact-path normalized export uses the worker");
+            ap::DecodedAudio output;
+            check(bool(ap::decodeAudioFile(exact, output)) && output.frames == 188 * 1024,
+                  "worker replaces the requested file with the complete mixdown");
+            float peak = 0;
+            for (const auto sample : output.interleaved) peak = std::max(peak, std::abs(sample));
+            check(std::abs(peak - 0.99f) < 1e-6f, "normalization applies gain to the captured pass");
+            daw::analysis::Metrics metrics;
+            check(bool(controller.analyzeChannel(track, 0, 1, metrics)) &&
+                  std::abs(metrics.peak - 0.25) < 1e-6 && std::abs(metrics.seconds - 1) < 1e-6,
+                  "channel analysis returns worker metrics for the selected range");
+            check(controller.positionSeconds() == position && controller.projectRevision() == revision &&
+                  !controller.project().findTrack(track)->soloed,
+                  "export and analysis preserve live transport, Solo and document history");
+            const auto original = bytes(sourcePath);
+            check(!controller.exportMixdown(sourcePath, false) && bytes(sourcePath) == original,
+                  "exact-path export cannot replace a project source");
+        }
         for (int invalid = 0; invalid < 5; ++invalid) {
             auto bad = spec;
             if (invalid == 0) bad.sampleRate = std::numeric_limits<double>::quiet_NaN();

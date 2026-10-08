@@ -149,6 +149,9 @@ public:
         const auto schedule = m_clips.controlCopy();
         return schedule ? schedule->clips : nullptr;
     }
+    using ControlState = std::shared_ptr<const ClipSchedule>;
+    ControlState controlState() const { return m_clips.controlCopy(); }
+    void restoreControlState(ControlState state) { m_clips.publish(std::move(state)); }
 
     void prepare(const PrepareInfo& info) override {
         m_sampleRate = info.sampleRate;
@@ -617,6 +620,13 @@ public:
         if (enabled) m_routing.fetch_or(0x100, std::memory_order_relaxed);
         else m_routing.fetch_and(~std::uint64_t(0x100), std::memory_order_relaxed);
     }
+
+    bool enabled() const noexcept {
+        return (m_routing.load(std::memory_order_relaxed) & 0x100) != 0;
+    }
+    using ControlState = std::uint64_t;
+    ControlState controlState() const noexcept { return m_routing.load(std::memory_order_relaxed); }
+    void restoreControlState(ControlState state) noexcept { m_routing.store(state, std::memory_order_relaxed); }
 
     void setRouting(ChannelCount first, ChannelCount count, bool enabled,
                     unsigned channelMask = 3) noexcept {

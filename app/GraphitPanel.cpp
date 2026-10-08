@@ -1,3 +1,5 @@
+#include <QDir>
+#include "PluginStyle.hpp"
 #include "GraphitPanel.hpp"
 
 #include "Controls.hpp"
@@ -38,10 +40,6 @@ namespace graphit = daw::plugins::graphit;
 
 namespace {
 
-constexpr QColor kSurface(0x10, 0x11, 0x13);
-constexpr QColor kMuted(0x8C, 0x91, 0x96);
-constexpr QColor kPrimary(0xF1, 0xF3, 0xF2);
-constexpr QColor kAccent(0x55, 0xE0, 0xC8);
 constexpr double kPi = std::numbers::pi_v<double>;
 
 const daw::plugins::ParameterInfo* parameterInfo(std::string_view id) {
@@ -56,101 +54,8 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const QRectF ring = QRectF(rect()).adjusted(5.0, 5.0, -5.0, -5.0);
-        const QPointF centre = ring.center();
-        const double radius = ring.width() * 0.5;
-        const double fraction = std::clamp(value(), 0.0, 1.0);
-
-        for (int tick = 0; tick < 29; ++tick) {
-            const double position = double(tick) / 28.0;
-            const double angle = (225.0 - position * 270.0) * kPi / 180.0;
-            const bool active = position <= fraction + 1.0e-9;
-            const double outer = radius - 1.5;
-            const double inner = outer - (tick % 4 == 0 ? 7.5 : 4.0);
-            QColor ink = active ? kPrimary : QColor(0x3B, 0x3E, 0x40);
-            ink.setAlpha(active ? 235 : 75);
-            painter.setPen(QPen(ink, active ? 1.55 : 0.9,
-                                Qt::SolidLine, Qt::RoundCap));
-            painter.drawLine(
-                QPointF(centre.x() + std::cos(angle) * inner,
-                        centre.y() - std::sin(angle) * inner),
-                QPointF(centre.x() + std::cos(angle) * outer,
-                        centre.y() - std::sin(angle) * outer));
-        }
-
-        const QRectF collar = ring.adjusted(21.0, 21.0, -21.0, -21.0);
-        for (int layer = 0; layer < 6; ++layer) {
-            const double spread = double(layer) * 1.7;
-            QColor shadow(0, 0, 0, 70 - layer * 9);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(shadow);
-            painter.drawEllipse(collar.adjusted(-spread, -spread,
-                                                 spread, spread)
-                                    .translated(0.0, 8.0 + layer * 0.8));
-        }
-
-        QRadialGradient bezel(collar.topLeft() +
-                                  QPointF(collar.width() * 0.30,
-                                          collar.height() * 0.22),
-                              collar.width() * 0.82);
-        bezel.setColorAt(0.0, QColor(0x58, 0x5A, 0x5C));
-        bezel.setColorAt(0.48, QColor(0x2C, 0x2E, 0x30));
-        bezel.setColorAt(0.78, QColor(0x15, 0x16, 0x18));
-        bezel.setColorAt(1.0, QColor(0x05, 0x06, 0x07));
-        painter.setPen(QPen(QColor(0x05, 0x06, 0x07), 2.2));
-        painter.setBrush(bezel);
-        painter.drawEllipse(collar);
-
-        const QRectF body = collar.adjusted(7.0, 7.0, -7.0, -7.0);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0, 0, 0, 165));
-        painter.drawEllipse(body.translated(0.0, 3.5));
-
-        QLinearGradient graphite(body.topLeft(), body.bottomLeft());
-        graphite.setColorAt(0.0, QColor(0x3D, 0x3F, 0x41));
-        graphite.setColorAt(0.40, QColor(0x29, 0x2B, 0x2D));
-        graphite.setColorAt(0.72, QColor(0x1C, 0x1E, 0x20));
-        graphite.setColorAt(1.0, QColor(0x12, 0x13, 0x15));
-        painter.setPen(QPen(QColor(0x09, 0x0A, 0x0B), 1.7));
-        painter.setBrush(graphite);
-        painter.drawEllipse(body);
-
-        QRadialGradient highlight(body.topLeft() +
-                                      QPointF(body.width() * 0.28,
-                                              body.height() * 0.20),
-                                  body.width() * 0.62);
-        highlight.setColorAt(0.0, QColor(255, 255, 255, 34));
-        highlight.setColorAt(0.48, QColor(255, 255, 255, 8));
-        highlight.setColorAt(1.0, QColor(255, 255, 255, 0));
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(highlight);
-        painter.drawEllipse(body.adjusted(2.0, 2.0, -2.0, -2.0));
-
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(QColor(255, 255, 255, underMouse() || isEditing()
-                                                    ? 62 : 42),
-                            1.35, Qt::SolidLine, Qt::RoundCap));
-        painter.drawArc(collar.adjusted(3.0, 3.0, -3.0, -3.0),
-                        28 * 16, 124 * 16);
-        painter.setPen(QPen(QColor(0, 0, 0, 150), 2.0,
-                            Qt::SolidLine, Qt::RoundCap));
-        painter.drawArc(collar.adjusted(3.0, 3.0, -3.0, -3.0),
-                        205 * 16, 130 * 16);
-
-        const double angle = (225.0 - fraction * 270.0) * kPi / 180.0;
-        painter.setPen(QPen(kPrimary, 3.0, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(
-            QPointF(centre.x() + std::cos(angle) * body.width() * 0.10,
-                    centre.y() - std::sin(angle) * body.width() * 0.10),
-            QPointF(centre.x() + std::cos(angle) * body.width() * 0.40,
-                    centre.y() - std::sin(angle) * body.width() * 0.40));
-
-        if (hasFocus()) {
-            painter.setPen(QPen(kAccent, 2.0, Qt::SolidLine));
-            painter.drawEllipse(ring.adjusted(-2.0, -2.0, 2.0, 2.0));
-        }
+        QPainter p(this);
+        pluginStyle::knob(p,rect(),value(),isEditing(),isEnabled(),hasFocus());
     }
 };
 
@@ -247,7 +152,7 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     m_amountReadout = new QLabel(this);
     m_amountReadout->setAlignment(Qt::AlignCenter);
     m_amountReadout->setStyleSheet(QStringLiteral(
-        "color:#F1F3F2;font-size:11px;font-weight:600;letter-spacing:2px;"));
+        "font-size:11px;font-weight:600;letter-spacing:2px;"));
     layout->addWidget(m_amountReadout);
     layout->addLayout(modeRow);
     layout->addStretch(1);
@@ -255,7 +160,7 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     auto* footer = new QLabel(tr("SATURATION  ·  EQUALIZATION  ·  DYNAMICS"), this);
     footer->setAlignment(Qt::AlignCenter);
     footer->setStyleSheet(QStringLiteral(
-        "color:#777C81;font-size:8px;letter-spacing:2px;"));
+        "font-size:10px;letter-spacing:1px;"));
     layout->addWidget(footer);
 
     auto* priority = new PrioritySlider(this);
@@ -277,21 +182,11 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     priority->setGeometry(30, 135, 112, 25);
     m_activeButton->setGeometry(width() - 132, 127, 102, 32);
 
-    setStyleSheet(QStringLiteral(
-        "QPushButton#GraphitModeButton{color:#92979C;background:#0A0B0D;"
-        "border:1px solid #34383B;border-radius:5px;font-size:12px;"
-        "font-weight:600;}"
-        "QPushButton#GraphitModeButton:hover{color:#F1F3F2;border-color:#697075;}"
-        "QPushButton#GraphitModeButton:checked{color:#F1F3F2;background:#153B37;"
-        "border:2px solid #55E0C8;}"
-        "QPushButton#GraphitModeButton:focus{border:2px solid #F1F3F2;}"
-        "QPushButton#GraphitActiveButton{color:#7B8084;background:transparent;"
-        "border:1px solid transparent;border-radius:5px;font-size:9px;"
-        "font-weight:600;letter-spacing:1px;padding:0 5px;}"
-        "QPushButton#GraphitActiveButton:checked{color:#55E0C8;}"
-        "QPushButton#GraphitActiveButton:hover{border-color:#34383B;}"
-        "QPushButton#GraphitActiveButton:focus{border-color:#F1F3F2;}"));
+    pluginStyle::bind(this);
 
+
+    dial->setProperty("parameterId", QStringLiteral("amount"));
+    priority->setProperty("parameterId", QStringLiteral("priority"));
     connect(dial, &ui::Knob::valueChanged, this, [this](double value) {
         beginAmountGesture();
         writeParameter("amount", value);
@@ -337,10 +232,8 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     refresh();
 }
 
-graphit::GraphitInstance* GraphitPanel::graphitInstance() const {
-    if (!m_controller) return nullptr;
-    return dynamic_cast<graphit::GraphitInstance*>(
-        m_controller->insertInstance(m_channelKey, m_insertKey));
+bool GraphitPanel::available() const {
+    return m_controller && m_controller->hasInsert(m_channelKey, m_insertKey, graphit::GraphitInstance::uid());
 }
 
 double GraphitPanel::readParameter(const char* parameterId) const {
@@ -510,10 +403,10 @@ void GraphitPanel::refresh() {
 }
 
 void GraphitPanel::refreshTelemetry() {
-    graphit::Telemetry telemetry;
-    if (graphit::GraphitInstance* instance = graphitInstance())
-        telemetry = instance->consumeTelemetry();
-    const float peak = std::max(telemetry.outputLeft, telemetry.outputRight);
+    const auto telemetry = available()
+        ? m_controller->effectMeterSnapshot(m_channelKey, m_insertKey)
+        : daw::EffectMeterSnapshot{};
+    const float peak = telemetry.output;
     const float level = peak > 1.0e-6f
         ? std::clamp((20.0f * std::log10(peak) + 54.0f) / 54.0f, 0.0f, 1.0f)
         : 0.0f;
@@ -522,7 +415,7 @@ void GraphitPanel::refreshTelemetry() {
     const bool hadHistory = std::any_of(m_history.begin(), m_history.end(),
                                        [](float level) { return level > 0.0f; });
     m_meterLevel = std::max(level, m_meterLevel * float(std::pow(0.92, dt / 0.033)));
-    m_gainReduction = std::max(telemetry.gainReductionDb,
+    m_gainReduction = std::max(telemetry.reduction,
                                m_gainReduction * float(std::pow(0.90, dt / 0.033)));
     if (m_meterLevel < 1e-5f) m_meterLevel = 0.0f;
     if (m_gainReduction < 1e-5f) m_gainReduction = 0.0f;
@@ -548,16 +441,8 @@ void GraphitPanel::paintEvent(QPaintEvent*) {
 
 void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing, true);
-    QLinearGradient surface(0.0, 0.0, 0.0, height());
-    surface.setColorAt(0.0, QColor(0x1B, 0x1C, 0x1E));
-    surface.setColorAt(0.42, kSurface);
-    surface.setColorAt(1.0, QColor(0x0D, 0x0E, 0x10));
-    painter.fillRect(rect(), surface);
-
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor(0x2B, 0x2E, 0x30), 1.0));
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
-                            11.0, 11.0);
+    painter.fillRect(rect(),th().background);
+    pluginStyle::surface(painter,QRectF(rect()).adjusted(1,1,-1,-3));
 
     const double centreX = width() * 0.5;
     QPainterPath headerShape;
@@ -577,12 +462,8 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     headerShape.quadTo(width() - 8.0, 8.0, width() - 20.0, 8.0);
     headerShape.closeSubpath();
 
-    QLinearGradient headerFill(0.0, 8.0, 0.0, 174.0);
-    headerFill.setColorAt(0.0, QColor(0x0D, 0x0E, 0x10));
-    headerFill.setColorAt(0.72, QColor(0x09, 0x0A, 0x0C));
-    headerFill.setColorAt(1.0, QColor(0x07, 0x08, 0x09));
-    painter.setBrush(headerFill);
-    painter.setPen(QPen(QColor(0x32, 0x35, 0x37), 1.2));
+    painter.setBrush(th().well());
+    painter.setPen(QPen(th().separator(),1));
     painter.drawPath(headerShape);
 
     QFont header = painter.font();
@@ -590,12 +471,12 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     header.setWeight(QFont::DemiBold);
     header.setLetterSpacing(QFont::PercentageSpacing, 180.0);
     painter.setFont(header);
-    painter.setPen(kPrimary);
+    painter.setPen(th().textPrimary);
     painter.drawText(QRectF(28.0, 15.0, 180.0, 20.0),
                      Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("GRAPHIT"));
     header.setLetterSpacing(QFont::PercentageSpacing, 115.0);
     painter.setFont(header);
-    painter.setPen(kMuted);
+    painter.setPen(th().textSecondary);
     painter.drawText(QRectF(width() - 100.0, 15.0, 72.0, 20.0),
                      Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("VLTONE"));
 
@@ -604,7 +485,7 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     small.setWeight(QFont::Medium);
     small.setLetterSpacing(QFont::PercentageSpacing, 135.0);
     painter.setFont(small);
-    painter.setPen(kMuted);
+    painter.setPen(th().textSecondary);
     painter.drawText(QRectF(30.0, 39.0, 120.0, 14.0),
                      Qt::AlignLeft | Qt::AlignVCenter,
                      tr("AMOUNT %1%").arg(int(std::lround(m_amountValue * 100.0))));
@@ -613,20 +494,20 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
                      tr("GR %1 dB").arg(m_gainReduction, 0, 'f', 1));
 
     const QRectF graph(44.0, 57.0, width() - 88.0, 42.0);
-    painter.setPen(QPen(QColor(0x2E, 0x32, 0x34), 1.0, Qt::DotLine));
+    painter.setPen(QPen(th().separator(), 1.0, Qt::DotLine));
     painter.drawLine(graph.bottomLeft(), graph.bottomRight());
     const double spacing = graph.width() / double(m_history.size() - 1);
     for (std::size_t index = 0; index < m_history.size(); ++index) {
         const double x = graph.left() + double(index) * spacing;
         const double height = 2.0 + m_history[index] * (graph.height() - 3.0);
-        QColor bar = kAccent;
+        QColor bar = pluginStyle::accent();
         bar.setAlpha(int(55 + m_history[index] * 150.0));
         painter.setPen(QPen(bar, 1.0, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(QPointF(x, graph.bottom()),
                          QPointF(x, graph.bottom() - height));
     }
 
-    painter.setPen(kMuted);
+    painter.setPen(th().textSecondary);
     painter.drawText(QRectF(30.0, 113.0, 112.0, 16.0),
                      Qt::AlignCenter,
                      tr("PRIORITY %1").arg(QString::fromStdString(
@@ -656,7 +537,10 @@ void GraphitPanel::hideEvent(QHideEvent* event) {
 }
 
 bool GraphitPanel::checkForTest() {
-    if (!m_controller || !graphitInstance()) return false;
+    const auto shots = qEnvironmentVariable("VLT_NATIVE_SCREENSHOTS");
+    if (!shots.isEmpty()) { QDir().mkpath(shots); grab().save(shots + "/graphit.png"); }
+
+    if (!m_controller || !available()) return false;
     const auto oneUndoAdvanced = [this](std::size_t before) {
         const std::size_t after = m_controller->undoDepth();
         return before < m_controller->undoLimit() ? after == before + 1

@@ -1,4 +1,5 @@
 #include "crash/CrashHandler.hpp"
+#include "Host/PluginLoadContext.hpp"
 
 #include "recovery/SessionFile.hpp"
 
@@ -31,12 +32,12 @@ namespace {
 int g_markerFd = -1;
 
 constexpr std::size_t kPluginNameMax = 128;
-char g_pluginName[kPluginNameMax] = {};
+auto& g_pluginName = plugins::pluginLoadContext.name;
 /// Reading a name the handler might catch mid-write is acceptable — a truncated
 /// plugin name in a crash report is still a plugin name. What is not acceptable
 /// is following a dangling pointer, which is why the name is copied here rather
 /// than referenced.
-std::atomic<bool> g_pluginActive{false};
+auto& g_pluginActive = plugins::pluginLoadContext.active;
 
 std::atomic<bool> g_installed{false};
 /// Guards against a fault inside the handler itself turning into an endless

@@ -131,11 +131,42 @@ int main() {
     fixturePlugins.waitForScan();
     check(fixturePlugins.lastScanError().empty(), "the isolated fixture scan finishes");
 
-    daw::EngineController ctrl;
+    daw::EngineController ctrl{daw::EngineController::TestRuntime{}};
     check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
           "the controller initialises without a device");
 
     ctrl.pluginManager().copyCatalogFrom(fixturePlugins);
+
+    // A component reload belongs to one native side, not the entire dual-mono
+    // slot. Keeping the other instance also preserves opaque, unmirrored state.
+    {
+        const auto equalizer = ctrl.pluginManager().find(daw::plugins::Format::Internal, "daw.equalizer");
+        const auto track = ctrl.addTrack(daw::TrackKind::Audio, "Dual Mono Reload");
+        const auto slot = equalizer ? ctrl.addInsert(track, *equalizer) : std::string{};
+        check(!slot.empty() && ctrl.setInsertChannelMode(track, slot, daw::PluginChannelMode::DualMono),
+              "a dual-mono runtime slot is available for component reload");
+        ctrl.setInsertEditorChannel(track, slot, daw::PluginEditorChannel::Right);
+        const auto rightIdentity = ctrl.insertIdentity(track, slot);
+        auto* right = ctrl.insertInstance(track, slot);
+        if (right) {
+            const auto parameter = right->parameterIndexForId("output.gain");
+            if (parameter >= 0) right->setParameterFromHost(std::uint32_t(parameter), -7);
+        }
+        ctrl.setInsertEditorChannel(track, slot, daw::PluginEditorChannel::Left);
+        const auto leftIdentity = ctrl.insertIdentity(track, slot);
+        const auto oldGraph = ctrl.routingGraph();
+        for (const auto& entry : oldGraph->nodes)
+            if (auto* node = dynamic_cast<daw::plugins::PluginNode*>(entry.node);
+                node && node->instanceId() == leftIdentity.instance) node->onReloadRequested();
+        ctrl.pumpPluginEvents();
+        check(ctrl.insertIdentity(track, slot) != leftIdentity,
+              "component reload replaces the requested native side");
+        ctrl.setInsertEditorChannel(track, slot, daw::PluginEditorChannel::Right);
+        check(ctrl.insertIdentity(track, slot) == rightIdentity &&
+                  std::abs(ctrl.insertParameter(track, slot, "output.gain") + 7) < 1e-9,
+              "left component reload preserves the right identity and unmirrored opaque state");
+        ctrl.removeTrack(track);
+    }
 
     const auto descriptor =
         ctrl.pluginManager().find(daw::plugins::Format::Clap, "com.daw.test.gain");
@@ -490,7 +521,7 @@ int main() {
     // Multi-source routing remains a real project operation (including render,
     // undo, legacy loading and both instances of a dual-mono plugin).
     {
-        daw::EngineController multi;
+        daw::EngineController multi{daw::EngineController::TestRuntime{}};
         check(multi.initialize(48000, 128, false).isOk(), "multi-sidechain engine initializes");
         multi.pluginManager().copyCatalogFrom(fixturePlugins);
         const auto target = multi.importAudioToNewTrack(tonePath, 0);
@@ -516,7 +547,7 @@ int main() {
               "an invalid source cannot partially apply the selection");
         const auto saved = (dir / "multi-sidechain.vlt").string();
         check(multi.saveProject(saved).isOk(), "multi-sidechain project saves");
-        daw::EngineController reopened;
+        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
         reopened.initialize(48000, 128, false);
         reopened.pluginManager().copyCatalogFrom(fixturePlugins);
         check(reopened.openProject(saved).isOk() &&
@@ -737,9 +768,10 @@ int main() {
         ctrl.setInsertParameter(trackId, insertId, parameters.front().id, 0.73);
         check(ctrl.loadSamplerSample(samplerTrackId, samplerSlotId, tonePath),
               "the Sampler has content immediately before recovery capture");
-        // Host parameter writes are timestamped events. Render one block range
-        // so the fixture's opaque processor state contains the new L/R values;
-        // the inline parameter fallback is deliberately removed below.
+        // Deliver host edits to the live fixture. Offline export owns another
+        // runtime and cannot update this processor's opaque recovery state.
+        // The inline parameter fallback is deliberately removed below.
+        ctrl.pumpPreviewPluginEvents();
         check(ctrl.exportMixdown((dir / "before_recovery.wav").string(), false)
                   .isOk(),
               "queued plugin values reach DSP before the crash snapshot");
@@ -752,6 +784,7 @@ int main() {
         ctrl.setInsertEditorChannel(trackId, insertId,
                                     daw::PluginEditorChannel::Left);
         ctrl.setInsertParameter(trackId, insertId, parameters.front().id, 0.41);
+        ctrl.pumpPreviewPluginEvents();
         check(ctrl.exportMixdown((dir / "recovery_state_probe.wav").string(),
                                  false).isOk(),
               "the recovery state probe reaches the plugin processor");
@@ -792,7 +825,7 @@ int main() {
                   (fs::path(sessionDir) / "project.json").string(), "").isOk(),
               "the plugin recovery manifest loads");
 
-        daw::EngineController recovered;
+        daw::EngineController recovered{daw::EngineController::TestRuntime{}};
         recovered.initialize(48000, 512, /*openDevice=*/false);
         recovered.pluginManager().copyCatalogFrom(fixturePlugins);
         check(recovered.restoreRecoveryProject(
@@ -860,7 +893,7 @@ int main() {
         ctrl.exportMixdown(beforePath, false);
         const float beforePeak = peakOf(beforePath);
 
-        daw::EngineController reloaded;
+        daw::EngineController reloaded{daw::EngineController::TestRuntime{}};
         reloaded.initialize(48000, 512, /*openDevice=*/false);
         reloaded.pluginManager().copyCatalogFrom(fixturePlugins);
 
@@ -918,15 +951,24 @@ int main() {
                       daw::PluginEditorChannel::Right &&
                   slots->front().sidechainTrackIds == std::vector<std::string>{samplerTrackId},
               "wrapper mode, selected dual-mono side and sidechain survive reload");
-        if (slots) {
+        if (slots && !slots->empty()) {
             const auto wrapperParameters = reloaded.insertParameters(
                 reloaded.project().tracks.front().id, slots->front().id);
+            check(!wrapperParameters.empty() && std::any_of(
+                      slots->front().rightParameters.begin(), slots->front().rightParameters.end(),
+                      [&](const auto& parameter) { return parameter.id == wrapperParameters.front().id &&
+                          std::fabs(parameter.value - .5) < 1e-6 && parameter.restoreAfterState; }),
+                  "right-side edits saved before DSP override the older chunk on reopen");
+            // The local CLAP fixture applies queued host edits in process().
+            // Opening a project and rendering its independent offline clone
+            // must not implicitly advance the live processor.
+            reloaded.pumpPreviewPluginEvents();
             check(!wrapperParameters.empty() &&
                       std::fabs(reloaded.insertParameter(
                                     reloaded.project().tracks.front().id,
                                     slots->front().id,
                                     wrapperParameters.front().id) - 0.5) < 1e-6,
-                  "the right dual-mono instance restores its own state chunk");
+                  "the right dual-mono instance restores its own chunk and pending edits");
         }
         const daw::ClipModel* reloadedClip =
             reloaded.audioClip(reloaded.project().tracks.front().id, clipId);
@@ -988,7 +1030,7 @@ int main() {
   }]
 })";
 
-        daw::EngineController old;
+        daw::EngineController old{daw::EngineController::TestRuntime{}};
         old.initialize(48000, 512, /*openDevice=*/false);
         check(old.openProject(legacy.string()).isOk(),
               "a v1 project without plugin fields loads");
@@ -1012,7 +1054,7 @@ int main() {
     "inserts": [], "clips": []
   }]
 })";
-        daw::EngineController oldSampler;
+        daw::EngineController oldSampler{daw::EngineController::TestRuntime{}};
         oldSampler.initialize(48000, 512, /*openDevice=*/false);
         check(oldSampler.openProject(v2.string()).isOk(),
               "a v2 sampler project without samplerFx loads");
@@ -1031,7 +1073,7 @@ int main() {
     // plugin reports; storing plain values in the lane would make the drawn
     // curve meaningless the moment it was pointed at another parameter.
     {
-        daw::EngineController automated;
+        daw::EngineController automated{daw::EngineController::TestRuntime{}};
         automated.initialize(48000, 512, /*openDevice=*/false);
         const std::string midiTrack =
             automated.addTrack(daw::TrackKind::Instrument, "Synth");
@@ -1071,6 +1113,7 @@ int main() {
         // A full-range ramp across the clip: 0 to 1 normalised is 0 to 2 plain.
         automated.setLanePoints(midiTrack, clip, lane, {{0.0, 0.0}, {8.0, 1.0}});
 
+        const double liveBeforeExport = automated.insertParameter(midiTrack, slot, parameters[0].id);
         const std::string rampPath = (dir / "ramp.wav").string();
         check(automated.exportMixdown(rampPath, false).isOk(),
               "exports with the lane driving the parameter");
@@ -1096,12 +1139,10 @@ int main() {
         check(std::fabs(rampSevenEighths - 1.75f) < 0.02f,
               "and seven eighths of the way in, seven eighths up");
 
-        // Pointing the lane at nothing stops it driving the parameter — but it
-        // does *not* rewind the parameter. Automation writes a value into the
-        // plugin like any other edit; the plugin keeps the last one it was
-        // given, which here is the 2.0 the ramp ended on. That is how every
-        // host behaves, and the alternative — silently restoring some earlier
-        // value when a lane is deleted — would be the surprising one.
+        // The ramp ran in the offline clone. It must not change the live
+        // processor, or leak its last automated value into a subsequent export.
+        check(std::abs(automated.insertParameter(midiTrack, slot, parameters[0].id) - liveBeforeExport) < 1e-9,
+              "offline automation leaves the live processor unchanged");
         automated.setLaneTarget(midiTrack, clip, lane, slot, "");
         const std::string clearedPath = (dir / "cleared.wav").string();
         automated.exportMixdown(clearedPath, false);
@@ -1112,13 +1153,13 @@ int main() {
         const float held = midpoint < cleared.interleaved.size()
                                ? std::fabs(cleared.interleaved[midpoint])
                                : -1.0f;
-        check(std::fabs(held - 2.0f) < 0.02f,
-              "and a lane pointed at nothing stops driving it, at the value it left");
+        check(std::fabs(held - liveBeforeExport) < 0.02f,
+              "a removed automation target renders from the unchanged live state");
     }
 
     // ── Routed audio bypasses sampler-owned FX, then hears track FX ──
     {
-        daw::EngineController routed;
+        daw::EngineController routed{daw::EngineController::TestRuntime{}};
         routed.initialize(48000, 512, /*openDevice=*/false);
         const std::string source =
             routed.addTrack(daw::TrackKind::Audio, "Routed Source");
@@ -1157,7 +1198,7 @@ int main() {
     // soloing anything left every instrument and MIDI track playing. With a
     // synth in the project — which is most projects — solo did nothing at all.
     {
-        daw::EngineController solo;
+        daw::EngineController solo{daw::EngineController::TestRuntime{}};
         solo.initialize(48000, 512, /*openDevice=*/false);
         const std::string audio = solo.addTrack(daw::TrackKind::Audio, "Audio");
         solo.importAudio(tonePath, audio, 0.0);
@@ -1222,7 +1263,7 @@ int main() {
     // inserts. Signal arrived, the meter moved, and every plugin on the bus did
     // nothing at all.
     {
-        daw::EngineController routed;
+        daw::EngineController routed{daw::EngineController::TestRuntime{}};
         routed.initialize(48000, 512, /*openDevice=*/false);
         const std::string src = routed.addTrack(daw::TrackKind::Audio, "Source");
         routed.importAudio(tonePath, src, 0.0);
@@ -1252,7 +1293,7 @@ int main() {
     // Pre-fader, with the track's own fader down, so the *only* path to the
     // master is send → bus → the bus's plugin.
     {
-        daw::EngineController sent;
+        daw::EngineController sent{daw::EngineController::TestRuntime{}};
         sent.initialize(48000, 512, /*openDevice=*/false);
         const std::string src = sent.addTrack(daw::TrackKind::Audio, "Source");
         sent.importAudio(tonePath, src, 0.0);
@@ -1309,7 +1350,7 @@ int main() {
     // with the slot, so the paste is the tuned plugin rather than a fresh one
     // wearing the same name.
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         c.initialize(48000, 512, /*openDevice=*/false);
         c.pluginManager().copyCatalogFrom(fixturePlugins);
 
@@ -1347,8 +1388,9 @@ int main() {
         // when it next processes a block, and nothing is rendering here — the
         // mixdown below is what proves the pasted chain really sounds like the
         // one it was copied from.
-        check(pasted && pasted->front().parameters.size() == 1 &&
-                  std::fabs(pasted->front().parameters.front().value - 0.25) < 1e-9,
+        check(pasted && !pasted->empty() && std::any_of(pasted->front().parameters.begin(), pasted->front().parameters.end(),
+                  [&](const auto& parameter) { return parameter.id == parameters[0].id &&
+                      std::fabs(parameter.value - 0.25) < 1e-9; }),
               "and the plugin arrives holding the value it was copied at");
         check(std::fabs(c.project().findTrack(b)->volume - 1.0f) < 1e-6f &&
                   c.project().findTrack(b)->sends.empty(),
@@ -1420,6 +1462,59 @@ int main() {
               "so the source is left with none");
     }
 
+    {
+        const auto source = dir / "unavailable-source.vlt";
+        const auto saved = dir / "unavailable-copy.vlt";
+        const auto templ = dir / "unavailable-template.vlt";
+        daw::ProjectModel project;
+        daw::TrackModel track;
+        track.id = "unavailable-track"; track.name = "Retained plugin";
+        daw::InsertModel slot;
+        slot.id = "unavailable-slot"; slot.name = "Unavailable fixture";
+        slot.format = daw::PluginFormat::Vst3; slot.uid = "fixture-not-installed";
+        slot.path = (dir / "not-installed.vst3").string();
+        slot.channelMode = daw::PluginChannelMode::DualMono;
+        slot.stateFile = "missing-left.bin"; slot.rightStateFile = "missing-right.bin";
+        slot.parameters = {{"gain", .37}}; slot.rightParameters = {{"gain", .81}};
+        track.inserts.push_back(slot); project.tracks.push_back(track);
+        check(bool(daw::ProjectSerializer::save(project, source.string())), "create unavailable-plugin project");
+        const auto stateDir = fs::path(daw::ProjectSerializer::statePath(source.string()));
+        fs::create_directories(stateDir);
+        const std::string left("left\0opaque\xff", 12), right("right\0opaque\xfe", 13);
+        { std::ofstream stream(stateDir / slot.stateFile, std::ios::binary); stream.write(left.data(), left.size()); }
+        { std::ofstream stream(stateDir / slot.rightStateFile, std::ios::binary); stream.write(right.data(), right.size()); }
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        check(bool(controller.initialize(48000, 256, false)) && bool(controller.openProject(source.string())),
+              "unavailable native plugin keeps project editable");
+        check(!controller.hasInsert(track.id, slot.id), "unavailable slot does not claim a native instance");
+        fs::remove_all(source);
+        const auto verify = [&](const fs::path& path) {
+            daw::ProjectModel document;
+            if (!daw::ProjectSerializer::load(document, path.string()) || document.tracks.empty()) return false;
+            const auto& restored = document.tracks.front().inserts.front();
+            const auto read = [&](const std::string& name) {
+                std::ifstream stream(fs::path(daw::ProjectSerializer::statePath(path.string())) / name, std::ios::binary);
+                return std::string(std::istreambuf_iterator<char>(stream), {});
+            };
+            return read(restored.stateFile) == left && read(restored.rightStateFile) == right &&
+                restored.parameters.front().value == .37 && restored.rightParameters.front().value == .81;
+        };
+        check(bool(controller.saveProject(saved.string())) && verify(saved),
+              "Save As preserves both unavailable plugin chunks after source package removal");
+        check(bool(controller.saveProjectTemplate(templ.string(), "Retained")) && verify(templ),
+              "template save shares lossless unavailable-plugin state packaging");
+        daw::plugins::PluginDescriptor replacement;
+        replacement.format = daw::plugins::Format::Internal;
+        replacement.uid = "daw.equalizer"; replacement.name = "Equalizer";
+        check(controller.replaceInsert(track.id, slot.id, replacement),
+              "an unavailable slot can be replaced while retaining its document ID");
+        const auto noCapture = controller.captureRecoverySnapshot(0);
+        check(noCapture.pluginStates.empty() && noCapture.project.tracks.front().inserts.front().stateFile.empty(),
+              "replacement never inherits cached native bytes from the previous plugin UID");
+        controller.removeTrack(track.id);
+        check(controller.prepareProjectSave().pluginStates.empty(),
+              "removed unavailable slots release retained recovery state");
+    }
     fs::remove_all(dir, ec);
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return failures;

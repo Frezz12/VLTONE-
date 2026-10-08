@@ -96,7 +96,7 @@ int main() {
 
     // ── Formats ────────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -151,7 +151,7 @@ int main() {
 
     // ── Stems sum to the mixdown ───────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -191,7 +191,7 @@ int main() {
 
     // ── Pre-fader stems ignore the fader and the pan ────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         c.setTrackVolume(a, 0.5f);
@@ -224,7 +224,7 @@ int main() {
 
     // ── Mute, and rendering as though nothing were muted ────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         c.setTrackMuted(a, true);
@@ -254,7 +254,7 @@ int main() {
 
     // ── Range: the cycle region ────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         c.setLoopRangeSeconds(0.25, 0.75);
@@ -276,7 +276,7 @@ int main() {
 
     // ── Tail ───────────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -315,7 +315,7 @@ int main() {
 
     // ── Bypassing the effects, and putting them back ────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         // No plugin host in this test, so the observable part is the promise
@@ -340,7 +340,7 @@ int main() {
 
     // ── Mono ───────────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         daw::rendering::Spec spec;
@@ -360,7 +360,7 @@ int main() {
 
     // ── A different sample rate ────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -388,7 +388,7 @@ int main() {
         // that catches the whole chain — decode, resample, graph, encode —
         // shifting the audio rather than merely reporting the right header.
         {
-            daw::EngineController pure;
+            daw::EngineController pure{daw::EngineController::TestRuntime{}};
             pure.initialize(kRate, 512, /*openDevice=*/false);
             const std::string t = pure.addTrack(daw::TrackKind::Audio, "Tone");
             pure.importAudio(toneA, t, 0.0);
@@ -456,7 +456,7 @@ int main() {
 
     // ── Cancelling ─────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -487,7 +487,7 @@ int main() {
 
     // ── Refusals ───────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -520,7 +520,7 @@ int main() {
         // MetronomeNode gates its click on `context.playing`, which an offline
         // pass asserts, so this only holds because the render leaves it out of
         // the graph entirely.
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -562,7 +562,7 @@ int main() {
         // that the range still renders to its exact length and starts on time;
         // the shift itself is covered where a latency node can be built, in
         // engine_graph_test.
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         daw::rendering::Spec spec;
@@ -584,7 +584,7 @@ int main() {
 
     // ── Pre-roll ───────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
 
@@ -636,7 +636,7 @@ int main() {
         // back where it started.
         const float lsb = 1.0f / 32768.0f;
         const float level = 0.3f * lsb;
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         c.initialize(kRate, 512, /*openDevice=*/false);
         const std::string t = c.addTrack(daw::TrackKind::Audio, "Faint");
         const std::string faint = (dir / "faint.wav").string();
@@ -676,7 +676,7 @@ int main() {
         // systematic half-LSB offset on every integer export. The writer
         // quantises itself to avoid that, and this is what holds it to it.
         auto meanOfConstant = [&](float value, const char* folder) {
-            daw::EngineController q;
+            daw::EngineController q{daw::EngineController::TestRuntime{}};
             q.initialize(kRate, 512, /*openDevice=*/false);
             const std::string tr = q.addTrack(daw::TrackKind::Audio, "Flat");
             const std::string file =
@@ -709,7 +709,7 @@ int main() {
 
     // ── Metadata ───────────────────────────────────────────────────────────
     {
-        daw::EngineController c;
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
         std::string a, b;
         buildProject(c, a, b);
         daw::rendering::Spec spec;

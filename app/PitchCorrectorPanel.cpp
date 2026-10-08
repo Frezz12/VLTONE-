@@ -2,7 +2,7 @@
 #include "EngineController.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Theme.hpp"
-#include "graphics/BrowserSurface.hpp"
+#include "NativePluginView.hpp"
 #include <QCoreApplication>
 #include <QHideEvent>
 #include <QShowEvent>
@@ -38,50 +38,39 @@ PitchCorrectorPanel::PitchCorrectorPanel(daw::EngineController* controller, QStr
     setMinimumSize(560, 360);
     m_presets = QJsonDocument::fromJson(QSettings().value(presetKey).toByteArray()).object();
     for (unsigned i = 0; i < 12; ++i) m_presetValues[i] = read(i);
-    m_profile = new ui::graphics::BrowserProfile(this, nullptr, false);
-    m_view = new ui::graphics::BrowserSurface(m_profile, this);
-    m_view->setObjectName("PitchWebView"); m_view->setProperty("dawWebInput", true);
+    m_view = new NativePluginView(NativePluginView::Kind::Pitch, this);
     auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->addWidget(m_view);
-    auto* page = m_view->page();
-    // QWidget's host mask clips the outside corners. Its Chromium backing
-    // surface must be opaque to avoid exposing stale pixels on partial paints.
-    // Quick composites in one scene and needs alpha for the HTML corner shape.
-    page->setBackgroundColor(page->isQuick() ? QColor(Qt::transparent) :
-        mixColors(QColor("#24262b"), th().accent, .06));
-    page->setAudioMuted(true);
-    page->navigationPolicy = [](const QUrl& url, bool) {
-        return url.scheme() == QStringLiteral("qrc") && url.host().isEmpty() &&
-               url.path() == QStringLiteral("/vlt/pitch/index.html");
-    };
-    page->setWebAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
-    page->setWebAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, false);
-    page->setWebAttribute(QWebEngineSettings::JavascriptCanOpenWindows, false);
-    m_bridge = new PitchWebBridge(this); page->setWebChannelObject("pitch", m_bridge);
-    connect(page, &ui::graphics::BrowserPage::loadStarted, this, [this] { m_ready = false; finishAll(); });
+    m_bridge = new PitchControls(this);
+    connect(m_bridge, &PitchControls::snapshot, m_view, &NativePluginView::setSnapshot);
+    connect(m_view, &NativePluginView::edit, m_bridge, &PitchControls::edit);
+    connect(m_view, &NativePluginView::finish, m_bridge, &PitchControls::finish);
+    connect(m_view, &NativePluginView::automate, m_bridge, &PitchControls::automate);
+    connect(m_view, &NativePluginView::toggleBypass, m_bridge, &PitchControls::toggleBypass);
+    connect(m_view, &NativePluginView::factoryPreset, m_bridge, &PitchControls::factoryPreset);
+    connect(m_view, &NativePluginView::loadPreset, m_bridge, &PitchControls::loadPreset);
+    connect(m_view, &NativePluginView::deletePreset, m_bridge, &PitchControls::deletePreset);
+    m_view->savePreset = [this](const QString& name, bool replace) { return m_bridge->savePreset(name, replace); };
+    connect(m_view, &NativePluginView::toggleNote, m_bridge, &PitchControls::toggleNote);
+    connect(m_view, &NativePluginView::sendToAll, m_bridge, &PitchControls::sendToAll);
     m_timer = new QTimer(this); m_timer->setObjectName("PitchTelemetryTimer"); m_timer->setInterval(33);
     connect(m_timer, &QTimer::timeout, this, &PitchCorrectorPanel::refresh);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
-        if (!m_view->page()->isQuick())
-            m_view->page()->setBackgroundColor(mixColors(QColor("#24262b"), th().accent, .06));
         if (isVisible()) refresh();
     });
-    page->load(QUrl(QStringLiteral("qrc:/vlt/pitch/index.html")));
 }
 PitchCorrectorPanel::~PitchCorrectorPanel() {
     finishAll();
-    // The Chromium profile must outlive all pages, including Quick items.
-    delete m_view; m_view = nullptr;
-    delete m_profile; m_profile = nullptr;
+
 }
-pitch::PitchCorrectorInstance* PitchCorrectorPanel::instance() const {
-    return m_controller ? dynamic_cast<pitch::PitchCorrectorInstance*>(m_controller->insertInstance(m_channel, m_insert)) : nullptr;
+bool PitchCorrectorPanel::available() const {
+    return m_controller && m_controller->hasInsert(m_channel, m_insert, pitch::PitchCorrectorInstance::uid());
 }
 double PitchCorrectorPanel::read(unsigned index) const {
     const auto& p = pitch::parameterTable()[index];
-    return instance() ? m_controller->insertParameter(m_channel, m_insert, p.id) : p.defaultValue;
+    return available() ? m_controller->insertParameter(m_channel, m_insert, p.id) : p.defaultValue;
 }
 void PitchCorrectorPanel::write(unsigned index, double value) {
-    if (index >= 12 || !std::isfinite(value) || !instance()) return;
+    if (index >= 12 || !std::isfinite(value) || !available()) return;
     if (index == 11 && m_controller->liveAudioActivity()) {
         m_status = tr("Stop playback and input monitoring to change quality."); return;
     }
@@ -93,7 +82,7 @@ void PitchCorrectorPanel::write(unsigned index, double value) {
 }
 void PitchCorrectorPanel::finishGesture(unsigned index) {
     if (index >= 12 || !m_gestures[index]) return;
-    if (instance() && read(index) != *m_gestures[index]) {
+    if (available() && read(index) != *m_gestures[index]) {
         m_controller->commitInsertParameterEdit(m_channel, m_insert,
             pitch::parameterTable()[index].id, *m_gestures[index], "Change Pitch Correction");
         emit projectEdited();
@@ -102,7 +91,7 @@ void PitchCorrectorPanel::finishGesture(unsigned index) {
 }
 void PitchCorrectorPanel::finishAll() { for (unsigned i = 0; i < 12; ++i) finishGesture(i); }
 void PitchCorrectorPanel::applyFactoryPreset(int index) {
-    if (index < 0 || index >= 4 || !instance()) return;
+    if (index < 0 || index >= 4 || !available()) return;
     finishAll(); const auto group = m_controller->beginUndoGroup();
     const auto& preset = pitch::factoryPresets()[std::size_t(index)];
     const std::array<double, 3> style{preset.tune, preset.humanize, preset.vibrato};
@@ -113,7 +102,7 @@ void PitchCorrectorPanel::applyFactoryPreset(int index) {
     m_userPreset = false; m_status.clear(); refresh();
 }
 void PitchCorrectorPanel::applyValues(const Values& values, const QString& name) {
-    if (!instance()) return;
+    if (!available()) return;
     if (m_controller->liveAudioActivity() && values[11] != read(11)) {
         m_status = tr("Stop playback and input monitoring to load this preset's quality."); refresh(); return;
     }
@@ -123,7 +112,6 @@ void PitchCorrectorPanel::applyValues(const Values& values, const QString& name)
     m_presetValues = values; m_presetName = name; m_userPreset = true; m_status.clear(); refresh();
 }
 void PitchCorrectorPanel::refresh() {
-    if (!m_ready) return;
     Values values; QVariantList params;
     for (unsigned i = 0; i < 12; ++i) { values[i] = read(i); params.append(i == 0 ? pitch::retuneMilliseconds(values[i]) : values[i]); }
     if (!m_userPreset && std::abs(values[0]-pitch::kDefaultTune) < .001 && values[1] == 0 && values[2] == 0) {
@@ -136,7 +124,7 @@ void PitchCorrectorPanel::refresh() {
     }
     bool modified = false;
     for (unsigned i = 0; i < (m_userPreset ? 12u : 3u); ++i) modified |= std::abs(values[i]-m_presetValues[i]) > .001;
-    QVariantMap state{{"values", params}, {"mask", allowedNotes(values)}, {"preset", m_presetName},
+    QVariantMap state{{"available", available()}, {"values", params}, {"mask", allowedNotes(values)}, {"preset", m_presetName},
         {"modified", modified}, {"userPreset", m_userPreset}, {"presets", m_presets.keys()}, {"status", m_status},
         {"busy", m_controller && m_controller->liveAudioActivity()}};
     state["sendToAllLabel"] = tr("Send settings to all other VLT Pitch instances");
@@ -144,31 +132,30 @@ void PitchCorrectorPanel::refresh() {
         {"accent", th().accent.name()},
         {"shellTop", mixColors(QColor("#2b2d31"), th().accent, .06).name()},
         {"shellBottom", mixColors(QColor("#24262b"), th().accent, .06).name()}};
-    if (auto* p = instance()) {
-        const auto telemetry = p->telemetrySnapshot();
+    if (available()) {
+        const auto telemetry = m_controller->effectMeterSnapshot(m_channel, m_insert);
         const auto* model = m_controller->insertModel(m_channel, m_insert);
         state["active"] = model && !model->bypassed;
         state["input"] = noteName(telemetry.inputHz, values[3]); state["target"] = noteName(telemetry.targetHz, values[3]);
         state["cents"] = std::round(telemetry.correctionCents);
         state["targetNote"] = telemetry.targetHz > 0 ? (int(std::lround(69+12*std::log2(telemetry.targetHz/values[3])))%12+12)%12 : -1;
-        state["latency"] = p->latencySamples()*1000.0/std::max(1.0, m_controller->sampleRate());
-        state["quality"] = p->activeQuality(); state["pending"] = p->qualityChangePending();
+        state["latency"] = telemetry.latencySamples*1000.0/std::max(1.0, m_controller->sampleRate());
+        state["quality"] = telemetry.quality; state["pending"] = telemetry.qualityPending;
     }
     if (state != m_previous) { m_previous = state; emit m_bridge->snapshot(state); }
 }
 void PitchCorrectorPanel::showEvent(QShowEvent* e) { QWidget::showEvent(e); m_previous.clear(); refresh(); m_timer->start(); }
 void PitchCorrectorPanel::hideEvent(QHideEvent* e) { m_timer->stop(); finishAll(); QWidget::hideEvent(e); }
 
-PitchWebBridge::PitchWebBridge(PitchCorrectorPanel* panel) : QObject(panel), m_panel(panel) {}
-void PitchWebBridge::ready() { m_panel->m_ready = true; m_panel->m_previous.clear(); m_panel->refresh(); }
-void PitchWebBridge::edit(int index, double value, bool finished) {
+PitchControls::PitchControls(PitchCorrectorPanel* panel) : QObject(panel), m_panel(panel) {}
+void PitchControls::edit(int index, double value, bool finished) {
     if (index < 0 || index >= 12 || !std::isfinite(value)) return;
     m_panel->m_status.clear(); m_panel->write(unsigned(index), index == 0 ? pitch::tuneFromMilliseconds(value) : value);
     if (finished) { m_panel->finishGesture(unsigned(index)); m_panel->refresh(); }
 }
-void PitchWebBridge::finish(int index) { if (index >= 0) m_panel->finishGesture(unsigned(index)); m_panel->refresh(); }
-void PitchWebBridge::toggleNote(int note) {
-    if (note < 0 || note >= 12 || !m_panel->instance()) return;
+void PitchControls::finish(int index) { if (index >= 0) m_panel->finishGesture(unsigned(index)); m_panel->refresh(); }
+void PitchControls::toggleNote(int note) {
+    if (note < 0 || note >= 12 || !m_panel->available()) return;
     PitchCorrectorPanel::Values values;
     for (unsigned i = 0; i < 12; ++i) values[i] = m_panel->read(i);
     const int next = allowedNotes(values) ^ (1 << note);
@@ -178,16 +165,16 @@ void PitchWebBridge::toggleNote(int note) {
     m_panel->m_controller->collapseUndo(group, "Change Custom Pitch Scale");
     m_panel->m_status.clear(); m_panel->refresh();
 }
-void PitchWebBridge::toggleBypass() {
-    if (!m_panel->instance()) return;
+void PitchControls::toggleBypass() {
+    if (!m_panel->available()) return;
     const auto* model = m_panel->m_controller->insertModel(m_panel->m_channel, m_panel->m_insert);
     if (!model) return;
     m_panel->m_controller->setInsertBypassed(m_panel->m_channel, m_panel->m_insert, !model->bypassed);
     emit m_panel->projectEdited(); m_panel->refresh();
 }
-void PitchWebBridge::factoryPreset(int index) { m_panel->applyFactoryPreset(index); }
-void PitchWebBridge::sendToAll() {
-    if (!m_panel->instance()) return;
+void PitchControls::factoryPreset(int index) { m_panel->applyFactoryPreset(index); }
+void PitchControls::sendToAll() {
+    if (!m_panel->available()) return;
     m_panel->finishAll();
     std::size_t updated = 0;
     const auto result = m_panel->m_controller->copyPitchCorrectorSettings(
@@ -198,7 +185,7 @@ void PitchWebBridge::sendToAll() {
     if (result && updated) emit m_panel->projectEdited();
     m_panel->refresh();
 }
-void PitchWebBridge::loadPreset(const QString& name) {
+void PitchControls::loadPreset(const QString& name) {
     if (!m_panel->m_presets.value(name).isObject()) return;
     const auto saved = m_panel->m_presets.value(name).toObject(); PitchCorrectorPanel::Values values;
     for (const auto& p : pitch::parameterTable()) {
@@ -208,7 +195,8 @@ void PitchWebBridge::loadPreset(const QString& name) {
     }
     m_panel->applyValues(values, name);
 }
-QString PitchWebBridge::savePreset(const QString& text, bool replace) {
+QString PitchControls::savePreset(const QString& text, bool replace) {
+    if (!m_panel->available()) return tr("Plugin unavailable");
     const auto name = text.trimmed();
     if (name.isEmpty() || name.size() > 48) return tr("Use a name with 1–48 characters.");
     for (const auto& p : pitch::factoryPresets())
@@ -227,13 +215,13 @@ QString PitchWebBridge::savePreset(const QString& text, bool replace) {
     presets[name] = values; QSettings().setValue(presetKey, QJsonDocument(presets).toJson(QJsonDocument::Compact));
     m_panel->m_presetName = name; m_panel->m_userPreset = true; m_panel->refresh(); return {};
 }
-void PitchWebBridge::deletePreset(const QString& name) {
+void PitchControls::deletePreset(const QString& name) {
     if (!m_panel->m_presets.contains(name)) return;
     m_panel->m_presets.remove(name); QSettings().setValue(presetKey, QJsonDocument(m_panel->m_presets).toJson(QJsonDocument::Compact));
     if (name == m_panel->m_presetName) { m_panel->m_presetName = tr("Custom"); m_panel->m_userPreset = false; }
     m_panel->refresh();
 }
-void PitchWebBridge::automate(int index) {
+void PitchControls::automate(int index) {
     if (index < 0 || index >= 12 || !pitch::parameterTable()[unsigned(index)].isAutomatable) return;
     emit m_panel->automationRequested(QString::fromStdString(pitch::parameterTable()[unsigned(index)].id));
 }

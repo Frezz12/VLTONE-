@@ -145,7 +145,6 @@ QLabel[role="secondary"] { color: %3; font-size: 12px; }
 #BatchSlot { background: %4; border-radius: 4px; }
 #BatchSlotName { text-align: left; background: transparent; border: none; padding: 2px 4px; }
 #BatchSlotName:hover { background: %5; }
-#BatchSlotName:focus { border: 1px solid %6; }
 #BatchError { color: %2; border: 1px solid %6; border-radius: 5px; padding: 6px; }
 #BatchApply { padding: 6px 14px; }
 )" ).arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(), t.well().name(),
@@ -266,7 +265,7 @@ void PluginBatchDialog::addPlugin(const daw::plugins::PluginDescriptor& plugin, 
     const auto& source = m_targets[m_sourceIndex];
     const auto id = source.clipId.empty() ? m_draft->addInsert(source.trackId, plugin)
         : m_draft->addClipFxInsert(source.trackId, source.clipId, plugin);
-    if (id.empty() || !m_draft->insertInstance(source.trackId, id)) {
+    if (id.empty() || !m_draft->hasInsert(source.trackId, id)) {
         if (!id.empty()) {
             if (source.clipId.empty()) m_draft->removeInsert(source.trackId, id);
             else m_draft->removeClipFxInsert(source.trackId, source.clipId, id);
@@ -280,7 +279,7 @@ void PluginBatchDialog::addPlugin(const daw::plugins::PluginDescriptor& plugin, 
 void PluginBatchDialog::openEditor(const QString& id) {
     if (auto window = m_editors.value(id)) { window->show(); window->raise(); window->activateWindow(); return; }
     const auto& track = m_targets[m_sourceIndex].trackId;
-    if (!m_draft->insertInstance(track, id.toStdString())) return;
+    if (!m_draft->hasInsert(track, id.toStdString())) return;
     auto* window = new QDialog(this); window->setAttribute(Qt::WA_DeleteOnClose);
     window->setWindowTitle(QString::fromStdString(m_draft->insertModel(track, id.toStdString())->name));
     auto* layout = new QVBoxLayout(window); layout->setContentsMargins(0, 0, 0, 0);
@@ -298,8 +297,7 @@ bool PluginBatchDialog::eventFilter(QObject* watched, QEvent* event) {
         if (auto* editor = qobject_cast<PluginEditorWindow*>(watched)) {
             if (auto* window = qobject_cast<QDialog*>(editor->parentWidget())) {
                 const auto size = static_cast<QResizeEvent*>(event)->size();
-                const auto* plugin = m_draft->insertInstance(m_targets[m_sourceIndex].trackId, editor->insertId().toStdString());
-                if (editor->isEmbedded() && plugin && !plugin->editorCanResize()) window->setFixedSize(size);
+                if (editor->isEmbedded() && !editor->canResizeNativeEditor()) window->setFixedSize(size);
                 else window->resize(size);
             }
         }
@@ -348,7 +346,7 @@ void PluginBatchDialog::apply() {
 }
 
 bool PluginBatchDialog::checkForTest(const QString& screenshotPath) {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     const auto lead = controller.addTrack(daw::TrackKind::Audio, "Lead");
     const auto doubleTrack = controller.addTrack(daw::TrackKind::Audio, "Double");

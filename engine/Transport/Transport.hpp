@@ -2,6 +2,7 @@
 
 #include "Common/Types.hpp"
 #include "AudioPresentationClock.hpp"
+#include "InputClock.hpp"
 #include "Job/BackgroundExecutor.hpp"
 
 #include <atomic>
@@ -9,8 +10,6 @@
 #include <cmath>
 
 namespace daw::engine {
-
-enum class TransportState : std::uint8_t { Stopped, Playing, Paused, Recording };
 
 /// Sample-accurate transport shared between the control thread and the audio
 /// thread. Every field is a plain atomic — the audio thread reads the state at
@@ -21,24 +20,24 @@ public:
     void setSampleRate(SampleRate rate) noexcept {
         // prepare() also runs for a replacement device with the same rate.
         // Its old DAC history must not survive that stream restart.
-        m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
+        invalidatePresentation();
         m_sampleRate.store(rate, std::memory_order_relaxed);
     }
     SampleRate sampleRate() const noexcept {
         return m_sampleRate.load(std::memory_order_relaxed);
     }
 
-    void play() noexcept { m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel); m_backgroundLease.setPlaying(true); m_state.store(TransportState::Playing, std::memory_order_release); }
-    void pause() noexcept { m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel); m_backgroundLease.setPlaying(false); m_state.store(TransportState::Paused, std::memory_order_release); }
-    void stop() noexcept { m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel); m_backgroundLease.setPlaying(false); m_state.store(TransportState::Stopped, std::memory_order_release); }
+    void play() noexcept { invalidatePresentation(); m_backgroundLease.setPlaying(true); publishState(TransportState::Playing); }
+    void pause() noexcept { invalidatePresentation(); m_backgroundLease.setPlaying(false); publishState(TransportState::Paused); }
+    void stop() noexcept { invalidatePresentation(); m_backgroundLease.setPlaying(false); publishState(TransportState::Stopped); }
     void startRecording() noexcept {
-        m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
+        invalidatePresentation();
         m_backgroundLease.setPlaying(true);
-        m_state.store(TransportState::Recording, std::memory_order_release);
+        publishState(TransportState::Recording);
     }
 
     TransportState state() const noexcept {
-        return m_state.load(std::memory_order_acquire);
+        return m_inputClock.state();
     }
     bool isPlaying() const noexcept {
         const TransportState s = state();
@@ -47,7 +46,7 @@ public:
     bool isRecording() const noexcept { return state() == TransportState::Recording; }
 
     void seek(SamplePos position) noexcept {
-        m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
+        invalidatePresentation();
         m_position.store(position < 0 ? 0 : position, std::memory_order_release);
     }
     void seekSeconds(double seconds) noexcept {
@@ -64,20 +63,14 @@ public:
     /// Input timestamp -> unwrapped musical time, independent of UI delivery.
     /// Published by the audio thread; a loop never resets this clock.
     double inputBeatsAt(std::uint64_t ns) const noexcept {
-        for (int attempt = 0; attempt != 3; ++attempt) {
-            const auto before = m_inputSequence.load(std::memory_order_acquire);
-            if (before & 1) continue;
-            const auto at = m_inputNs.load(std::memory_order_relaxed);
-            const double begin = m_inputBeat.load(std::memory_order_relaxed);
-            const double duration = m_inputDuration.load(std::memory_order_relaxed);
-            const double bpm = m_inputTempo.load(std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_acquire);
-            if (before != m_inputSequence.load(std::memory_order_relaxed)) continue;
-            if (!isPlaying()) return begin + duration * bpm / 60.0;
-            const double elapsed = ns > at ? double(ns - at) / 1e9 : 0.0;
-            return begin + std::clamp(elapsed, 0.0, duration) * bpm / 60.0;
-        }
-        return m_inputEndBeat.load(std::memory_order_acquire);
+        return m_inputClock.inputBeatsAt(ns);
+    }
+    /// Control thread only, with this transport's audio reader drained.
+    void bindInputClock(InputClock* sink, AudioPresentationClock* presentation = nullptr) noexcept {
+        if (sink) sink->copyFrom(m_inputClock);
+        if (presentation) presentation->copyFrom(m_presentationClock);
+        m_inputClockSink = sink;
+        m_presentationClockSink = presentation;
     }
     double positionSeconds() const noexcept {
         const SampleRate rate = sampleRate();
@@ -93,7 +86,7 @@ public:
         m_outputGeneration = presentationGeneration();
     }
     std::uint64_t presentationGeneration() const noexcept {
-        return m_presentationGeneration.load(std::memory_order_acquire);
+        return m_presentationClock.generation();
     }
     bool presentationSnapshot(std::int64_t atNs, AudioPresentationSnapshot& snapshot) const noexcept {
         // Fixed reader-local storage: no locks, allocations or retry loops
@@ -177,7 +170,7 @@ public:
 
     void setLoopEnabled(bool enabled) noexcept {
         if (m_loopEnabled.exchange(enabled, std::memory_order_relaxed) != enabled)
-            m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
+            invalidatePresentation();
     }
     bool isLoopEnabled() const noexcept {
         return m_loopEnabled.load(std::memory_order_relaxed);
@@ -186,7 +179,7 @@ public:
         const bool changed = loopStart() != start || loopEnd() != end;
         m_loopStart.store(start, std::memory_order_relaxed);
         m_loopEnd.store(end, std::memory_order_relaxed);
-        if (changed) m_presentationGeneration.fetch_add(1, std::memory_order_acq_rel);
+        if (changed) invalidatePresentation();
     }
     SamplePos loopStart() const noexcept {
         return m_loopStart.load(std::memory_order_relaxed);
@@ -210,16 +203,11 @@ public:
         }
         const double rate = sampleRate();
         const double inputDuration = rate > 0.0 ? double(frames) / rate : 0.0;
-        const double inputBegin = m_inputEndBeat.load(std::memory_order_relaxed);
+        const double inputBegin = m_inputClock.endBeat();
         const double inputTempo = tempo();
-        m_inputSequence.fetch_add(1, std::memory_order_acq_rel);
-        std::atomic_thread_fence(std::memory_order_release);
-        m_inputNs.store(std::uint64_t(presentationNowNs()), std::memory_order_relaxed);
-        m_inputBeat.store(inputBegin, std::memory_order_relaxed);
-        m_inputDuration.store(inputDuration, std::memory_order_relaxed);
-        m_inputTempo.store(inputTempo, std::memory_order_relaxed);
-        m_inputEndBeat.store(inputBegin + inputDuration * inputTempo / 60.0, std::memory_order_release);
-        m_inputSequence.fetch_add(1, std::memory_order_release);
+        const auto inputNs = std::uint64_t(presentationNowNs());
+        m_inputClock.publish(inputNs, inputBegin, inputDuration, inputTempo);
+        if (m_inputClockSink) m_inputClockSink->publish(inputNs, inputBegin, inputDuration, inputTempo);
         const auto timestamp = m_outputTimeNs > 0 && rate > 0
             ? m_outputTimeNs + std::int64_t(double(m_outputFrameOffset) * 1e9 / rate)
             : presentationNowNs();
@@ -242,13 +230,21 @@ public:
         if (snapshot.sampleRate > 0 && snapshot.source != PresentationClockSource::RenderEstimate)
             snapshot.outputTimeNs += std::int64_t(double(graphLatencyFrames) * 1e9 / snapshot.sampleRate);
         m_presentationClock.publish(snapshot);
+        if (m_presentationClockSink) m_presentationClockSink->publish(snapshot);
     }
 
 private:
-    std::atomic<std::uint64_t> m_inputSequence{0}, m_inputNs{0};
-    std::atomic<double> m_inputBeat{0}, m_inputDuration{0}, m_inputTempo{120}, m_inputEndBeat{0};
+    void invalidatePresentation() noexcept {
+        const auto generation = m_presentationClock.advanceGeneration();
+        if (m_presentationClockSink) m_presentationClockSink->setGeneration(generation);
+    }
+    void publishState(TransportState state) noexcept {
+        m_inputClock.setState(state);
+        if (m_inputClockSink) m_inputClockSink->setState(state);
+    }
+    InputClock m_inputClock;
+    InputClock* m_inputClockSink = nullptr; // bind/unbind only under the render gate
     BackgroundPlaybackLease m_backgroundLease;
-    std::atomic<TransportState> m_state{TransportState::Stopped};
     std::atomic<SamplePos> m_position{0};
     std::atomic<SamplePos> m_duration{0};
     std::atomic<SamplePos> m_loopStart{0};
@@ -258,8 +254,8 @@ private:
     std::atomic<int> m_timeSigNumerator{4};
     std::atomic<int> m_timeSigDenominator{4};
     std::atomic<bool> m_loopEnabled{false};
-    std::atomic<std::uint64_t> m_presentationGeneration{0};
     AudioPresentationClock m_presentationClock;
+    AudioPresentationClock* m_presentationClockSink = nullptr; // same render-gated binding as input clock
     AudioPresentationSnapshot m_pendingPresentation; // audio-thread-owned
     std::int64_t m_outputTimeNs = 0; // audio-thread-owned
     std::uint64_t m_outputFrameOffset = 0;

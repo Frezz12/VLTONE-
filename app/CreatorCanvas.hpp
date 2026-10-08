@@ -5,7 +5,9 @@
 #include <functional>
 
 class QGraphicsPathItem;
+class QMimeData;
 namespace ui {
+inline constexpr auto kCreatorNodeMimeType = "application/x-vltone-creator-node";
 class CreatorCanvas final : public QGraphicsView {
   Q_OBJECT
 public:
@@ -23,6 +25,9 @@ public:
   void actualSize();
   void updateWires();
   void updateCodeStatus(const daw::plugins::mini::MiniModuleDefinition &);
+  void updateValues(const daw::plugins::mini::MiniModuleDefinition &);
+  void highlightConnectionPath(const QString &from, const QString &to, bool includeMemory);
+  void setLibraryNodes(const QMap<QString, QString> &nodes) { m_libraryNodes = nodes; }
 signals:
   void connectPorts(QString source, QString sourcePort, QString destination,
                     QString destinationPort);
@@ -39,25 +44,37 @@ signals:
   void pasteRequested(QPointF position);
   void status(QString text);
   void zoomChanged(double zoom);
+  void groupRequested();
+  void enterRequested(QString node);
+  void unpackRequested();
+  void independentRequested();
+  void exportNodeRequested();
+  void importNodeRequested();
 
 protected:
   bool focusNextPrevChild(bool next) override;
   void drawBackground(QPainter *, const QRectF &) override;
   void mousePressEvent(QMouseEvent *) override;
+  void mouseDoubleClickEvent(QMouseEvent *) override;
   void mouseMoveEvent(QMouseEvent *) override;
   void mouseReleaseEvent(QMouseEvent *) override;
   void wheelEvent(QWheelEvent *) override;
   void keyPressEvent(QKeyEvent *) override;
   void keyReleaseEvent(QKeyEvent *) override;
   void contextMenuEvent(QContextMenuEvent *) override;
+  void dragEnterEvent(QDragEnterEvent *) override;
+  void dragMoveEvent(QDragMoveEvent *) override;
+  void dropEvent(QDropEvent *) override;
 
 private:
   void cancelConnection();
+  QString draggedNode(const QMimeData *) const;
   void *m_port = nullptr;
   QGraphicsPathItem *m_wire = nullptr;
   bool m_space = false, m_panning = false;
   QPoint m_panAt;
   QMap<QString, QPointF> m_beforeMove;
   daw::plugins::mini::MiniModuleDefinition m_graph;
+  QMap<QString, QString> m_libraryNodes;
 };
 } // namespace ui

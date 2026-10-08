@@ -101,7 +101,7 @@ int main() {
     }
     const auto package = (directory / "aac-project.vlt").string();
     {
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         checkResult(controller.initialize(48000, 512, false), "initialize offline controller");
         daw::EngineController::PreparedAudio prepared;
         audio::Result result = audio::Result::ok();
@@ -118,7 +118,7 @@ int main() {
         checkResult(daw::EngineController::prepareProjectOpen(package, 48000, prepared), "reload AAC project");
         check(prepared.failedPaths.empty() && prepared.audio.size() == 1 &&
               prepared.audio[0].source->frames() == reference.frames, "M4A reloads with full audio");
-        daw::EngineController controller;
+        daw::EngineController controller{daw::EngineController::TestRuntime{}};
         checkResult(controller.initialize(48000, 512, false), "initialize reopen controller");
         checkResult(controller.openPreparedProject(std::move(prepared)), "activate reopened AAC project");
     }

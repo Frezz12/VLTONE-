@@ -69,7 +69,7 @@ DelayInstance::DelayInstance() {
 const PluginDescriptor& DelayInstance::staticDescriptor() noexcept {
     static const PluginDescriptor d = [] {
         PluginDescriptor p; p.format = Format::Internal; p.uid = p.path = "daw.delay";
-        p.name = "Flowers Delay"; p.vendor = "VLTONE"; p.version = "1.0";
+        p.name = "Classic Delay"; p.vendor = "VLTONE"; p.version = "1.0";
         p.category = "Effect|Delay"; p.stateSchemaVersion = 1; return p;
     }();
     return d;
@@ -170,15 +170,20 @@ void DelayInstance::render(const PluginProcessContext& c, unsigned offset, unsig
             m_delayFrom = m_delayTo; m_delayTo = m_wanted; m_delayFade = 0;
         }
         m_delayFade = std::min(1., m_delayFade + m_fadeStep);
-        m_routeFade = std::min(1., m_routeFade + m_fadeStep); m_route = std::lerp(m_routeFrom, m_routeTo, m_routeFade);
-        m_characterFade = std::min(1., m_characterFade + m_fadeStep);
-        for (unsigned i = 0; i < kCharacterCount; ++i) m_weights[i] = std::lerp(m_weightFrom[i], m_weightTo[i], m_characterFade);
+        if (m_routeFade < 1) {
+            m_routeFade = std::min(1., m_routeFade + m_fadeStep); m_route = std::lerp(m_routeFrom, m_routeTo, m_routeFade);
+        }
+        if (m_characterFade < 1) {
+            m_characterFade = std::min(1., m_characterFade + m_fadeStep);
+            for (unsigned i = 0; i < kCharacterCount; ++i) m_weights[i] = std::lerp(m_weightFrom[i], m_weightTo[i], m_characterFade);
+        }
         const double dry[2]{input(c, 0, frame), input(c, 1, frame)};
         std::array<double, 2> wet{}, radio{};
         const double depth = std::min(.005 * m_rate * m_smooth[12] / 100, .4 * std::min(m_delayFrom, m_delayTo));
         for (unsigned ch = 0; ch < 2; ++ch) {
-            const double modulation = depth * std::sin(2 * dsp::pi * (m_modPhase + (ch && !mono ? .25 : 0)));
-            const double delayed = std::lerp(m_lines[ch].readLinear(m_delayFrom + modulation), m_lines[ch].readLinear(m_delayTo + modulation), m_delayFade);
+            const double modulation = depth > 0 ? depth * std::sin(2 * dsp::pi * (m_modPhase + (ch && !mono ? .25 : 0))) : 0;
+            const double current = m_lines[ch].readLinear(m_delayTo + modulation);
+            const double delayed = m_delayFade < 1 ? std::lerp(m_lines[ch].readLinear(m_delayFrom + modulation), current, m_delayFade) : current;
             auto& tone = m_loopTone[ch]; tone.hp += m_smoothStep * (hp - tone.hp); tone.lp += m_smoothStep * (lp - tone.lp);
             wet[ch] = tone.process(delayed);
             radio[ch] = m_radioTone[ch].process(wet[ch]);
@@ -187,23 +192,28 @@ void DelayInstance::render(const PluginProcessContext& c, unsigned offset, unsig
         const double radioLevel = std::max(std::abs(radio[0]), std::abs(radio[1]));
         const double pole = radioLevel > m_radioEnvelope ? m_radioAttack : m_radioRelease;
         m_radioEnvelope = pole * m_radioEnvelope + (1 - pole) * radioLevel;
-        const double radioGain = m_radioEnvelope > .0630957 ? std::pow(.0630957 / m_radioEnvelope, .75) : 1;
+        const double radioGain = m_weights[2] > 0 && m_radioEnvelope > .0630957 ? std::pow(.0630957 / m_radioEnvelope, .75) : 1;
         m_holdPhase += std::min(1., 12000 / m_rate);
         const bool hold = m_holdPhase >= 1; if (hold) m_holdPhase -= std::floor(m_holdPhase);
-        const double fmRead = m_rate * (.001 + .0005 * std::sin(2 * dsp::pi * m_fmPhase));
+        const double fmRead = m_weights[3] > 0 ? m_rate * (.001 + .0005 * std::sin(2 * dsp::pi * m_fmPhase)) : 0;
         const double tapeRead = m_rate * (.003 + .0003 * std::sin(2 * dsp::pi * m_tapePhase));
         for (unsigned ch = 0; ch < 2; ++ch) {
             const double injected = std::lerp(dry[ch], ch ? 0. : .5 * (dry[0] + dry[1]), m_route);
             const double returned = std::lerp(wet[ch], wet[1 - ch], m_route);
             m_lines[ch].write(dsp::flush(injected + returned * m_smooth[5] / 100)); m_lines[ch].advance();
             if (hold) m_held[ch] = std::round(std::clamp(wet[ch], -1., 1.) * 511.) / 511.;
-            const std::array<double, kCharacterCount> colours{
-                wet[ch], std::tanh(1.6 * m_phoneTone[ch].process(wet[ch])) / 1.6,
-                std::tanh(2.5 * radio[ch] * radioGain) / 1.5,
-                m_colourLines[ch].readLinear(fmRead),
-                std::tanh(2 * m_tapeTone[ch].process(m_colourLines[ch].readLinear(tapeRead))) / 1.6,
-                std::tanh(7.94 * wet[ch]) / 2.5, m_held[ch]};
-            double coloured = 0; for (unsigned i = 0; i < kCharacterCount; ++i) coloured += m_weights[i] * colours[i];
+            // Keep filter histories warm for identical, click-free character
+            // changes, but evaluate expensive nonlinearities only for audible
+            // branches (including both sides of an interrupted crossfade).
+            const double phone = m_phoneTone[ch].process(wet[ch]);
+            const double tape = m_tapeTone[ch].process(m_colourLines[ch].readLinear(tapeRead));
+            double coloured = m_weights[0] * wet[ch];
+            if (m_weights[1] > 0) coloured += m_weights[1] * std::tanh(1.6 * phone) / 1.6;
+            if (m_weights[2] > 0) coloured += m_weights[2] * std::tanh(2.5 * radio[ch] * radioGain) / 1.5;
+            if (m_weights[3] > 0) coloured += m_weights[3] * m_colourLines[ch].readLinear(fmRead);
+            if (m_weights[4] > 0) coloured += m_weights[4] * std::tanh(2 * tape) / 1.6;
+            if (m_weights[5] > 0) coloured += m_weights[5] * std::tanh(7.94 * wet[ch]) / 2.5;
+            if (m_weights[6] > 0) coloured += m_weights[6] * m_held[ch];
             const double effected = std::lerp(wet[ch], coloured, m_smooth[9] / 100);
             const double result = std::lerp(dry[ch], effected, m_smooth[6] / 100) * gain;
             if (c.outputs && ch < c.outputChannels && c.outputs[ch]) c.outputs[ch][frame] = float(dsp::clean(result));

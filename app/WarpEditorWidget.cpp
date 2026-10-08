@@ -76,7 +76,6 @@ protected:
             }
         }
         if (marquee) { auto fill = theme.accent; fill.setAlpha(28); p.setBrush(fill); p.setPen(theme.accent); p.drawRect(selection.normalized()); }
-        if (hasFocus()) { p.setPen(theme.accent); p.setBrush(Qt::NoBrush); p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 8, 8); }
     }
     void paintContent(QPainter& p) {
         const auto& theme = ThemeManager::instance().theme();
@@ -84,7 +83,7 @@ protected:
         QPainterPath shape; shape.addRoundedRect(rect(), Theme::cornerRadius, Theme::cornerRadius); p.setClipPath(shape);
         p.fillRect(rect(), theme.well());
         const auto* c = e->clip();
-        if (!c || c->warp.empty()) { p.setPen(theme.textSecondary); p.drawText(rect(), Qt::AlignCenter, tr("Right-click an audio clip and choose Warp Audio")); return; }
+        if (!c || c->warp.empty()) { p.setPen(theme.textSecondary); p.drawText(rect(), Qt::AlignCenter, tr("Right-click an audio clip and choose Warp Editor")); return; }
         const auto& map = e->m_previewing && e->m_after->isChecked() ? e->m_proposal.map : c->warp;
         const double tempo = e->m_controller->tempo();
         const double origin = daw::secondsToBeats(c->startSeconds, tempo);
@@ -395,6 +394,7 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     toolGroups->addWidget(editGroup); toolGroups->addWidget(timingGroup, 1);
     auto check = [&](const QString& text) { auto* w = new QCheckBox(text, editGroup); w->setAccessibleName(text); editTools->addWidget(w); return w; };
     m_enabled = check(tr("Warp")); m_enabled->setObjectName("WarpEnabled"); m_snap = check(tr("Snap")); m_snap->setChecked(true);
+    m_enabled->setToolTip(tr("Match the clip to the project tempo. Turn off to restore its original timing and duration."));
     m_grid = new QComboBox(m_tools); m_grid->setAccessibleName(tr("Warp grid")); m_grid->setObjectName("WarpGrid");
     m_grid->addItem(tr("Project grid"), 0.);
     for (const auto& item : {std::pair{"1/4", 1.}, {"1/8", .5}, {"1/16", .25}, {"1/32", .125}, {"1/8 triplet", 1./3}}) m_grid->addItem(item.first, item.second);

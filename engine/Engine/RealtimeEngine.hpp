@@ -81,6 +81,7 @@ public:
                    ChannelCount channels = 2, bool offline = false);
 
     SampleRate sampleRate() const noexcept { return m_prepareInfo.sampleRate; }
+    PrepareInfo prepareInfo() const noexcept { return m_prepareInfo; }
     FrameCount maxBlockSize() const noexcept { return m_prepareInfo.maxBlockSize; }
     ChannelCount channels() const noexcept { return m_prepareInfo.channels; }
 
@@ -93,11 +94,20 @@ public:
     /// Compile and publish. The audio thread picks the new graph up on its next
     /// block; the old one stays alive until that block is finished.
     Status commitGraph(bool reconfigureNodes = false);
+    /// Control-thread output selection for an in-process audition runtime.
+    /// Edits still compile against the primary graph while the override plays.
+    Status setOutputGraph(AudioGraph graph);
+    void clearOutputGraph();
+    bool hasOutputGraph() const noexcept { return m_outputGraphActive; }
+    void restoreSessionGraph(std::shared_ptr<const CompiledGraph> graph);
+    std::shared_ptr<const CompiledGraph> sessionGraph() const {
+        return m_outputGraphActive ? m_suspendedGraph : m_processor.graph();
+    }
     void preparePlayback(SamplePos position) {
         // Invalidate queued look-ahead before warming the new position. Ready
         // immutable pages remain reusable, including on a backward loop jump.
         if (auto* cache = PcmReadCache::existing()) cache->invalidateRequests();
-        const auto snapshot = m_processor.graph();
+        const auto snapshot = sessionGraph();
         if (snapshot) for (const auto& entry : snapshot->nodes) entry.node->preparePlayback(position);
     }
 
@@ -206,6 +216,9 @@ private:
     void updateMasterMeters(const AudioBlock& output, FrameCount frames) noexcept;
 
     AudioGraph m_graph;
+    /// Control-thread-only primary publication retained during audition.
+    std::shared_ptr<const CompiledGraph> m_suspendedGraph;
+    bool m_outputGraphActive = false;
     GraphProcessor m_processor;
     Transport m_transport;
     PrepareInfo m_prepareInfo;

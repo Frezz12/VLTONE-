@@ -339,14 +339,12 @@ void PluginQuickAdder::updateGeometryForState() {
             selection-background-color: %5;
             font-size: 11px;
         }
-        QLineEdit#PluginQuickSearch:focus { border: 1px solid %6; }
     )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .arg(th().textPrimary.name(QColor::HexArgb),
              withAlpha(th().well(), int(225 * fieldOpacity)).name(QColor::HexArgb),
              withAlpha(th().ink(), int(54 * fieldOpacity)).name(QColor::HexArgb),
              withAlpha(th().ink(), int(92 * fieldOpacity)).name(QColor::HexArgb),
-             withAlpha(m_accent, 110).name(QColor::HexArgb),
-             withAlpha(m_accent, 190).name(QColor::HexArgb)));
+             withAlpha(m_accent, 110).name(QColor::HexArgb)));
     updateGeometry();
     positionOverlay();
     emit sizeChanged();
@@ -702,7 +700,7 @@ void PluginQuickAdder::paintEvent(QPaintEvent*) {
     p.setOpacity(opacity);
     const QRectF hit = QRectF(1, 0, kCollapsedWidth - 2, kToolbarHeight);
     if (m_hover || hasFocus()) {
-        p.setPen(QPen(withAlpha(m_accent, hasFocus() ? 190 : 95), 1.0));
+        p.setPen(Qt::NoPen);
         p.setBrush(withAlpha(m_accent, m_pressed ? 42 : 24));
         p.drawRoundedRect(hit, 5, 5);
     }
@@ -1026,8 +1024,12 @@ void PluginQuickAdder::keyPressEvent(QKeyEvent* event) {
 bool PluginQuickAdder::eventFilter(QObject* watched, QEvent* event) {
     const bool geometryEvent = event->type() == QEvent::Resize ||
                                event->type() == QEvent::Move;
-    if (m_expanded && geometryEvent && watched == overlayRoot()) {
-        positionOverlay();
+    if (m_expanded && geometryEvent) {
+        // The context island can move while its field stays at the same local
+        // position. Keep results anchored when any containing widget moves.
+        if (auto* widget = qobject_cast<QWidget*>(watched);
+            widget && widget->isAncestorOf(this))
+            positionOverlay();
     }
     if (watched == m_search && event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
@@ -1095,6 +1097,7 @@ bool PluginQuickAdder::eventFilter(QObject* watched, QEvent* event) {
 
 bool PluginQuickAdder::checkInteractionForTest() {
     daw::EngineController probe;
+    if (!probe.initialize(48000, 256, false)) return false;
     const auto graphit = probe.pluginManager().find(
         daw::plugins::Format::Internal, "daw.graphit");
     if (!graphit) return false;
@@ -1106,7 +1109,9 @@ bool PluginQuickAdder::checkInteractionForTest() {
     QWidget root(&shell);
     root.setGeometry(20, 30, 640, 420);
     root.setProperty("vlt.gpuSurfaceActive", true);
-    PluginQuickAdder adder(&probe, &root);
+    QWidget island(&root);
+    island.resize(root.size());
+    PluginQuickAdder adder(&probe, &island);
     adder.move(40, 40);
     adder.setTrackId(trackId);
     shell.show();
@@ -1139,6 +1144,11 @@ bool PluginQuickAdder::checkInteractionForTest() {
         adder.m_overlay->parentWidget() == &root &&
         root.childAt(overlayProbe) == adder.m_overlay;
     if (!overlayInGpuScene) return false;
+    island.move(55, 12);
+    QApplication::processEvents();
+    if (adder.m_overlay->pos() != adder.mapTo(&root, QPoint(0, adder.height() + 3)) ||
+        adder.m_overlay->width() != adder.width())
+        return false;
     adder.m_search->clear();
     QKeyEvent recordOverride(QEvent::ShortcutOverride, Qt::Key_R,
                              Qt::NoModifier, QStringLiteral("r"));

@@ -1,4 +1,6 @@
 #include "EngineController.hpp"
+#include "RenderSessionData.hpp"
+#include "RenderWorker.hpp"
 #include "RenderOutput.hpp"
 #include "platform/PathUtils.hpp"
 #include "Internal/ChannelColorInstance.hpp"
@@ -18,67 +20,186 @@ namespace daw {
 
 namespace {
 
-/// Characters a file name cannot carry on one platform or another, plus the
-/// ones that would make a name ambiguous in a shell. A track called "Kick / Snr"
-/// has to become a file, and it must not become two directories.
-std::string sanitizeFileName(std::string name) {
-    for (char& c : name) {
-        const bool illegal = c == '/' || c == '\\' || c == ':' || c == '*' ||
-                             c == '?' || c == '"' || c == '<' || c == '>' ||
-                             c == '|';
-        if (illegal || static_cast<unsigned char>(c) < 0x20) c = '_';
-    }
-    // Trailing dots and spaces are legal to create on Windows and impossible to
-    // delete afterwards.
-    while (!name.empty() && (name.back() == ' ' || name.back() == '.')) {
-        name.pop_back();
-    }
-    while (!name.empty() && name.front() == ' ') name.erase(name.begin());
-    return name.empty() ? std::string("untitled") : name;
-}
-
-/// A path nothing else in this render is already writing to. Two tracks are
-/// allowed to share a name, and neither should quietly overwrite the other.
-std::string uniquePath(const std::string& dir, const std::string& stem,
-                       std::string_view extension,
-                       std::unordered_set<std::string>& taken) {
-    for (int attempt = 1;; ++attempt) {
-        std::string name = attempt == 1
-                               ? stem
-                               : stem + " (" + std::to_string(attempt) + ")";
-        const fs::path fileName = platform::pathFromUtf8(
-            name + "." + std::string(extension));
-        std::string path = platform::pathToUtf8(
-            platform::pathFromUtf8(dir) / fileName);
-        std::string key = path;
-        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
-            return char(std::tolower(c));
-        });
-        std::error_code ec;
-        if (!fs::exists(platform::pathFromUtf8(path), ec) && !ec &&
-            taken.insert(key).second) return path;
-        if (ec) throw fs::filesystem_error("cannot select export path", ec);
-    }
-}
-
 float dbToLinear(double db) { return float(std::pow(10.0, db / 20.0)); }
+
+void validateRenderModule(const InsertModel& slot) {
+    if (slot.uid != plugins::mini::kUid) return;
+    const auto error = slot.miniModule
+        ? plugins::mini::validate(*slot.miniModule, slot.miniModuleMode)
+        : "Missing module definition";
+    if (!error.empty()) throw std::runtime_error("Mini module unavailable: " + slot.name + " — " + error);
+}
+
+audio::Result validateRenderSpec(const rendering::Spec& spec) {
+    const auto nonnegative = [](double value) { return std::isfinite(value) && value >= 0.0; };
+    if (!nonnegative(spec.sampleRate) ||
+        (spec.sampleRate != 0 && (spec.sampleRate < 1000 || spec.sampleRate > 768000)) ||
+        !nonnegative(spec.preRollSeconds) || !nonnegative(spec.tailSeconds) ||
+        !nonnegative(spec.tailMaxSeconds) || !nonnegative(spec.tailHoldSeconds) ||
+        !std::isfinite(spec.tailSilenceDb) || !std::isfinite(spec.customStartSeconds) ||
+        !std::isfinite(spec.customEndSeconds) || spec.blockSize > engine::kMaxBlockSize)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render settings");
+    return audio::Result::ok();
+}
 
 } // namespace
 
 // ── Offline render ─────────────────────────────────────────────────────────
+
+EngineController::InsertSlot* EngineController::liveInsertSlot(
+    const std::string& channelId, const std::string& insertId) {
+    return m_runtime.nativeForWorkerOrTest().pluginSlot(channelId, insertId);
+}
+
+void EngineController::applyStoredParameters(
+    plugins::PluginNode& node, const std::vector<InsertParameter>& values) {
+    if (AudioRuntime::applyStoredParameters(node, values) && !m_liveDeviceAllowed)
+        m_previewParameterEditsPending = true;
+}
+
+std::uint64_t RenderSessionSpec::sourceRevision() const noexcept {
+    return m_data ? m_data->revision : 0;
+}
+std::uint64_t RenderSessionSpec::sourceGeneration() const noexcept {
+    return m_data ? m_data->generation : 0;
+}
+
+audio::Result EngineController::captureRenderSession(
+    const rendering::Spec& spec, RenderSessionSpec& out) {
+    out = {};
+    if (auto valid = validateRenderSpec(spec); !valid) return valid;
+    try {
+        auto data = std::make_shared<RenderSessionSpec::Data>();
+        data->spec = spec;
+        data->sampleRate = m_sampleRate;
+        data->blockSize = m_bufferSize;
+        data->revision = projectRevision();
+        data->generation = m_projectGeneration;
+        data->catalog = m_pluginManager.catalogSnapshot();
+        data->sourceSamples = m_sourceSamples;
+        auto& snapshot = data->snapshot;
+        auto& pendingParameterOverrides = data->pendingParameterOverrides;
+        {
+            snapshot.project = m_project;
+            snapshot.project.sampleRate = m_sampleRate;
+            applyRenderSelection(spec, snapshot.project);
+
+            // A plugin's native state is the authoritative description of its
+            // sound. Some commercial VST3 controllers expose a stale or lossy
+            // parameter mirror; replaying every reported value after loadState
+            // can therefore undo a valid component state. Keep only host edits
+            // that have not reached the live processor yet and replay those on
+            // top of the state in the render clone.
+            // Request only audible slots. The runtime captures both native
+            // state and pending edits under one gate, then returns owned data.
+            const auto visitSlots = [&](const auto& visit) {
+                for (auto& track : snapshot.project.tracks) {
+                    if (!carriesAudio(track) || track.freeze.active()) continue;
+                    if (!spec.independentTrackId.empty() && track.id != spec.independentTrackId) continue;
+                    if (trackAccepts(track.kind, ClipKind::Midi)) visit(track.id, track.instrument);
+                    for (auto& module : track.miniModules) visit(track.id, module);
+                    for (auto& slot : track.inserts) visit(track.id, slot);
+                    if (track.samplerFx.isOwnedBy(track.instrument))
+                        for (auto& slot : track.samplerFx.inserts) visit(track.id, slot);
+                    for (auto& clip : track.clips)
+                        if (clip.kind == ClipKind::Audio)
+                            for (auto& slot : clip.inserts) visit(track.id, slot);
+                }
+                if (spec.independentTrackId.empty()) {
+                    for (auto& slot : snapshot.project.masterMiniModules) visit(kMasterChannelId, slot);
+                    for (auto& slot : snapshot.project.masterInserts) visit(kMasterChannelId, slot);
+                }
+            };
+            const auto needsState = [](const InsertModel& slot) {
+                return slot.isLoaded() && !slot.bypassed && slot.mix != 0.f &&
+                    slot.uid != plugins::channel_color::ChannelColorInstance::uid() && slot.uid != plugins::mini::kUid;
+            };
+            std::vector<AudioPluginStateRequest> requests;
+            visitSlots([&](const std::string& channelId, InsertModel& slot) {
+                if (!needsState(slot)) return;
+                requests.push_back({{channelId, slot.id}});
+                if (slot.channelMode == PluginChannelMode::DualMono) requests.push_back({{channelId, slot.id, true}});
+            });
+            std::unordered_map<std::string, AudioPluginStateSnapshot> captured;
+            for (auto& state : m_runtime.pluginStateSnapshots(requests)) {
+                if (state.sample && !state.samplePath.empty())
+                    data->sourceSamples[state.samplePath] = state.sample;
+                captured.emplace(state.address.slotId + (state.address.right ? "-right" : ""), std::move(state));
+            }
+            const auto captureNode = [&](const AudioPluginStateSnapshot& capturedState,
+                                            const std::string& key,
+                                            std::string& stateFile,
+                                            std::vector<InsertParameter>& fallback) {
+                if (!capturedState.exists)
+                    throw std::runtime_error("cannot capture unavailable render plugin: " + key);
+                if (capturedState.failed)
+                    throw std::runtime_error("restart failed plugin before rendering: " + capturedState.descriptor.name);
+                stateFile.clear();
+                fallback.clear();
+                // Export needs a fresh opaque snapshot. Recovery deliberately
+                // retains old chunks after a failed save, which must never be
+                // used as if they described the sound of this render.
+                if (capturedState.supportsState) {
+                    recovery::RecoverySnapshot::PluginState state;
+                    state.fileName = key;
+                    if (!capturedState.stateCaptured)
+                        throw std::runtime_error("cannot capture render plugin state: " +
+                                                 capturedState.descriptor.name);
+                    state.bytes = capturedState.state;
+                    stateFile = key;
+                    snapshot.pluginStates.push_back(std::move(state));
+                } else {
+                    fallback = capturedState.parameters;
+                }
+                auto& values = pendingParameterOverrides[key];
+                values = capturedState.pending;
+                if (stateFile.empty()) {
+                    for (const auto& pending : values) {
+                        const auto found = std::find_if(fallback.begin(), fallback.end(),
+                            [&](const auto& value) { return value.id == pending.id; });
+                        if (found != fallback.end()) found->value = pending.value;
+                        else fallback.push_back(pending);
+                    }
+                }
+                if (values.empty()) pendingParameterOverrides.erase(key);
+            };
+            const auto collectSlot = [&](const std::string& channelId,
+                                         InsertModel& slot) {
+                if (!slot.isLoaded() || slot.bypassed || slot.mix == 0.f) return;
+                validateRenderModule(slot);
+                // COLOR's complete configuration is inline: static controls
+                // and the saved component seed. Its live parameter mirror may
+                // contain the last automation value from a previous playback.
+                if (slot.uid == plugins::channel_color::ChannelColorInstance::uid() || slot.uid == plugins::mini::kUid) {
+                    slot.stateFile.clear(); return;
+                }
+                captureNode(captured.at(slot.id), slot.id,
+                               slot.stateFile, slot.parameters);
+                if (slot.channelMode == PluginChannelMode::DualMono)
+                    captureNode(captured.at(slot.id + "-right"),
+                                   slot.id + "-right", slot.rightStateFile,
+                                   slot.rightParameters);
+            };
+            visitSlots(collectSlot);
+        }
+        data->samples = m_samples;
+        data->clipSamples = m_clipSampleCache;
+        data->sharedClipSamples = m_sharedClipSampleCache;
+        out.m_data = std::move(data);
+        return audio::Result::ok();
+    } catch (const std::exception& error) {
+        return audio::Result::fail(audio::EngineError::Unknown, error.what());
+    } catch (...) {
+        return audio::Result::fail(audio::EngineError::Unknown, "render snapshot capture failed");
+    }
+}
 
 audio::Result EngineController::renderProject(
     const rendering::Spec& spec,
     const std::function<bool(const rendering::Progress&)>& onProgress,
     rendering::Report& out) {
     out = {};
-    const auto nonnegative = [](double value) { return std::isfinite(value) && value >= 0.0; };
-    if (!nonnegative(spec.sampleRate) || !nonnegative(spec.preRollSeconds) ||
-        !nonnegative(spec.tailSeconds) || !nonnegative(spec.tailMaxSeconds) ||
-        !nonnegative(spec.tailHoldSeconds) || !std::isfinite(spec.tailSilenceDb) ||
-        !std::isfinite(spec.customStartSeconds) || !std::isfinite(spec.customEndSeconds) ||
-        spec.blockSize > 8192)
-        return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render settings");
+    if (auto valid = validateRenderSpec(spec); !valid) return valid;
     if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument,
                                    "a render is already in progress");
@@ -87,6 +208,44 @@ audio::Result EngineController::renderProject(
         explicit BusyScope(bool& value) : flag(value) { flag = true; }
         ~BusyScope() { flag = false; }
     } busy(m_exportInProgress);
+    try {
+        rendering::Progress progress;
+        progress.stage = rendering::Progress::Stage::Preparing;
+        if (onProgress && !onProgress(progress)) {
+            out.cancelled = true;
+            return audio::Result::ok();
+        }
+        stop();
+        RenderSessionSpec session;
+        if (auto captured = captureRenderSession(spec, session); !captured) return captured;
+        return renderSession(session, onProgress, out);
+    } catch (const std::exception& error) {
+        return audio::Result::fail(audio::EngineError::Unknown, error.what());
+    } catch (...) {
+        return audio::Result::fail(audio::EngineError::Unknown, "render failed with an unexpected exception");
+    }
+}
+
+audio::Result EngineController::renderSession(
+    const RenderSessionSpec& session,
+    const std::function<bool(const rendering::Progress&)>& onProgress,
+    rendering::Report& out) {
+    return RenderWorker::render(session, onProgress, out);
+}
+
+audio::Result EngineController::renderSessionInWorker(
+    const RenderSessionSpec& session,
+    const std::function<bool(const rendering::Progress&)>& onProgress,
+    rendering::Report& out) {
+    out = {};
+    // Pin the immutable generation even if a progress callback replaces the
+    // caller's handle. No source controller, callback or live DSP is retained.
+    const auto data = session.m_data;
+    if (!data)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "empty render session");
+    const auto& spec = data->spec;
+    const auto& snapshot = data->snapshot;
+    const auto& pendingParameterOverrides = data->pendingParameterOverrides;
     bool cancelled = false;
     auto lastProgress = std::chrono::steady_clock::time_point{};
     const auto preparing = [&] {
@@ -102,128 +261,9 @@ audio::Result EngineController::renderProject(
     };
     try {
         if (!preparing()) { out.cancelled = true; return audio::Result::ok(); }
-        stop();
-        // Pending clip edits are already in the document. Bake them in the
-        // isolated controller, where progress/cancellation can safely run.
-
-        // Capture on the plugin control thread. The offline controller owns
-        // its document, nodes, plugin instances, scheduler and rate; only
-        // immutable sample data is shared with the live session. UI timers and
-        // queued collaboration updates can therefore run at progress points.
-        recovery::RecoverySnapshot snapshot;
-        std::unordered_map<std::string, std::vector<InsertParameter>>
-            pendingParameterOverrides;
-        {
-            const engine::RealtimeEngine::RenderGate gate(m_engine);
-            snapshot.project = m_project;
-            snapshot.project.sampleRate = m_sampleRate;
-            applyRenderSelection(spec, snapshot.project);
-
-            // A plugin's native state is the authoritative description of its
-            // sound. Some commercial VST3 controllers expose a stale or lossy
-            // parameter mirror; replaying every reported value after loadState
-            // can therefore undo a valid component state. Keep only host edits
-            // that have not reached the live processor yet and replay those on
-            // top of the state in the render clone.
-            const auto captureNode = [&](plugins::PluginNode* node,
-                                            const std::string& key,
-                                            std::string& stateFile,
-                                            std::vector<InsertParameter>& fallback) {
-                if (!node || !node->instance())
-                    throw std::runtime_error("cannot capture unavailable render plugin: " + key);
-                auto* instance = node->instance();
-                stateFile.clear();
-                fallback.clear();
-                // Export needs a fresh opaque snapshot. Recovery deliberately
-                // retains old chunks after a failed save, which must never be
-                // used as if they described the sound of this render.
-                if (instance->supportsState()) {
-                    recovery::RecoverySnapshot::PluginState state;
-                    state.fileName = key;
-                    if (!instance->saveState(state.bytes))
-                        throw std::runtime_error("cannot capture render plugin state: " +
-                                                 std::string(node->name()));
-                    stateFile = key;
-                    snapshot.pluginStates.push_back(std::move(state));
-                } else {
-                    for (const auto& parameter : instance->parameters()) {
-                        const double value = instance->parameterValue(parameter.index);
-                        if (!parameter.id.empty() && std::isfinite(value))
-                            fallback.push_back({parameter.id, value});
-                    }
-                }
-                const auto events = node->pendingParameterEvents();
-                const auto descriptors = node->instance()->parameters();
-                auto& values = pendingParameterOverrides[key];
-                for (const auto& event : events) {
-                    if (event.paramIndex >= descriptors.size() ||
-                        !std::isfinite(event.value)) {
-                        continue;
-                    }
-                    const std::string& id = descriptors[event.paramIndex].id;
-                    if (id.empty()) continue;
-                    const auto existing = std::find_if(
-                        values.begin(), values.end(), [&](const auto& value) {
-                            return value.id == id;
-                        });
-                    if (existing != values.end()) existing->value = event.value;
-                    else values.push_back({id, event.value});
-                }
-                if (stateFile.empty()) {
-                    for (const auto& pending : values) {
-                        const auto found = std::find_if(fallback.begin(), fallback.end(),
-                            [&](const auto& value) { return value.id == pending.id; });
-                        if (found != fallback.end()) found->value = pending.value;
-                        else fallback.push_back(pending);
-                    }
-                }
-                if (values.empty()) pendingParameterOverrides.erase(key);
-            };
-            const auto collectSlot = [&](const std::string& channelId,
-                                         InsertModel& slot) {
-                if (!slot.isLoaded() || slot.bypassed || slot.mix == 0.f) return;
-                // COLOR's complete configuration is inline: static controls
-                // and the saved component seed. Its live parameter mirror may
-                // contain the last automation value from a previous playback.
-                if (slot.uid == plugins::channel_color::ChannelColorInstance::uid() || slot.uid == plugins::mini::kUid) {
-                    slot.stateFile.clear(); return;
-                }
-                InsertSlot* live = liveInsertSlot(channelId, slot.id);
-                if (!live || !live->node || !live->node->instance())
-                    throw std::runtime_error("cannot capture unavailable render plugin: " + slot.name);
-                captureNode(live->node.get(), slot.id,
-                               slot.stateFile, slot.parameters);
-                if (slot.channelMode == PluginChannelMode::DualMono)
-                    captureNode(live->rightNode.get(),
-                                   slot.id + "-right", slot.rightStateFile,
-                                   slot.rightParameters);
-            };
-            for (auto& track : snapshot.project.tracks) {
-                if (!carriesAudio(track) || track.freeze.active()) continue;
-                if (!spec.independentTrackId.empty() && track.id != spec.independentTrackId) continue;
-                if (trackAccepts(track.kind, ClipKind::Midi))
-                    collectSlot(track.id, track.instrument);
-                for(auto& module:track.miniModules) collectSlot(track.id,module);
-                for (auto& slot : track.inserts)
-                    collectSlot(track.id, slot);
-                if (track.samplerFx.isOwnedBy(track.instrument))
-                    for (auto& slot : track.samplerFx.inserts)
-                        collectSlot(track.id, slot);
-                for (auto& clip : track.clips) {
-                    if (clip.kind != ClipKind::Audio) continue;
-                    for (auto& slot : clip.inserts)
-                        collectSlot(track.id, slot);
-                }
-            }
-            if (spec.independentTrackId.empty())
-                for(auto& module:snapshot.project.masterMiniModules) collectSlot(kMasterChannelId,module);
-                for (auto& slot : snapshot.project.masterInserts)
-                    collectSlot(kMasterChannelId, slot);
-        }
-        EngineController scratch;
-        scratch.m_isRenderClone = true;
-        scratch.m_renderingPass = true;
-        const double rate = spec.sampleRate > 0.0 ? spec.sampleRate : m_sampleRate;
+        EngineController scratch(WorkerRuntime{});
+        scratch.m_runtime.nativeForWorkerOrTest().renderingPass = true;
+        const double rate = spec.sampleRate > 0.0 ? spec.sampleRate : data->sampleRate;
         if (!std::isfinite(rate) || rate < 1000 || rate > 768000)
             return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render sample rate");
         const bool eventSensitive = std::any_of(snapshot.project.tracks.begin(),
@@ -234,10 +274,10 @@ audio::Result EngineController::renderProject(
                 });
             });
         const auto renderBlockSize = spec.blockSize ? spec.blockSize
-            : eventSensitive ? m_bufferSize : std::max(m_bufferSize, 1024u);
+            : eventSensitive ? data->blockSize : std::max(data->blockSize, 1024u);
         if (const auto ready = scratch.initialize(rate, renderBlockSize, false); !ready) return ready;
-        scratch.m_pluginManager.copyCatalogFrom(m_pluginManager);
-        scratch.m_project = std::move(snapshot.project);
+        scratch.m_pluginManager.restoreCatalog(data->catalog);
+        scratch.m_project = snapshot.project;
         if (!spec.independentTrackId.empty()) {
             std::erase_if(scratch.m_project.tracks, [&](const TrackModel& track) {
                 return track.id != spec.independentTrackId;
@@ -256,19 +296,17 @@ audio::Result EngineController::renderProject(
             scratch.m_project.masterVolume = 1.f; scratch.m_project.masterPan = 0.f;
             scratch.m_project.invalidateTrackIndex();
         }
-        scratch.m_sourceSamples = m_sourceSamples;
-        if (std::abs(rate - m_sampleRate) <= 0.01) {
-            scratch.m_samples = m_samples;
-            scratch.m_clipSampleCache = m_clipSampleCache;
-            scratch.m_sharedClipSampleCache = m_sharedClipSampleCache;
+        scratch.m_sourceSamples = data->sourceSamples;
+        if (std::abs(rate - data->sampleRate) <= 0.01) {
+            scratch.m_samples = data->samples;
+            scratch.m_clipSampleCache = data->clipSamples;
+            scratch.m_sharedClipSampleCache = data->sharedClipSamples;
         }
         scratch.m_sampleLoadContinue = preparing;
-        scratch.m_engine.transport().setTempo(scratch.m_project.tempo);
-        scratch.m_engine.transport().setTimeSignature(scratch.m_project.timeSigNumerator,
-                                                     scratch.m_project.timeSigDenominator);
-        scratch.m_engine.transport().setLoopRange(scratch.toSamples(m_project.loopStartSeconds),
-                                                  scratch.toSamples(m_project.loopEndSeconds));
-        scratch.m_engine.transport().setLoopEnabled(m_project.loopEnabled);
+        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = scratch.m_project.tempo});
+        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::TimeSignature, .numerator = scratch.m_project.timeSigNumerator, .denominator = scratch.m_project.timeSigDenominator});
+        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::LoopRange, .position = scratch.toSamples(scratch.m_project.loopStartSeconds), .end = scratch.toSamples(scratch.m_project.loopEndSeconds)});
+        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::LoopEnabled, .enabled = scratch.m_project.loopEnabled});
         if (const auto built = scratch.rebuildGraph(); !built) return built;
 
         std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
@@ -332,7 +370,7 @@ audio::Result EngineController::renderProject(
             if (attempt == 7)
                 return audio::Result::fail(audio::EngineError::Unknown,
                     "audio processor keeps changing configuration after 8 export attempts: " +
-                    scratch.m_engine.offlineError());
+                    scratch.m_runtime.nativeForWorkerOrTest().engine.offlineError());
         }
         return audio::Result::fail(audio::EngineError::Unknown, "export preparation failed");
     } catch (const std::exception& error) {
@@ -344,6 +382,8 @@ audio::Result EngineController::renderProject(
 }
 
 void EngineController::applyRenderSelection(const rendering::Spec& spec, ProjectModel& project) {
+    if (!spec.soloChannelId.empty())
+        for (auto& track : project.tracks) track.soloed = track.id == spec.soloChannelId;
     // ── Bypass ──
     auto bypassSlots = [](std::vector<InsertModel>& slots) {
         for (InsertModel& slot : slots) {
@@ -544,7 +584,7 @@ audio::Result EngineController::renderProjectPass(
     // bypass/solo/tap configuration is discarded with it, so restoration never
     // rebuilds or overwrites the live session on an error path.
     UndoStack::Suspend quiet(m_undo);
-    m_renderingPass = true;
+    m_runtime.nativeForWorkerOrTest().renderingPass = true;
 
     // ── Sample rate ──
     if (std::abs(targetRate - m_sampleRate) > 0.01) {
@@ -552,14 +592,14 @@ audio::Result EngineController::renderProjectPass(
     }
 
     // ── Taps ──
-    m_renderTapsPreFader = spec.stemsPreFader;
-    m_renderTapsAtSource = spec.stemsAtSource;
+    m_runtime.nativeForWorkerOrTest().renderTapsPreFader = spec.stemsPreFader;
+    m_runtime.nativeForWorkerOrTest().renderTapsAtSource = spec.stemsAtSource;
     std::vector<std::string> stems;
-    m_renderTaps.clear();
+    m_runtime.nativeForWorkerOrTest().renderTaps.clear();
     for (const std::string& channelId : spec.stemChannelIds) {
-        if (!m_channels.contains(channelId)) continue;   // deleted since
-        if (m_renderTaps.contains(channelId)) continue;  // named twice
-        m_renderTaps[channelId] =
+        if (!m_runtime.nativeForWorkerOrTest().channels.contains(channelId)) continue;   // deleted since
+        if (m_runtime.nativeForWorkerOrTest().renderTaps.contains(channelId)) continue;  // named twice
+        m_runtime.nativeForWorkerOrTest().renderTaps[channelId] =
             std::make_shared<engine::TapNode>(channelId + " Tap");
         stems.push_back(channelId);
     }
@@ -581,18 +621,14 @@ audio::Result EngineController::renderProjectPass(
 
     // Prepare in the final processing mode before reading any latency. The
     // isolated controller never opens a device; all later compiles stay offline.
-    if (const auto ready = m_engine.prepare(m_sampleRate, m_bufferSize, 2, true); !ready)
+    if (const auto ready = m_runtime.nativeForWorkerOrTest().engine.prepare(m_sampleRate, m_bufferSize, 2, true); !ready)
         return audio::Result::fail(audio::EngineError::Unknown,
-            m_engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
-                                           : m_engine.offlineError());
-    const auto graph = m_engine.compiledGraph();
+            m_runtime.nativeForWorkerOrTest().engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
+                                           : m_runtime.nativeForWorkerOrTest().engine.offlineError());
+    const auto graph = m_runtime.nativeForWorkerOrTest().engine.compiledGraph();
     const auto requireSlot = [&](const std::string& channelId, const InsertModel& model, bool frozen = false) {
-        if(model.uid==plugins::mini::kUid && !spec.bypassTrackInserts && !spec.bypassChannelInserts && !spec.stemsAtSource &&
-           !(channelId==kMasterChannelId && spec.bypassMasterChain)) {
-            const auto error=model.miniModule?plugins::mini::validate(*model.miniModule,model.miniModuleMode):"Missing module definition";
-            if(!error.empty()) throw std::runtime_error("Mini module unavailable: "+model.name+" — "+error);
-        }
         if (frozen || !model.isLoaded() || model.bypassed || model.mix == 0.f) return;
+        validateRenderModule(model);
         auto* slot = liveInsertSlot(channelId, model.id);
         if (!slot || !slot->node || !slot->node->isReady() ||
             (model.channelMode == PluginChannelMode::DualMono &&
@@ -633,7 +669,7 @@ audio::Result EngineController::renderProjectPass(
     // latency and truncates the end by the same amount.
     engine::FrameCount captureLatency = graph->totalLatency;
     std::unordered_map<engine::TapNode*, engine::FrameCount> tapLatencies;
-    for (const auto& [channelId, tap] : m_renderTaps) {
+    for (const auto& [channelId, tap] : m_runtime.nativeForWorkerOrTest().renderTaps) {
         const auto entry = std::find_if(graph->nodes.begin(), graph->nodes.end(),
             [&](const auto& node) { return node.node == tap.get(); });
         if (entry == graph->nodes.end())
@@ -670,14 +706,14 @@ audio::Result EngineController::renderProjectPass(
     };
     std::vector<Sink> sinks;
     std::unordered_set<std::string> taken;
-    const std::string base = sanitizeFileName(spec.baseName);
+    const std::string base = rendering::sanitizeFileName(spec.baseName);
 
     audio::Result ioStatus = audio::Result::ok();
     auto openSink = [&](const std::string& stem, engine::TapNode* tap) {
         if (!ioStatus) return;
         Sink sink;
         sink.tap = tap;
-        sink.path = uniquePath(spec.outputDir, stem, extension, taken);
+        sink.path = rendering::uniquePath(spec.outputDir, stem, extension, taken);
         ioStatus = sink.writer.open(files.stage(sink.path), spec.file, m_sampleRate,
                                     fileChannels, expectedFrames);
         if (!ioStatus) return;
@@ -700,8 +736,8 @@ audio::Result EngineController::renderProjectPass(
         const std::string label =
             track ? track->name
                   : (channelId == kMasterChannelId ? "Master" : channelId);
-        openSink(base + " - " + sanitizeFileName(label),
-                 m_renderTaps[channelId].get());
+        openSink(base + " - " + rendering::sanitizeFileName(label),
+                 m_runtime.nativeForWorkerOrTest().renderTaps[channelId].get());
     }
 
     // Anything half-written is worse than nothing: it looks like a finished
@@ -751,7 +787,7 @@ audio::Result EngineController::renderProjectPass(
     };
 
     auto lastProgress = std::chrono::steady_clock::time_point{};
-    auto renderStatus = m_engine.renderOffline(
+    auto renderStatus = m_runtime.nativeForWorkerOrTest().engine.renderOffline(
         renderStart, renderEnd, m_bufferSize,
         [&](const engine::AudioBlock& block, engine::FrameCount frames) {
             if (extraMasterDelay) masterCaptureDelay.process(block, block, frames);
@@ -835,7 +871,7 @@ audio::Result EngineController::renderProjectPass(
         },
         engine::OfflineOptions{.sourcesEndSample = rangeEnd, .pipeline = spec.pipeline,
                                .forcePipeline = spec.forcePipeline});
-    out.usedPipeline = m_engine.lastOfflineUsedPipeline();
+    out.usedPipeline = m_runtime.nativeForWorkerOrTest().engine.lastOfflineUsedPipeline();
 
     if (!renderStatus || !ioStatus || cancelled) {
         discard();
@@ -848,8 +884,8 @@ audio::Result EngineController::renderProjectPass(
             renderStatus.error() == engine::EngineError::RenderRestartRequired;
         return audio::Result::fail(
             audio::EngineError::Unknown,
-            m_engine.offlineError().empty() ? std::string(engine::describe(renderStatus.error()))
-                                           : m_engine.offlineError());
+            m_runtime.nativeForWorkerOrTest().engine.offlineError().empty() ? std::string(engine::describe(renderStatus.error()))
+                                           : m_runtime.nativeForWorkerOrTest().engine.offlineError());
     }
 
     for (Sink& sink : sinks) {
@@ -864,24 +900,45 @@ audio::Result EngineController::renderProjectPass(
     return audio::Result::ok();
 }
 
-audio::Result EngineController::applyRenderSampleRate(double rate) {
-    const double previousPosition = positionSeconds();
-    // Clip audio is converted to the session rate once, when it is decoded, and
-    // then cached by path. Changing the rate without dropping those caches would
-    // render every clip at the wrong speed — the reason this is a helper and not
-    // three lines at the call site.
-    m_samples.clear();
-    m_clipSampleCache.clear();
-    m_sharedClipSampleCache.clear();
-    m_sampleRate = rate;
-    if (auto prepared = m_engine.prepare(m_sampleRate, m_bufferSize, 2); !prepared)
-        return audio::Result::fail(audio::EngineError::InvalidArgument,
-            std::string(engine::describe(prepared.error())));
-    m_engine.transport().seek(toSamples(previousPosition));
-    m_recorder->shutdown();
-    m_recorder->initialize(m_sampleRate, 2);
-    updateTimelineDuration();
-    return audio::Result::ok();
+audio::Result EngineController::applyRenderSampleRate(double rate, uint32_t frames) {
+    if (!frames) frames = m_bufferSize;
+    if (std::abs(rate - m_sampleRate) < 0.01 && frames == m_bufferSize)
+        return audio::Result::ok();
+    if (const auto saved = m_runtime.captureRecoveryCheckpoint(); !saved) return saved;
+    const auto previous = m_runtime.transportSnapshot();
+    const auto oldRate = m_sampleRate;
+    const auto oldFrames = m_bufferSize;
+    // Converted clip data and its timeline positions must change together.
+    // Keep old caches until the complete new generation is acknowledged.
+    auto oldSamples = std::move(m_samples);
+    auto oldClips = std::move(m_clipSampleCache);
+    auto oldShared = std::move(m_sharedClipSampleCache);
+    m_sampleRate = rate; m_bufferSize = frames;
+    auto result = audio::Result::ok();
+    try {
+        auto session = prepareAudioSession(AudioPluginLoadPolicy::PreserveUnavailable);
+        using Action = AudioTransportCommand::Action;
+        const std::array<AudioTransportCommand, 7> transport{{
+            {.action = Action::Tempo, .value = m_project.tempo},
+            {.action = Action::TimeSignature, .numerator = m_project.timeSigNumerator, .denominator = m_project.timeSigDenominator},
+            {.action = Action::LoopRange, .position = toSamples(m_project.loopStartSeconds), .end = toSamples(m_project.loopEndSeconds)},
+            {.action = Action::LoopEnabled, .enabled = m_project.loopEnabled},
+            {.action = Action::Duration, .position = toSamples(double(previous.duration) / oldRate)},
+            {.action = Action::SeekSeconds, .value = previous.positionSeconds},
+            {.action = previous.playing ? Action::Play : Action::Pause}
+        }};
+        announceAllRetiring();
+        result = m_runtime.replacePreparedSession(std::move(session), rate, frames, m_isRenderClone, {}, {}, transport);
+    } catch (const std::exception& error) {
+        result = audio::Result::fail(audio::EngineError::Unknown, error.what());
+    }
+    if (!result) {
+        m_sampleRate = oldRate; m_bufferSize = oldFrames;
+        m_samples = std::move(oldSamples);
+        m_clipSampleCache = std::move(oldClips);
+        m_sharedClipSampleCache = std::move(oldShared);
+    } else m_project.sampleRate = rate;
+    return result;
 }
 
 } // namespace daw

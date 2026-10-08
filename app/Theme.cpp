@@ -708,9 +708,6 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
     border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %PANEL_LIGHT%; border-radius: %RADIUS%px;
     padding: 3px 7px; selection-background-color: %ACCENT%;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
-    border: 1px solid %ACCENT%;
-}
 QCheckBox { spacing: 7px; min-height: 20px; }
 QCheckBox:disabled { color: %TEXT2%; }
 /* Compact closed controls; their lists use the shared popup surface below. */
@@ -721,7 +718,6 @@ QComboBox {
     selection-background-color: %ACCENT%;
 }
 QComboBox:hover { border-color: %BUTTON_EDGE%; }
-QComboBox:focus, QComboBox:on { border: 1px solid %ACCENT%; }
 QComboBox:disabled { color: %TEXT2%; }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox::down-arrow { image: url(:/icons/popup-chevron-%APPEARANCE%.svg); width: 12px; height: 12px; }
@@ -761,9 +757,8 @@ QPushButton:checked {
                                 stop:0 %BUTTON_ON_TOP%, stop:1 %BUTTON_ON_BOTTOM%);
     color: %TEXT%; border-color: %BUTTON_ON_EDGE%; border-bottom-color: %ACCENT%;
 }
-QPushButton:checked:hover { background: %BUTTON_ON_TOP%; border-color: %ACCENT%; }
+QPushButton:checked:hover { background: %BUTTON_ON_TOP%; }
 QPushButton:checked:pressed { background: %BUTTON_ON_BOTTOM%; border-color: %BUTTON_ON_EDGE%; }
-QPushButton:focus { border-color: %ACCENT%; }
 QPushButton:default, QPushButton[accentAction="true"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %BUTTON_ACCENT_TOP%, stop:1 %ACCENT%);
@@ -777,7 +772,6 @@ QPushButton:default:hover, QPushButton[accentAction="true"]:hover {
 QPushButton:default:pressed, QPushButton[accentAction="true"]:pressed {
     background: %ACCENT%; border-top-color: %ACCENT_DARK%; border-bottom-color: %BUTTON_ACCENT_EDGE%;
 }
-QPushButton:default:focus, QPushButton[accentAction="true"]:focus { border-color: %ACCENT_TEXT%; }
 QPushButton:disabled, QPushButton:checked:disabled, QPushButton:default:disabled,
 QPushButton[accentAction="true"]:disabled {
     background: %SURFACE%; color: %TEXT2%; border-color: %SEP%;
@@ -816,7 +810,6 @@ QTreeWidget#SettingsNavigation::item:hover { background: %HOVER%; }
 QTreeWidget#SettingsNavigation::item:selected {
     background: %ACCENT_SOFT%; color: %TEXT%; border-left-color: %ACCENT%;
 }
-QTreeWidget#SettingsNavigation::item:focus { border-color: %ACCENT%; }
 QWidget#SettingsPageHeader {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %PANEL_TOP%,stop:1 %PANEL_BOTTOM%);
     border-bottom: 1px solid %SEP%; }
@@ -849,7 +842,6 @@ QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_LIT%, stop:1 %GLASS_HI%);
 }
-QSlider::groove:horizontal:focus { border: 1px solid %ACCENT%; }
 QSlider::groove:vertical {
     width: 4px; background: %WELL%; border: none; border-radius: 2px;
 }
@@ -869,7 +861,6 @@ QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_LIT%, stop:1 %GLASS_HI%);
 }
-QSlider::groove:vertical:focus { border: 1px solid %ACCENT%; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%TEXT%", c(t.textPrimary))
         .replace("%APPEARANCE%", t.dark ? QStringLiteral("dark") : QStringLiteral("light"))

@@ -92,7 +92,7 @@ int main() {
               !loaded.inserts.front().model.windowOpen,
           "omits sends, routing and project/window-specific state");
 
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     check(controller.initialize(48000, 256, /*openDevice=*/false).isOk(),
           "controller starts headless");
     const std::string source =

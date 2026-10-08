@@ -1,3 +1,5 @@
+#include <QDir>
+#include "PluginStyle.hpp"
 #include "EqualizerPanel.hpp"
 
 #include "Controls.hpp"
@@ -9,6 +11,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QContextMenuEvent>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -31,11 +35,13 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTimer>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 using namespace daw::plugins;
 namespace eq = daw::plugins::equalizer;
@@ -92,54 +98,11 @@ protected:
             QRectF(rect()).adjusted(kMargin + 0.5, kMargin + 0.5,
                                     -kMargin - 0.5, -kMargin - 0.5);
         if (plate.width() < 2.0 || plate.height() < 2.0) return;
-        QPainterPath shape;
-        shape.addRoundedRect(plate, 10, 10);
-
-        // It has to read as lifted off a plot it partly covers, so the shadow
-        // is heavier than the chrome's — this is the one surface in the window
-        // that is genuinely floating.
-        for (int i = kMargin; i >= 1; --i) {
-            const qreal k = 1.0 - qreal(i) / qreal(kMargin);
-            const int alpha = int(std::lround(46.0 * k * k));
-            if (alpha <= 0) continue;
-            QPainterPath halo;
-            halo.addRoundedRect(plate.adjusted(-i, -i * 0.6, i, i * 1.3),
-                                10 + i, 10 + i);
-            p.fillPath(halo, QColor(0, 0, 0, alpha));
-        }
-
-        // A restrained glass surface: enough of the live analyzer remains
-        // visible to preserve context, while the high opacity keeps labels and
-        // controls readable on a busy spectrum.
-        QColor glassTop = mixColors(t.surfaceElevated, t.background,
-                                    t.dark ? 0.36 : 0.08);
-        QColor glassBottom = mixColors(t.surface, t.background,
-                                       t.dark ? 0.58 : 0.20);
-        glassTop.setAlpha(t.dark ? 232 : 242);
-        glassBottom.setAlpha(t.dark ? 216 : 234);
-        QLinearGradient body(plate.topLeft(), plate.bottomLeft());
-        body.setColorAt(0.0, glassTop);
-        body.setColorAt(1.0, glassBottom);
-        p.fillPath(shape, body);
-
-        QLinearGradient sheen(plate.topLeft(), plate.bottomLeft());
-        sheen.setColorAt(0.0, QColor(255, 255, 255, t.dark ? 22 : 64));
-        sheen.setColorAt(0.46, QColor(255, 255, 255, 0));
-        p.fillPath(shape, sheen);
-
-        // A hairline of the band's own colour along the top edge: the plate
-        // says which band it belongs to before you read a word on it.
-        p.setBrush(Qt::NoBrush);
+        pluginStyle::surface(p,plate);
         if (m_accent.isValid()) {
-            QColor edge = m_accent;
-            edge.setAlpha(t.dark ? 150 : 190);
-            p.setPen(QPen(edge, 1.6));
-            p.drawLine(QPointF(plate.left() + 11, plate.top() + 0.8),
-                       QPointF(plate.right() - 11, plate.top() + 0.8));
+            p.setPen(QPen(m_accent,1.6));
+            p.drawLine(plate.topLeft()+QPointF(14,1),plate.topRight()+QPointF(-14,1));
         }
-        QColor rim = mixColors(t.separator(), t.textPrimary, t.dark ? 0.10 : 0.0);
-        p.setPen(QPen(rim, 1.0));
-        p.drawPath(shape);
     }
 
 private:
@@ -629,10 +592,6 @@ void EqualizerGraph::paintScene(QPainter& painter, const QRegion&) {
     painter.setPen(QPen(mixColors(ground, theme.textPrimary,
                                   theme.dark ? 0.16 : 0.22), 1.0));
     painter.drawRect(plot);
-    if (hasFocus()) {
-        painter.setPen(QPen(theme.accentHighlight, 2.0));
-        painter.drawRect(QRectF(rect()).adjusted(1, 1, -2, -2));
-    }
 }
 
 void EqualizerGraph::mousePressEvent(QMouseEvent* event) {
@@ -840,7 +799,6 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     padding: 3px 10px; color: %3; min-height: 22px;
 }
 #EqualizerPanel QComboBox:hover { border-color: %2; background: %6; }
-#EqualizerPanel QComboBox:focus { border-color: %2; }
 #EqualizerPanel QComboBox::drop-down { width: 16px; border: none; }
 #EqualizerPanel QPushButton {
     padding: 3px 12px; min-height: 22px;
@@ -927,7 +885,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
             knob->setAccessibleName(caption);
             knob->setAutomatable(info->isAutomatable);
         }
-        knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
+        knob->setVisualStyle(ui::Knob::VisualStyle::Slicer);
         knob->setBare(diameter);
         connect(knob, &ui::Knob::valueChanged, this,
                 [this, field](double value) {
@@ -1007,7 +965,7 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
         if (field == eq::BandParam::DetectorLow ||
             field == eq::BandParam::DetectorHigh)
             knob->setLogarithmic(true);
-        knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
+        knob->setVisualStyle(ui::Knob::VisualStyle::Slicer);
         knob->setBare(38);
         connect(knob, &ui::Knob::valueChanged, this, [this, field](double value) {
             if (m_refreshing || m_graph->selection().empty()) return;
@@ -1179,9 +1137,9 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     m_graph->gestureStarted = [this] {
         m_graphGestureStart = {};
         std::vector<QString> ids;
-        if (eq::EqualizerInstance* instance = equalizerInstance()) {
+        if (const auto snapshot = equalizerSnapshot()) {
             for (int band : m_graph->selection()) {
-                m_graphGestureStart[std::size_t(band)] = instance->bandState(band);
+                m_graphGestureStart[std::size_t(band)] = snapshot->bands[band];
                 ids.push_back(bandId(band, eq::BandParam::Frequency));
                 ids.push_back(bandId(band, eq::BandParam::Gain));
                 ids.push_back(bandId(band, eq::BandParam::DynamicRange));
@@ -1206,8 +1164,8 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     m_graph->gainsInverted = [this](const std::vector<int>& bands) { invertGains(bands); };
     m_graph->bandsReset = [this](const std::vector<int>& bands) { resetBands(bands); };
     m_graph->auditionChanged = [this](int band) {
-        if (eq::EqualizerInstance* instance = equalizerInstance())
-            instance->setAuditionBand(band);
+        if (m_controller)
+            m_controller->auditionEqualizerBand(m_channelKey, m_insertKey, band);
     };
 
     QSettings settings;
@@ -1226,9 +1184,9 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     updateAnalyzerConfig();
     refresh();
     if (qEnvironmentVariableIsSet("DAW_SHOT_EQUALIZER")) {
-        if (eq::EqualizerInstance* instance = equalizerInstance()) {
+        if (const auto snapshot = equalizerSnapshot()) {
             for (int band = 0; band < int(eq::kBandCount); ++band) {
-                if (!instance->bandState(band).enabled) continue;
+                if (!snapshot->bands[band].enabled) continue;
                 m_graph->setSelection({band});
                 selectBands({band});
                 break;
@@ -1237,10 +1195,9 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     }
 }
 
-eq::EqualizerInstance* EqualizerPanel::equalizerInstance() const {
-    if (!m_controller) return nullptr;
-    return dynamic_cast<eq::EqualizerInstance*>(
-        m_controller->insertInstance(m_channelKey, m_insertKey));
+std::optional<daw::EqualizerSnapshot> EqualizerPanel::equalizerSnapshot(bool consumeMeters) const {
+    return m_controller ? m_controller->equalizerSnapshot(m_channelKey, m_insertKey, consumeMeters)
+                        : std::nullopt;
 }
 
 double EqualizerPanel::readParameter(const QString& id) const {
@@ -1254,13 +1211,14 @@ void EqualizerPanel::writeParameter(const QString& id, double value) {
     if (!m_refreshing) {
         m_selectedKind = QStringLiteral("custom");
         m_selectedName = tr("Custom");
-        if (eq::EqualizerInstance* instance = equalizerInstance())
-            instance->setPresetReference("custom", "Custom");
+        if (m_controller)
+            m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "custom", "Custom");
     }
 }
 
 ui::Knob* EqualizerPanel::makeKnob(const QString& id, const QString& caption, int size) {
     auto* knob = new ui::Knob({}, this);
+    knob->setProperty("parameterId", id);
     if (const ParameterInfo* info = parameterInfo(id)) {
         knob->setRange(info->minValue, info->maxValue);
         knob->setDefaultValue(info->defaultValue);
@@ -1274,7 +1232,7 @@ ui::Knob* EqualizerPanel::makeKnob(const QString& id, const QString& caption, in
         knob->setToolTip(QString::fromStdString(info->name));
         knob->setAutomatable(info->isAutomatable);
     }
-    knob->setVisualStyle(ui::Knob::VisualStyle::Graphite);
+    knob->setVisualStyle(ui::Knob::VisualStyle::Slicer);
     knob->setBare(size);
     knob->setValue(readParameter(id));
     connect(knob, &ui::Knob::valueChanged, this, [this, id](double value) {
@@ -1324,11 +1282,11 @@ void EqualizerPanel::selectBands(const std::vector<int>& bands) {
 }
 
 void EqualizerPanel::createBand(double frequency, double gain) {
-    eq::EqualizerInstance* instance = equalizerInstance();
-    if (!instance) return;
+    const auto snapshot = equalizerSnapshot();
+    if (!snapshot) return;
     int band = -1;
     for (int i = 0; i < int(eq::kBandCount); ++i)
-        if (!instance->bandState(i).enabled) { band = i; break; }
+        if (!snapshot->bands[i].enabled) { band = i; break; }
     if (band < 0) {
         QMessageBox::information(this, tr("Equalizer is full"),
                                  tr("All 24 equalizer bands are already in use."));
@@ -1362,11 +1320,11 @@ void EqualizerPanel::deleteBands(const std::vector<int>& bands) {
 }
 
 void EqualizerPanel::duplicateBand(int source) {
-    eq::EqualizerInstance* instance = equalizerInstance();
-    if (!instance || source < 0) return;
+    const auto snapshot = equalizerSnapshot();
+    if (!snapshot || source < 0) return;
     int target = -1;
     for (int i = 0; i < int(eq::kBandCount); ++i)
-        if (!instance->bandState(i).enabled) { target = i; break; }
+        if (!snapshot->bands[i].enabled) { target = i; break; }
     if (target < 0) return;
     std::vector<QString> ids;
     for (std::uint32_t field = 0; field < eq::kBandParameterCount; ++field)
@@ -1455,8 +1413,8 @@ void EqualizerPanel::applyValues(const Values& values, const QString& kind,
     m_controller->collapseUndo(undo, label);
     m_selectedKind = kind;
     m_selectedName = name;
-    if (eq::EqualizerInstance* instance = equalizerInstance())
-        instance->setPresetReference(kind.toStdString(), name.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, kind.toStdString(), name.toStdString());
     emit projectEdited();
     refresh();
 }
@@ -1469,9 +1427,9 @@ void EqualizerPanel::applyFactoryPreset(int index) {
                 QString::fromUtf8(preset.name.data(), int(preset.name.size())),
                 "Apply Equalizer Preset");
     std::vector<int> active;
-    if (eq::EqualizerInstance* instance = equalizerInstance())
+    if (const auto snapshot = equalizerSnapshot())
         for (int band = 0; band < int(eq::kBandCount); ++band)
-            if (instance->bandState(band).enabled) active.push_back(band);
+            if (snapshot->bands[band].enabled) active.push_back(band);
     m_graph->setSelection(active.empty() ? std::vector<int>{}
                                          : std::vector<int>{active.front()});
 }
@@ -1609,8 +1567,8 @@ void EqualizerPanel::saveUserPreset() {
     storeUserPresets();
     m_selectedKind = QStringLiteral("user");
     m_selectedName = name;
-    if (eq::EqualizerInstance* instance = equalizerInstance())
-        instance->setPresetReference("user", name.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "user", name.toStdString());
     refresh();
 }
 
@@ -1638,8 +1596,8 @@ void EqualizerPanel::renameUserPreset() {
     current->name = name;
     m_selectedName = name;
     storeUserPresets();
-    if (eq::EqualizerInstance* instance = equalizerInstance())
-        instance->setPresetReference("user", name.toStdString());
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "user", name.toStdString());
     refresh();
 }
 
@@ -1657,30 +1615,19 @@ void EqualizerPanel::deleteUserPreset() {
     storeUserPresets();
     m_selectedKind = QStringLiteral("custom");
     m_selectedName = tr("Custom");
-    if (eq::EqualizerInstance* instance = equalizerInstance())
-        instance->setPresetReference("custom", "Custom");
+    if (m_controller)
+        m_controller->setInsertPresetReference(m_channelKey, m_insertKey, "custom", "Custom");
     refresh();
 }
 
 void EqualizerPanel::switchComparison(char slot) {
-    eq::EqualizerInstance* instance = equalizerInstance();
-    if (!instance || instance->activeComparison() == slot) return;
-    const char before = instance->activeComparison();
-    instance->captureComparison(before);
-    const Values values = instance->comparison(slot);
-    applyValues(values, QStringLiteral("custom"), tr("Custom"),
-                "Switch Equalizer A/B");
-    instance->setActiveComparison(slot);
+    if (!m_controller || !m_controller->switchEqualizerComparison(m_channelKey, m_insertKey, slot)) return;
+    emit projectEdited();
     refresh();
 }
 
 void EqualizerPanel::copyComparison() {
-    eq::EqualizerInstance* instance = equalizerInstance();
-    if (!instance) return;
-    const char source = instance->activeComparison();
-    const char target = source == 'A' ? 'B' : 'A';
-    instance->captureComparison(source);
-    instance->copyComparison(source, target);
+    if (!m_controller || !m_controller->copyEqualizerComparison(m_channelKey, m_insertKey)) return;
     emit projectEdited();
     refresh();
 }
@@ -1690,14 +1637,14 @@ void EqualizerPanel::updateAnalyzerConfig() {
     settings.setValue(QStringLiteral("equalizer/analyzer/pre"), m_pre->isChecked());
     settings.setValue(QStringLiteral("equalizer/analyzer/post"), m_post->isChecked());
     settings.setValue(QStringLiteral("equalizer/analyzer/sidechain"), m_side->isChecked());
-    if (eq::EqualizerInstance* instance = equalizerInstance()) {
-        eq::AnalyzerConfig config = instance->analyzerConfig();
+    if (const auto snapshot = equalizerSnapshot()) {
+        eq::AnalyzerConfig config = snapshot->analyzer;
         config.enabled = isVisible();
         config.pre = m_pre->isChecked();
         config.post = m_post->isChecked();
         config.sidechain = m_side->isChecked();
         config.frozen = m_freeze->isChecked();
-        instance->setAnalyzerConfig(config);
+        m_controller->setEqualizerAnalyzer(m_channelKey, m_insertKey, config);
     }
 }
 
@@ -1730,9 +1677,9 @@ void EqualizerPanel::refreshBandControls() {
                                QStringLiteral("$band.detector.low"),
                                QStringLiteral("$band.detector.high")})
         if (ui::Knob* knob = m_knobs.value(key)) knob->setArcColor(accent);
-    eq::EqualizerInstance* instance = equalizerInstance();
-    if (!instance) return;
-    const eq::BandState state = instance->bandState(std::uint32_t(band));
+    const auto snapshot = equalizerSnapshot();
+    if (!snapshot) return;
+    const eq::BandState state = snapshot->bands[std::uint32_t(band)];
     auto setCombo = [](QComboBox* combo, int value) {
         const QSignalBlocker blocker(combo);
         combo->setCurrentIndex(value);
@@ -1748,6 +1695,8 @@ void EqualizerPanel::refreshBandControls() {
         m_external->setChecked(state.externalSidechain);
     }
     auto setBandKnob = [this, band](const QString& key, eq::BandParam field) {
+        if (ui::Knob* knob = m_knobs.value(key))
+            knob->setProperty("parameterId", bandId(band, field));
         if (ui::Knob* knob = m_knobs.value(key); knob && !knob->isEditing())
             knob->setValue(readParameter(bandId(band, field)));
     };
@@ -1820,37 +1769,22 @@ void EqualizerPanel::refresh() {
                                  sampleRate != m_responseSampleRate;
     auto& response = m_cachedResponse;
     auto& curves = m_cachedCurves;
-    if (eq::EqualizerInstance* instance = equalizerInstance()) {
-        telemetry = instance->consumeTelemetry();
-        for (std::uint32_t band = 0; band < eq::kBandCount; ++band)
-            bands[band] = instance->bandState(band);
+    if (const auto snapshot = equalizerSnapshot(true)) {
+        telemetry = snapshot->telemetry;
+        bands = snapshot->bands;
         if (responseChanged) {
-            response.fill(0.0);
-            for (auto& curve : curves) curve.fill(0.0f);
-        for (std::size_t i = 0; i < response.size(); ++i) {
-            const double frequency = 10.0 * std::pow(3000.0,
-                double(i) / double(response.size() - 1));
-            response[i] = instance->responseDb(frequency);
-        }
-        // Only the enabled bands are walked. A session rarely uses more than a
-        // handful, and this runs on the refresh timer.
-        for (std::uint32_t band = 0; band < eq::kBandCount; ++band) {
-            if (!bands[band].enabled) continue;
-            for (int i = 0; i < EqualizerGraph::kCurvePoints; ++i) {
-                const double frequency = 10.0 * std::pow(3000.0,
-                    double(i) / double(EqualizerGraph::kCurvePoints - 1));
-                curves[band][std::size_t(i)] =
-                    float(instance->bandResponseDb(band, frequency));
+            if (const auto computed = m_controller->equalizerResponse(m_channelKey, m_insertKey)) {
+                response = computed->combined;
+                curves = computed->bands;
+                m_responseValues = actual;
+                m_responseSampleRate = sampleRate;
+                m_responseValid = true;
             }
         }
-            m_responseValues = actual;
-            m_responseSampleRate = sampleRate;
-            m_responseValid = true;
-        }
-        const char active = instance->activeComparison();
+        const char active = snapshot->comparison;
         m_a->setChecked(active == 'A');
         m_b->setChecked(active == 'B');
-        const auto [kind, name] = instance->presetReference();
+        const auto [kind, name] = snapshot->preset;
         m_selectedKind = QString::fromStdString(kind);
         m_selectedName = QString::fromStdString(name);
     }
@@ -1905,27 +1839,48 @@ void EqualizerPanel::refresh() {
 }
 
 bool EqualizerPanel::checkForTest() {
-    if (!m_controller || !equalizerInstance()) return false;
-    const std::vector<std::uint8_t> saved = [&] {
-        std::vector<std::uint8_t> state;
-        equalizerInstance()->saveState(state);
-        return state;
-    }();
+    const auto shots = qEnvironmentVariable("VLT_NATIVE_SCREENSHOTS");
+    if (!shots.isEmpty()) {
+        QDir().mkpath(shots);
+        QTimer::singleShot(0, this, [this, shots] { grab().save(shots + "/equalizer.png"); });
+    }
+
+    // The production endpoint publishes UI readouts asynchronously. Wait for
+    // the first complete snapshot before sending the synthetic gestures.
+    const auto waitForReadout = [](auto ready) {
+        QElapsedTimer elapsed;
+        elapsed.start();
+        while (!ready()) {
+            if (elapsed.elapsed() >= 1000) return false;
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(1);
+        }
+        return true;
+    };
+    if (!m_controller || !waitForReadout([&] { return bool(equalizerSnapshot()); })) {
+        std::fprintf(stderr, "Equalizer UI selftest: no initial snapshot\n");
+        return false;
+    }
+    refresh();
     const std::size_t createDepth = m_controller->undoDepth();
     createBand(1000.0, 3.0);
-    const bool created = selectedBand() >= 0 &&
-        equalizerInstance()->bandState(std::uint32_t(selectedBand())).enabled &&
+    const bool created = waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && selectedBand() >= 0 && state->bands[std::uint32_t(selectedBand())].enabled;
+    }) &&
         m_controller->undoDepth() == createDepth + 1;
     const int band = selectedBand();
     if (band >= 0) {
-        m_graphGestureStart[std::size_t(band)] = equalizerInstance()->bandState(band);
+        m_graphGestureStart[std::size_t(band)] = equalizerSnapshot()->bands[band];
         beginGesture({bandId(band, eq::BandParam::Frequency),
                       bandId(band, eq::BandParam::Gain)});
         moveBands({band}, 2.0, -1.0, 0.0);
         finishGesture("Equalizer UI Selftest Move");
     }
-    const bool moved = band >= 0 &&
-        equalizerInstance()->bandState(band).frequency > 1500.0;
+    const bool moved = band >= 0 && waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && state->bands[band].frequency > 1500.0;
+    });
 
     const auto dragKnobUp = [](ui::Knob* knob, int pixels) {
         if (!knob) return;
@@ -1946,12 +1901,16 @@ bool EqualizerPanel::checkForTest() {
     };
 
     ui::Knob* frequency = m_knobs.value(QStringLiteral("$band.frequency"));
+    bool frequencyReady = false;
     if (band >= 0 && frequency) {
         writeParameter(bandId(band, eq::BandParam::Frequency), 20.0);
+        frequencyReady = waitForReadout([&] {
+            return readParameter(bandId(band, eq::BandParam::Frequency)) == 20.0;
+        });
         frequency->setValue(20.0);
         dragKnobUp(frequency, 1);
     }
-    const bool preciseLowFrequency = frequency && frequency->value() > 20.0 &&
+    const bool preciseLowFrequency = frequencyReady && frequency && frequency->value() > 20.0 &&
                                      frequency->value() < 30.0;
 
     if (band >= 0) {
@@ -1960,41 +1919,60 @@ bool EqualizerPanel::checkForTest() {
         selectBands({band});
         refresh();
     }
+    const bool dynamicsReady = band >= 0 && waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && state->bands[band].dynamicAuto &&
+            !m_dynamicPanel->isHidden();
+    });
     ui::Knob* threshold = m_knobs.value(QStringLiteral("$band.dynamic.threshold"));
     const double thresholdBefore = threshold ? threshold->value() : 0.0;
     dragKnobUp(threshold, 2);
-    const bool dynamicsStayOpen = band >= 0 && threshold &&
+    const bool dynamicsStayOpen = dynamicsReady && threshold && waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && !state->bands[band].dynamicAuto;
+    }) &&
         !m_bandPanel->isHidden() && !m_dynamicPanel->isHidden() &&
-        selectedBand() == band && threshold->value() > thresholdBefore &&
-        !equalizerInstance()->bandState(std::uint32_t(band)).dynamicAuto;
+        selectedBand() == band && threshold->value() > thresholdBefore;
 
     createBand(10.0, -12.0);
     const int lowCutBand = selectedBand();
-    const bool createsLowCut = lowCutBand >= 0 &&
-        equalizerInstance()->bandState(std::uint32_t(lowCutBand)).type ==
-            eq::FilterType::LowCut &&
-        equalizerInstance()->bandState(std::uint32_t(lowCutBand)).gainDb == 0.0;
+    const bool createsLowCut = lowCutBand >= 0 && waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && state->bands[lowCutBand].type == eq::FilterType::LowCut &&
+            state->bands[lowCutBand].gainDb == 0.0;
+    });
     createBand(30000.0, 12.0);
     const int highCutBand = selectedBand();
-    const bool createsHighCut = highCutBand >= 0 &&
-        equalizerInstance()->bandState(std::uint32_t(highCutBand)).type ==
-            eq::FilterType::HighCut &&
-        equalizerInstance()->bandState(std::uint32_t(highCutBand)).gainDb == 0.0;
+    const bool createsHighCut = highCutBand >= 0 && waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && state->bands[highCutBand].type == eq::FilterType::HighCut &&
+            state->bands[highCutBand].gainDb == 0.0;
+    });
 
-    const char beforeSlot = equalizerInstance()->activeComparison();
+    const char beforeSlot = equalizerSnapshot()->comparison;
     switchComparison(beforeSlot == 'A' ? 'B' : 'A');
-    const bool comparison = equalizerInstance()->activeComparison() != beforeSlot;
+    const bool comparison = waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && state->comparison == (beforeSlot == 'A' ? 'B' : 'A');
+    });
     updateAnalyzerConfig();
-    const bool analyzer = equalizerInstance()->analyzerConfig().enabled == isVisible();
+    const bool analyzer = waitForReadout([&] {
+        const auto state = equalizerSnapshot();
+        return state && state->analyzer.enabled == isVisible();
+    });
     bool accessible = m_graph->focusPolicy() == Qt::StrongFocus &&
                       !m_graph->accessibleName().isEmpty();
     for (ui::Knob* knob : std::as_const(m_knobs))
         accessible = accessible && knob->focusPolicy() == Qt::TabFocus &&
                      !knob->accessibleName().isEmpty();
-    equalizerInstance()->loadState(saved);
-    refresh();
-    return created && moved && preciseLowFrequency && dynamicsStayOpen &&
-           createsLowCut && createsHighCut && comparison && analyzer && accessible;
+    const bool passed = created && moved && preciseLowFrequency && dynamicsStayOpen &&
+        createsLowCut && createsHighCut && comparison && analyzer && accessible;
+    if (!passed) std::fprintf(stderr,
+        "Equalizer UI selftest: created=%d moved=%d frequency=%d dynamics=%d "
+        "lowCut=%d highCut=%d comparison=%d analyzer=%d a11y=%d\n",
+        created, moved, preciseLowFrequency, dynamicsStayOpen, createsLowCut,
+        createsHighCut, comparison, analyzer, accessible);
+    return passed;
 }
 
 void EqualizerPanel::showEvent(QShowEvent* event) {
@@ -2006,11 +1984,11 @@ void EqualizerPanel::showEvent(QShowEvent* event) {
 
 void EqualizerPanel::hideEvent(QHideEvent* event) {
     if (m_timer) m_timer->stop();
-    if (eq::EqualizerInstance* instance = equalizerInstance()) {
-        eq::AnalyzerConfig config = instance->analyzerConfig();
+    if (const auto snapshot = equalizerSnapshot()) {
+        eq::AnalyzerConfig config = snapshot->analyzer;
         config.enabled = false;
-        instance->setAnalyzerConfig(config);
-        instance->setAuditionBand(-1);
+        m_controller->setEqualizerAnalyzer(m_channelKey, m_insertKey, config);
+        m_controller->auditionEqualizerBand(m_channelKey, m_insertKey, -1);
     }
     QWidget::hideEvent(event);
 }

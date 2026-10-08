@@ -37,6 +37,16 @@ else()
 endif()
 set(DAW_TEST_CLAP_PATH "${DAW_TEST_CLAP_PATH}" PARENT_SCOPE)
 
+add_library(daw_test_fault_clap MODULE TestFaultClapPlugin.cpp)
+target_link_libraries(daw_test_fault_clap PRIVATE daw_clap_headers)
+if(WIN32)
+    target_link_libraries(daw_test_fault_clap PRIVATE user32)
+endif()
+target_compile_features(daw_test_fault_clap PRIVATE cxx_std_23)
+set_target_properties(daw_test_fault_clap PROPERTIES
+    PREFIX "" SUFFIX ".clap" OUTPUT_NAME "DawTestFault"
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins_fault_test)
+
 add_library(daw_test_render_clap MODULE TestRenderClapPlugin.cpp)
 target_link_libraries(daw_test_render_clap PRIVATE daw_clap_headers)
 target_compile_features(daw_test_render_clap PRIVATE cxx_std_23)

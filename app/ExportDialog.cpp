@@ -1262,19 +1262,17 @@ QLineEdit, QComboBox, QDoubleSpinBox {
     border-radius: 0; padding: 4px 8px; min-height: 18px;
     selection-background-color: %ACCENT%; selection-color: %ACCENT_INK%; }
 QLineEdit { placeholder-text-color: %PLACEHOLDER%; }
-QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border-color: %ACCENT%; }
 QLineEdit:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { color: %MUTED%; }
 QPushButton { background: %ELEVATED%; color: %TEXT%; border: 1px solid %SEP%;
     border-radius: 0; padding: 4px 10px; min-height: 18px; }
 QPushButton:hover { background: %HOVER%; border-color: %CONTROL_BORDER%; }
 QPushButton:pressed { background: %TINT%; }
-QPushButton:focus { border-color: %ACCENT%; }
 QPushButton:disabled { background: %SURFACE%; color: %MUTED%; }
 QCheckBox, QRadioButton { spacing: 7px; padding: 2px 0; min-height: 20px; }
 QRadioButton::indicator {
     border: 1px solid %CONTROL_BORDER%; background: %WELL%; width: 12px; height: 12px; border-radius: 7px; }
 QRadioButton::indicator:checked { background: %ACCENT%; border-color: %ACCENT%; }
-QRadioButton::indicator:hover { border-color: %ACCENT%; }
+
 QCheckBox:disabled, QRadioButton:disabled { color: %MUTED%; }
 QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-radius: 0; }
 #ExportCover { background: %INPUT%; border: 1px dashed %CONTROL_BORDER%; border-radius: 0; padding: 4px;
@@ -1282,7 +1280,6 @@ QCheckBox:focus, QRadioButton:focus { color: %TEXT%; background: %TINT%; border-
 #ExportCover:hover { background: %HOVER%; border-style: solid; }
 #ExportCover:disabled { background: %WELL%; border-color: %SEP%; }
 #ExportRender { min-width: 100px; background: %ACCENT%; color: %ACCENT_INK%; border-color: %ACCENT%; }
-#ExportRender:hover, #ExportRender:focus { border-color: %ACCENT_INK%; }
 #ExportRender:pressed { background: %ACCENT_PRESSED%; }
 #ExportRender:disabled { background: %SURFACE%; color: %MUTED%; border-color: %SEP%; }
 #ExportHeading { font-size: %HEADING%px; font-weight: 600; color: %TEXT%; }

@@ -40,6 +40,7 @@ var (
 	errReleaseVersion      = errors.New("release version already exists")
 	errScreenshotCaptions  = errors.New("published screenshots require captions")
 	errScreenshotLimit     = errors.New("release screenshot limit reached")
+	errHighlightScreenshot = errors.New("screenshot is used by a release highlight")
 )
 
 var artifactKinds = map[string]struct {
@@ -58,15 +59,16 @@ var artifactKinds = map[string]struct {
 }
 
 type releaseInput struct {
-	Version    string   `json:"version"`
-	SummaryRU  string   `json:"summary_ru"`
-	SummaryEN  string   `json:"summary_en"`
-	FeaturesRU []string `json:"features_ru"`
-	FeaturesEN []string `json:"features_en"`
-	ChangesRU  []string `json:"changes_ru"`
-	ChangesEN  []string `json:"changes_en"`
-	FixesRU    []string `json:"fixes_ru"`
-	FixesEN    []string `json:"fixes_en"`
+	Version    string              `json:"version"`
+	SummaryRU  string              `json:"summary_ru"`
+	SummaryEN  string              `json:"summary_en"`
+	FeaturesRU []string            `json:"features_ru"`
+	FeaturesEN []string            `json:"features_en"`
+	ChangesRU  []string            `json:"changes_ru"`
+	ChangesEN  []string            `json:"changes_en"`
+	FixesRU    []string            `json:"fixes_ru"`
+	FixesEN    []string            `json:"fixes_en"`
+	Highlights *[]releaseHighlight `json:"highlights,omitempty"`
 }
 
 type releaseArtifactView struct {
@@ -111,6 +113,7 @@ type releaseView struct {
 	FixesEN     []string                `json:"fixes_en,omitempty"`
 	Artifacts   []releaseArtifactView   `json:"artifacts"`
 	Screenshots []releaseScreenshotView `json:"screenshots"`
+	Highlights  []releaseHighlight      `json:"highlights"`
 	PageURL     string                  `json:"page_url,omitempty"`
 	PublishedAt *time.Time              `json:"published_at"`
 	CreatedAt   time.Time               `json:"created_at,omitempty"`
@@ -220,6 +223,13 @@ func (s *Server) releaseFromInput(item *model.Release, input releaseInput) map[s
 		}
 		*list.target = datatypes.JSON(jsonBytes(values))
 	}
+	if input.Highlights != nil {
+		values, errors := normalizedReleaseHighlights(*input.Highlights, item.Status == model.ReleasePublished)
+		for name, message := range errors {
+			fields[name] = message
+		}
+		item.Highlights = datatypes.JSON(jsonBytes(values))
+	}
 	return fields
 }
 
@@ -244,6 +254,10 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 	item := model.Release{ID: uuid.New(), Status: model.ReleaseDraft, CreatedBy: &adminID, UpdatedBy: &adminID}
 	if fields := s.releaseFromInput(&item, input); len(fields) != 0 {
 		writeError(w, r, 422, "validation_failed", "Release draft contains invalid fields.", fields)
+		return
+	}
+	if fields := releaseHighlightImageErrors(s.DB, item); len(fields) != 0 {
+		writeError(w, r, 422, "validation_failed", "Release draft contains invalid blocks.", fields)
 		return
 	}
 	if !s.releaseVersionAvailable(item.ID, item.Version) {
@@ -279,6 +293,11 @@ func (s *Server) adminUpdateRelease(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		fields = s.releaseFromInput(&item, input)
+		if len(fields) == 0 {
+			for name, message := range releaseHighlightImageErrors(tx, item) {
+				fields[name] = message
+			}
+		}
 		if item.Status == model.ReleasePublished {
 			if item.SummaryRU == "" {
 				fields["summary_ru"] = "Russian summary is required."
@@ -355,6 +374,13 @@ func (s *Server) adminPublishRelease(w http.ResponseWriter, r *http.Request) {
 		}
 		if uncaptained != 0 {
 			fields["screenshots"] = "Every screenshot needs Russian and English captions."
+		}
+		_, highlightErrors := normalizedReleaseHighlights(releaseJSONHighlights(item.Highlights), true)
+		for name, message := range highlightErrors {
+			fields[name] = message
+		}
+		for name, message := range releaseHighlightImageErrors(tx, item) {
+			fields[name] = message
 		}
 		if len(fields) != 0 {
 			return errReleaseValidation
@@ -456,7 +482,7 @@ func (s *Server) adminReleaseView(item model.Release) releaseView {
 		FeaturesRU: releaseJSONList(item.FeaturesRU), FeaturesEN: releaseJSONList(item.FeaturesEN),
 		ChangesRU: releaseJSONList(item.ChangesRU), ChangesEN: releaseJSONList(item.ChangesEN),
 		FixesRU: releaseJSONList(item.FixesRU), FixesEN: releaseJSONList(item.FixesEN),
-		Artifacts: artifacts, Screenshots: screenshots, PublishedAt: item.PublishedAt,
+		Artifacts: artifacts, Screenshots: screenshots, Highlights: releaseJSONHighlights(item.Highlights), PublishedAt: item.PublishedAt,
 		CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
 	}
 }
@@ -544,7 +570,7 @@ func (s *Server) publicReleaseView(item model.Release, locale string) releaseVie
 	version := valueOrEmpty(item.Version)
 	artifacts, screenshots := s.releaseRelations(item.ID, version)
 	result := releaseView{
-		ID: item.ID, Version: version, Artifacts: artifacts, Screenshots: screenshots,
+		ID: item.ID, Version: version, Artifacts: artifacts, Screenshots: screenshots, Highlights: releaseJSONHighlights(item.Highlights),
 		PageURL:     fmt.Sprintf("%s/%s/releases/%s", s.Config.PublicOrigin, locale, url.PathEscape(version)),
 		PublishedAt: item.PublishedAt,
 	}
@@ -1030,6 +1056,11 @@ func (s *Server) adminDeleteReleaseScreenshot(w http.ResponseWriter, r *http.Req
 		if err := tx.First(&item, "id = ? AND release_id = ?", screenshotID, releaseID).Error; err != nil {
 			return err
 		}
+		for _, highlight := range releaseJSONHighlights(release.Highlights) {
+			if highlight.ScreenshotID == screenshotID.String() {
+				return errHighlightScreenshot
+			}
+		}
 		if err := tx.Delete(&item).Error; err != nil {
 			return err
 		}
@@ -1037,6 +1068,10 @@ func (s *Server) adminDeleteReleaseScreenshot(w http.ResponseWriter, r *http.Req
 	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		writeError(w, r, 404, "screenshot_not_found", "Screenshot was not found.", nil)
+		return
+	}
+	if errors.Is(err, errHighlightScreenshot) {
+		writeError(w, r, 422, "screenshot_in_use", "Скриншот используется в главном обновлении. Сначала смените изображение блока и сохраните релиз.", nil)
 		return
 	}
 	if err != nil {

@@ -36,7 +36,7 @@ test("account can withdraw diagnostics without closing the account", async ({ pa
 test("RU/EN pages and registration-to-account flow", async ({ page }) => {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/meta")) return route.fulfill({ json: { registration_enabled: true, registration_legal: { version: "2026-09-26", ready: false } } });
+    if (path.endsWith("/meta")) return route.fulfill({ json: { registration_enabled: true, registration_captcha: { provider: "turnstile", required: false, configured: false, site_key: "" }, registration_legal: { version: "2026-09-26", ready: false } } });
     if (path.endsWith("/web/auth/register")) {
       expect(route.request().postDataJSON()).toMatchObject({ consent_accepted: true, consent_version: "2026-09-26", terms_accepted: true, terms_version: "2026-09-26", diagnostics_accepted: false });
       return route.fulfill({ status: 201, json: account });
@@ -48,7 +48,7 @@ test("RU/EN pages and registration-to-account flow", async ({ page }) => {
   });
 
   await page.goto("/en");
-  await expect(page.getByRole("heading", { name: /Record, arrange and mix\./ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Give shape to your sound\./ })).toBeVisible();
   await page.goto("/ru/register");
   await expect(page).toHaveURL(/\/register\?lang=ru$/);
   await page.getByLabel("Почта").fill("tester@example.com");

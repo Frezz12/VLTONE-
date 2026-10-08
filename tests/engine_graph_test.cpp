@@ -205,9 +205,74 @@ struct OutputBuffer {
     FrameCount frames;
 };
 
+struct DeferredSource final : Node {
+    std::atomic<bool>& independentRan;
+    bool expireOnly = false, expired = false, synchronousCalled = false;
+    ProcessContext block;
+    explicit DeferredSource(std::atomic<bool>& ran, bool hang = false)
+        : independentRan(ran), expireOnly(hang) {}
+    std::string_view name() const noexcept override { return "deferred source"; }
+    MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    bool canFuseTask() const noexcept override { return true; }
+    bool hasDeferredProcess() const noexcept override { return true; }
+    void process(const ProcessContext&) override { synchronousCalled = true; }
+    bool beginProcess(const ProcessContext& context) override { block = context; return false; }
+    bool finishProcess(bool deadline) noexcept override {
+        if (!deadline && (expireOnly || !independentRan.load())) return false;
+        expired = deadline;
+        for (ChannelCount ch = 0; ch < block.output.numChannels(); ++ch)
+            std::fill_n(block.output.data(ch), block.frames, deadline ? 0.f : 2.f);
+        return true;
+    }
+    Status processStatus() const noexcept override {
+        return expired ? Status(fail(EngineError::ProcessingFailed)) : Status{};
+    }
+};
+
+struct IndependentSource final : Node {
+    std::atomic<bool>& ran;
+    explicit IndependentSource(std::atomic<bool>& flag) : ran(flag) {}
+    std::string_view name() const noexcept override { return "independent source"; }
+    MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+    void process(const ProcessContext& context) override {
+        for (ChannelCount ch = 0; ch < context.output.numChannels(); ++ch)
+            std::fill_n(context.output.data(ch), context.frames, 1.f);
+        ran.store(true);
+    }
+};
+
 } // namespace
 
 int main() {
+    for (const bool serial : {true, false}) {
+        for (const bool hang : {false, true}) {
+            std::atomic<bool> ran{false};
+            auto first = std::make_shared<DeferredSource>(ran, hang);
+            auto second = std::make_shared<DeferredSource>(ran, hang);
+            AudioGraph graph;
+            const auto independent = graph.addNode(std::make_unique<IndependentSource>(ran));
+            const auto a = graph.adoptNode(first), b = graph.adoptNode(second);
+            const auto sink = graph.addNode(std::make_unique<SumNode>());
+            (void)graph.connect(independent, sink); (void)graph.connect(a, sink); (void)graph.connect(b, sink);
+            graph.setSink(sink);
+            auto snapshot = graph.compile({48000, 128, 2});
+            GraphProcessor processor(4); processor.setParallelThreshold(0);
+            OutputBuffer output(2, 128);
+            check(bool(snapshot), "compile deferred graph");
+            if (!snapshot) continue;
+            processor.setGraph(*snapshot);
+            for (int pass = 0; pass < 4; ++pass) {
+                ran.store(false);
+                const auto result = serial ? processor.processSerial(output.block(), 128, pass * 128, true)
+                    : processor.process(output.block(), 128, pass * 128, true);
+                check(bool(result) == !hang && ran.load() && output.storage.front() == (hang ? 1.f : 5.f) &&
+                      !first->synchronousCalled && !second->synchronousCalled,
+                      "pending jobs preserve independent work, completion counts and defined fallback");
+                check(first->block.deadlineNanos != 0 && first->block.deadlineNanos == second->block.deadlineNanos,
+                      "all deferred nodes share one block deadline in serial and parallel passes");
+            }
+        }
+    }
     // Device recommendations count the caller too. Excluded helpers must not
     // steal jobs, consume an active helper's wake, or hang on shutdown. Exercise
     // limits changing in both directions and a frontier revealed mid-pass.
@@ -219,7 +284,7 @@ int main() {
             std::array<std::atomic<unsigned>, 64> seen{};
             std::atomic<bool> invalidWorker{false};
             unsigned limit = 8;
-            static void execute(void* opaque, std::uint32_t item, unsigned worker) {
+            static bool execute(void* opaque, std::uint32_t item, unsigned worker) {
                 auto& self = *static_cast<Probe*>(opaque);
                 if (worker >= self.limit) self.invalidWorker.store(true);
                 self.seen[item].fetch_add(1);
@@ -228,6 +293,7 @@ int main() {
                     self.jobs->wakeHelpers(63);
                 }
                 std::this_thread::yield();
+                return true;
             }
         } probe{&jobs};
         jobs.setSink({&Probe::execute, &probe});

@@ -5,8 +5,9 @@ for (const locale of ["ru", "en"]) {
     await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
     await page.goto("/");
     await expect(page).toHaveTitle(/VLTone.*(?:Открытая бета|Open beta)/);
-    await expect(page.locator("h1")).toContainText(locale === "ru" ? "Запись, MIDI и сведение." : "Record, arrange and mix.");
+    await expect(page.locator("h1")).toContainText(locale === "ru" ? "Дай форму своему звуку." : "Give shape to your sound.");
     await expect(page.locator(".hero-announcement")).toHaveCount(0);
+    await expect(page.locator(".hero-topline")).toHaveCount(0);
     await expect(page.locator(".vlt-brand .brand-mark img")).toBeVisible();
     await expect(page.locator(".vlt-brand .brand-mark img")).toHaveCSS("object-fit", "contain");
     await expect(page.locator(".vlt-brand .brand-mark")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
@@ -75,6 +76,11 @@ test("homepage respects reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await expect(page.locator(".hero-product")).toHaveCSS("transform", "none");
+  await expect(page.locator(".hero-art")).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".cta-phrase .phrase-hit").first()).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".hero-editorial h1 > span").first()).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".hero-motion-footer .signal-bar").first()).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".ambient-motion-control")).toBeHidden();
 });
 
 test("search discovery files expose clean canonical routes", async ({ request }) => {
@@ -164,11 +170,86 @@ test("gallery switches on demand and enlargement restores keyboard focus", async
   const piano = page.locator(".gallery-switcher").getByRole("button", {name:"Piano Roll",exact:true});
   await piano.focus(); await page.keyboard.press("Enter");
   await expect(piano).toHaveAttribute("aria-pressed","true");
-  await expect(page.locator(".hero-product .product-shot img")).toHaveAttribute("src",/piano-ru.webp/);
+  await expect(page.locator(".hero-product .product-shot img")).toHaveAttribute("src",/showcase-midi-ru.webp/);
+  expect(await page.locator(".hero-product picture").evaluate(element => element.getAnimations().length)).toBe(0);
   const enlarge = page.locator(".hero-product .product-shot");
   await enlarge.focus(); await page.keyboard.press("Enter");
   await expect(page.locator("dialog[open]")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("dialog[open]")).toHaveCount(0);
   await expect(enlarge).toBeFocused();
+});
+
+test("gallery playhead drags between views and responds immediately to keyboard navigation", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("vlt-cookie-preference-v1", "none"));
+  await page.goto("/");
+  const playhead = page.getByRole("slider", { name: "Переключить экран программы" });
+  await playhead.scrollIntoViewIfNeeded();
+  const bounds = await playhead.boundingBox();
+  if (!bounds) throw new Error("Gallery playhead is missing");
+  await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width - 8, bounds.y + bounds.height / 2, { steps: 16 });
+  await page.mouse.up();
+  await expect(playhead).toHaveValue("3");
+  await expect(page.locator(".hero-product .product-shot img")).toHaveAttribute("src", /showcase-eq-ru.webp/);
+  await expect(page.locator('.gallery-channel[aria-pressed="true"]')).toHaveCount(1);
+  await playhead.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(playhead).toHaveValue("2");
+  await expect(page.locator(".hero-product .product-shot img")).toHaveAttribute("src", /showcase-mix-ru.webp/);
+  expect(await page.locator(".hero-product picture").evaluate(element => element.getAnimations().length)).toBe(0);
+  await page.keyboard.press("Home");
+  await expect(playhead).toHaveValue("0");
+  await expect(page.locator('.gallery-channel[aria-pressed="true"]')).toHaveAttribute("data-view", "0");
+});
+
+test("homepage keeps its product image and download path without JavaScript", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const page = await context.newPage();
+  try {
+    await page.goto("http://127.0.0.1:3100/");
+    await expect(page.locator("h1")).toContainText("Дай форму своему звуку.");
+    await expect(page.locator(".hero-art img")).toBeVisible();
+    await expect(page.locator(".hero-copy-panel .vlt-button")).toHaveAttribute("href", "/releases");
+    await expect(page.locator(".workflow-copy")).toHaveCount(3);
+    await expect(page.locator(".hero-motion-footer .signal-bar").first()).toHaveCSS("animation-play-state", "paused");
+    await expect(page.locator(".ambient-motion-control")).toBeHidden();
+  } finally {
+    await context.close();
+  }
+});
+
+test("ambient motion runs without scrolling and can pause and resume", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("vlt-cookie-preference-v1", "none"));
+  await page.goto("/");
+  const wave = page.locator(".hero-motion-footer .signal-bar").first();
+  await expect(wave).toHaveCSS("animation-play-state", "running");
+  const firstPosition = await wave.evaluate(element => getComputedStyle(element).transform);
+  await expect.poll(() => wave.evaluate(element => getComputedStyle(element).transform)).not.toBe(firstPosition);
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+
+  await page.getByRole("button", { name: "Приостановить анимацию" }).click();
+  await expect(wave).toHaveCSS("animation-play-state", "paused");
+  // Allow the compositor to deliver the pause before checking the frozen frame.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const pausedPosition = await wave.evaluate(element => getComputedStyle(element).transform);
+  await page.waitForTimeout(180);
+  expect(await wave.evaluate(element => getComputedStyle(element).transform)).toBe(pausedPosition);
+  await page.getByRole("button", { name: "Продолжить анимацию" }).click();
+  await expect(wave).toHaveCSS("animation-play-state", "running");
+
+  const feature = page.locator('.workflow-card[data-track="1"]');
+  await feature.scrollIntoViewIfNeeded();
+  await expect(wave).toHaveCSS("animation-play-state", "paused");
+  await expect(feature.locator(".loop-motion").first()).toHaveCSS("animation-play-state", "running");
+
+  const outro = page.locator(".studio-cta");
+  await outro.scrollIntoViewIfNeeded();
+  await expect(outro.locator(".phrase-cursor")).toHaveCSS("animation-play-state", "running");
+  const outroPosition = await outro.locator(".phrase-cursor").evaluate(element => getComputedStyle(element).transform);
+  await expect.poll(() => outro.locator(".phrase-cursor").evaluate(element => getComputedStyle(element).transform)).not.toBe(outroPosition);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(feature.locator(".loop-motion").first()).toHaveCSS("animation-name", "none");
+  await expect(outro.locator(".phrase-cursor")).toHaveCSS("animation-name", "none");
 });

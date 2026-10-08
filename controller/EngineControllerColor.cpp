@@ -1,6 +1,5 @@
 #include "EngineController.hpp"
 #include "model/ChannelColor.hpp"
-#include "Internal/ChannelColorInstance.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -17,17 +16,9 @@ void EngineController::applyChannelColorState(const std::string& id, const std::
     track=m_project.findTrack(id);
     track->channelColor=state;
     const auto settings=channelColorSettings(id);
-    auto* live=liveInsertSlot(id,settings.id);
-    if (!live || !live->node) { rebuildGraph(); live=liveInsertSlot(id,settings.id); }
-    if (live && live->node) {
-        if(auto* color=dynamic_cast<plugins::channel_color::ChannelColorInstance*>(live->node->instance());
-            color && color->profileSeed()!=parseChannelColorSeed(settings.profileSeed)) {
-            const engine::RealtimeEngine::RenderGate gate(m_engine);
-            color->setProfileSeed(parseChannelColorSeed(settings.profileSeed));
-        }
-        applyStoredParameters(*live->node,settings.parameters);
-        live->node->setBypassed(settings.bypassed);
-    }
+    const auto apply = [&] { return m_runtime.configureChannelColor({id, settings.id},
+        parseChannelColorSeed(settings.profileSeed), settings.parameters, settings.bypassed); };
+    if (!apply()) { rebuildGraph(); (void)apply(); }
 }
 
 void EngineController::setChannelColorParameter(const std::string& id, const std::string& param, double value) {

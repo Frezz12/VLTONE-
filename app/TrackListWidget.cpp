@@ -255,11 +255,6 @@ protected:
         const QRect glyphRect = tile.adjusted(inset, inset, -inset, -inset).toAlignedRect();
         if (chosen.isNull()) icons::paint(p, m_glyph, glyphRect, ink);
         else chosen.paint(&p, glyphRect);
-        if (hasFocus() || underMouse()) {
-            p.setPen(QPen(hasFocus() ? t.accentHighlight : ink, 1));
-            p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(tile, 6, 6);
-        }
 
         if (!m_disclosure) return;
         // A chevron tucked into the corner: this tile opens and closes. It sits
@@ -1405,7 +1400,7 @@ bool TrackListWidget::checkCollaborationPresenceForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     controller.initialize(48000.0, 512, false);
     const QString first =
         QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "A"));
@@ -1452,7 +1447,7 @@ bool TrackListWidget::checkButtonPaintForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     controller.initialize(48000.0, 512, false);
     const QString first = QString::fromStdString(
         controller.addTrack(daw::TrackKind::Audio, "Paint A"));

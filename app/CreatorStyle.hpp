@@ -8,12 +8,13 @@
 class QAction;
 
 namespace ui {
-// Creator has its own surfaces and typography; only the light/dark preference
-// is shared with the host. Proxied node controls use this same style explicitly.
+// Canvas and proxied controls use the active application theme, including
+// custom palettes. Semantic port colours remain distinguishable in both modes.
 struct CreatorColors {
   QColor canvas, panel, card, field, hover, border, grid;
   QColor text, muted, accent, accentFill, onAccent;
   QColor audio, number, gate, function;
+  QColor integer, array, list, buffer;
 };
 CreatorColors creatorColors();
 void styleCreator(QWidget *widget);
@@ -40,7 +41,7 @@ private:
   void endInteraction();
   void scrub(QMouseEvent *);
   double m_start = 0, m_scrub = 0, m_default = 0;
-  int m_pending = 0;
+  qreal m_pending = 0.0;
   bool m_pressed = false, m_dragged = false, m_logarithmic = false;
   LockedCursorDrag m_cursor;
 };

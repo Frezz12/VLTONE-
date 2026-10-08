@@ -1,0 +1,137 @@
+{
+  "format": "vltcreator",
+  "version": 3,
+  "name": "NodeEqualizer",
+  "activeMode": "",
+  "graphPath": [],
+  "definition": {
+    "id": "creator.nodes.NodeEqualizer",
+    "name": "NodeEqualizer",
+    "version": 5,
+    "nodes": [
+      {
+        "id": "input",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "interface",
+        "type": "interface",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "coefficients",
+        "type": "biquad_coefficients",
+        "version": 1,
+        "parameters": {
+          "frequency": 1200,
+          "q": 0.70710678,
+          "gain": 6,
+          "type": 5
+        }
+      },
+      {
+        "id": "filter",
+        "type": "biquad",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "input",
+        "to": "filter",
+        "fromPort": "out",
+        "toPort": "in"
+      },
+      {
+        "from": "coefficients",
+        "to": "filter",
+        "fromPort": "out",
+        "toPort": "coefficients"
+      },
+      {
+        "from": "interface",
+        "to": "coefficients",
+        "fromPort": "frequency",
+        "toPort": "frequency"
+      },
+      {
+        "from": "interface",
+        "to": "coefficients",
+        "fromPort": "gain",
+        "toPort": "gain"
+      },
+      {
+        "from": "filter",
+        "to": "output",
+        "fromPort": "out",
+        "toPort": "in"
+      }
+    ],
+    "controls": [
+      {
+        "id": "frequency",
+        "name": "Frequency",
+        "min": 30,
+        "max": 18000,
+        "default": 1200,
+        "unit": "Hz",
+        "log": true,
+        "bindings": []
+      },
+      {
+        "id": "gain",
+        "name": "Gain",
+        "min": -24,
+        "max": 24,
+        "default": 6,
+        "unit": "dB",
+        "log": false,
+        "bindings": []
+      }
+    ],
+    "subgraphs": []
+  },
+  "positions": {
+    "": {
+      "input": [
+        40,
+        60
+      ],
+      "output": [
+        350,
+        60
+      ],
+      "interface": [
+        660,
+        60
+      ],
+      "coefficients": [
+        970,
+        60
+      ],
+      "filter": [
+        40,
+        330
+      ]
+    }
+  },
+  "viewports": {
+    "": {
+      "center": [
+        630,
+        380
+      ],
+      "zoom": 0.8
+    }
+  }
+}

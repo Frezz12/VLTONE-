@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +15,26 @@
 namespace fs = std::filesystem;
 namespace ap = audio::platform;
 namespace {
+bool isolated = false;
+struct CreationFailure {
+    explicit CreationFailure(const char* uid) { set(uid); }
+    ~CreationFailure() { set(""); }
+    static void set(const char* uid) {
+#if defined(_WIN32)
+        _putenv_s("DAW_TEST_RENDER_CREATE_FAILURE", uid);
+#else
+        if (*uid) setenv("DAW_TEST_RENDER_CREATE_FAILURE", uid, 1);
+        else unsetenv("DAW_TEST_RENDER_CREATE_FAILURE");
+#endif
+    }
+};
+void selectHosting(daw::PluginManager& manager) {
+    if (isolated) manager.setHostingMode(daw::PluginManager::HostingMode::Isolated, DAW_PLUGIN_HOST_PATH);
+}
+auto initialize(daw::EngineController& controller, unsigned block) {
+    selectHosting(controller.pluginManager());
+    return controller.initialize(48000, block, false);
+}
 struct SineNode final : daw::engine::Node {
     std::string_view name() const noexcept override { return "Sine"; }
     bool isSource() const noexcept override { return true; }
@@ -86,17 +107,66 @@ ap::DecodedAudio render(daw::EngineController& c, const daw::rendering::Spec& sp
 }
 }
 
-int main() try {
+int main(int argc, char** argv) try {
+    isolated = argc == 2 && std::string_view(argv[1]) == "--isolated";
     TempDirectory temp;
     const auto source = temp.path / "tone.wav";
     const auto stemSource = temp.path / "stem-tone.wav";
     writeTone(source, 1000); writeTone(stemSource, 375);
 
+    // A render request owns its generation, including pending plugin edits and
+    // audio resources. Destroying its editor/controller must not change it.
+    {
+        daw::RenderSessionSpec session;
+        ap::DecodedAudio reference;
+        {
+            daw::EngineController c{daw::EngineController::TestRuntime{}};
+            require(bool(initialize(c, 128)), "initialize detached session");
+            const auto a = track(c, source, "Detached");
+            const auto slot = c.addInsert(a, plugin(DAW_TEST_CLAP_PATH, "com.daw.test.gain"));
+            require(!slot.empty(), "detached plugin");
+            const auto parameters = c.insertInstance(a, slot)->parameters();
+            require(!parameters.empty(), "detached parameter");
+            c.setInsertParameter(a, slot, parameters.front().id, 0.37);
+            auto spec = specFor(temp.path / "detached-session");
+            reference = render(c, spec);
+            require(bool(c.captureRenderSession(spec, session)) && session.valid(), "capture detached session");
+            require(session.sourceRevision() == c.projectRevision() && session.sourceGeneration() > 0,
+                    "snapshot records source identity");
+            c.newProject();
+            c.pluginManager().setHostingMode(daw::PluginManager::HostingMode::Local);
+        }
+        const auto retained = session;
+        daw::rendering::Report report;
+        auto status = daw::EngineController::renderSession(session, [&](const auto&) {
+            session = {}; // the executor pins the original immutable generation
+            return true;
+        }, report);
+        require(bool(status) && report.files.size() == 1, "render after source destruction: " + status.message());
+        require(difference(reference, decode(report.files.front())) < 1e-6, "detached render retains sound");
+        status = daw::EngineController::renderSession(retained, {}, report);
+        require(bool(status) && report.files.size() == 1 &&
+                difference(reference, decode(report.files.front())) < 1e-6, "snapshot can be replayed");
+        status = daw::EngineController::renderSession(retained, [](const auto&) { return false; }, report);
+        require(bool(status) && report.cancelled && report.files.empty(), "detached cancellation");
+        require(!daw::EngineController::renderSession({}, {}, report) && report.files.empty(), "reject empty session");
+        daw::EngineController invalid{daw::EngineController::TestRuntime{}};
+        auto bad = specFor(temp.path / "invalid-session"); bad.blockSize = 8193;
+        session = retained;
+        require(!invalid.captureRenderSession(bad, session) && !session.valid(), "failed capture clears stale session");
+        require(bool(initialize(invalid, 128)), "initialize invalid render check");
+        invalid.play();
+        bool calledProgress = false;
+        require(!invalid.renderProject(bad, [&](const auto&) { calledProgress = true; return true; }, report) &&
+                invalid.isPlaying() && !calledProgress, "invalid render leaves playback and UI callbacks untouched");
+        std::cout << "PASS immutable render survives document and runtime destruction\n";
+    }
+
     // Larger blocks are automatic only for audio arrangements. A probe makes
     // the activation size observable; MIDI and automation keep device timing.
     for (const std::string kind : {"audio", "midi", "automation"}) {
-        daw::EngineController c;
-        require(bool(c.initialize(48000, 128, false)), "initialize block selection");
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        require(bool(initialize(c, 128)), "initialize block selection");
         const auto a = track(c, source, "Block probe");
         require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, "review.block-size")).empty(),
                 "insert block probe");
@@ -125,9 +195,9 @@ int main() try {
         require(bool(engine.prepare(48000, 64, 2)), "prepare shared engine");
         auto& graph = engine.graph();
         const auto input = graph.addNode(std::make_unique<SineNode>());
-        daw::plugins::ClapFactory factory;
+        daw::PluginManager manager; selectHosting(manager);
         auto node = std::make_shared<daw::plugins::PluginNode>(uid,
-            factory.create(plugin(DAW_TEST_RENDER_CLAP_PATH, uid)));
+            manager.instantiate(plugin(DAW_TEST_RENDER_CLAP_PATH, uid)));
         const auto effect = graph.adoptNode(node);
         const auto sum = graph.addNode(std::make_unique<daw::engine::SumNode>());
         require(bool(graph.connect(input, effect)) && bool(graph.connect(input, sum)) &&
@@ -158,8 +228,8 @@ int main() try {
     // pre-roll and output lengths are calculated. Compare every file sample.
     for (const auto* uid : {"review.latency", "review.prepare", "review.callback",
                             "review.unstable"}) {
-        daw::EngineController c;
-        require(bool(c.initialize(48000, 64, false)), "initialize");
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        require(bool(initialize(c, 64)), "initialize");
         const auto a = track(c, source, "Effect");
         track(c, source, "Parallel");
         auto spec = specFor(temp.path / uid);
@@ -178,8 +248,8 @@ int main() try {
     for (unsigned block : {8u, 64u, 512u, 2048u}) {
         for (const auto* uid : {"review.audio-latency", "review.once-restart",
                                 "review.redundant-restart"}) {
-            daw::EngineController c;
-            require(bool(c.initialize(48000, block, false)), "initialize deferred restart");
+            daw::EngineController c{daw::EngineController::TestRuntime{}};
+            require(bool(initialize(c, block)), "initialize deferred restart");
             const auto a = track(c, source, "Effect");
             const auto b = track(c, source, "Parallel");
             auto spec = specFor(temp.path / (std::string(uid) + std::to_string(block)));
@@ -213,8 +283,8 @@ int main() try {
     // same live controller can immediately retry with an explicit FX bypass.
     for (const auto* uid : {"review.activation", "review.process", "review.clone", "review.dual",
                             "review.restart", "review.mode", "review.hardware", "review.nonfinite"}) {
-        daw::EngineController c;
-        require(bool(c.initialize(48000, 64, false)), "initialize failure case");
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        require(bool(initialize(c, 64)), "initialize failure case");
         const auto a = track(c, source, "Failure source");
         // Include a wide graph: the failure must cross a worker-thread boundary.
         for (int i = 0; i < 8; ++i) c.addTrack(daw::TrackKind::Audio, "Empty");
@@ -229,7 +299,10 @@ int main() try {
         const auto previous = fs::path(spec.outputDir) / "mixdown.wav";
         { std::ofstream file(previous); file << "previous-export"; }
         daw::rendering::Report report;
-        const auto failed = c.renderProject(spec, {}, report);
+        const auto failed = [&] {
+            const CreationFailure failure(uid);
+            return c.renderProject(spec, {}, report);
+        }();
         require(!failed && report.files.empty() && !report.cancelled, std::string(uid) + " must fail explicitly");
         require(!failed.message().empty(), "failure has a diagnostic");
         if (std::string(uid) == "review.restart")
@@ -249,8 +322,8 @@ int main() try {
     // Cancellation in a replacement pass must not publish a partial file or
     // turn into another retry. Preserve an existing user export as well.
     {
-        daw::EngineController c;
-        require(bool(c.initialize(48000, 64, false)), "initialize restart cancellation");
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        require(bool(initialize(c, 64)), "initialize restart cancellation");
         const auto a = track(c, source, "Cancel");
         require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, "review.audio-latency")).empty(),
                 "create cancellation fixture");
@@ -275,8 +348,8 @@ int main() try {
     // Different track latency plus additional master latency. Custom windows,
     // pre-roll, partial blocks, mono and stereo all retain the same origin.
     for (unsigned block : {8u, 64u, 512u}) {
-        daw::EngineController c;
-        require(bool(c.initialize(48000, block, false)), "initialize stems");
+        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        require(bool(initialize(c, block)), "initialize stems");
         const auto a = track(c, stemSource, "Delayed");
         const auto b = track(c, stemSource, "Dry");
         const auto gain = plugin(DAW_TEST_CLAP_PATH, "com.daw.test.gain");

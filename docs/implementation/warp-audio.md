@@ -1,16 +1,36 @@
 # Warp Audio
 
-Right-click an ordinary local audio clip and choose **Warp Audio**. The selected
+Right-click an ordinary audio clip and choose **Warp Editor**. The selected
 clip opens in its own **Warp** bottom panel. **W** shows Warp and **X** switches
 to Mixer; each keeps its own height. The panel expands upward over the arrangement
 with the correct covered timeline inset. Selection changes do not retarget the
 editor. Closing the panel keeps its clip, map and viewport; opening another project
 clears the binding. The product name remains **Warp**.
 
+## Automatic tempo matching on import
+
+Dropping audio onto an arrangement audio lane (or empty space), and Import Audio,
+prepare a source-tempo estimate in the cancellable background import job. A stable,
+unambiguous tempo creates an enabled two-anchor Warp map, with Preserve Pitch and
+Complex mode, before the clip enters the project. Its duration is multiplied by
+source BPM / project BPM; its start stays at the drop position. Project BPM never
+changes. The map, original duration and import share one Undo entry.
+
+In **Warp Editor**, turn **Warp** off to recover the original duration and timing;
+turn it on to reuse the saved map at the current project tempo. Reopening the
+editor respects Off. Double-clicking the arrangement clip still opens the sampler.
+
+Tempo analysis examines at most the first 90 seconds. Silence, an uncertain or
+variable tempo, and failed analysis retain ordinary playback; manual Warp remains
+available for supported mono/stereo clips. Other channel counts are not fitted.
+Dropping a sample into a Pattern/sampler keeps its existing behavior. Existing
+clips are not automatically reanalyzed or fitted.
+
 ## Editing
 
-- First open creates an identity map from the current trim/stretch and starts
-  cancellable background transient analysis. Suggestions never move audio.
+- Without an existing map, first open creates an identity map from the current
+  trim/stretch and starts cancellable background transient analysis. Suggestions
+  never move audio.
 - Double-click adds a marker; click a transient suggestion to promote it.
   Ctrl-click or a marquee selects multiple markers. Drag moves the selection; Alt bypasses
   Snap. Arrow keys move by the grid, Shift+arrow by 0.01 quarter-note beats.
@@ -103,7 +123,8 @@ Automated coverage: `warp_audio_test` (attack timing across segments, stereo,
 live transitions, seek and allocation checks), `warp_test` (maps, controller
 history, persistence, copies, trim/split, BPM, export and audio versions),
 `warp_ui_test` (real Qt marker input, proposals, precise fields and compact layout)
-and `warp_panel_test` (context menu, pinning, independent panel heights and inset).
+and `warp_panel_test` (context menu, pinning, independent panel heights and inset,
+real file-drop tempo matching, Warp Off and sampler double-click).
 `warp_test` also checks preview isolation, save/export, range anchors and groove
 arithmetic. Regression targets include `miditools_test`,
 `controller_test`, `time_stretch_test`, `processing_render_test`,

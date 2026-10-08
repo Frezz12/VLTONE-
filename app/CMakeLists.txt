@@ -91,6 +91,11 @@ if(DAW_BUILD_TESTS)
                 set_tests_properties(creator_ui_${creator_theme}_${creator_locale}_${creator_scale} PROPERTIES
                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${creator_scale};DAW_CREATOR_CHECK_DIR=${PROJECT_SOURCE_DIR}/artifacts/creator-ui-${creator_theme}-${creator_locale}-${creator_scale}"
                     TIMEOUT 60 RUN_SERIAL TRUE)
+                add_test(NAME creator_ai_${creator_theme}_${creator_locale}_${creator_scale}
+                    COMMAND $<TARGET_FILE:daw> --creator-check --theme ${creator_theme} --language ${creator_locale})
+                set_tests_properties(creator_ai_${creator_theme}_${creator_locale}_${creator_scale} PROPERTIES
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${creator_scale};DAW_CREATOR_AI_CHECK_ONLY=1;DAW_CREATOR_CHECK_DIR=${PROJECT_SOURCE_DIR}/artifacts/creator-ai/${creator_theme}-${creator_locale}-${creator_scale}"
+                    TIMEOUT 150 RUN_SERIAL TRUE)
             endforeach()
         endforeach()
     endforeach()
@@ -269,7 +274,7 @@ if(DAW_BUILD_TESTS)
     endif()
     add_test(NAME modulation_ui_test COMMAND modulation_ui_test)
     set_tests_properties(modulation_ui_test PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 90)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
     if(WIN32)
         set_tests_properties(modulation_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -302,7 +307,7 @@ if(DAW_BUILD_TESTS)
     endif()
     add_test(NAME compressor_ui_test COMMAND compressor_ui_test)
     set_tests_properties(compressor_ui_test PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 90)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
     if(WIN32)
         set_tests_properties(compressor_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -318,7 +323,7 @@ if(DAW_BUILD_TESTS)
     endif()
     add_test(NAME delay_ui_test COMMAND delay_ui_test)
     set_tests_properties(delay_ui_test PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QTWEBENGINE_DISABLE_SANDBOX=1;QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu --disable-gpu-compositing" TIMEOUT 120)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 120)
     if(WIN32)
         set_tests_properties(delay_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -333,7 +338,8 @@ if(DAW_BUILD_TESTS)
         target_link_libraries(pitch_corrector_ui_test PRIVATE "-framework CoreFoundation")
     endif()
     add_test(NAME pitch_corrector_ui_test COMMAND pitch_corrector_ui_test)
-    set_tests_properties(pitch_corrector_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
+    set_tests_properties(pitch_corrector_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
     if(WIN32)
         set_tests_properties(pitch_corrector_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -366,32 +372,13 @@ qt_add_executable(daw ${DAW_APP_SOURCES})
 # A targeted app build must not leave an older scanner beside the new host.
 # They share a wire protocol and the plugin compatibility checks.
 add_dependencies(daw daw_scan creator_tools)
-foreach(modulation_target daw modulation_ui_test)
-    if(TARGET ${modulation_target})
-        qt_add_resources(${modulation_target} "${modulation_target}_modulation_ui"
-            PREFIX "/vlt/modulation" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/modulation"
-            FILES resources/modulation/index.html resources/modulation/modulation.css resources/modulation/modulation.js)
-    endif()
-endforeach()
-foreach(compressor_target daw compressor_ui_test)
-    if(TARGET ${compressor_target})
-        qt_add_resources(${compressor_target} "${compressor_target}_compressor_ui"
-            PREFIX "/vlt/compressor" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/compressor"
-            FILES resources/compressor/index.html resources/compressor/compressor.css resources/compressor/compressor.js)
-    endif()
-endforeach()
-foreach(delay_target daw delay_ui_test)
-    if(TARGET ${delay_target})
-        qt_add_resources(${delay_target} "${delay_target}_delay_ui"
-            PREFIX "/vlt/delay" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/delay"
-            FILES resources/delay/index.html resources/delay/delay.css resources/delay/delay.js)
-    endif()
-endforeach()
-foreach(pitch_target daw pitch_corrector_ui_test)
-    if(TARGET ${pitch_target})
-        qt_add_resources(${pitch_target} "${pitch_target}_pitch_ui"
-            PREFIX "/vlt/pitch" BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/pitch"
-            FILES resources/pitch/index.html resources/pitch/pitch.css resources/pitch/pitch.js)
+# Built-in effect editors use Qt Widgets/QPainter; no web documents are bundled.
+foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test)
+    if(TARGET ${native_target})
+        target_sources(${native_target} PRIVATE
+            NativePluginView.cpp NativePluginView.hpp Controls.cpp Controls.hpp
+            Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp)
+        target_link_libraries(${native_target} PRIVATE Qt6::Svg)
     endif()
 endforeach()
 if(DAW_BUILD_TESTS)
@@ -421,11 +408,13 @@ if(TARGET browser_navigation_test)
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
 endif()
 
-if(TARGET pitch_corrector_ui_test)
-    qt_add_resources(pitch_corrector_ui_test "pitch_test_fonts"
-        PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
-        FILES ${VLTONE_UI_FONTS})
-endif()
+foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test)
+    if(TARGET ${native_target})
+        qt_add_resources(${native_target} "${native_target}_fonts"
+            PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
+            FILES ${VLTONE_UI_FONTS})
+    endif()
+endforeach()
 if(TARGET cla2a_ui_test)
     qt_add_resources(cla2a_ui_test "cla2a_test_fonts"
         PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
@@ -491,6 +480,9 @@ target_link_libraries(daw PRIVATE daw_controller vlt_browser_surface vlt_gpu_sce
                                   Qt6::SerialPort Qt6::Svg
                                   OpenSSL::Crypto RtMidi::rtmidi)
 if(DAW_BUILD_TESTS)
+    add_test(NAME timeline_clip_undo_drag_ui_test COMMAND $<TARGET_FILE:daw> --timelineclipcheck)
+    set_tests_properties(timeline_clip_undo_drag_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90 RUN_SERIAL TRUE)
     add_test(NAME audio_timeline_scroll_test COMMAND $<TARGET_FILE:daw> --audio-scroll-check)
     set_tests_properties(audio_timeline_scroll_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2" TIMEOUT 90 RUN_SERIAL TRUE)
@@ -498,6 +490,17 @@ if(DAW_BUILD_TESTS)
     add_test(NAME plugin_picker_ui_test COMMAND $<TARGET_FILE:daw> --pluginpickercheck)
     add_test(NAME offline_render_ui_test COMMAND $<TARGET_FILE:daw> --offlinecheck)
     add_test(NAME plugin_batch_ui_test COMMAND $<TARGET_FILE:daw> --pluginbatchcheck)
+    foreach(builtin_panel equalizer gravity graphit)
+        string(TOUPPER "${builtin_panel}" builtin_panel_flag)
+        add_test(NAME ${builtin_panel}_process_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+        set_tests_properties(${builtin_panel}_process_ui_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_${builtin_panel_flag}_ONLY=1;DAW_SELFTEST_VERBOSE=1;DAW_PLUGIN_DIAGNOSTICS=1"
+            TIMEOUT 60 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(${builtin_panel}_process_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
     add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
     add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
     foreach(color_scale 1 1.5 2)
@@ -539,6 +542,26 @@ if(DAW_BUILD_TESTS)
         set_tests_properties(plugin_editor_idle_ui_test PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_IDLE_ONLY=1;DAW_TEST_VST_SHELL_PATH=$<TARGET_FILE:daw_test_vst_shell>"
             TIMEOUT 60 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(plugin_editor_idle_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endif()
+    if(DAW_ENABLE_CLAP)
+        add_dependencies(daw daw_test_fault_clap)
+        add_test(NAME plugin_isolation_ui_test COMMAND $<TARGET_FILE:daw> --selftest --language ru)
+        set_tests_properties(plugin_isolation_ui_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_ISOLATION_ONLY=1;DAW_TEST_FAULT_CLAP_PATH=$<TARGET_FILE:daw_test_fault_clap>;DAW_ISOLATION_SCREENSHOT_DIR=${CMAKE_BINARY_DIR}/test-artifacts/plugin-isolation"
+            TIMEOUT 45 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(plugin_isolation_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+            add_test(NAME plugin_remote_editor_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+            set_tests_properties(plugin_remote_editor_ui_test PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=windows;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_REMOTE_EDITOR_ONLY=1;DAW_TEST_FAULT_CLAP_PATH=$<TARGET_FILE:daw_test_fault_clap>"
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+                TIMEOUT 60 RUN_SERIAL TRUE)
+        endif()
     endif()
     set_tests_properties(midi_input_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_MIDI_ONLY=1"
@@ -558,6 +581,16 @@ if(DAW_BUILD_TESTS)
     set_tests_properties(track_presentation_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_TRACK_PRESENTATION_CHECK_ONLY=1"
         TIMEOUT 45 RUN_SERIAL TRUE)
+    foreach(scrub_scale 1 1.5 2)
+        add_test(NAME view_scrub_input_ui_${scrub_scale} COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+        set_tests_properties(view_scrub_input_ui_${scrub_scale} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_VIEW_SCRUB_CHECK_ONLY=1;QT_SCALE_FACTOR=${scrub_scale}"
+            TIMEOUT 30 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(view_scrub_input_ui_${scrub_scale} PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
     if(WIN32)
         set_tests_properties(track_presentation_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -610,6 +643,14 @@ if(DAW_BUILD_TESTS)
         set_tests_properties(midi_input_ui_test recording_context_ui_test warp_panel_test collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test track_mixer_sync_ui_test clip_library_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    add_test(NAME timeline_view_controls_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(timeline_view_controls_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_VIEW_CONTROLS_ONLY=1"
+        TIMEOUT 60 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(timeline_view_controls_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 endif()
 if(APPLE)
@@ -690,7 +731,7 @@ if(DAW_PACKAGE)
         # belong in Contents/MacOS. Installed from here rather than from their
         # own directories so they land after the bundle has been laid down and
         # before macdeployqt walks it.
-        install(TARGETS daw_scan daw_guard daw_reporter
+        install(TARGETS daw_scan daw_guard daw_reporter daw_plugin_host daw_worker daw_audio
                 RUNTIME DESTINATION "${DAW_BUNDLE_NAME}.app/Contents/MacOS")
     endif()
     if(WIN32)

@@ -55,6 +55,8 @@ enum class Glyph {
     // the cloud project browser.
     Cloud, CloudUpload, CloudOff, Users, Link, Key, Check, Warning,
     Copy, Edit,
+    /// The arrangement with its sidebar and lower panel: workspace controls.
+    Workspace,
     /// An open arc, meant to be rotated by the caller to indicate work in
     /// flight. It carries no animation of its own.
     Spinner

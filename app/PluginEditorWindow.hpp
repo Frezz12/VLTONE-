@@ -1,6 +1,7 @@
 #pragma once
 
-#include "Host/PluginInstance.hpp"
+#include "Host/PluginEditorHost.hpp"
+#include "PluginReadout.hpp"
 
 #include <QHash>
 #include <QString>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,7 @@ class QTimer;
 class QVBoxLayout;
 class QComboBox;
 class QLabel;
+class QPushButton;
 class QSlider;
 class QToolButton;
 class QShowEvent;
@@ -37,10 +40,8 @@ class Knob;
 /// is an `NSView*` on macOS and an `HWND` on Windows, which is exactly what
 /// CLAP, VST3 and AU each want — so no per-platform source file is needed here.
 ///
-/// The slot is addressed by (channelId, insertId) and **re-resolved on every
-/// use**, never cached as a pointer: undo can rewrite the document, and a
-/// rebuild can replace the live instance, underneath an open window. Same
-/// discipline as PianoRollWindow.
+/// Controller commands address the slot by ID and bind native operations to
+/// an instance generation. Undo or recovery may replace it under an open UI.
 class PluginEditorWindow : public QWidget, public daw::plugins::PluginEditorHost {
     Q_OBJECT
 public:
@@ -56,6 +57,8 @@ public:
     /// should fall back to the generic parameter panel.
     bool isEmbedded() const { return m_embedded; }
     bool requiresNativeSurface() const;
+    bool canResizeNativeEditor() const;
+    void showParameterPanel();
 
     /// Clear any maximized/full-screen state inherited from the main macOS
     /// Space and restore this editor as a bounded auxiliary window.
@@ -77,6 +80,10 @@ public:
     void setHostKeyHandler(std::function<bool(QKeyEvent*, bool)> handler) {
         m_hostKeyHandler = std::move(handler);
     }
+    void setAutomationShortcutEnabledProvider(std::function<bool()> provider) {
+        m_automationShortcutEnabled = std::move(provider);
+    }
+    void pollHostShortcuts();
 
     /// Let go of the plugin's view *now*, because the plugin itself is about to
     /// be destroyed — a Replace, a Remove, an undo, a project being closed.
@@ -93,6 +100,7 @@ public:
     void pollForTest();
     static bool checkIdleForTest(daw::EngineController& controller,
                                 const std::string& fixturePath);
+    static bool checkIsolationForTest(const std::string& fixturePath);
     QStringList parameterDockOrderForTest() const;
     QString parameterDockActiveForTest() const { return m_dockActive; }
     /// Exercise the same screen-bound clamp as a real native editor without
@@ -112,7 +120,7 @@ signals:
     void nestedPluginEditorRequested(const QString& channelId,
                                      const QString& insertId);
     void projectEdited();
-    /// Emitted only for the four application-owned Qt editors. Native and
+    /// Emitted only for application-owned Qt editors. Native and
     /// generic third-party plugin surfaces deliberately have no presence seam.
     void builtInPanelReady(QWidget* panel, const QString& stableTypeId);
     /// A parameter knob requested automation by gesture or context menu. The window itself
@@ -135,20 +143,22 @@ private:
     friend class PluginEditorNativeKeyboard;
     bool routeHostKey(QKeyEvent* event, bool textEntry);
     std::function<bool(QKeyEvent*, bool)> m_hostKeyHandler;
+    std::function<bool()> m_automationShortcutEnabled;
     std::unique_ptr<PluginEditorNativeKeyboard> m_nativeKeyboard;
-    /// The live plugin behind the slot, or null if it went away.
-    daw::plugins::PluginInstance* instance() const;
+    std::optional<daw::PluginEditorSnapshot> editorSnapshot() const;
     /// Build the fallback panel of sliders for a plugin with no GUI.
     void buildGenericEditor();
     void refreshGenericEditor();
     void pollEditorState();
+    void refreshRemoteStatus();
+    void buildRemoteStatusPanel();
     void syncPollTimer();
     void buildWrapper();
     void refreshWrapper();
     void scheduleEditorInitialization(int delayMs);
     void rebuildEditorContent();
     void tryAttachNativeEditor(std::uint64_t generation, int attempt);
-    void finishNativeEditorOpen(daw::plugins::PluginInstance* plugin);
+    void finishNativeEditorOpen();
     void finishEditorContent();
     void showLoadingState();
     void hideLoadingState();
@@ -166,9 +176,8 @@ private:
     /// nothing more than that list being reordered.
     void layOutParameterDock();
     /// The plugin's own words for a value — "440 Hz", "2:1" — or the number.
-    QString parameterText(const QString& parameterId, double plain) const;
-    QString parameterText(daw::plugins::PluginInstance* live,
-                          std::int32_t parameterIndex, double plain) const;
+    QString parameterText(const std::string& parameterId, double plain,
+                          std::int32_t indexHint = -1) const;
     void setParameterDockVisible(bool visible);
     /// How much width the dock is taking right now — nothing when it is
     /// hidden. Every place the window's width is computed back from the
@@ -203,6 +212,10 @@ private:
     QToolButton* m_rightChannel = nullptr;
     QComboBox* m_sidechain = nullptr;
     QWidget* m_generic = nullptr;        // fallback panel, when there is no GUI
+    QLabel* m_remoteStatus = nullptr;
+    QPushButton* m_remoteOpen = nullptr;
+    QPushButton* m_remoteRestart = nullptr;
+    bool m_reopenRemoteAfterRestart = false;
     QWidget* m_loading = nullptr;        // visible until the native attach runs
     /// The row the editor content lives in: the plugin's view (or the fallback
     /// panel) and, beside it, our own parameter dock.
@@ -220,21 +233,19 @@ private:
         QLabel* value = nullptr;
         QLabel* badge = nullptr;
         QString parameterId;
-        std::string parameterKey;
-        std::int32_t parameterIndex = -1;
         double lastPlain = std::numeric_limits<double>::quiet_NaN();
     };
     std::vector<DockControl> m_dockControls;
+    std::vector<daw::PluginParameterReadout> m_dockValues;
     struct GenericControl {
         QSlider* slider = nullptr;
         QLabel* value = nullptr;
-        std::string parameterKey;
         double minimum = 0.0;
         double maximum = 0.0;
-        std::int32_t parameterIndex = -1;
         double lastPlain = std::numeric_limits<double>::quiet_NaN();
     };
     std::vector<GenericControl> m_genericControls;
+    std::vector<daw::PluginParameterReadout> m_genericValues;
     /// Which parameter the plugin last moved by itself.
     QString m_dockActive;
     QTimer* m_poll = nullptr;            // refreshes wrapper + fallback panel
@@ -256,16 +267,12 @@ private:
     /// Invalidates queued loading/attach turns when a plugin is replaced,
     /// closed, or its dual-mono side changes while an editor is still loading.
     std::uint64_t m_loadGeneration = 0;
-    /// Compared only with the freshly re-resolved slot instance. It is never
-    /// dereferenced after a queued turn because a project edit can retire it.
-    daw::plugins::PluginInstance* m_pendingEditorPlugin = nullptr;
+    daw::PluginIdentity m_contentIdentity;
+    daw::PluginIdentity m_pendingEditor;
     bool m_nativeEditorFailed = false;
     bool m_rebuildingEditorContent = false;
-    /// The instance the view was opened on. Compared, never dereferenced after
-    /// the plugin retires: `instance()` re-reads the slot, and after a Replace
-    /// that is a *different* plugin, which must not be told to close an editor
-    /// it never opened.
-    daw::plugins::PluginInstance* m_openedOn = nullptr;
+    /// Late close/resize/idle commands carry the identity of their own view.
+    daw::PluginIdentity m_openedOn;
     /// True while the window is resizing itself on the plugin's instruction, so
     /// the resulting resizeEvent is not echoed back as a host-side resize.
     bool m_applyingPluginSize = false;

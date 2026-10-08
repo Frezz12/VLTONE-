@@ -10,7 +10,7 @@
 #include <cstdio>
 
 bool PianoRollWindow::checkSlidesForTest(const QString &images) {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false).isOk())
         return false;
     auto track = controller.addTrack(daw::TrackKind::Midi, "Slide phrase");

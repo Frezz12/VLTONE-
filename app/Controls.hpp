@@ -37,19 +37,22 @@ namespace ui {
 class FrameTimer;
 
 /// Relative pointer gesture for controls that must keep moving after the
-/// physical pointer would otherwise reach a screen edge.  Each sample is
-/// measured from the press position and the system pointer is immediately
-/// returned there, so callers receive small, directionally stable deltas.
+/// physical pointer would otherwise reach a screen edge. Track successive
+/// floating-point positions; recenter only at an edge and ignore the warp's
+/// queued events, so mouse and trackpad samples cover the same distance.
 class LockedCursorDrag {
 public:
     void begin(const QPointF& globalPosition);
-    QPointF takeDelta(const QPointF& globalPosition);
+    QPointF takeDelta(const QPointF& globalPosition, bool wrapAtEdge = true);
     QPointF finish(const QPointF& globalPosition);
     void cancel();
     bool active() const { return m_active; }
 
 private:
-    QPoint m_anchor;
+    QPointF m_anchor;
+    QPointF m_lastPosition;
+    QPointF m_warpFrom;
+    bool m_warpPending = false;
     bool m_active = false;
 };
 
@@ -74,6 +77,7 @@ public:
     ViewScrubSlider(icons::Glyph glyph, Axis axis, int resetValue,
                     QWidget* parent = nullptr);
 protected:
+    bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
@@ -572,7 +576,7 @@ private:
 class Knob : public QWidget {
     Q_OBJECT
 public:
-    enum class VisualStyle { Standard, SamplerDigital, Gravity, Graphite };
+    enum class VisualStyle { Standard, SamplerDigital, Gravity, Graphite, Slicer };
 
     Knob(const QString& caption, QWidget* parent = nullptr);
 

@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, /*openDevice=*/false).isOk()) {
         std::fprintf(stderr, "the controller did not initialise\n");
         return 1;

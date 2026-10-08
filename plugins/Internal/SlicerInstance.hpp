@@ -15,14 +15,6 @@
 
 namespace daw::plugins::slicer {
 
-struct ControlState {
-    std::string path;
-    std::shared_ptr<const engine::SampleBuffer> audio;
-    std::shared_ptr<const SliceTable> table;
-    AnalysisSettings analysis;
-    std::array<double, kParameterCount> parameters{};
-};
-
 struct RuntimeState {
     std::shared_ptr<const SampleData> sample;
     std::shared_ptr<const SliceTable> table;

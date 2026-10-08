@@ -29,8 +29,8 @@ test("usage totals, launch history, search and pagination on desktop and mobile"
   await expect(page.getByText("В программе", { exact: true })).toBeVisible();
   await expect(page.getByText("Завершён", { exact: true })).toBeVisible();
   await expect(page.getByText("Нет свежих отчётов", { exact: true })).toBeVisible();
-  await expect(page.locator(".admin-nav-group")).toHaveCount(5);
-  await expect(page.locator(".admin-nav a.active")).toHaveCSS("background-image", "none");
+  await expect(page.locator(".admin-side .admin-nav-group")).toHaveCount(3);
+  await expect(page.locator(".admin-side .admin-nav a.active")).toHaveAttribute("aria-current", "page");
   await page.screenshot({ path: "test-results/dashboard-usage-desktop.png", fullPage: true });
   await usage.getByRole("button", { name: "Далее" }).click();
   await expect(usage.getByRole("link", { name: "Второй пользователь" })).toBeVisible();

@@ -30,6 +30,9 @@ set(DAW_PLUGINHOST_SOURCES
     Creator/FunctionDefinition.cpp
     Internal/MiniModuleDefinition.cpp
     Internal/MiniNodeRegistry.cpp
+    Internal/CreatorProgrammingNodes.cpp
+    Internal/CreatorGraphDefinition.cpp
+    Internal/CreatorPrimitiveKernel.cpp
     Internal/CreatorDspRuntime.cpp
     Creator/CreatorCompilerClient.cpp
     Creator/WasmProgram.cpp

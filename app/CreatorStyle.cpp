@@ -11,19 +11,14 @@
 
 namespace ui {
 CreatorColors creatorColors() {
-  if (th().dark)
-    return {QColor("#11151c"), QColor("#191e27"), QColor("#202733"),
-            QColor("#151b24"), QColor("#2b3443"), QColor("#3d485b"),
-            QColor("#2c3442"), QColor("#edf0f7"), QColor("#a5afc2"),
-            QColor("#aaa4ff"), QColor("#7165d9"), QColor("#ffffff"),
-            QColor("#63d6b6"), QColor("#8abaff"), QColor("#d7a1ef"),
-            QColor("#efc078")};
-  return {QColor("#f0f3f8"), QColor("#fafbfe"), QColor("#ffffff"),
-          QColor("#f3f5fa"), QColor("#e8ecf5"), QColor("#bbc5d6"),
-          QColor("#d5dce8"), QColor("#202838"), QColor("#5c6880"),
-          QColor("#6553c8"), QColor("#6553c8"), QColor("#ffffff"),
-          QColor("#087c64"), QColor("#2869bb"), QColor("#8843ad"),
-          QColor("#996210")};
+  const auto &t = th();
+  return {t.background, t.surface, t.surfaceElevated, t.well(),
+          mixColors(t.surfaceElevated, t.textPrimary, .08), t.separator(), t.gridLine,
+          t.textPrimary, t.textSecondary, t.accent, t.accent, t.accentText(),
+          QColor(t.dark ? "#63d6b6" : "#087c64"), QColor(t.dark ? "#8abaff" : "#2869bb"),
+          QColor(t.dark ? "#d7a1ef" : "#8843ad"), QColor(t.dark ? "#efc078" : "#996210"),
+          QColor(t.dark ? "#baca74" : "#596816"), QColor(t.dark ? "#e6a878" : "#9a531f"),
+          QColor(t.dark ? "#ec95b0" : "#ab3860"), QColor(t.dark ? "#79ced7" : "#177883")};
 }
 
 void styleCreator(QWidget *widget) {
@@ -44,26 +39,39 @@ void styleCreator(QWidget *widget) {
   widget->setPalette(palette);
   // Token replacement keeps the QSS readable and independent of DAW chrome.
   QString css = QStringLiteral(R"(
-    QWidget { color: $text; font-size: 13px; }
+    QWidget { color: $text; font-size: 12px; }
     QMainWindow, QDialog, QScrollArea, QStatusBar, QWidget#CreatorPropertiesBody { background: $panel; }
     QLabel { background: transparent; border: none; padding: 0; }
     QLabel[creatorRole="muted"] { color: $muted; }
-    QLabel[creatorRole="heading"] { font-size: 17px; font-weight: 600; }
-    QLabel[creatorRole="brand"] { font-size: 20px; font-weight: 600; padding: 0 14px 0 4px; }
+    QLabel[creatorRole="heading"] { font-size: 14px; font-weight: 600; }
+    QLabel[creatorRole="brand"] { font-size: 16px; font-weight: 600; padding: 0 10px 0 4px; }
     QLabel[creatorRole="section"] { color: $muted; font-size: 11px; font-weight: 600; padding: 8px 0; }
-    QToolBar { background: $panel; border: none; border-bottom: 1px solid $border; padding: 9px; spacing: 5px; }
+    QWidget#CreatorAiPanel QToolButton { background: transparent; border: 1px solid transparent; text-align: left; padding: 3px 5px; }
+    QWidget#CreatorAiPanel QToolButton:hover { background: $hover; }
+    QWidget#CreatorAiPanel QToolButton:focus { border-color: $accent; }
+    QWidget#CreatorAiPanel QScrollArea, QWidget#CreatorAiPanel QScrollArea > QWidget > QWidget { background: $panel; }
+    QWidget#CreatorAiPanel QPlainTextEdit { background: $field; border: 1px solid $border; border-radius: 7px; padding: 6px; }
+    QWidget#CreatorAiPanel QPlainTextEdit:focus { border-color: $accent; }
+    QPushButton#CreatorAiRestore { background: transparent; color: $muted; }
+    QToolBar { background: $panel; border: none; border-bottom: 1px solid $border; padding: 5px; spacing: 4px; }
     QToolBar::separator { background: $border; width: 1px; margin: 8px 7px; }
-    QToolButton, QPushButton { background: $card; border: 1px solid $border; border-radius: 6px; padding: 6px 10px; min-height: 18px; }
-    QToolButton { padding: 7px; }
+    QToolButton, QPushButton { background: $card; border: 1px solid $border; border-radius: 5px; padding: 4px 8px; min-height: 18px; }
+    QToolButton { padding: 5px; }
     QToolButton:hover, QPushButton:hover { background: $hover; border-color: $muted; }
     QToolButton:pressed, QPushButton:pressed { background: $field; border-color: $accent; }
-    QToolButton:focus, QPushButton:focus { border-color: $accent; }
     QToolButton:disabled, QPushButton:disabled { color: $muted; background: $panel; border-color: $border; }
     QToolButton[creatorPrimary="true"], QPushButton[creatorPrimary="true"] { color: $onAccent; background: $accentFill; border-color: $accentFill; padding-left: 13px; padding-right: 13px; font-weight: 600; }
     QToolButton[creatorPrimary="true"]:hover { border-color: $accent; }
     QToolButton[creatorPrimary="true"]:disabled { background: $hover; color: $muted; border-color: $border; }
-    QLineEdit, QAbstractSpinBox, QComboBox { background: $field; color: $text; border: 1px solid $border; border-radius: 5px; padding: 5px 8px; min-height: 18px; selection-background-color: $accentFill; selection-color: $onAccent; }
-    QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus { border-color: $accent; }
+    QToolBar#CreatorToolbar { padding: 7px 10px; spacing: 5px; }
+    QToolBar#CreatorToolbar::separator { background: $border; width: 1px; margin: 8px 10px; }
+    QToolBar#CreatorToolbar QToolButton { background: transparent; border: 1px solid transparent; padding: 5px; min-width: 20px; min-height: 20px; }
+    QToolBar#CreatorToolbar QToolButton:hover { background: $hover; border-color: transparent; }
+    QToolBar#CreatorToolbar QToolButton:pressed { background: $field; border-color: transparent; }
+    QToolBar#CreatorToolbar QToolButton:disabled { background: transparent; border-color: transparent; }
+    QToolBar#CreatorToolbar QToolButton[creatorPrimary="true"] { color: $onAccent; background: $accentFill; padding-left: 13px; padding-right: 13px; font-weight: 600; }
+    QToolBar#CreatorToolbar QToolButton[creatorPrimary="true"]:disabled { background: $hover; color: $muted; }
+    QLineEdit, QAbstractSpinBox, QComboBox { background: $field; color: $text; border: 1px solid $border; border-radius: 4px; padding: 3px 6px; min-height: 16px; selection-background-color: $accentFill; selection-color: $onAccent; }
     QLineEdit:disabled, QAbstractSpinBox:disabled, QComboBox:disabled { color: $muted; border-color: transparent; background: $panel; }
     QAbstractSpinBox QLineEdit { border: none; padding: 0; background: transparent; min-height: 0; }
     QLineEdit QToolButton { background: transparent; border: none; border-radius: 0; padding: 0; min-height: 0; min-width: 0; }
@@ -73,10 +81,14 @@ void styleCreator(QWidget *widget) {
     QComboBox::down-arrow { image: url(:/icons/popup-chevron-$appearance.svg); width: 12px; height: 12px; border: none; }
     QComboBox QAbstractItemView { padding: 4px; border: 1px solid $border; background: $card; selection-background-color: $hover; selection-color: $text; }
     QListWidget, QTreeWidget { background: $panel; border: none; outline: none; padding: 0; }
-    QListWidget::item { padding: 6px 8px; border: 1px solid transparent; border-radius: 5px; }
+    QListWidget::item { padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; }
     QListWidget::item:hover { background: $hover; }
     QListWidget::item:selected { background: $hover; color: $text; border-color: $accent; }
     QListWidget::item:disabled { background: transparent; color: $muted; padding-top: 14px; padding-bottom: 5px; }
+    QTreeWidget#CreatorNodeLibrary::item { padding: 3px 5px; border: 1px solid transparent; border-radius: 4px; }
+    QTreeWidget#CreatorNodeLibrary::item:hover { background: $hover; }
+    QTreeWidget#CreatorNodeLibrary::item:selected { background: $hover; color: $text; border-color: $accent; }
+    QTreeWidget#CreatorNodeLibrary::branch { background: transparent; }
     QTableWidget { background: $field; alternate-background-color: $card; gridline-color: $border; border: 1px solid $border; selection-background-color: $hover; selection-color: $text; }
     QHeaderView::section { background: $panel; color: $muted; border: none; border-bottom: 1px solid $border; padding: 7px; }
     QPlainTextEdit { background: $field; color: $text; border: none; selection-background-color: $accentFill; selection-color: $onAccent; }
@@ -138,8 +150,9 @@ icons::Glyph creatorCategoryIcon(std::string_view category) {
 }
 
 int creatorCategoryOrder(std::string_view category) {
-  constexpr std::string_view categories[] = {"Routing", "Effects", "Generators",
-      "Modulation", "Math", "Logic", "Analysis", "Code"};
+  constexpr std::string_view categories[] = {"Routing", "Signal", "Math", "Levels", "Logic",
+      "Memory", "Time", "Filters", "Shaping", "Collections", "Custom", "Effects", "Generators",
+      "Modulation", "Analysis", "Code"};
   const auto it = std::find(std::begin(categories), std::end(categories), category);
   return int(it - std::begin(categories));
 }
@@ -184,7 +197,7 @@ void CreatorNumberField::beginText() {
   selectAll();
 }
 void CreatorNumberField::scrub(QMouseEvent *event) {
-  const int dy = -m_cursor.takeDelta(event->globalPosition().toPoint()).y();
+  const qreal dy = -m_cursor.takeDelta(event->globalPosition()).y();
   if (!m_dragged) {
     m_pending += dy;
     if (std::abs(m_pending) < 3) return;
@@ -192,7 +205,7 @@ void CreatorNumberField::scrub(QMouseEvent *event) {
     setCursor(Qt::BlankCursor);
     lineEdit()->setCursor(Qt::BlankCursor);
   }
-  const double pixels = m_pending ? std::exchange(m_pending, 0) : dy;
+  const double pixels = m_pending ? std::exchange(m_pending, 0.0) : dy;
   const double speed = event->modifiers().testFlag(Qt::ShiftModifier) ? .025 : .25;
   if (m_logarithmic && minimum() > 0 && maximum() > minimum())
     m_scrub *= std::exp(pixels * speed * std::log(maximum() / minimum()) / 100.);
@@ -261,7 +274,7 @@ bool CreatorNumberField::input(QEvent *event) {
       setValue(m_default); emit editingFinished(); event->accept(); return true;
     }
     m_pending = 0; m_pressed = true; m_dragged = false;
-    m_cursor.begin(mouse->globalPosition().toPoint());
+    m_cursor.begin(mouse->globalPosition());
     grabMouse(); event->accept(); return true;
   }
   if (event->type() == QEvent::MouseMove && m_pressed) {

@@ -604,7 +604,7 @@ bool ChannelStrip::checkDragLifecycleForTest() {
 }
 
 bool ChannelStrip::checkFaderInputForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     const auto trackId = controller.addTrack(daw::TrackKind::Audio, "Fader input");
     bool ok = true;
@@ -1345,6 +1345,13 @@ QWidget* ChannelStrip::buildInserts() {
         const daw::InsertModel* model = &(*inserts)[std::size_t(i)];
 
         auto* b = makeSlotButton(QString::fromStdString(model->name), true);
+        const auto state = m_controller->insertRuntimeStatus(channel.toStdString(), model->id).state;
+        if (state == daw::EngineController::PluginRuntimeState::Running ||
+            state == daw::EngineController::PluginRuntimeState::Failed ||
+            state == daw::EngineController::PluginRuntimeState::Restarting) {
+            b->setProperty("isolatedPluginName", QString::fromStdString(model->name));
+            m_isolatedSlotButtons.insert(QString::fromStdString(model->id), b);
+        }
         b->setProperty("insertSlotIndex", i);
         b->setProperty("insertSlotFilled", true);
         b->setProperty("insertRow", true);
@@ -1352,7 +1359,7 @@ QWidget* ChannelStrip::buildInserts() {
         // on another machine, a plugin uninstalled, a licence that lapsed. The
         // document still says what belongs here — the strip has to say that it
         // is not there.
-        const bool missing = !m_controller->insertInstance(channel.toStdString(), model->id);
+        const bool missing = !m_controller->hasInsert(channel.toStdString(), model->id);
         b->setProperty("bypassed", model->bypassed);
         b->setProperty("missing", missing);
         if (missing) {
@@ -1681,6 +1688,15 @@ QMenu* ChannelStrip::buildInsertMenu(QWidget* parent, const QString& insertId,
 
     connect(menu->addAction(tr("Open Editor")), &QAction::triggered, this,
             [this, channel, insertId] { emit editorRequested(channel, insertId); });
+    ui::addPluginControlsAction(menu, m_controller, channel, insertId);
+    const auto runtime = m_controller->insertRuntimeStatus(channel.toStdString(), insertId.toStdString());
+    if (runtime.state == daw::EngineController::PluginRuntimeState::Failed) {
+        connect(menu->addAction(tr("Restart plugin")), &QAction::triggered, this,
+                [this, channel, insertId] {
+                    (void)m_controller->restartInsert(channel.toStdString(), insertId.toStdString());
+                    emit editorRequested(channel, insertId);
+                });
+    }
     menu->addSeparator();
 
     QAction* bypass = menu->addAction(tr("Bypass"));
@@ -1768,6 +1784,14 @@ QWidget* ChannelStrip::buildInstrument() {
     if (loaded) {
         // Same interaction as a loaded insert: click opens the plugin, right
         // click offers the slot's options.
+        const auto state = m_controller->insertRuntimeStatus(trackId.toStdString(),
+                                                             track->instrument.id).state;
+        if (state == daw::EngineController::PluginRuntimeState::Running ||
+            state == daw::EngineController::PluginRuntimeState::Failed ||
+            state == daw::EngineController::PluginRuntimeState::Restarting) {
+            slot->setProperty("isolatedPluginName", QString::fromStdString(track->instrument.name));
+            m_isolatedSlotButtons.insert(instrumentId, slot);
+        }
         slot->setProperty("bypassed", track->instrument.bypassed);
         slot->setToolTip(
             track->instrument.bypassed
@@ -1787,6 +1811,7 @@ QWidget* ChannelStrip::buildInstrument() {
                             this, [this, trackId, instrumentId] {
                                 emit editorRequested(trackId, instrumentId);
                             });
+                    ui::addPluginControlsAction(menu, m_controller, trackId, instrumentId);
                     QMenu* replace = ui::buildPluginMenu(
                         menu, m_controller, /*instruments=*/true,
                         [this, trackId](const daw::plugins::PluginDescriptor& d) {
@@ -2433,7 +2458,7 @@ bool ChannelStrip::hasActiveGesture() const {
 }
 
 bool ChannelStrip::checkGroupInputsForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 256, false)) return false;
     const auto audio = controller.addTrack(daw::TrackKind::Audio, "Kick");
     const auto bus = controller.addTrack(daw::TrackKind::Bus, "Percussion");
@@ -2554,6 +2579,7 @@ bool ChannelStrip::checkGroupInputsForTest() {
 }
 
 void ChannelStrip::syncFromModel() {
+    refreshIsolatedSlots();
     syncColor(false);
     // These controls report user edits through their value signals. A value
     // arriving from another view must not echo back into the controller (and
@@ -2625,6 +2651,7 @@ void ChannelStrip::syncFromModel() {
 }
 
 void ChannelStrip::refreshAutomationValues() {
+    refreshIsolatedSlots();
     syncColor(true);
     if (!m_controller) return;
     const auto* track =
@@ -2656,6 +2683,26 @@ void ChannelStrip::refreshAutomationValues() {
         m_pan->setPan(pan);
     }
     updateReadouts();
+}
+
+void ChannelStrip::refreshIsolatedSlots() {
+    if (m_isolatedSlotButtons.isEmpty()) return;
+    const auto channel = channelId().toStdString();
+    for (auto it = m_isolatedSlotButtons.begin(); it != m_isolatedSlotButtons.end(); ++it) {
+        const auto status = m_controller->insertRuntimeStatus(channel, it.key().toStdString()).state;
+        auto* button = it.value();
+        if (button->property("isolatedRuntimeState").isValid() &&
+            button->property("isolatedRuntimeState").toInt() == int(status)) continue;
+        button->setProperty("isolatedRuntimeState", int(status));
+        const auto name = button->property("isolatedPluginName").toString();
+        const bool failed = status == daw::EngineController::PluginRuntimeState::Failed;
+        const bool restarting = status == daw::EngineController::PluginRuntimeState::Restarting;
+        button->setText(failed ? tr("Stopped: %1").arg(name) :
+                        restarting ? tr("Restarting: %1").arg(name) : name);
+        button->setToolTip(failed ? tr("%1 stopped. Open its editor to restart the plugin.").arg(name) :
+                          restarting ? tr("%1 is restarting.").arg(name) : name);
+        button->setAccessibleName(button->text());
+    }
 }
 
 void ChannelStrip::updateReadouts() {
@@ -2836,7 +2883,7 @@ QMenu* ChannelStrip::buildContextMenu(QWidget* parent) {
 }
 
 bool ChannelStrip::checkContextMenusForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Channel");
     ChannelStrip master(&controller, {}, true);
@@ -3383,8 +3430,8 @@ QLabel { color: %TEXT2%; font-size: 9px; }
     border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %LIGHT%; border-radius: 5px;
     color: %TEXT%; font-size: 9px; font-weight: 400; padding: 0 10px 0 25px;
 }
-#RoutingButton:hover { background: %WELL%; border-color: %ACCENT_SOFT%; }
-#RoutingButton:focus { border-color: %ACCENT%; }
+#RoutingButton:hover { background: %WELL%; }
+
 #RoutingButton:pressed { background: %RECESS%; border-color: %WELL_EDGE%; }
 #RoutingButton:disabled { color: %TEXT2%; }
 #RoutingButton::menu-indicator { image: none; width: 0; }
@@ -3425,7 +3472,6 @@ QLabel { color: %TEXT2%; font-size: 9px; }
    the chain the user cannot hear. */
 #SlotButton[missing="true"] { color: %BYPASS%; border-color: %BYPASS%; }
 #SlotButton:hover { background: %HOVER%; color: %TEXT%; }
-#SlotButton:focus { border-color: %ACCENT%; }
 #SlotButton:pressed { background: %RECESS%; }
 #SlotButton::menu-indicator { image: none; width: 0; }
 #SlotButton:disabled { color: %TEXT2%; }
@@ -3450,7 +3496,7 @@ QLabel { color: %TEXT2%; font-size: 9px; }
     background: transparent; border: 1px solid transparent; border-radius: 3px;
     color: %TEXT2%; font-size: 9px; padding: 0;
 }
-#ChannelPeakReadout:hover, #ChannelPeakReadout:focus { background: %HOVER%; color: %TEXT%; border-color: %SEP%; }
+#ChannelPeakReadout:hover, #ChannelPeakReadout:focus { background: %HOVER%; color: %TEXT%; }
 #ChannelPeakReadout:pressed { background: %RECESS%; }
 #ChannelPeakReadout[clipped="true"] { color: %CLIP%; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))

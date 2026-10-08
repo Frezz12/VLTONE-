@@ -204,6 +204,9 @@ struct PluginProcessContext {
     std::int64_t sampleTime = 0;
     /// Monotonic processing clock, including skipped/sleeping blocks; -1 if unavailable.
     std::int64_t steadyTime = -1;
+    /// Absolute rt::nowNanos deadline shared by the graph; zero leaves expiry
+    /// to the caller. This is a host contract, never a plugin transport clock.
+    std::uint64_t deadlineNanos = 0;
     bool playing = false;
     bool offline = false;
 };

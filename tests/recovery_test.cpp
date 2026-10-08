@@ -101,7 +101,7 @@ int main() {
     { std::ofstream(coverPath, std::ios::binary) << "test cover"; }
 
     // ── A project with something of every kind in it ──
-    daw::EngineController ctrl;
+    daw::EngineController ctrl{daw::EngineController::TestRuntime{}};
     check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
           "controller initialises offline");
 
@@ -275,7 +275,7 @@ int main() {
             daw::platform::pathToUtf8(unicodePackage);
         writeTone(unicodeToneUtf8, 48000, 4800);
 
-        daw::EngineController unicodeController;
+        daw::EngineController unicodeController{daw::EngineController::TestRuntime{}};
         unicodeController.initialize(48000, 512, /*openDevice=*/false);
         const std::string unicodeTrack =
             unicodeController.addTrack(daw::TrackKind::Audio, "Unicode");

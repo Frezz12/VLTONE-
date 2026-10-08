@@ -7,12 +7,15 @@
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDoubleSpinBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QGraphicsObject>
 #include <QGraphicsPathItem>
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPathStroker>
@@ -29,6 +32,10 @@ namespace {
 constexpr int nodeRole = 10, wireRole = 11;
 QColor portColor(PortType type) {
   const auto c = creatorColors();
+  if (type == PortType::Integer) return c.integer;
+  if (type == PortType::Array) return c.array;
+  if (type == PortType::List) return c.list;
+  if (type == PortType::Buffer) return c.buffer;
   return type == PortType::Audio ? c.audio : type == PortType::Function ? c.function
          : type == PortType::Gate ? c.gate : c.number;
 }
@@ -73,6 +80,15 @@ public:
       p->drawRoundedRect(QRectF(-4.5, -4.5, 9, 9), 1, 1);
     else if(kind==PortType::Function) {
       p->drawPolygon(QPolygonF{{-5,-3},{0,-6},{5,-3},{5,3},{0,6},{-5,3}});
+    } else if (kind == PortType::Integer) {
+      p->drawPolygon(QPolygonF{{0,-6},{6,5},{-6,5}});
+    } else if (kind == PortType::Array) {
+      p->drawRect(QRectF(-5,-5,10,10)); p->drawLine(-1,-5,-1,5);
+    } else if (kind == PortType::List) {
+      p->setBrush(Qt::NoBrush);
+      for (int y : {-4, 0, 4}) p->drawLine(-5,y,5,y);
+    } else if (kind == PortType::Buffer) {
+      p->drawRoundedRect(QRectF(-6,-4,12,8),4,4); p->drawLine(1,-4,1,4);
     } else {
       QPolygonF diamond{{0, -5}, {5, 0}, {0, 5}, {-5, 0}};
       p->drawPolygon(diamond);
@@ -98,12 +114,13 @@ class NodeItem final : public QGraphicsObject {
 public:
   NodeItem(const NodeDefinition &n, const MiniModuleDefinition &graph,
            CreatorCanvas *canvas)
-      : model(n), canvas(canvas), description(describeNode(n)),
+      : model(n), canvas(canvas), description(describeNode(n, &graph)),
         desc(description.id.empty() ? nullptr : &description) {
     setFlags(ItemIsMovable | ItemIsSelectable | ItemSendsGeometryChanges |
              ItemIsFocusable);
     setCacheMode(DeviceCoordinateCache);
     setData(nodeRole, QString::fromStdString(n.id));
+    setData(20, n.label.starts_with("Missing:"));
     setToolTip(desc ? creatorText(desc->name) + " · " +
                           creatorText(desc->category)
                     : QString::fromStdString(n.type));
@@ -121,13 +138,13 @@ public:
           std::none_of(ports.begin(), ports.end(), [&](const auto &p) { return p.id == id; }))
         ports.push_back({id, "Missing: " + id, PortType::Number});
     }
-    double y = 64;
+    double y = 52;
     for (const auto &port : outputs) {
       auto *item = new Port(QString::fromStdString(n.id), port, true, this);
       item->setPos(width, y);
       labels.push_back(
           {QRectF(20, y - 10, width - 36, 20), creatorText(port.name), true});
-      y += 32;
+      y += 28;
     }
     const auto control = [&](const NodeParameterDescription &p, unsigned index,
                              double row, bool connected) {
@@ -157,6 +174,9 @@ public:
         spin->setSingleStep((p.logarithmic ? std::max(.001, p.initial * .01)
                                            : (p.maximum - p.minimum) / 100) *
                             factor);
+        const bool discrete = (n.type == "history" && (n.valueType == "integer" || n.valueType == "gate")) ||
+          std::any_of(desc->inputs.begin(), desc->inputs.end(), [&](const auto &port) { return port.parameter == int(index) && (port.type == PortType::Integer || port.type == PortType::Gate); });
+        if (discrete) { spin->setDecimals(0); spin->setSingleStep(1); }
         spin->setValue(value * factor);
         spin->setDefaultValue(p.initial * factor);
         spin->setLogarithmic(p.logarithmic);
@@ -165,6 +185,7 @@ public:
         if (!p.unit.empty())
           spin->setSuffix(" " + QString::fromStdString(p.unit));
         widget = spin;
+        spin->setProperty("creatorFactor", factor);
         QObject::connect(spin, &QDoubleSpinBox::editingFinished, canvas,
                          [canvas, n, p, spin, factor] {
                            emit canvas->parameterEdited(
@@ -174,7 +195,7 @@ public:
                          });
       }
       styleCreator(widget);
-      widget->setFixedSize(128, 28);
+      widget->setFixedSize(108, 24);
       widget->setAccessibleName(creatorText(desc->name) + " " +
                                 creatorText(p.name));
       widget->setToolTip(
@@ -187,7 +208,7 @@ public:
       widget->setProperty("creatorParameter", int(index));
       auto *proxy = new QGraphicsProxyWidget(this);
       proxy->setWidget(widget);
-      proxy->setPos(width - 144, row - 14);
+      proxy->setPos(width - 120, row - 12);
     };
     for (const auto &port : inputs) {
       auto *item = new Port(QString::fromStdString(n.id), port, false, this);
@@ -196,19 +217,19 @@ public:
           graph.connections.begin(), graph.connections.end(),
           [&](const auto &e) { return e.to == n.id && e.toPort == port.id; });
       labels.push_back(
-          {QRectF(16, y - 10, port.parameter >= 0 ? 108 : width - 32, 20),
+          {QRectF(12, y - 10, port.parameter >= 0 ? 100 : width - 24, 20),
            creatorText(port.name), false});
       if (port.parameter >= 0)
         control(desc->parameters[port.parameter], unsigned(port.parameter), y,
                 item->connected);
-      y += 32;
+      y += 28;
     }
     for (unsigned i = 0; i < desc->parameters.size(); ++i)
       if (!desc->parameters[i].modulatable) {
-        labels.push_back({QRectF(16, y - 10, 108, 20),
+        labels.push_back({QRectF(12, y - 10, 100, 20),
                           creatorText(desc->parameters[i].name), false});
         control(desc->parameters[i], i, y, false);
-        y += 32;
+        y += 28;
       }
     if (n.type == "interface") {
       labels.push_back({QRectF(16, y, width - 32, 24),
@@ -244,20 +265,21 @@ public:
     p->setRenderHint(QPainter::Antialiasing);
     const auto c = creatorColors();
     p->setBrush(c.card);
-    p->setPen(QPen(isSelected() ? c.accent : c.border, isSelected() ? 2 : 1));
+    p->setPen(QPen(data(20).toBool() ? QColor(217,87,91) : isSelected() ? c.accent : c.border,
+                   data(20).toBool() || isSelected() ? 2 : 1));
     p->drawRoundedRect(QRectF(0, 0, width, height), 9, 9);
     p->setPen(QPen(c.border, 1));
-    p->drawLine(QPointF(16, 44), QPointF(width - 16, 44));
+    p->drawLine(QPointF(12, 34), QPointF(width - 12, 34));
     icons::paint(*p, creatorCategoryIcon(desc ? desc->category : "Code"),
-                 QRectF(15, 13, 18, 18), c.accent);
+                 QRectF(12, 9, 16, 16), c.accent);
     p->setPen(c.text);
     QFont title = p->font();
-    title.setPixelSize(13);
+    title.setPixelSize(12);
     title.setWeight(QFont::DemiBold);
     p->setFont(title);
-    p->drawText(QRectF(43, 1, width - 59, 42), Qt::AlignVCenter,
+    p->drawText(QRectF(36, 1, width - 48, 32), Qt::AlignVCenter,
                 p->fontMetrics().elidedText(creatorText(desc ? desc->name : model.type),
-                                            Qt::ElideRight, int(width - 59)));
+                                            Qt::ElideRight, int(width - 48)));
     p->setPen(c.muted);
     QFont body = p->font();
     body.setPixelSize(12);
@@ -276,6 +298,10 @@ public:
       canvas->updateWires();
     return QGraphicsObject::itemChange(change, value);
   }
+  void mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) override {
+    if (!model.subgraph.empty()) emit canvas->enterRequested(QString::fromStdString(model.id));
+    else QGraphicsObject::mouseDoubleClickEvent(event);
+  }
   NodeDefinition model;
   CreatorCanvas *canvas;
   NodeDescription description;
@@ -286,7 +312,7 @@ public:
     bool right;
   };
   std::vector<Label> labels;
-  static constexpr double width = 280;
+  static constexpr double width = 240;
   double height = 86;
   int codeLabel=-1;
 };
@@ -296,7 +322,10 @@ public:
     setData(wireRole, index);
     setFlag(ItemIsSelectable);
     setZValue(-1);
-    setToolTip(from->title + " → " + to->title);
+    setToolTip(from->title + " → " + to->title + "\n" +
+               CreatorCanvas::tr("Double-click to disconnect"));
+    // Keep the scene's broad-phase bounds as wide as the clickable stroke.
+    setPen(QPen(Qt::transparent, 12));
     updatePath();
   }
   void updatePath() { setPath(cable(from->scenePos(), to->scenePos())); }
@@ -309,7 +338,7 @@ public:
              QWidget *) override {
     p->setRenderHint(QPainter::Antialiasing);
     const bool valid=from->matches(*to);
-    p->setPen(QPen(!valid?QColor(217,87,91):isSelected() ? creatorColors().text : portColor(from->kind),
+    p->setPen(QPen(!valid || data(20).toBool() ? QColor(217,87,91):isSelected() ? creatorColors().text : portColor(from->kind),
                    isSelected() ? 3 : 2, from->kind==PortType::Function || !valid?Qt::DashLine:Qt::SolidLine));
     p->setBrush(Qt::NoBrush);
     p->drawPath(path());
@@ -317,10 +346,15 @@ public:
   Port *from, *to;
 };
 Port *portAt(CreatorCanvas *canvas, QPoint point) {
-  for (auto *item : canvas->items(point))
-    if (auto *port = dynamic_cast<Port *>(item))
-      return port;
-  return nullptr;
+  // Hit slop is measured in viewport logical pixels, independently of zoom.
+  Port *nearest = nullptr;
+  double distance = 12.01;
+  for (auto *item : canvas->items(QRect(point - QPoint(12, 12), QSize(25, 25))))
+    if (auto *port = dynamic_cast<Port *>(item)) {
+      const double candidate = QLineF(point, canvas->mapFromScene(port->scenePos())).length();
+      if (candidate < distance) { nearest = port; distance = candidate; }
+    }
+  return nearest;
 }
 } // namespace
 CreatorCanvas::CreatorCanvas(QWidget *parent) : QGraphicsView(parent) {
@@ -328,7 +362,8 @@ CreatorCanvas::CreatorCanvas(QWidget *parent) : QGraphicsView(parent) {
   setObjectName("CreatorCanvas");
   setAccessibleName(tr("Creator node graph"));
   setAccessibleDescription(
-      tr("Tab adds a node. Drag ports to connect. Delete removes selection. "
+      tr("Drag nodes from the library. Tab adds a node. Drag ports to connect. "
+         "Double-click a wire to disconnect. Delete removes selection. "
          "Control plus wheel zooms. Space plus drag pans."));
   setSceneRect(-16000, -16000, 32000, 32000);
   setRenderHint(QPainter::Antialiasing);
@@ -338,6 +373,7 @@ CreatorCanvas::CreatorCanvas(QWidget *parent) : QGraphicsView(parent) {
   setTransformationAnchor(NoAnchor);
   setViewportUpdateMode(BoundingRectViewportUpdate);
   setMouseTracking(true);
+  setAcceptDrops(true);
   setFocusPolicy(Qt::StrongFocus);
   connect(scene(), &QGraphicsScene::selectionChanged, this, [this] {
     const auto ids = selectedNodes();
@@ -362,6 +398,26 @@ CreatorCanvas::~CreatorCanvas() {
   scene()->blockSignals(true);
   cancelConnection();
   scene()->clear();
+}
+void CreatorCanvas::updateValues(const MiniModuleDefinition &graph) {
+  m_graph = graph;
+  for (auto *item : scene()->items()) if (auto *node = dynamic_cast<NodeItem *>(item)) {
+    auto model = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const auto &n) { return n.id == node->model.id; });
+    if (model == graph.nodes.end()) continue;
+    node->model.parameters = model->parameters;
+    for (auto *child : node->childItems()) if (auto *proxy = dynamic_cast<QGraphicsProxyWidget *>(child)) {
+      auto *widget = proxy->widget();
+      if (!widget || !widget->property("creatorParameter").isValid()) continue;
+      const auto index = widget->property("creatorParameter").toUInt();
+      if (index >= node->description.parameters.size()) continue;
+      const auto &parameter = node->description.parameters[index];
+      auto value = parameter.initial;
+      for (const auto &p : model->parameters) if (p.id == parameter.id) value = p.value;
+      QSignalBlocker block(widget);
+      if (auto *spin = qobject_cast<CreatorNumberField *>(widget)) spin->setValue(value * spin->property("creatorFactor").toDouble());
+      else if (auto *combo = qobject_cast<QComboBox *>(widget)) combo->setCurrentIndex(int(value - parameter.minimum));
+    }
+  }
 }
 void CreatorCanvas::setGraph(const MiniModuleDefinition &graph,
                              const QMap<QString, QPointF> &positions) {
@@ -433,6 +489,24 @@ void CreatorCanvas::selectNode(const QString &id) {
       break;
     }
 }
+void CreatorCanvas::highlightConnectionPath(const QString &from, const QString &to, bool includeMemory) {
+  QMap<QString, QString> parent;
+  QStringList pending{to}; parent[to] = {};
+  for (qsizetype i = 0; i < pending.size() && !parent.contains(from); ++i)
+    for (const auto &edge : m_graph.connections) if (QString::fromStdString(edge.from) == pending[i]) {
+      const auto target = QString::fromStdString(edge.to);
+      const auto node = std::find_if(m_graph.nodes.begin(), m_graph.nodes.end(), [&](const auto &n) { return n.id == edge.to; });
+      if (!includeMemory && node != m_graph.nodes.end() && isMemoryWrite(*node, edge.toPort)) continue;
+      if (!parent.contains(target)) { parent[target] = pending[i]; pending.push_back(target); }
+    }
+  QStringList path{from, to};
+  if (parent.contains(from)) for (auto at = from; at != to && !at.isEmpty(); at = parent.value(at)) path.push_back(at);
+  for (auto *item : scene()->items()) {
+    bool highlighted = item->data(nodeRole).isValid() && path.contains(item->data(nodeRole).toString());
+    if (auto *wire = dynamic_cast<Wire *>(item)) highlighted = path.contains(wire->from->node) && path.contains(wire->to->node);
+    item->setData(20, highlighted); item->update();
+  }
+}
 CreatorViewport CreatorCanvas::viewportState() const {
   return {mapToScene(viewport()->rect().center()), transform().m11()};
 }
@@ -502,8 +576,7 @@ void CreatorCanvas::mousePressEvent(QMouseEvent *event) {
       for (auto *item : scene()->items())
         if (auto *other = dynamic_cast<Port *>(item)) {
           other->compatible = other->matches(*port) &&
-                              other->output != port->output &&
-                              other->node != port->node;
+                              other->output != port->output;
           other->dimmed = !other->compatible && other != port;
           other->update();
         }
@@ -528,6 +601,51 @@ void CreatorCanvas::mouseMoveEvent(QMouseEvent *event) {
     return;
   }
   QGraphicsView::mouseMoveEvent(event);
+}
+void CreatorCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
+  if (event->button() == Qt::LeftButton && !m_space && !m_panning &&
+      !portAt(this, event->pos())) {
+    // Only the top item may react: a wire behind a node must stay untouched.
+    if (auto *wire = dynamic_cast<Wire *>(itemAt(event->pos()))) {
+      const auto index = wire->data(wireRole).toUInt();
+      cancelConnection();
+      emit disconnectWire(index);
+      event->accept();
+      return;
+    }
+  }
+  QGraphicsView::mouseDoubleClickEvent(event);
+}
+QString CreatorCanvas::draggedNode(const QMimeData *mime) const {
+  if (!mime || !mime->hasFormat(kCreatorNodeMimeType)) return {};
+  const auto type = QString::fromUtf8(mime->data(kCreatorNodeMimeType));
+  if (m_libraryNodes.contains(type)) return type;
+  for (const auto &node : nodeRegistry())
+    if (type == QString::fromStdString(node.id) && node.id != "wire" &&
+        node.id != "subgraph" && !node.id.starts_with("subgraph_")) return type;
+  return {};
+}
+void CreatorCanvas::dragEnterEvent(QDragEnterEvent *event) {
+  dragMoveEvent(event);
+}
+void CreatorCanvas::dragMoveEvent(QDragMoveEvent *event) {
+  if (!draggedNode(event->mimeData()).isEmpty() &&
+      event->possibleActions().testFlag(Qt::CopyAction)) {
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+  } else event->ignore();
+}
+void CreatorCanvas::dropEvent(QDropEvent *event) {
+  const auto type = draggedNode(event->mimeData());
+  if (type.isEmpty() || !event->possibleActions().testFlag(Qt::CopyAction)) {
+    event->ignore();
+    return;
+  }
+  cancelConnection();
+  event->setDropAction(Qt::CopyAction);
+  event->accept();
+  setFocus(Qt::MouseFocusReason);
+  emit addNodeRequested(type, mapToScene(event->position().toPoint()));
 }
 void CreatorCanvas::mouseReleaseEvent(QMouseEvent *event) {
   if (m_panning) {
@@ -633,8 +751,7 @@ void CreatorCanvas::contextMenuEvent(QContextMenuEvent *event) {
                     QString::fromLatin1(portTypeName(port->kind)));
     for (auto *item : scene()->items())
       if (auto *other = dynamic_cast<Port *>(item)) {
-        if (!other->matches(*port) || other->output == port->output ||
-            other->node == port->node)
+        if (!other->matches(*port) || other->output == port->output)
           continue;
         auto *action = menu.addAction(other->parentItem()->toolTip() + " / " +
                                       other->title);
@@ -669,7 +786,7 @@ void CreatorCanvas::contextMenuEvent(QContextMenuEvent *event) {
         [this, position] { emit addRequested(position); }, Qt::QueuedConnection);
     menu.addSeparator();
     std::vector<const NodeDescription *> types;
-    for (const auto &type : nodeRegistry()) types.push_back(&type);
+    for (const auto &type : nodeRegistry()) if (type.id != "wire" && type.id != "subgraph" && !type.id.starts_with("subgraph_")) types.push_back(&type);
     std::stable_sort(types.begin(), types.end(), [](auto *a, auto *b) {
       return creatorCategoryOrder(a->category) < creatorCategoryOrder(b->category);
     });
@@ -686,8 +803,24 @@ void CreatorCanvas::contextMenuEvent(QContextMenuEvent *event) {
         emit addNodeRequested(QString::fromStdString(id), position);
       }, Qt::QueuedConnection);
     }
+    auto *personal = menu.addMenu(tr("My nodes"));
+    for (auto it = m_libraryNodes.begin(); it != m_libraryNodes.end(); ++it)
+      connect(personal->addAction(it.value()), &QAction::triggered, this, [this, type = it.key(), position] { emit addNodeRequested(type, position); }, Qt::QueuedConnection);
+    personal->addSeparator();
+    personal->addAction(tr("Import node…"), this, &CreatorCanvas::importNodeRequested);
     if (!selectedNodes().empty() || !selectedConnections().empty()) {
       menu.addSeparator();
+      menu.addAction(tr("Create node from selection…"), this, &CreatorCanvas::groupRequested);
+      if (selectedNodes().size() == 1) {
+        const auto id = selectedNodes().front().toStdString();
+        auto selected = std::find_if(m_graph.nodes.begin(), m_graph.nodes.end(), [&](const auto &n) { return n.id == id; });
+        if (selected != m_graph.nodes.end() && selected->type == "subgraph") {
+          menu.addAction(tr("Open node"), this, [this, id] { emit enterRequested(QString::fromStdString(id)); });
+          menu.addAction(tr("Expand into graph"), this, &CreatorCanvas::unpackRequested);
+          menu.addAction(tr("Make independent"), this, &CreatorCanvas::independentRequested);
+          menu.addAction(tr("Export node…"), this, &CreatorCanvas::exportNodeRequested);
+        }
+      }
       menu.addAction(tr("Duplicate"), this, &CreatorCanvas::duplicateRequested);
       menu.addAction(tr("Delete"), this, &CreatorCanvas::deleteRequested);
     }

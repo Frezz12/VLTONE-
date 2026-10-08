@@ -252,11 +252,6 @@ void ColorKnob::paintEvent(QPaintEvent*) {
         p.drawEllipse(centre, cap, cap);
     }
 
-    if (hasFocus()) {
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(t.accent, std::max(1.2, pocket * 0.06)));
-        p.drawEllipse(centre, pocket + pocket * 0.05, pocket + pocket * 0.05);
-    }
 }
 
 } // namespace ui

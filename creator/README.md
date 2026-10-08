@@ -82,9 +82,17 @@ never accepted: WAMR AOT is generated locally in the user's `VLTONE/Creator/AOT-
 cache. Its key includes Wasm, ABI/SDK, metering revision, compiler binary hash and
 platform; cached bytes are checked against their checksum before loading.
 
-Creator format is 2, mini-module format 4, DAW project format 15 and strip preset
-format 5. Previous supported formats remain readable. Unknown SDK definitions
+Creator format is 3, mini-module format 5, DAW project format 16 and strip preset
+format 6. Previous supported formats remain readable. Unknown SDK definitions
 remain embedded as unavailable data rather than losing their source.
+
+For code-free DSP see [the node guide](sdk/NODE_DSP_RU.md) and
+[the generated registry](sdk/NODE_REFERENCE.json). The prepared elementary
+runtime supports sample history, bounded numeric collections, typed subgraphs
+and 2×/4× oversampling. Reusable `.vltnode` v1 files live in
+`Documents/VLTONE/CreatorNodes`; projects embed independent copies of library
+definitions. The four [teaching projects](sdk/examples/nodes) demonstrate a
+compressor, equalizer, saturator and feedback delay.
 
 Developers run `scripts/setup-creator-tools.ps1` on Windows or
 `bash scripts/setup-creator-tools.sh` on macOS/Linux before configuring CMake.

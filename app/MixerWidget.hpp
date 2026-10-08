@@ -14,7 +14,6 @@ namespace daw { class EngineController; }
 class QHBoxLayout;
 class QLabel;
 class QScrollArea;
-class QAbstractButton;
 class QToolButton;
 namespace ui { class FrameTimer; }
 
@@ -110,7 +109,7 @@ private:
     QScrollArea* m_masterScroll = nullptr;
     QWidget* m_masterDock = nullptr;
     QWidget* m_masterColumn = nullptr;
-    QAbstractButton* m_masterHandle = nullptr;
+    QWidget* m_masterEdge = nullptr;
     QToolButton* m_masterToggle = nullptr;
     bool m_masterVisible = true;
     bool m_masterDragging = false;

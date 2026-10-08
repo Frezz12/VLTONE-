@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowDown, ArrowUpRight, History, Mic2, Piano, PlugZap, Plus, SlidersHorizontal, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUpRight, Plus } from "lucide-react";
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { ProductShot } from "@/components/product-gallery";
 import { siteMetadata, siteUrl } from "@/lib/seo";
 
 const capabilityKeys = ["recording", "midi", "mixing", "plugins", "ai", "recovery"] as const;
-const capabilityIcons = { recording: Mic2, midi: Piano, mixing: SlidersHorizontal, plugins: PlugZap, ai: Sparkles, recovery: History };
-const capabilityShots = { recording: "workspace", midi: "piano", mixing: "mixer", plugins: "plugins", ai: "ai", recovery: "recovery" };
+const capabilityShots = { recording: "showcase-instrumental", midi: "showcase-midi", mixing: "showcase-mix", plugins: "plugins", ai: "ai", recovery: "recovery" };
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
   const { locale } = await params;
@@ -38,7 +37,7 @@ export default async function CapabilitiesPage({ params }: { params: Promise<{ l
           <span className="section-label">{t("eyebrow")}</span>
           <span className="capabilities-beta status-dot">{t("statusLabel")}</span>
         </div>
-        <div className="capabilities-intro">
+        <div className="capabilities-intro" data-reveal="0">
           <h1 id="capabilities-title">{t("title")}<span>{t("titleAccent")}</span></h1>
           <div className="capabilities-intro-copy">
             <p>{t("intro")}</p>
@@ -49,15 +48,13 @@ export default async function CapabilitiesPage({ params }: { params: Promise<{ l
       </section>
 
       <nav className="capabilities-toc" aria-label={t("contentsLabel")}>
-        {capabilityKeys.map((key, index) => <a href={`#${key}`} key={key}>
-          <span className="capability-nav-number" aria-hidden>0{index + 1}</span>
+        {capabilityKeys.map((key) => <a href={`#${key}`} key={key}>
           {t(`items.${key}.nav`)}<ArrowDown size={13} aria-hidden />
         </a>)}
       </nav>
 
       <div id="capability-list" className="capability-list">
         {capabilityKeys.map((key, index) => {
-          const Icon = capabilityIcons[key];
           const points = t.raw(`items.${key}.points`) as string[];
           const highlights = t.raw(`items.${key}.highlights`) as string[];
           const primary = index < 3;
@@ -66,10 +63,9 @@ export default async function CapabilitiesPage({ params }: { params: Promise<{ l
             <figcaption>{t(`items.${key}.caption`)}</figcaption>
           </figure>;
 
-          return <article id={key} className={`capability-detail ${primary ? "capability-primary" : "capability-extra"}`} aria-labelledby={`${key}-title`} key={key}>
+          return <article id={key} className={`capability-detail ${primary ? "capability-primary" : "capability-extra"}`} aria-labelledby={`${key}-title`} key={key} data-reveal="0">
             {!primary && visual}
             <div className="capability-copy">
-              <div className="capability-eyebrow"><span>0{index + 1} / {t(`items.${key}.tag`)}</span><Icon size={20} strokeWidth={1.5} aria-hidden /></div>
               <h2 id={`${key}-title`}>{t(`items.${key}.title`)}</h2>
               <p className="capability-lead">{t(`items.${key}.lead`)}</p>
               <p className="capability-highlights">{highlights.map((highlight) => <span key={highlight}>{highlight}</span>)}</p>

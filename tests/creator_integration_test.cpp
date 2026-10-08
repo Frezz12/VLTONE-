@@ -19,6 +19,7 @@ using namespace daw::plugins::mini;
 namespace {
 int failures = 0;
 bool cppMode = false;
+bool programmingMode = false;
 bool check(bool ok, const char *message) {
   std::printf("%s %s\n", ok ? "PASS" : "FAIL", message);
   failures += !ok;
@@ -42,6 +43,10 @@ MiniModuleDefinition definition(bool revised = false) {
         p.value = .5;
     d.connections.back() = {"ui", "half", "level", "a"};
     d.connections.push_back({"half", "gain", "out", "gain"});
+  }
+  if (programmingMode) {
+    d.version = 5;
+    d.nodes[3] = makeNode("audio_scale", "gain");
   }
   if (cppMode) {
     d.version = 4;
@@ -101,10 +106,11 @@ std::vector<float> playback(EngineController &c, unsigned frames = 12000) {
 } // namespace
 int main(int argc, char **argv) {
   cppMode = argc > 1 && std::string_view(argv[1]) == "--cpp";
+  programmingMode = argc > 1 && std::string_view(argv[1]) == "--programming";
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   ProjectModel future;
   check(!ProjectSerializer::deserializeDocument(
-            future, R"({"format":"vlt-project","version":16})"),
+            future, std::string("{\"format\":\"vlt-project\",\"version\":") + std::to_string(ProjectSerializer::kFormatVersion + 1) + "}"),
         "future project versions are rejected instead of silently dropping "
         "fields");
   const auto temporary = std::filesystem::temp_directory_path() /
@@ -122,7 +128,7 @@ int main(int argc, char **argv) {
   check(bool(writer.writeWAVFile(wav, source, 48000)), "fixture written");
   const auto before = definition(), after = definition(true);
   {
-    EngineController c;
+    EngineController c{EngineController::TestRuntime{}};
     c.initialize(48000, 256, false);
     const auto track = c.importAudioToNewTrack(wav, 0);
     const auto slot = c.addMiniModule(track, before);
@@ -195,7 +201,7 @@ int main(int argc, char **argv) {
     // File operations restore the complete typed definition, without the
     // library.
     const auto file = (temporary / "creator.vlt").string();
-    EngineController reopened;
+    EngineController reopened{EngineController::TestRuntime{}};
     reopened.initialize(48000, 256, false);
     check(bool(c.saveProject(file)) && bool(reopened.openProject(file)) &&
               reopened.miniModules(track)[1].miniModule == after &&
@@ -211,7 +217,7 @@ int main(int argc, char **argv) {
           "slot IDs");
   }
   {
-    EngineController c;
+    EngineController c{EngineController::TestRuntime{}};
     c.initialize(48000, 256, false);
     const auto track = c.importAudioToNewTrack(wav, 0);
     c.setRecordDirectory(temporary.string());

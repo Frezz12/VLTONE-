@@ -45,6 +45,7 @@ type Server struct {
 	telemetryPartitionMu sync.Mutex
 	telemetryPartitions  map[string]bool
 	AIHTTPClient         *http.Client
+	CaptchaHTTPClient    *http.Client
 
 	Config             config.Config
 	DB                 *gorm.DB
@@ -398,6 +399,7 @@ func (s *Server) meta(w http.ResponseWriter, _ *http.Request) {
 		"consent_version":      s.Config.ConsentVersion,
 		"registration_legal":   map[string]any{"version": s.Config.LegalProfile.Version, "ready": s.Config.LegalProfile.Ready()},
 		"registration_enabled": s.Config.LegalProfile.AllowsRegistration(),
+		"registration_captcha": map[string]any{"provider": "turnstile", "required": s.Config.RegistrationCaptchaRequired(), "configured": s.Config.TurnstileSiteKey != "" && s.Config.TurnstileSecretKey != "", "site_key": s.Config.TurnstileSiteKey},
 		"offline_hours":        72, "access_token_minutes": 15,
 		"public_key": s.Signer.PublicKeyBase64(),
 		"collaboration": map[string]any{

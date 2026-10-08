@@ -84,6 +84,14 @@ NodeId AudioGraph::adoptNode(std::shared_ptr<Node> node) {
     return NodeId(m_nodes.size() - 1);
 }
 
+Status AudioGraph::replaceNode(NodeId id, std::shared_ptr<Node> node) {
+    if (id >= m_nodes.size() || !m_nodes[id].alive) return fail(EngineError::UnknownNode);
+    if (!node) return fail(EngineError::InvalidArgument);
+    m_nodes[id].node = std::move(node);
+    m_dirty = true;
+    return {};
+}
+
 Status AudioGraph::removeNode(NodeId id) {
     if (id >= m_nodes.size() || !m_nodes[id].alive) return fail(EngineError::UnknownNode);
     disconnectAll(id);
@@ -460,13 +468,17 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     compiled->taskCount = std::uint32_t(compiled->nodes.size());
     for (std::uint32_t i = 0; i < compiled->nodes.size(); ++i) {
         auto& entry = compiled->nodes[i];
+        if (entry.node->hasDeferredProcess()) {
+            entry.deferredIndex = std::uint32_t(compiled->deferredNodes.size());
+            compiled->deferredNodes.push_back(i);
+        }
         if (entry.id == m_sink || entry.successorCount != 1 || entry.inputCount > 1 ||
-            !entry.node->canFuseTask() || entry.node->midiRole() != MidiNodeRole::None ||
+            !entry.node->canFuseTask() || entry.node->hasDeferredProcess() || entry.node->midiRole() != MidiNodeRole::None ||
             entry.node->latencySamples() != 0) continue;
         const auto next = compiled->successors[entry.firstSuccessor];
         auto& successor = compiled->nodes[next];
         if (successor.dependencies != 1 || successor.inputCount != 1 ||
-            !successor.node->canFuseTask() || successor.node->midiRole() != MidiNodeRole::None ||
+            !successor.node->canFuseTask() || successor.node->hasDeferredProcess() || successor.node->midiRole() != MidiNodeRole::None ||
             successor.node->latencySamples() != 0) continue;
         const auto& edge = compiled->inputEdges[successor.firstInput];
         if (edge.role != InputRole::Main || edge.delayIndex != kInvalidNode) continue;
@@ -507,6 +519,8 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     // Per-block scratch travels with the snapshot, so a renderer that has
     // loaded this graph can never index it with another graph's sizes.
     compiled->pending = std::vector<PendingCounter>(order.size());
+    compiled->deferredPending = std::vector<PendingCounter>(compiled->deferredNodes.size());
+    compiled->deferredStarted.resize(compiled->deferredNodes.size());
     compiled->inputScratch.assign(compiled->inputEdges.size(), AudioBlock{});
 
     // MIDI scratch, sized here for the same reason as the audio scratch: the

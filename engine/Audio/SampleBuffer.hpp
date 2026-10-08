@@ -7,6 +7,8 @@
 #include <memory>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
+#include <stdexcept>
 #include <vector>
 
 namespace daw::engine {
@@ -22,12 +24,16 @@ public:
     SampleBuffer(ChannelCount channels, FrameCount frames, SampleRate rate)
         : m_storage(std::size_t(channels) * frames),
           m_channels(channels), m_frames(frames), m_sampleRate(rate) {
-        if (m_storage.fileBacked()) {
-            m_readCache = &PcmReadCache::instance();
-            m_sourceId = m_readCache->addSource(m_storage.data(), std::size_t(channels) * frames);
-        }
+        registerReadCache();
     }
     ~SampleBuffer() { if (m_readCache) m_readCache->removeSource(m_sourceId); }
+
+    static std::shared_ptr<const SampleBuffer> mapReadOnly(const std::filesystem::path& path,
+        ChannelCount channels, FrameCount frames, SampleRate rate) {
+        if (!channels || channels > kMaxChannels || !frames || !std::isfinite(rate) || rate <= 0)
+            throw std::invalid_argument("invalid audio resource shape");
+        return std::shared_ptr<const SampleBuffer>(new SampleBuffer(path, channels, frames, rate));
+    }
 
     /// Build from interleaved decoder output.
     static std::shared_ptr<const SampleBuffer> fromInterleaved(
@@ -47,6 +53,7 @@ public:
     FrameCount frames() const noexcept { return m_frames; }
     SampleRate sampleRate() const noexcept { return m_sampleRate; }
     bool fileBacked() const noexcept { return m_storage.fileBacked(); }
+    bool readOnly() const noexcept { return m_storage.readOnly(); }
     // May return fewer samples at a cache-page boundary. The view is pinned
     // until the current node's PcmReadScope ends or evicts its cursor.
     std::span<const float> readSpan(ChannelCount channelIndex, FrameCount first, FrameCount count) const noexcept {
@@ -80,6 +87,7 @@ public:
     /// the channel planes in place so a short MPEG stream needs no second PCM
     /// allocation and does not acquire a silent tail from its length estimate.
     void trimFrames(FrameCount frames) noexcept {
+        if (m_storage.readOnly()) return;
         frames = std::min(frames, m_frames);
         if (frames == m_frames) return;
         for (ChannelCount ch = 1; ch < m_channels; ++ch)
@@ -96,10 +104,20 @@ public:
     }
 
     float* writableChannel(ChannelCount index) noexcept {
+        if (m_storage.readOnly()) return nullptr;
         return m_storage.data() + std::size_t(index) * m_frames;
     }
 
 private:
+    SampleBuffer(const std::filesystem::path& path, ChannelCount channels, FrameCount frames, SampleRate rate)
+        : m_storage(path, std::size_t(channels) * frames),
+          m_channels(channels), m_frames(frames), m_sampleRate(rate) { registerReadCache(); }
+    void registerReadCache() {
+        if (!m_storage.fileBacked()) return;
+        m_readCache = &PcmReadCache::instance();
+        const SampleStorage& storage = m_storage;
+        m_sourceId = m_readCache->addSource(storage.data(), std::size_t(m_channels) * m_frames);
+    }
     SampleStorage m_storage;
     ChannelCount m_channels;
     FrameCount m_frames;

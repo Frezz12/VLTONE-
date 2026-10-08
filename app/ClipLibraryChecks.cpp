@@ -27,7 +27,7 @@
 bool checkClipLibraryForTest(const QString& screenshot) {
     bool ok=true;
     const auto check=[&](bool value,const char* what) { std::fprintf(stderr,"%s clip library: %s\n",value?"PASS":"FAIL",what); ok &= value; return value; };
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000,256,false)) return false;
     const auto midiTrack=controller.addTrack(daw::TrackKind::Midi,"Keys");
     const auto midi=controller.addMidiClip(midiTrack,1,8);

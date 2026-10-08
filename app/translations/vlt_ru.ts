@@ -2262,6 +2262,11 @@ Will be skipped: %3</source>
 </context>
 <context>
     <name>ChannelStrip</name>
+    <message><source>Restart plugin</source><translation>Перезапустить плагин</translation></message>
+    <message><source>Stopped: %1</source><translation>Сбой: %1</translation></message>
+    <message><source>Restarting: %1</source><translation>Перезапуск: %1</translation></message>
+    <message><source>%1 stopped. Open its editor to restart the plugin.</source><translation>%1 остановлен. Откройте его редактор, чтобы перезапустить плагин.</translation></message>
+    <message><source>%1 is restarting.</source><translation>%1 перезапускается.</translation></message>
     <message><source>COLOR — tape and tube</source><translation>COLOR — лента и лампа</translation></message>
     <message><source>Enable COLOR</source><translation>Включить COLOR</translation></message>
     <message><source>Show COLOR controls</source><translation>Показать настройки COLOR</translation></message>
@@ -10897,6 +10902,13 @@ Click to load. Drag onto Audio FX.</source>
 </context>
 <context>
     <name>PluginEditorWindow</name>
+    <message><source>Open plugin window</source><translation>Открыть окно плагина</translation></message>
+    <message><source>Restart plugin</source><translation>Перезапустить плагин</translation></message>
+    <message><source>Restarting plugin… Other tracks can keep playing.</source><translation>Плагин перезапускается… Остальные дорожки продолжают работать.</translation></message>
+    <message><source>The plugin stopped responding or failed. Restart it to restore the last confirmed settings.</source><translation>Плагин перестал отвечать или завершился с ошибкой. Перезапустите его, чтобы восстановить последние подтверждённые настройки.</translation></message>
+    <message><source>The plugin window could not be opened. You can retry or use the parameter panel.</source><translation>Не удалось открыть окно плагина. Повторите попытку или воспользуйтесь панелью параметров.</translation></message>
+    <message><source>This plugin runs in a separate process. Its editor opens in its own window.</source><translation>Плагин работает в отдельном процессе. Его редактор открывается в собственном окне.</translation></message>
+    <message><source>This plugin runs in a separate process. Use the parameter panel to edit it.</source><translation>Плагин работает в отдельном процессе. Используйте панель параметров для его настройки.</translation></message>
     <message>
         <source>Plugin</source>
         <translation>Плагин</translation>
@@ -11156,6 +11168,8 @@ Click to load. Drag onto Audio FX.</source>
 </context>
 <context>
     <name>PluginManagerWindow</name>
+    <message><source>Run plugins in separate processes (experimental)</source><translation>Запускать плагины в отдельных процессах (экспериментально)</translation></message>
+    <message><source>Applies to newly loaded plugins. Reopen the project to apply it to existing slots. Plugin editors open in separate windows.</source><translation>Применяется к вновь загружаемым плагинам. Откройте проект заново, чтобы применить настройку к существующим слотам. Редакторы плагинов открываются в отдельных окнах.</translation></message>
     <message><source>Retrying: %1</source><translation>Повторная проверка: %1</translation></message>
     <message><source>%1 (+%2 active)</source><translation>%1 (ещё %2 выполняются)</translation></message>
     <message><source>Stopping…</source><translation>Остановка…</translation></message>
@@ -11504,6 +11518,10 @@ Click to load. Drag onto Audio FX.</source>
 <context>
     <name>QObject</name>
     <message>
+        <source>Parameters and routing…</source>
+        <translation>Параметры и маршрутизация…</translation>
+    </message>
+    <message>
         <source>Secondary message text</source>
         <translation>Вторичный текст сообщения</translation>
     </message>
@@ -11811,7 +11829,9 @@ Click to load. Drag onto Audio FX.</source>
         <source>Last saved automatically at %1 — %2.
 
 Notes, clips, the mix and plugin settings come back as of that moment. Audio is read from your original files, not from copies inside the project.</source>
-        <translation type="unfinished"></translation>
+        <translation>Последнее автоматическое сохранение: %1 — %2.
+
+Ноты, клипы, микс и настройки плагинов восстановятся на этот момент. Аудио загружается из исходных файлов, а не из копий внутри проекта.</translation>
     </message>
     <message>
         <source>
@@ -15371,8 +15391,8 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Создать клипы автоматизации</translation>
     </message>
     <message>
-        <source>Show or hide automation lanes for all tracks</source>
-        <translation>Показать или скрыть дорожки автоматизации для всех дорожек</translation>
+        <source>Show or hide automation lanes for selected tracks</source>
+        <translation>Показать или скрыть автоматизацию выбранных дорожек</translation>
     </message>
     <message>
         <source>Track height: drag the icon up or down; double-click resets</source>
@@ -18088,7 +18108,7 @@ Use File → Save as Template… to create one.</source>
     </message>
 </context>
 <context>
-    <name>PitchWebBridge</name>
+    <name>PitchControls</name>
     <message>
         <source>Settings sent to %1 VLT Pitch instance(s).</source>
         <translation>Настройки отправлены в экземпляры VLT Pitch: %1.</translation>
@@ -18989,8 +19009,12 @@ I измеряется при воспроизведении. Нажмите д�
         <translation>Сбросить карту</translation>
     </message>
     <message>
-        <source>Right-click an audio clip and choose Warp Audio</source>
-        <translation>Нажмите ПКМ по аудиоклипу и выберите Warp Audio</translation>
+        <source>Right-click an audio clip and choose Warp Editor</source>
+        <translation>Нажмите ПКМ по аудиоклипу и выберите Warp Editor</translation>
+    </message>
+    <message>
+        <source>Match the clip to the project tempo. Turn off to restore its original timing and duration.</source>
+        <translation>Подстроить клип под темп проекта. Выключите Warp, чтобы вернуть исходный ритм и длительность.</translation>
     </message>
     <message>
         <source>Save groove</source>
@@ -20358,6 +20382,11 @@ I измеряется при воспроизведении. Нажмите д�
 </context>
 <context>
 <name>ui::CreatorWindow</name>
+<message><source>Creator assistant</source><translation>Помощник Creator</translation></message>
+<message><source>Parameters</source><translation>Параметры</translation></message>
+<message><source>Close chat</source><translation>Закрыть чат</translation></message>
+<message><source>Assistant is working</source><translation>Помощник работает</translation></message>
+<message><source>Assistant finished</source><translation>Помощник завершил работу</translation></message>
 <message><source>Mode</source><translation>Режим</translation></message>
 <message><source>Nodes</source><translation>Ноды</translation></message>
 <message><source>Fit graph</source><translation>Вписать граф</translation></message>
@@ -20365,6 +20394,12 @@ I измеряется при воспроизведении. Нажмите д�
 <message><source>Build your module</source><translation>Создайте свой модуль</translation></message>
 <message><source>Right-click the canvas to add a node. Connect matching ports to build the signal path.</source><translation>Добавляйте ноды правой кнопкой на канвасе. Соединяйте порты одного типа, чтобы построить путь сигнала.</translation></message>
 <message><source>PORT TYPES</source><translation>ТИПЫ ПОРТОВ</translation></message>
+<message><source>Integer · index or counter</source><translation>Целое · индекс или счётчик</translation></message>
+<message><source>Array · fixed numeric collection</source><translation>Массив · фиксированная длина</translation></message>
+<message><source>List · bounded numeric collection</source><translation>Список · заданная вместимость</translation></message>
+<message><source>Buffer · prepared signal history</source><translation>Буфер · история сигнала</translation></message>
+<message><source>Up</source><translation>Выше</translation></message>
+<message><source>Down</source><translation>Ниже</translation></message>
 <message><source>Audio · sound signal</source><translation>Аудио · звуковой сигнал</translation></message>
 <message><source>Number · parameter value</source><translation>Число · значение параметра</translation></message>
 <message><source>Gate · trigger or switch</source><translation>Gate · триггер или переключатель</translation></message>
@@ -20420,6 +20455,8 @@ Ctrl + колесо  Масштаб
 <message><source>Search node library</source><translation>Поиск в библиотеке нод</translation></message>
 <message><source>Node library</source><translation>Библиотека нод</translation></message>
 <message><source>Double-click or press Enter to add</source><translation>Двойной щелчок или Enter — добавить</translation></message>
+<message><source>Drag onto the canvas, double-click or press Enter to add</source><translation>Перетащите на холст; двойной щелчок или Enter — добавить</translation></message>
+<message><source>Back to parent graph</source><translation>К родительской схеме</translation></message>
 <message><source>Compile diagnostics</source><translation>Результаты компиляции</translation></message>
 <message><source>Ready</source><translation>Готово</translation></message>
 <message><source>Fit</source><translation>Вписать</translation></message>
@@ -20508,9 +20545,58 @@ Select Interface to design the card and its two controls. Compile to audition it
 <message><source>Cannot create the mini-module folder.</source><translation>Не удалось создать папку мини-модулей.</translation></message>
 <message><source>The destination belongs to another or unreadable module.</source><translation>По этому пути находится другой или нечитаемый модуль.</translation></message>
 <message><source>Compiled and installed. Select “%1” in a Channel Strip.</source><translation>Модуль установлен. Выберите «%1» в Channel Strip.</translation></message>
+
+<message><source>My nodes</source><translation>Мои ноды</translation></message>
+<message><source>Import node…</source><translation>Импорт ноды…</translation></message>
+<message><source>Export node…</source><translation>Экспорт ноды…</translation></message>
+<message><source>Create node from selection…</source><translation>Создать ноду из выделения…</translation></message>
+<message><source>Create node from selection</source><translation>Создать ноду из выделения</translation></message>
+<message><source>Open node</source><translation>Открыть ноду</translation></message>
+<message><source>Expand into graph</source><translation>Развернуть в схему</translation></message>
+<message><source>Make independent</source><translation>Сделать независимой</translation></message>
+<message><source>Graph navigation</source><translation>Навигация по схеме</translation></message>
+<message><source>← Module</source><translation>← Модуль</translation></message>
+<message><source>Create node…</source><translation>Создать ноду…</translation></message>
+<message><source>Select processing nodes first.</source><translation>Сначала выделите ноды обработки.</translation></message>
+<message><source>Node name</source><translation>Название ноды</translation></message>
+<message><source>My node</source><translation>Моя нода</translation></message>
+<message><source>Create custom node</source><translation>Создать свою ноду</translation></message>
+<message><source>Missing node definition</source><translation>Определение ноды не найдено</translation></message>
+<message><source>Export custom node</source><translation>Экспорт своей ноды</translation></message>
+<message><source>Creator node (*.vltnode)</source><translation>Нода Creator (*.vltnode)</translation></message>
+<message><source>Unable to save node file</source><translation>Не удалось сохранить файл ноды</translation></message>
+<message><source>Node saved: </source><translation>Нода сохранена: </translation></message>
+<message><source>Import custom node</source><translation>Импорт своей ноды</translation></message>
+<message><source>Node already exists</source><translation>Нода уже существует</translation></message>
+<message><source>Independent copy</source><translation>Независимая копия</translation></message>
+<message><source>Update type</source><translation>Обновить тип</translation></message>
+<message><source>This file contains a different version. Update this project's type or import an independent copy?</source><translation>В файле другая версия. Обновить тип в этом проекте или импортировать независимую копию?</translation></message>
+<message><source> · Library</source><translation> · Библиотека</translation></message>
+<message><source>Label</source><translation>Подпись</translation></message>
+<message><source>Default name</source><translation>Стандартное название</translation></message>
+<message><source>Value type</source><translation>Тип значения</translation></message>
+<message><source>Capacity</source><translation>Вместимость</translation></message>
+<message><source>Edit curve points…</source><translation>Изменить точки кривой…</translation></message>
+<message><source>Edit initial values…</source><translation>Начальные значения…</translation></message>
+<message><source>Initial values</source><translation>Начальные значения</translation></message>
+<message><source>Invalid values</source><translation>Недопустимые значения</translation></message>
+<message><source>Enter finite numbers. Curve points need increasing X and at least two points.</source><translation>Введите конечные числа. Для кривой нужны минимум две точки и возрастающие X.</translation></message>
+<message><source>Edit ports…</source><translation>Изменить порты…</translation></message>
+<message><source>Custom node ports</source><translation>Порты своей ноды</translation></message>
+<message><source>Inputs</source><translation>Входы</translation></message>
+<message><source>Outputs</source><translation>Выходы</translation></message>
+<message><source>Signature</source><translation>Сигнатура</translation></message>
+<message><source>Add port</source><translation>Добавить порт</translation></message>
+<message><source>Remove port</source><translation>Удалить порт</translation></message>
+<message><source>Invalid ports</source><translation>Недопустимые порты</translation></message>
+<message><source>Check port types, finite ranges, defaults and capacity (1–4096).</source><translation>Проверьте типы, диапазоны, начальные значения и вместимость (1–4096).</translation></message>
+<message><source>Oversampling</source><translation>Передискретизация</translation></message>
+<message><source>A graph supports at most 512 expanded nodes.</source><translation>В схеме допускается до 512 развёрнутых нод.</translation></message>
 </context>
 <context>
 <name>ui::CreatorCanvas</name>
+<message><source>Double-click to disconnect</source><translation>Двойной щелчок — удалить связь</translation></message>
+<message><source>Drag nodes from the library. Tab adds a node. Drag ports to connect. Double-click a wire to disconnect. Delete removes selection. Control plus wheel zooms. Space plus drag pans.</source><translation>Перетащите ноду из библиотеки или нажмите Tab для добавления. Соедините порты перетаскиванием. Двойной щелчок по проводу удаляет связь. Delete удаляет выделенное. Ctrl и колесо меняют масштаб. Пробел и перетаскивание перемещают холст.</translation></message>
 <message><source>Search nodes…</source><translation>Поиск нод…</translation></message>
 <message><source>Drag vertically · Shift: fine · Double-click: type · Ctrl-click: reset</source><translation>Тяните вверх/вниз · Shift: точно · Двойной щелчок: ввод · Ctrl + щелчок: сброс</translation></message>
 <message><source>Ports up to date</source><translation>Порты проверены</translation></message>
@@ -20528,6 +20614,55 @@ Select Interface to design the card and its two controls. Compile to audition it
 <message><source>Delete</source><translation>Удалить</translation></message>
 <message><source>Fit graph</source><translation>Вписать граф</translation></message>
 <message><source>100%</source><translation>100%</translation></message>
+
+<message><source>My nodes</source><translation>Мои ноды</translation></message>
+<message><source>Import node…</source><translation>Импорт ноды…</translation></message>
+<message><source>Export node…</source><translation>Экспорт ноды…</translation></message>
+<message><source>Create node from selection…</source><translation>Создать ноду из выделения…</translation></message>
+<message><source>Create node from selection</source><translation>Создать ноду из выделения</translation></message>
+<message><source>Open node</source><translation>Открыть ноду</translation></message>
+<message><source>Expand into graph</source><translation>Развернуть в схему</translation></message>
+<message><source>Make independent</source><translation>Сделать независимой</translation></message>
+<message><source>Graph navigation</source><translation>Навигация по схеме</translation></message>
+<message><source>← Module</source><translation>← Модуль</translation></message>
+<message><source>Module</source><translation>Модуль</translation></message>
+<message><source>Create node…</source><translation>Создать ноду…</translation></message>
+<message><source>Select processing nodes first.</source><translation>Сначала выделите ноды обработки.</translation></message>
+<message><source>Node name</source><translation>Название ноды</translation></message>
+<message><source>My node</source><translation>Моя нода</translation></message>
+<message><source>Create custom node</source><translation>Создать свою ноду</translation></message>
+<message><source>Missing node definition</source><translation>Определение ноды не найдено</translation></message>
+<message><source>Export custom node</source><translation>Экспорт своей ноды</translation></message>
+<message><source>Creator node (*.vltnode)</source><translation>Нода Creator (*.vltnode)</translation></message>
+<message><source>Unable to save node file</source><translation>Не удалось сохранить файл ноды</translation></message>
+<message><source>Node saved: </source><translation>Нода сохранена: </translation></message>
+<message><source>Import custom node</source><translation>Импорт своей ноды</translation></message>
+<message><source>Node already exists</source><translation>Нода уже существует</translation></message>
+<message><source>Independent copy</source><translation>Независимая копия</translation></message>
+<message><source>Update type</source><translation>Обновить тип</translation></message>
+<message><source>This file contains a different version. Update this project's type or import an independent copy?</source><translation>В файле другая версия. Обновить тип в этом проекте или импортировать независимую копию?</translation></message>
+<message><source> · Library</source><translation> · Библиотека</translation></message>
+<message><source>Label</source><translation>Подпись</translation></message>
+<message><source>Default name</source><translation>Стандартное название</translation></message>
+<message><source>Value type</source><translation>Тип значения</translation></message>
+<message><source>Capacity</source><translation>Вместимость</translation></message>
+<message><source>Edit curve points…</source><translation>Изменить точки кривой…</translation></message>
+<message><source>Edit initial values…</source><translation>Начальные значения…</translation></message>
+<message><source>Initial values</source><translation>Начальные значения</translation></message>
+<message><source>Invalid values</source><translation>Недопустимые значения</translation></message>
+<message><source>Enter finite numbers. Curve points need increasing X and at least two points.</source><translation>Введите конечные числа. Для кривой нужны минимум две точки и возрастающие X.</translation></message>
+<message><source>Edit ports…</source><translation>Изменить порты…</translation></message>
+<message><source>Custom node ports</source><translation>Порты своей ноды</translation></message>
+<message><source>Inputs</source><translation>Входы</translation></message>
+<message><source>Outputs</source><translation>Выходы</translation></message>
+<message><source>Logarithmic</source><translation>Логарифмическая</translation></message>
+<message><source>Signature</source><translation>Сигнатура</translation></message>
+<message><source>Add port</source><translation>Добавить порт</translation></message>
+<message><source>Remove port</source><translation>Удалить порт</translation></message>
+<message><source>Invalid ports</source><translation>Недопустимые порты</translation></message>
+<message><source>Check port types, finite ranges, defaults and capacity (1–4096).</source><translation>Проверьте типы, диапазоны, начальные значения и вместимость (1–4096).</translation></message>
+<message><source>Oversampling</source><translation>Передискретизация</translation></message>
+<message><source>A graph supports at most 512 expanded nodes.</source><translation>В схеме допускается до 512 развёрнутых нод.</translation></message>
 </context>
 <context>
 <name>CreatorNodes</name>
@@ -20621,6 +20756,108 @@ Select Interface to design the card and its two controls. Compile to audition it
 <message><source>Humanize</source><translation>Разброс</translation></message>
 <message><source>Control 1</source><translation>Регулятор 1</translation></message>
 <message><source>Control 2</source><translation>Регулятор 2</translation></message>
+
+<message><source>Signal</source><translation>Сигнал</translation></message>
+<message><source>Levels</source><translation>Уровни</translation></message>
+<message><source>Memory</source><translation>Память</translation></message>
+<message><source>Filters</source><translation>Фильтры</translation></message>
+<message><source>Shaping</source><translation>Характер</translation></message>
+<message><source>Collections</source><translation>Коллекции</translation></message>
+<message><source>Custom</source><translation>Свои ноды</translation></message>
+<message><source>Exponential</source><translation>Экспонента</translation></message>
+<message><source>Natural logarithm</source><translation>Натуральный логарифм</translation></message>
+<message><source>Logarithm 2</source><translation>Логарифм 2</translation></message>
+<message><source>Logarithm 10</source><translation>Логарифм 10</translation></message>
+<message><source>Hyperbolic tangent</source><translation>Гиперболический тангенс</translation></message>
+<message><source>Arctangent</source><translation>Арктангенс</translation></message>
+<message><source>Sign</source><translation>Знак</translation></message>
+<message><source>Floor</source><translation>Округление вниз</translation></message>
+<message><source>Ceiling</source><translation>Округление вверх</translation></message>
+<message><source>Round</source><translation>Округление</translation></message>
+<message><source>Fraction</source><translation>Дробная часть</translation></message>
+<message><source>Linear to dB</source><translation>Уровень → дБ</translation></message>
+<message><source>dB to Linear</source><translation>дБ → уровень</translation></message>
+<message><source>Modulo</source><translation>Остаток</translation></message>
+<message><source>Wrap</source><translation>Зацикливание</translation></message>
+<message><source>Fold</source><translation>Отражение</translation></message>
+<message><source>Smoothstep</source><translation>Плавный переход</translation></message>
+<message><source>Lerp</source><translation>Интерполяция</translation></message>
+<message><source>Add Audio</source><translation>Сложение аудио</translation></message>
+<message><source>Subtract Audio</source><translation>Вычитание аудио</translation></message>
+<message><source>Multiply Audio</source><translation>Умножение аудио</translation></message>
+<message><source>Scale Audio</source><translation>Усиление аудио</translation></message>
+<message><source>Split Stereo</source><translation>Разделить стерео</translation></message>
+<message><source>Join Stereo</source><translation>Собрать стерео</translation></message>
+<message><source>Encode Mid-Side</source><translation>Стерео → M/S</translation></message>
+<message><source>Decode Mid-Side</source><translation>M/S → стерео</translation></message>
+<message><source>Select Audio</source><translation>Выбор аудио</translation></message>
+<message><source>AND</source><translation>И</translation></message>
+<message><source>OR</source><translation>ИЛИ</translation></message>
+<message><source>XOR</source><translation>Исключающее ИЛИ</translation></message>
+<message><source>NOT</source><translation>НЕ</translation></message>
+<message><source>Rising Edge</source><translation>Передний фронт</translation></message>
+<message><source>Falling Edge</source><translation>Задний фронт</translation></message>
+<message><source>Gate to Number</source><translation>Gate → число</translation></message>
+<message><source>Number to Gate</source><translation>Число → Gate</translation></message>
+<message><source>Number to Integer</source><translation>Число → целое</translation></message>
+<message><source>Integer to Number</source><translation>Целое → число</translation></message>
+<message><source>Peak Detector</source><translation>Пиковый детектор</translation></message>
+<message><source>Window RMS</source><translation>Оконный RMS</translation></message>
+<message><source>Attack / Release</source><translation>Атака / восстановление</translation></message>
+<message><source>Slew Limiter</source><translation>Ограничение скорости</translation></message>
+<message><source>Rise / second</source><translation>Рост в секунду</translation></message>
+<message><source>Fall / second</source><translation>Спад в секунду</translation></message>
+<message><source>Variable / History</source><translation>Переменная / History</translation></message>
+<message><source>Accumulator</source><translation>Накопитель</translation></message>
+<message><source>Counter</source><translation>Счётчик</translation></message>
+<message><source>Time / Context</source><translation>Время / контекст</translation></message>
+<message><source>Delay Buffer</source><translation>Буфер задержки</translation></message>
+<message><source>Read Delay Tap</source><translation>Отвод задержки</translation></message>
+<message><source>Maximum delay</source><translation>Макс. задержка</translation></message>
+<message><source>One Pole</source><translation>Один полюс</translation></message>
+<message><source>Biquad</source><translation>Биквад</translation></message>
+<message><source>Biquad Coefficients</source><translation>Коэффициенты биквада</translation></message>
+<message><source>DC Block</source><translation>Удаление DC</translation></message>
+<message><source>Hard Clip</source><translation>Жёсткое ограничение</translation></message>
+<message><source>Transfer Curve</source><translation>Передаточная кривая</translation></message>
+<message><source>Table Lookup</source><translation>Табличная функция</translation></message>
+<message><source>Array</source><translation>Массив</translation></message>
+<message><source>List</source><translation>Список</translation></message>
+<message><source>Buffer</source><translation>Буфер</translation></message>
+<message><source>Integer</source><translation>Целое</translation></message>
+<message><source>Length</source><translation>Длина</translation></message>
+<message><source>Get Element</source><translation>Прочитать элемент</translation></message>
+<message><source>Set Element</source><translation>Записать элемент</translation></message>
+<message><source>Append</source><translation>Добавить элемент</translation></message>
+<message><source>Remove Element</source><translation>Удалить элемент</translation></message>
+<message><source>Clear Collection</source><translation>Очистить коллекцию</translation></message>
+<message><source>Sum Elements</source><translation>Сумма элементов</translation></message>
+<message><source>Minimum Element</source><translation>Минимум элементов</translation></message>
+<message><source>Maximum Element</source><translation>Максимум элементов</translation></message>
+<message><source>Map</source><translation>Преобразовать элементы</translation></message>
+<message><source>Reduce</source><translation>Свёртка элементов</translation></message>
+<message><source>Custom Node</source><translation>Своя нода</translation></message>
+<message><source>Node Input</source><translation>Вход ноды</translation></message>
+<message><source>Node Output</source><translation>Выход ноды</translation></message>
+<message><source>Named Value</source><translation>Именованное значение</translation></message>
+<message><source>Write enable</source><translation>Разрешение записи</translation></message>
+<message><source>Next</source><translation>Следующее</translation></message>
+<message><source>Initial</source><translation>Начальное</translation></message>
+<message><source>Index</source><translation>Индекс</translation></message>
+<message><source>Collection</source><translation>Коллекция</translation></message>
+<message><source>Valid</source><translation>Допустимо</translation></message>
+<message><source>Success</source><translation>Успех</translation></message>
+<message><source>Sample Rate</source><translation>Частота дискретизации</translation></message>
+<message><source>Playing</source><translation>Воспроизведение</translation></message>
+<message><source>Beat</source><translation>Доля</translation></message>
+<message><source>Table</source><translation>Таблица</translation></message>
+<message><source>Position</source><translation>Позиция</translation></message>
+<message><source>Window</source><translation>Окно</translation></message>
+<message><source>Pole</source><translation>Полюс</translation></message>
+<message><source>Coefficients</source><translation>Коэффициенты</translation></message>
+<message><source>Limit</source><translation>Предел</translation></message>
+<message><source>Item</source><translation>Элемент</translation></message>
+<message><source>Result</source><translation>Результат</translation></message>
 </context>
 <context><name>ui::CreatorNumberField</name>
 <message><source>Drag up or down to adjust. Shift for fine control. Double-click or press Enter to type. Escape cancels.</source><translation>Тяните вверх или вниз для настройки. Shift — точная настройка. Двойной щелчок или Enter — ввод числа. Escape — отмена.</translation></message>
@@ -20681,5 +20918,58 @@ Select Interface to design the card and its two controls. Compile to audition it
         <source>Per slice</source>
         <translation>Для этого среза</translation>
     </message>
+</context>
+<context>
+<name>ui::CreatorAiPanel</name>
+<message><source>AI model</source><translation>Модель AI</translation></message>
+<message><source>Conversation history</source><translation>История диалога</translation></message>
+<message><source>AI settings</source><translation>Настройки AI</translation></message>
+<message><source>No messages yet</source><translation>Сообщений пока нет</translation></message>
+<message><source>Creator conversation</source><translation>Диалог Creator</translation></message>
+<message><source>Describe an effect or ask about this graph…</source><translation>Опишите эффект или задайте вопрос о схеме…</translation></message>
+<message><source>Message to Creator assistant</source><translation>Сообщение помощнику Creator</translation></message>
+<message><source>Continue</source><translation>Продолжить</translation></message>
+<message><source>Send message</source><translation>Отправить сообщение</translation></message>
+<message><source>Stop</source><translation>Остановить</translation></message>
+<message><source>Undo AI result</source><translation>Отменить результат AI</translation></message>
+<message><source>Open AI settings to connect a model.</source><translation>Подключите модель в настройках AI.</translation></message>
+<message><source>State before AI restored.</source><translation>Состояние до запроса AI восстановлено.</translation></message>
+<message><source>Selected: %1</source><translation>Выделено: %1</translation></message>
+<message><source>Thinking…</source><translation>Обдумывает…</translation></message>
+<message><source>Completed</source><translation>Готово</translation></message>
+<message><source>Stopped. You can continue this request.</source><translation>Остановлено. Можно продолжить запрос.</translation></message>
+<message><source>Describe the mini-module you want. The assistant can connect nodes, write C++, fix compiler errors and install the result.</source><translation>Опишите нужный мини-модуль. Помощник соединит ноды, напишет C++, исправит ошибки компиляции и установит результат.</translation></message>
+<message><source>Compile and install</source><translation>Компиляция и установка</translation></message>
+<message><source>Check C++ ports</source><translation>Проверка портов C++</translation></message>
+<message><source>Update graph</source><translation>Изменение схемы</translation></message>
+<message><source>Read context</source><translation>Чтение контекста</translation></message>
+<message><source>Done</source><translation>Выполнено</translation></message>
+<message><source>Operation failed</source><translation>Ошибка операции</translation></message>
+<message><source>You</source><translation>Вы</translation></message>
+<message><source>Assistant</source><translation>Помощник</translation></message>
+<message><source>Could not save the local conversation.</source><translation>Не удалось сохранить локальный диалог.</translation></message>
+<message><source>Local conversation could not be loaded.</source><translation>Не удалось загрузить локальный диалог.</translation></message>
+</context>
+<context>
+<name>ui::CreatorAiWorkspace</name>
+<message><source>Writing C++…</source><translation>Пишет C++…</translation></message>
+<message><source>Updating nodes…</source><translation>Изменяет ноды…</translation></message>
+<message><source>AI: edit graph</source><translation>AI: изменение схемы</translation></message>
+<message><source>Checking ports…</source><translation>Проверяет порты…</translation></message>
+<message><source>Compiling…</source><translation>Компилирует…</translation></message>
+<message><source>AI: update C++ ports</source><translation>AI: обновление портов C++</translation></message>
+<message><source>Restore state before AI</source><translation>Восстановить состояние до AI</translation></message>
+<message><source>Installed file changed since this request began. Read current state before a new request.</source><translation>Установленный файл изменился после начала запроса. Начните новый запрос с актуальным состоянием.</translation></message>
+<message><source>Creator changed after this request or during AI edits. Nothing was restored.</source><translation>Creator изменён после запроса или во время правок AI. Ничего не восстановлено.</translation></message>
+</context>
+<context>
+<name>ui::CreatorBuildService</name>
+<message><source>Compiling…</source><translation>Компилирует…</translation></message>
+<message><source>Preparing previous DSP…</source><translation>Подготавливает прежний DSP…</translation></message>
+<message><source>The draft changed or the build was cancelled. Nothing was installed.</source><translation>Черновик изменён или сборка отменена. Ничего не установлено.</translation></message>
+<message><source>The installed file changed. Nothing was installed.</source><translation>Установленный файл изменился. Ничего не установлено.</translation></message>
+<message><source>Waiting for export or Freeze to finish…</source><translation>Ожидает завершения экспорта или Freeze…</translation></message>
+<message><source>Module instances changed during preparation. Read the current context and retry.</source><translation>Экземпляры модуля изменились при подготовке. Прочитайте актуальный контекст и повторите.</translation></message>
+<message><source>Installing…</source><translation>Устанавливает…</translation></message>
 </context>
 </TS>

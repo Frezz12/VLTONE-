@@ -3,6 +3,7 @@
 #include <QMap>
 #include <QPointF>
 #include <QString>
+#include <QStringList>
 #include <nlohmann/json_fwd.hpp>
 
 namespace ui {
@@ -13,6 +14,7 @@ struct CreatorViewport {
 };
 struct CreatorProject {
   QString name, activeMode;
+  QStringList graphPath;
   daw::plugins::mini::MiniModuleDefinition definition;
   QMap<QString, QMap<QString, QPointF>> positions;
   QMap<QString, CreatorViewport> viewports;
@@ -22,6 +24,10 @@ struct CreatorProject {
                                const QString &moduleName);
   daw::plugins::mini::MiniModuleDefinition graph() const;
   void setGraph(const daw::plugins::mini::MiniModuleDefinition &);
+  QString layoutKey() const;
+  QString pack(const QStringList &nodes, const QString &name, QString &error);
+  bool unpack(const QString &node, QString &error);
+  bool makeIndependent(const QString &node, QString &error);
   void syncControls();
   QString addMode(const QString &name);
   void removeMode(const QString &id);

@@ -42,23 +42,8 @@ public:
 
     void drawPrimitive(PrimitiveElement element, const QStyleOption* option,
                        QPainter* painter, const QWidget* widget = nullptr) const override {
-        const auto* toolButton = qobject_cast<const QToolButton*>(widget);
-        const auto* pushButton = qobject_cast<const QPushButton*>(widget);
-        const bool disclosure = qobject_cast<const QComboBox*>(widget) ||
-            (toolButton && toolButton->menu()) || (pushButton && pushButton->menu());
-        if (element == PE_FrameFocusRect && disclosure && option) {
-            // Opening a list with the mouse should not leave a selected ring.
-            // Keep a quiet focus cue for users moving through controls with Tab.
-            if (option->state & State_KeyboardFocusChange) {
-                painter->save();
-                painter->setPen(QPen(option->palette.color(QPalette::WindowText), 1,
-                                     Qt::DotLine));
-                painter->setBrush(Qt::NoBrush);
-                painter->drawRect(option->rect.adjusted(1, 1, -2, -2));
-                painter->restore();
-            }
-            return;
-        }
+        // Focus still routes keyboard input without drawing a control outline.
+        if (element == PE_FrameFocusRect) return;
         if (element == PE_IndicatorCheckBox && option) {
             drawToggle(option, painter);
             return;
@@ -162,14 +147,6 @@ private:
         painter->setBrush(glint);
         painter->drawEllipse(thumb.adjusted(1.0, 0.5, -1.0, -0.5));
 
-        if (option->state & State_HasFocus) {
-            QColor ring = accent;
-            ring.setAlpha(enabled ? 190 : 80);
-            painter->setPen(QPen(ring, 1.5));
-            painter->setBrush(Qt::NoBrush);
-            painter->drawRoundedRect(rail.adjusted(-0.5, -0.5, 0.5, 0.5),
-                                     8.5, 8.5);
-        }
         painter->restore();
     }
 };

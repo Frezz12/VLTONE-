@@ -350,7 +350,7 @@ audio::Result EngineController::bounceInPlace(
         discard(); out.cancelled = true; return audio::Result::ok();
     }
     if (cloudProjectBound()) {
-        EngineController draft;
+        EngineController draft(SecondaryRuntime{}, *this);
         if (auto ready = draft.initialize(m_sampleRate, m_bufferSize, false); !ready) { discard(); return ready; }
         draft.m_pluginManager.copyCatalogFrom(m_pluginManager);
         draft.m_recordDir = m_recordDir;
@@ -641,7 +641,7 @@ audio::Result EngineController::renderClipsOffline(
         }
         out.clipCount = clips.size();
 
-        EngineController scratch;
+        EngineController scratch(SecondaryRuntime{}, *this);
         if (const auto ready = scratch.initialize(m_sampleRate, m_bufferSize, false); !ready)
             return ready;
         std::vector<double> durations;
@@ -673,7 +673,7 @@ audio::Result EngineController::renderClipsOffline(
                 return audio::Result::fail(audio::EngineError::InvalidArgument,
                                            "could not prepare offline chain");
             for (const auto& slot : *scratch.channelInserts(project.tracks.front().id)) {
-                if (!scratch.insertInstance(project.tracks.front().id, slot.id))
+                if (!scratch.m_runtime.hasPlugin({project.tracks.front().id, slot.id}))
                     return audio::Result::fail(audio::EngineError::InvalidArgument,
                                                "could not load offline plugin: " + slot.name);
             }

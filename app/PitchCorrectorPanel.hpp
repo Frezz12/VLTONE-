@@ -7,18 +7,16 @@
 #include <string>
 class QTimer;
 class PitchCorrectorPanel;
-namespace ui::graphics { class BrowserSurface; class BrowserProfile; }
+class NativePluginView;
 namespace daw { class EngineController; }
 namespace daw::plugins::pitch { class PitchCorrectorInstance; }
 
-// Bounded control interface for the local document. No engine objects are
-// registered with WebChannel, and all calls execute on the control thread.
-class PitchWebBridge final : public QObject {
+// Native UI actions execute on the control thread and preserve undo gestures.
+class PitchControls final : public QObject {
     Q_OBJECT
 public:
-    explicit PitchWebBridge(PitchCorrectorPanel* panel);
+    explicit PitchControls(PitchCorrectorPanel* panel);
 public slots:
-    void ready();
     void edit(int index, double value, bool finished);
     void finish(int index);
     void toggleNote(int note);
@@ -49,9 +47,9 @@ protected:
     void showEvent(QShowEvent*) override;
     void hideEvent(QHideEvent*) override;
 private:
-    friend class PitchWebBridge;
+    friend class PitchControls;
     using Values = std::array<double, 12>;
-    daw::plugins::pitch::PitchCorrectorInstance* instance() const;
+    bool available() const;
     double read(unsigned index) const;
     void write(unsigned index, double value);
     void finishGesture(unsigned index);
@@ -60,14 +58,13 @@ private:
     void refresh();
     daw::EngineController* m_controller = nullptr;
     std::string m_channel, m_insert;
-    ui::graphics::BrowserProfile* m_profile = nullptr;
-    ui::graphics::BrowserSurface* m_view = nullptr;
-    PitchWebBridge* m_bridge = nullptr;
+    NativePluginView* m_view = nullptr;
+    PitchControls* m_bridge = nullptr;
     QTimer* m_timer = nullptr;
     std::array<std::optional<double>, 12> m_gestures{};
     Values m_presetValues{};
     QString m_presetName = QStringLiteral("Custom"), m_status;
     QJsonObject m_presets;
     QVariantMap m_previous;
-    bool m_userPreset = false, m_ready = false;
+    bool m_userPreset = false;
 };

@@ -5,8 +5,11 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
+
+namespace daw::engine { class SampleBuffer; }
 
 /// Shared Slicer data for playback, analysis and editing. Global sound controls
 /// are automatable parameters; boundaries, MIDI layout and per-slice settings
@@ -176,6 +179,14 @@ int degreeToSemitone(int degree, int scale) noexcept;
 int degreeToKey(int degree, int root, int scale) noexcept;
 /// `C-1`…`G9`, the same numbering the piano roll labels.
 std::string noteName(int midi);
+
+struct ControlState {
+    std::string path;
+    std::shared_ptr<const engine::SampleBuffer> audio;
+    std::shared_ptr<const SliceTable> table;
+    AnalysisSettings analysis;
+    std::array<double, kParameterCount> parameters{};
+};
 
 /// Every knob, in index order. Built once on first use.
 std::span<const ParameterInfo> parameterTable() noexcept;

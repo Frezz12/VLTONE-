@@ -36,7 +36,7 @@ static bool hasNote(const engine::MidiBuffer& output, int key, bool on = true) {
 }
 
 static void checkRecordingMonitoring() {
-    EngineController controller;
+    EngineController controller{EngineController::TestRuntime{}};
     check(controller.initialize(48000, 512, false).isOk(), "monitoring initialization");
     controller.setTempo(120);
     const auto track = controller.addTrack(TrackKind::Midi, "Recording");
@@ -275,7 +275,7 @@ int main() {
             pedal = true;
     check(pedal, "pedal reset at exact clip boundary");
 
-    EngineController c;
+    EngineController c{EngineController::TestRuntime{}};
     check(c.initialize(48000, 512, false).isOk(), "offline initialization");
     const auto track = c.addTrack(TrackKind::Midi, "Keys");
     auto prefs = c.recordingPrefs();
@@ -499,7 +499,7 @@ int main() {
           "tempo changes retain the trimmed source boundary in musical time");
 
     {
-        EngineController patternController;
+        EngineController patternController{EngineController::TestRuntime{}};
         patternController.initialize(48000, 512, false);
         const auto pattern = patternController.addPattern("Recorded Pattern");
         const auto child = patternController.addTrack(TrackKind::Midi, "Pattern Keys");

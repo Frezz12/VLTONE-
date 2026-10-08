@@ -290,6 +290,7 @@ bool MiniModuleInstance::activate(const PluginProcessInfo &info) {
       return false;
     m_latency = runtime->latency();
     m_tail = runtime->tail();
+    m_tailKnown = runtime->tailKnown();
     m_typedRuntime = std::move(runtime);
     m_active = true;
     applyControls();
@@ -332,6 +333,7 @@ bool MiniModuleInstance::activate(const PluginProcessInfo &info) {
   m_latency = (*compiled)->totalLatency;
   std::vector<unsigned> tails(m_runtime->nodes.size());
   m_tail = 0;
+  m_tailKnown = true;
   for (auto i : (*compiled)->order) {
     const auto &n = (*compiled)->nodes[i];
     unsigned before = 0;

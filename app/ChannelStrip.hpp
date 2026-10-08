@@ -120,6 +120,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent*) override;
 
 private:
+    QHash<QString, QToolButton*> m_isolatedSlotButtons;
+    void refreshIsolatedSlots();
     double m_displayedGain = -1.0;
     double m_displayedPan = -2.0;
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(

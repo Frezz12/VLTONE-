@@ -1,4 +1,5 @@
 #include "CreatorCompilerClient.hpp"
+#include "Internal/MiniNodeRegistry.hpp"
 #include "CodeUtilities.hpp"
 #include "CompilerProcess.hpp"
 #include <cstdlib>
@@ -101,18 +102,20 @@ FunctionAnalysis analyzeFunction(const FunctionDefinition &f,
 bool compileCppGraph(MiniModuleDefinition &d, std::string &error,
                      std::vector<CodeDiagnostic> &out,
                      const std::atomic<bool> *cancel) {
-  if (std::none_of(d.nodes.begin(), d.nodes.end(),
+  MiniModuleDefinition expanded;
+  if (!expandSubgraphs(d, expanded, error)) return false;
+  if (std::none_of(expanded.nodes.begin(), expanded.nodes.end(),
                    [](const auto &n) { return n.function.has_value(); })) {
     d.code = {};
     return true;
   }
-  for (const auto &n : d.nodes)
+  for (const auto &n : expanded.nodes)
     if (n.function &&
         n.function->analyzedHash != functionSourceHash(*n.function)) {
       error = "Update C++ function ports: " + n.id;
       return false;
     }
-  auto request = compilationUnit(d);
+  auto request = compilationUnit(expanded);
   request["action"] = "compile";
   const auto reply = creatorCompilerRequest(request, cancel);
   out = diagnostics(reply);
@@ -120,8 +123,9 @@ bool compileCppGraph(MiniModuleDefinition &d, std::string &error,
     error = reply.value("error", "C++ compilation failed");
     return false;
   }
-  d.version = 4;
-  d.code = {1, reply.at("wasm").get<std::string>(), graphCodeHash(d)};
+  d.version = std::max(4u, d.version);
+  expanded.version = d.version;
+  d.code = {1, reply.at("wasm").get<std::string>(), graphCodeHash(expanded)};
   return true;
 }
 bool prepareCodeArtifact(const CodeArtifact &artifact,

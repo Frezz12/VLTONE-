@@ -126,6 +126,18 @@ public:
     void setTimelineSuppressed(bool suppressed) noexcept {
         m_timelineSuppressed.store(suppressed, std::memory_order_relaxed);
     }
+    struct ControlState {
+        std::shared_ptr<const NoteSchedule> notes;
+        std::shared_ptr<const ControlCurves> controllers;
+        bool timelineSuppressed;
+    };
+    ControlState controlState() const {
+        return {m_schedule.controlCopy(), m_controllers.controlCopy(), m_timelineSuppressed.load(std::memory_order_relaxed)};
+    }
+    void restoreControlState(const ControlState& state) {
+        m_schedule.publish(state.notes); m_controllers.publish(state.controllers);
+        setTimelineSuppressed(state.timelineSuppressed);
+    }
     /// Deterministic performance-test hook: indexed subtrees inspected by the
     /// most recent discontinuity chase, including branches rejected at root.
     std::size_t lastChaseSubtreesVisitedForTest() const noexcept {

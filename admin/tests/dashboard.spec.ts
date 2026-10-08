@@ -92,7 +92,7 @@ test("administrator searches a user and performs protected account actions", asy
   await expect(page.locator(".collaboration-access-setting").getByRole("status")).toHaveText("Онлайн-доступ выключен.");
   expect(accessWrites.at(-1)).toEqual({ enabled: false, csrf: "csrf" });
 
-  await page.getByRole("button", { name: "Приостановить" }).click();
+  await page.getByRole("button", { name: "Приостановить", exact: true }).click();
   await expect.poll(() => actions).toContain("/suspend");
   await page.getByPlaceholder("Добавить токены").fill("5000");
   await page.getByRole("button", { name: "Добавить токены" }).click();

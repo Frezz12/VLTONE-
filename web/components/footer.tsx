@@ -6,7 +6,7 @@ export function Footer({ locale }: { locale: string }) {
   const ru = locale === "ru";
   return <footer className="site-footer"><div className="footer-inner">
     <Link className="footer-brand" href="/"><BrandMark /><span>VLTone</span></Link>
-    <p>{ru ? "DAW для Windows и macOS." : "A DAW for Windows and macOS."}</p>
+    <p>{ru ? "Место, где идеи становятся музыкой." : "Where ideas become music."}<br />Windows / macOS</p>
     <nav aria-label={ru ? "Ссылки в подвале" : "Footer navigation"}>
       <Link href="/register">{ru ? "Открытая бета" : "Open beta"}</Link>
       <Link href="/capabilities">{ru ? "Возможности" : "Capabilities"}</Link>

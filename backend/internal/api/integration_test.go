@@ -156,7 +156,8 @@ func TestPostgresAccountFlow(t *testing.T) {
 		"terms_accepted":  true, "terms_version": profile.Version,
 		"diagnostics_accepted": true, "diagnostics_version": profile.Version,
 	}
-	created := performJSON(router, http.MethodPost, "/v1/web/auth/register", registration, "203.0.113.10:1234", nil, nil)
+	var created testResponse
+	t.Run("registration CAPTCHA", func(t *testing.T) { created = checkRegistrationCaptcha(t, server, router, registration) })
 	if created.Status != http.StatusCreated {
 		t.Fatalf("register status=%d body=%v", created.Status, created.Body)
 	}
@@ -545,6 +546,9 @@ func TestPostgresAccountFlow(t *testing.T) {
 	if uploadedArtifact.Status != http.StatusOK || uploadedArtifact.Body["kind"] != "windows-exe" {
 		t.Fatalf("release artifact upload failed: %d %v", uploadedArtifact.Status, uploadedArtifact.Body)
 	}
+	t.Run("release highlights", func(t *testing.T) {
+		checkReleaseHighlights(t, router, releaseID, readyRelease, adminLogin.Cookies, adminHeaders)
+	})
 	publishedRelease := performJSON(router, http.MethodPost, "/v1/admin/releases/"+releaseID+"/publish", map[string]any{}, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
 	if publishedRelease.Status != http.StatusOK || publishedRelease.Body["status"] != model.ReleasePublished {
 		t.Fatalf("release publish failed: %d %v", publishedRelease.Status, publishedRelease.Body)
@@ -552,6 +556,9 @@ func TestPostgresAccountFlow(t *testing.T) {
 	publicRelease := performJSON(router, http.MethodGet, "/v1/releases/"+url.PathEscape("0.1.2 Alpha 1")+"?locale=ru", nil, "203.0.113.41:1234", nil, nil)
 	if publicRelease.Status != http.StatusOK || publicRelease.Body["summary"] != "Новая версия" {
 		t.Fatalf("public release failed: %d %v", publicRelease.Status, publicRelease.Body)
+	}
+	if blocks, ok := publicRelease.Body["highlights"].([]any); !ok || len(blocks) != 1 || blocks[0].(map[string]any)["title_ru"] != "Новый микшер" {
+		t.Fatalf("public highlights missing: %v", publicRelease.Body)
 	}
 	latestWindows := performJSON(router, http.MethodGet, "/v1/releases/latest?platform=windows&locale=ru", nil, "203.0.113.41:1234", nil, nil)
 	if latestWindows.Status != http.StatusOK || latestWindows.Body["version"] != "0.1.2" ||

@@ -1,5 +1,6 @@
 #include "CreatorProject.hpp"
 #include "Internal/MiniNodeRegistry.hpp"
+#include "Creator/CodeUtilities.hpp"
 #include <QFile>
 #include <QSaveFile>
 #include <QUuid>
@@ -18,7 +19,7 @@ CreatorProject CreatorProject::create(const QString &projectName,
   CreatorProject p;
   p.name = projectName;
   auto &d = p.definition;
-  d.version = 4;
+  d.version = 5;
   d.id = "creator." + uuid().toStdString();
   d.name = moduleName.toStdString();
   d.nodes = {makeNode("input", "input"), makeNode("output", "output"),
@@ -33,10 +34,23 @@ CreatorProject CreatorProject::create(const QString &projectName,
 MiniModuleDefinition CreatorProject::graph() const {
   auto d = resolved(definition, activeMode.toStdString());
   d.appearance = definition.appearance;
+  if (!graphPath.empty())
+    for (const auto &g : definition.subgraphs) if (g.id == graphPath.back().toStdString()) {
+      d.nodes = g.nodes; d.connections = g.connections; d.code = {};
+      break;
+    }
   return d;
 }
+QString CreatorProject::layoutKey() const { return graphPath.empty() ? activeMode : "node/" + graphPath.back(); }
 void CreatorProject::setGraph(const MiniModuleDefinition &d) {
   definition.version = std::max(definition.version, d.version);
+  definition.subgraphs = d.subgraphs;
+  if (!graphPath.empty())
+    for (auto &g : definition.subgraphs) if (g.id == graphPath.back().toStdString()) {
+      g.nodes = d.nodes; g.connections = d.connections;
+      definition.code = {}; for (auto &mode : definition.modes) mode.code = {};
+      return;
+    }
   for (auto &mode : definition.modes)
     if (mode.id == activeMode.toStdString()) {
       mode.nodes = d.nodes;
@@ -119,13 +133,15 @@ void CreatorProject::removeMode(const QString &id) {
 }
 json CreatorProject::toJson() const {
   json result{{"format", "vltcreator"},
-              {"version", 2},
+              {"version", 3},
               {"name", name.toStdString()},
               {"activeMode", activeMode.toStdString()},
               {"definition", daw::plugins::mini::toJson(definition)},
               {"positions", json::object()},
               {"viewports", json::object()}};
   result["codeNode"] = codeNode.toStdString();
+  result["graphPath"] = json::array();
+  for (const auto &id : graphPath) result["graphPath"].push_back(id.toStdString());
   result["codeCursors"] = json::object();
   for (auto it=codeCursors.begin();it!=codeCursors.end();++it)
     result["codeCursors"][it.key().toStdString()]=it.value();
@@ -142,7 +158,7 @@ bool CreatorProject::fromJson(const json &j, CreatorProject &result,
                               QString &error) {
   try {
     if (!j.is_object() || j.at("format") != "vltcreator" ||
-        (j.at("version") != 1 && j.at("version") != 2))
+        (j.at("version") != 1 && j.at("version") != 2 && j.at("version") != 3))
       throw std::runtime_error("Unsupported Creator project");
     CreatorProject p;
     p.name = QString::fromStdString(j.at("name").get<std::string>());
@@ -154,15 +170,23 @@ bool CreatorProject::fromJson(const json &j, CreatorProject &result,
           p.codeCursors[QString::fromStdString(id)]=std::clamp(value.get<int>(),0,int(kMaxFunctionSourceBytes));
     p.definition = daw::plugins::mini::fromJson(j.at("definition"));
     if (p.name.size() > 256 || !p.definition.unavailableSource.empty() ||
-        (p.definition.version != 3 && p.definition.version != 4))
+        (p.definition.version != 3 && p.definition.version != 4 && p.definition.version != 5))
       throw std::runtime_error("Invalid Creator project definition");
+    if (j.contains("graphPath")) {
+      if (!j.at("graphPath").is_array() || j.at("graphPath").size() > kMaxGraphDepth) throw std::runtime_error("Invalid graph navigation");
+      for (const auto &id : j.at("graphPath")) {
+        const auto key = id.get<std::string>();
+        if (std::any_of(p.definition.subgraphs.begin(), p.definition.subgraphs.end(), [&](const auto &g) { return g.id == key; }))
+          p.graphPath.push_back(QString::fromStdString(key));
+      }
+    }
     if (!p.activeMode.isEmpty() &&
         std::none_of(
             p.definition.modes.begin(), p.definition.modes.end(),
             [&](const auto &m) { return m.id == p.activeMode.toStdString(); }))
       p.activeMode = QString::fromStdString(p.definition.defaultMode);
     if (j.contains("positions")) {
-      if (!j.at("positions").is_object() || j.at("positions").size() > 9)
+      if (!j.at("positions").is_object() || j.at("positions").size() > 9 + kMaxNodes)
         throw std::runtime_error("Too many layouts");
       for (const auto &[mode, nodes] : j.at("positions").items()) {
         if (!nodes.is_object() || nodes.size() > kMaxNodes)

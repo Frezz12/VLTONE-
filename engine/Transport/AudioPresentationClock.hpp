@@ -61,6 +61,24 @@ public:
                   "Audio presentation history requires lock-free scalar atomics");
     static constexpr std::size_t capacity = 512;
     std::uint64_t identity() const noexcept { return m_identity; }
+    std::uint64_t generation() const noexcept { return m_generation.load(std::memory_order_acquire); }
+    std::uint64_t advanceGeneration() noexcept {
+        return m_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+    }
+    void setGeneration(std::uint64_t value) noexcept { m_generation.store(value, std::memory_order_release); }
+    // Control thread, with the source audio writer drained and the destination
+    // session identity retired. Preserve queued DAC history when attaching.
+    void copyFrom(const AudioPresentationClock& source) noexcept {
+        if (this == &source) return;
+        m_written.store(0, std::memory_order_release);
+        setGeneration(source.generation());
+        const auto latest = source.m_written.load(std::memory_order_acquire);
+        const auto count = std::min<std::uint64_t>(latest, capacity);
+        for (auto ticket = latest - count + 1; ticket <= latest && ticket; ++ticket) {
+            AudioPresentationSnapshot value;
+            if (source.read(ticket, value)) publish(value);
+        }
+    }
     void publish(const AudioPresentationSnapshot& value) noexcept {
         const auto ticket = m_written.load(std::memory_order_relaxed) + 1;
         auto& s = m_slots[ticket % capacity];
@@ -134,6 +152,7 @@ private:
     }
     std::array<Slot, capacity> m_slots;
     std::atomic<std::uint64_t> m_written{0};
+    std::atomic<std::uint64_t> m_generation{0};
     inline static std::atomic<std::uint64_t> s_nextIdentity{1};
     const std::uint64_t m_identity = s_nextIdentity.fetch_add(1, std::memory_order_relaxed);
 };

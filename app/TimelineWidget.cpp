@@ -701,6 +701,27 @@ void TimelineWidget::autoScrollMarquee(const QPoint& pointer) {
 }
 
 void TimelineWidget::publishSelection() {
+    // History and remote edits can move an id without updating the view's
+    // cached lane. Keep the selection attached to the clips, not their old
+    // addresses, before any observer or subsequent gesture uses it.
+    const auto& project = m_controller->project();
+    const auto end = std::remove_if(
+        m_selection.begin(), m_selection.end(), [this, &project](ClipRef& ref) {
+            if (findClipModel(ref.trackId, ref.clipId)) return false;
+            const std::string id = ref.clipId.toStdString();
+            for (const auto& track : project.tracks) {
+                if (std::any_of(track.clips.begin(), track.clips.end(),
+                                [&id](const auto& clip) { return clip.id == id; })) {
+                    ref.trackId = QString::fromStdString(track.id);
+                    return false;
+                }
+            }
+            return true;
+        });
+    m_selection.erase(end, m_selection.end());
+    if (!m_selectedClipId.isEmpty() && !isClipSelected(m_selectedClipId))
+        m_selectedClipId = m_selection.isEmpty() ? QString()
+                                                 : m_selection.front().clipId;
     if (!m_selectionModel) return;
     QVector<ui::ClipSel> out;
     out.reserve(m_selection.size());
@@ -5612,6 +5633,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
 
 void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     if (hasActivePointerGesture()) finishInterruptedPointerGesture();
+    publishSelection();
     m_lastPointerPosition = ev->position();
     setFocus(Qt::MouseFocusReason);
     if (ev->button() == Qt::MiddleButton) {
@@ -7352,7 +7374,7 @@ void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
         openPattern = menu.addAction(tr("Open Pattern Editor"));
         menu.addSeparator();
     } else if (hit.kind == daw::ClipKind::Audio) {
-        warpAudio = menu.addAction(tr("Warp Audio"));
+        warpAudio = menu.addAction(tr("Warp Editor"));
         warpAudio->setObjectName("WarpAudioAction");
         menu.setToolTipsVisible(true);
         const auto reason = m_controller->warpUnavailableReason(hit.trackId.toStdString(), hit.clipId.toStdString());
@@ -8099,7 +8121,10 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
     bool firstUsedLane = false;
     for (const QString& file : files) {
         const bool isMidi = ui::isMidiFile(file);
-        if (!isMidi && !ui::prepareAudioImport(this, *m_controller, file)) continue;
+        daw::ClipMusicalAnalysisModel analysis;
+        const bool autoWarp = laneKind != daw::TrackKind::Pattern;
+        if (!isMidi && !ui::prepareAudioImport(this, *m_controller, file,
+                                              autoWarp ? &analysis : nullptr)) continue;
         if (!isMidi && laneModel && laneKind == daw::TrackKind::Pattern) {
             imported |= !m_controller
                               ->addPatternSample(laneTrack.toStdString(),
@@ -8135,7 +8160,7 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
             }
         } else if (!m_controller
                         ->importAudio(file.toStdString(), trackId.toStdString(),
-                                      start)
+                                      start, analysis, autoWarp)
                         .empty()) {
             imported = true;
         }

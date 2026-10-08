@@ -67,7 +67,7 @@ std::string validate(const MiniModuleDefinition &d,
                      std::string_view selectedMode) {
   if (!d.unavailableSource.empty())
     return "Invalid module definition";
-  if (d.version < 1 || d.version > 4)
+  if (d.version < 1 || d.version > 5)
     return "Unsupported module version";
   const auto &look = d.appearance;
   if (look.theme != "studio" && look.theme != "graphite" &&
@@ -119,6 +119,8 @@ std::string validate(const MiniModuleDefinition &d,
   if (d.nodes.size() < 2 || d.nodes.size() > kMaxNodes ||
       d.connections.size() > kMaxEdges || d.controls.size() > 2)
     return "Module exceeds its node, connection or control limit";
+  if (d.version >= 5)
+    return validateProgrammingGraph(d);
   if (d.version >= 3)
     return validateTypedGraph(d);
   std::map<std::string, unsigned> indices;
@@ -215,6 +217,13 @@ bool sameAudioGraph(const MiniModuleDefinition &a, std::string_view am,
     auto graph = resolved(d, mode);
     if (graph.version < 3) graph.version = 1;
     graph.id.clear(); graph.name.clear();
+    for (auto &n : graph.nodes) n.label.clear();
+    for (auto &g : graph.subgraphs) {
+      g.name.clear();
+      for (auto &n : g.nodes) n.label.clear();
+      for (auto &p : g.inputs) { p.name.clear(); p.unit.clear(); }
+      for (auto &p : g.outputs) { p.name.clear(); p.unit.clear(); }
+    }
     for (auto &c : graph.controls) { c.name.clear(); c.unit.clear(); c.style.clear(); }
     return graph;
   };
@@ -300,6 +309,17 @@ json toJson(const MiniModuleDefinition &d) {
                           {"parameters", params}});
     if (n.function)
       j["nodes"].back()["function"] = functionToJson(*n.function);
+    if (d.version >= 5) {
+      auto &v = j["nodes"].back();
+      v["subgraph"] = n.subgraph; v["valueType"] = n.valueType;
+      v["port"] = n.port; v["label"] = n.label; v["signature"] = n.signature;
+      v["stateKey"] = n.stateKey;
+      v["capacity"] = n.capacity; v["values"] = n.values;
+    }
+  }
+  if (d.version >= 5) {
+    j["subgraphs"] = json::array();
+    for (const auto &g : d.subgraphs) j["subgraphs"].push_back(subgraphToJson(g));
   }
   if (d.version >= 4)
     j["code"] = {{"abi", d.code.abi}, {"wasm", d.code.wasm},
@@ -351,6 +371,7 @@ json toJson(const MiniModuleDefinition &d) {
       mode.erase("appearance");
       mode.erase("modes");
       mode.erase("defaultMode");
+      mode.erase("subgraphs");
       j["modes"].push_back(std::move(mode));
     }
   }
@@ -362,7 +383,7 @@ MiniModuleDefinition fromJson(const json &j) {
     d.id = j.at("id").get<std::string>();
     d.name = j.at("name").get<std::string>();
     d.version = j.at("version").get<unsigned>();
-    if (d.version < 1 || d.version > 4)
+    if (d.version < 1 || d.version > 5)
       throw std::runtime_error("version");
     if (!j.at("nodes").is_array() || j.at("nodes").size() > kMaxNodes ||
         !j.at("connections").is_array() ||
@@ -373,6 +394,7 @@ MiniModuleDefinition fromJson(const json &j) {
       NodeDefinition v{n.at("id").get<std::string>(),
                        n.at("type").get<std::string>(),
                        n.at("version").get<unsigned>()};
+      if (!nodeDescription(v.type, v.version)) throw std::runtime_error("unavailable node type");
       if (!n.at("parameters").is_object() || n.at("parameters").size() > 64)
         throw std::runtime_error("parameters");
       for (const auto &[key, value] : n.at("parameters").items())
@@ -381,7 +403,33 @@ MiniModuleDefinition fromJson(const json &j) {
         if (d.version < 4) throw std::runtime_error("function version");
         v.function = functionFromJson(n.at("function"));
       }
+      if (d.version >= 5) {
+        v.subgraph = n.value("subgraph", ""); v.valueType = n.value("valueType", "number");
+        v.port = n.value("port", ""); v.label = n.value("label", ""); v.signature = n.value("signature", "");
+        v.stateKey = n.value("stateKey", "");
+        v.capacity = n.value("capacity", 64u);
+        if (n.contains("values")) {
+          if (!n["values"].is_array() || n["values"].size() > kMaxCollection * 2)
+            throw std::runtime_error("collection size");
+          v.values = n["values"].get<std::vector<double>>();
+        }
+        if (v.subgraph.size() > 128 || v.stateKey.size() > 128 || v.port.size() > 128 || v.label.size() > 128 || v.signature.size() > 4096 ||
+            !parsePortType(v.valueType) || v.capacity < 1 || v.capacity > kMaxCollection ||
+            !std::all_of(v.values.begin(), v.values.end(), [](double x) { return std::isfinite(x); }))
+          throw std::runtime_error("node data");
+      }
       d.nodes.push_back(std::move(v));
+    }
+    if (d.version >= 5 && j.contains("subgraphs")) {
+      if (!j["subgraphs"].is_array() || j["subgraphs"].size() > kMaxNodes)
+        throw std::runtime_error("subgraph size");
+      std::size_t count = d.nodes.size();
+      for (const auto &g : j["subgraphs"]) {
+        auto group = subgraphFromJson(g);
+        count += group.nodes.size();
+        if (count > kMaxNodes * 9) throw std::runtime_error("subgraph storage size");
+        d.subgraphs.push_back(std::move(group));
+      }
     }
     if (d.version >= 4 && j.contains("code")) {
       const auto &c = j.at("code");

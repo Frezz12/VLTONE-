@@ -8,6 +8,12 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QContextMenuEvent>
+#include <QCheckBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QUrl>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QLayout>
@@ -43,7 +49,7 @@ bool MainWindow::checkWarpForTest() {
     QTimer::singleShot(0, this, [&] {
         if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
             for (auto* action : menu->actions()) if (action->objectName() == "WarpAudioAction") {
-                choseWarp = action->isEnabled(); menu->setActiveAction(action);
+                choseWarp = action->isEnabled() && action->text() == TimelineWidget::tr("Warp Editor"); menu->setActiveAction(action);
                 QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
                 QApplication::sendEvent(menu, &enter); return;
             }
@@ -142,6 +148,63 @@ bool MainWindow::checkWarpForTest() {
     if (const auto path = qEnvironmentVariable("DAW_WARP_SCREENSHOT"); !path.isEmpty()) grab().save(path);
     m_controller.removeClip(track.id, first.id); syncViews();
     check(!m_controller.audioClip(track.id, first.id), "deleting the edited clip refreshes safely");
+
+    // Exercise the real file-drop preparation and import, including its worker
+    // tempo analysis, rather than handing the controller an invented estimate.
+    setWarpVisible(false);
+    audio::AudioBuffer loop(2, 576000);
+    for (int i = 0; i < 576000; ++i) {
+        const int beat = i / 24000, age = i % 24000;
+        const float value = age < 1400 ? float(std::exp(-age / 185.) *
+            (.48 * (age % 41 < 17 ? 1 : -1) + .52 * std::sin(age * .009817477)) *
+            (beat % 4 == 0 ? 1 : .6)) : 0;
+        loop.getChannel(0)[i] = value; loop.getChannel(1)[i] = value * .7f;
+    }
+    const auto loopFile = directory.filePath("steady-loop.wav");
+    recorder.writeWAVFile(loopFile.toStdString(), loop, 48000);
+    m_controller.setTempo(150); syncViews();
+    QMimeData mime; mime.setUrls({QUrl::fromLocalFile(loopFile)});
+    const QPoint dropAt(int((1 - m_timeline->horizontalScrollForTest()) * m_timeline->pixelsPerSecondForTest()),
+                        m_timeline->laneCentreForTest(0));
+    QDragEnterEvent enter(dropAt, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(m_timeline, &enter);
+    QDropEvent drop(QPointF(dropAt), Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(m_timeline, &drop);
+    const auto* importedTrack = m_controller.project().findTrack(track.id);
+    check(drop.isAccepted() && importedTrack && importedTrack->clips.size() == 2,
+          "dropping an audio file imports it through background preparation");
+    if (importedTrack && importedTrack->clips.size() == 2) {
+        const auto imported = importedTrack->clips.back();
+        std::fprintf(stderr, "Auto Warp source %.2f BPM, status %d, duration %.5f\n",
+                     imported.musicalAnalysis.tempo.bpm, int(imported.musicalAnalysis.tempo.status), imported.durationSeconds);
+        check(imported.warp.enabled && std::abs(imported.durationSeconds - 9.6) < .001 &&
+              std::abs(imported.warp.baselineDurationSeconds - 12) < .001 && m_controller.tempo() == 150,
+              "a dropped 120 BPM loop automatically matches 150 BPM without changing project tempo");
+        const auto importedId = QString::fromStdString(imported.id);
+        openWarpEditor(trackId, importedId);
+        auto* enabled = m_warpEditor->findChild<QCheckBox*>("WarpEnabled");
+        if (enabled) enabled->click();
+        const auto* disabled = m_controller.audioClip(track.id, imported.id);
+        check(disabled && !disabled->warp.enabled && std::abs(disabled->durationSeconds - 12) < .001 &&
+              disabled->startSeconds == imported.startSeconds,
+              "switching Warp off in its editor restores original duration at the same position");
+        openWarpEditor(trackId, importedId);
+        check(enabled && !enabled->isChecked(), "reopening Warp Editor respects disabled automatic fitting");
+
+        int samplerRequests = 0, warpRequests = 0;
+        const auto samplerConnection = connect(m_timeline, &TimelineWidget::openSampleEditorRequested, this,
+            [&](const QString&, const QString& id) { if (id == importedId) ++samplerRequests; });
+        const auto warpConnection = connect(m_timeline, &TimelineWidget::openWarpEditorRequested, this,
+            [&](const QString&, const QString&) { ++warpRequests; });
+        setWarpVisible(false);
+        const QPoint sampleAt(int((imported.startSeconds + .4 - m_timeline->horizontalScrollForTest()) *
+                                   m_timeline->pixelsPerSecondForTest()), m_timeline->laneCentreForTest(0));
+        QMouseEvent twice(QEvent::MouseButtonDblClick, QPointF(sampleAt), QPointF(m_timeline->mapToGlobal(sampleAt)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(m_timeline, &twice);
+        check(samplerRequests == 1 && warpRequests == 0, "double-click still opens the sampler and does not request Warp");
+        disconnect(samplerConnection); disconnect(warpConnection);
+    }
     m_warpEditor->clearClip(); m_controller.restoreProject(original, "Restore after Warp test"); syncViews(); setMixerVisible(true);
     return ok;
 }

@@ -7,6 +7,7 @@ export function markAdminActivity() {
 
 export function adminPollingAllowed() {
   if (document.visibilityState !== "visible") return false;
+  if (document.documentElement.dataset.adminPollingPaused === "true") return false;
   const last = Number(window.localStorage.getItem(lastActivityKey));
   return Number.isFinite(last) && Date.now() - last < pollingActivityWindowMs;
 }

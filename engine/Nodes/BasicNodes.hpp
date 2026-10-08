@@ -113,6 +113,19 @@ public:
     }
     float gain() const noexcept { return m_targetGain.load(std::memory_order_relaxed); }
     bool mono() const noexcept { return m_mono.load(std::memory_order_relaxed); }
+    struct ControlState {
+        float gain, pan;
+        bool silent, mono;
+        std::shared_ptr<const LevelAutomation> automation;
+    };
+    ControlState controlState() const {
+        return {gain(), m_targetPan.load(std::memory_order_relaxed),
+            m_silent.load(std::memory_order_relaxed), mono(), m_automation.controlCopy()};
+    }
+    void restoreControlState(const ControlState& state) {
+        setGain(state.gain); setPan(state.pan); setSilent(state.silent); setMono(state.mono);
+        setAutomation(state.automation);
+    }
 
     void prepare(const PrepareInfo& info) override {
         // Scratch for the mono fold. Allocated here so the audio thread never
@@ -311,6 +324,17 @@ public:
     /// A curve for the send amount, on the same terms as `GainNode`'s.
     void setAutomation(std::shared_ptr<const LevelCurve> curve) {
         m_automation.publish(std::move(curve));
+    }
+    struct ControlState {
+        float level;
+        bool enabled;
+        std::shared_ptr<const LevelCurve> automation;
+    };
+    ControlState controlState() const {
+        return {m_level.load(std::memory_order_relaxed), m_enabled.load(std::memory_order_relaxed), m_automation.controlCopy()};
+    }
+    void restoreControlState(const ControlState& state) {
+        setLevel(state.level); setEnabled(state.enabled); setAutomation(state.automation);
     }
 
     void reset() override { m_initialized = false; }

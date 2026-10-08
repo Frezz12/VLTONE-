@@ -780,7 +780,7 @@ void PianoRollView::setScrollY(double y) {
 }
 
 bool PianoRollView::checkAuditionForTest() {
-    daw::EngineController controller;
+    daw::EngineController controller{daw::EngineController::TestRuntime{}};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Midi, "Audition");
     const auto other = controller.addTrack(daw::TrackKind::Midi, "Other instrument");

@@ -655,6 +655,9 @@ PluginEditorChannel pluginEditorChannelFromString(const std::string& name);
 struct InsertParameter {
     std::string id;      ///< format-native, stable across versions
     double value = 0.0;
+    /// Confirmed edit newer than an emergency opaque checkpoint. Ordinary
+    /// fallback values must never override a successfully loaded preset.
+    bool restoreAfterState = false;
     friend bool operator==(const InsertParameter&, const InsertParameter&) = default;
 };
 

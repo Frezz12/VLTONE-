@@ -1885,7 +1885,6 @@ components:
       properties:
         expected_head_seq: { type: integer, minimum: 0, description: Verified local head required for an owner version migration. }
         pluginPolicy: { type: string, enum: [builtin_only, external_checked] }
-        pluginPolicy: { enum: [builtin_only, external_checked] }
         control: { $ref: "#/components/schemas/SessionControl" }
         session: { $ref: "#/components/schemas/ProjectLiveSession" }
         members: { type: array, maxItems: 8, items: { $ref: "#/components/schemas/ProjectSessionMember" } }
@@ -2050,6 +2049,22 @@ components:
         height: { type: integer }
         sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         url: { type: string }
+    ReleaseHighlight:
+      type: object
+      additionalProperties: false
+      required: [id, tone, title_ru, title_en, lead_ru, lead_en, label_ru, label_en, details_ru, details_en, screenshot_id]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9_-]+$' }
+        tone: { type: string, enum: [coral, lilac, lime, sky, peach, mint, rose, periwinkle] }
+        title_ru: { type: string, maxLength: 160 }
+        title_en: { type: string, maxLength: 160 }
+        lead_ru: { type: string, maxLength: 600 }
+        lead_en: { type: string, maxLength: 600 }
+        label_ru: { type: string, maxLength: 60 }
+        label_en: { type: string, maxLength: 60 }
+        details_ru: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        details_en: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        screenshot_id: { type: string, description: Screenshot UUID belonging to this release; empty while drafting }
     PublicRelease:
       type: object
       required: [id, version, summary, features, changes, fixes, artifacts, screenshots, page_url, published_at]
@@ -2060,6 +2075,7 @@ components:
         features: { type: array, items: { type: string } }
         changes: { type: array, items: { type: string } }
         fixes: { type: array, items: { type: string } }
+        highlights: { type: array, maxItems: 12, items: { $ref: "#/components/schemas/ReleaseHighlight" } }
         artifacts: { type: array, items: { $ref: "#/components/schemas/ReleaseArtifact" } }
         screenshots: { type: array, items: { $ref: "#/components/schemas/ReleaseScreenshot" } }
         page_url: { type: string, format: uri }
@@ -2079,6 +2095,7 @@ components:
         changes_en: { type: array, items: { type: string } }
         fixes_ru: { type: array, items: { type: string } }
         fixes_en: { type: array, items: { type: string } }
+        highlights: { type: array, maxItems: 12, items: { $ref: "#/components/schemas/ReleaseHighlight" } }
         artifacts: { type: array, items: { $ref: "#/components/schemas/ReleaseArtifact" } }
         screenshots: { type: array, items: { $ref: "#/components/schemas/ReleaseScreenshot" } }
         published_at: { type: [string, "null"], format: date-time }
@@ -2098,6 +2115,7 @@ components:
         changes_en: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
         fixes_ru: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
         fixes_en: { type: array, maxItems: 100, items: { type: string, maxLength: 1000 } }
+        highlights: { type: array, maxItems: 12, items: { $ref: "#/components/schemas/ReleaseHighlight" } }
     ReleaseScreenshotWrite:
       type: object
       additionalProperties: false
@@ -2161,7 +2179,7 @@ components:
         sort_order: { type: integer }
     Meta:
       type: object
-      required: [service, api_version, consent_version, registration_legal, registration_enabled, offline_hours, access_token_minutes, public_key, collaboration]
+      required: [service, api_version, consent_version, registration_legal, registration_enabled, registration_captcha, offline_hours, access_token_minutes, public_key, collaboration]
       properties:
         service: { const: vlt-studio }
         api_version: { const: v1 }
@@ -2173,6 +2191,14 @@ components:
             version: { type: string }
             ready: { type: boolean }
         registration_enabled: { type: boolean, description: Operational availability of account registration; does not assert legal publication readiness. }
+        registration_captcha:
+          type: object
+          required: [provider, required, configured, site_key]
+          properties:
+            provider: { const: turnstile }
+            required: { type: boolean, description: Always true in production. }
+            configured: { type: boolean }
+            site_key: { type: string, description: Public widget key. Never contains the verification secret. }
         consent_version: { type: string, description: Legacy desktop entitlement field; registration uses registration_legal.version. }
         offline_hours: { const: 72 }
         access_token_minutes: { const: 15 }
@@ -2213,6 +2239,7 @@ components:
         terms_version: { type: string }
         diagnostics_accepted: { type: boolean, default: false }
         diagnostics_version: { type: string, description: Required current revision when diagnostics_accepted is true. }
+        captcha_token: { type: string, maxLength: 2048, description: Required when registration_captcha.required is true; verified server-side before account creation. }
     PasswordResetConfirmRequest:
       type: object
       additionalProperties: false

@@ -1,0 +1,232 @@
+{
+  "format": "vltmini",
+  "version": 5,
+  "definition": {
+    "id": "creator.nodes.NodeSaturator4x",
+    "name": "NodeSaturator4x",
+    "version": 5,
+    "nodes": [
+      {
+        "id": "input",
+        "type": "input",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "interface",
+        "type": "interface",
+        "version": 1,
+        "parameters": {}
+      },
+      {
+        "id": "saturator",
+        "type": "subgraph",
+        "version": 1,
+        "parameters": {},
+        "subgraph": "saturator.4x"
+      },
+      {
+        "id": "output_gain",
+        "type": "audio_scale",
+        "version": 1,
+        "parameters": {}
+      }
+    ],
+    "connections": [
+      {
+        "from": "input",
+        "to": "saturator",
+        "fromPort": "out",
+        "toPort": "signal"
+      },
+      {
+        "from": "interface",
+        "to": "saturator",
+        "fromPort": "drive",
+        "toPort": "drive"
+      },
+      {
+        "from": "saturator",
+        "to": "output_gain",
+        "fromPort": "signal",
+        "toPort": "in"
+      },
+      {
+        "from": "interface",
+        "to": "output_gain",
+        "fromPort": "level",
+        "toPort": "gain"
+      },
+      {
+        "from": "output_gain",
+        "to": "output",
+        "fromPort": "out",
+        "toPort": "in"
+      }
+    ],
+    "controls": [
+      {
+        "id": "drive",
+        "name": "Drive",
+        "min": 1,
+        "max": 12,
+        "default": 2,
+        "unit": "",
+        "log": false,
+        "bindings": []
+      },
+      {
+        "id": "level",
+        "name": "Level",
+        "min": 0,
+        "max": 1,
+        "default": 0.65,
+        "unit": "",
+        "log": false,
+        "bindings": []
+      }
+    ],
+    "subgraphs": [
+      {
+        "id": "saturator.4x",
+        "name": "Stereo waveshaper",
+        "version": 5,
+        "oversampling": 4,
+        "inputs": [
+          {
+            "id": "signal",
+            "name": "Signal",
+            "type": "audio"
+          },
+          {
+            "id": "drive",
+            "name": "Drive",
+            "type": "number",
+            "min": 1,
+            "max": 12,
+            "default": 2
+          }
+        ],
+        "outputs": [
+          {
+            "id": "signal",
+            "name": "Signal",
+            "type": "audio"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "signal",
+            "type": "subgraph_input",
+            "version": 1,
+            "parameters": {},
+            "port": "signal",
+            "valueType": "audio"
+          },
+          {
+            "id": "drive",
+            "type": "subgraph_input",
+            "version": 1,
+            "parameters": {},
+            "port": "drive",
+            "valueType": "number"
+          },
+          {
+            "id": "pre",
+            "type": "audio_scale",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "split",
+            "type": "stereo_split",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "left",
+            "type": "tanh",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "right",
+            "type": "tanh",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "join",
+            "type": "stereo_join",
+            "version": 1,
+            "parameters": {}
+          },
+          {
+            "id": "result",
+            "type": "subgraph_output",
+            "version": 1,
+            "parameters": {},
+            "port": "signal",
+            "valueType": "audio"
+          }
+        ],
+        "connections": [
+          {
+            "from": "signal",
+            "to": "pre",
+            "fromPort": "out",
+            "toPort": "in"
+          },
+          {
+            "from": "drive",
+            "to": "pre",
+            "fromPort": "out",
+            "toPort": "gain"
+          },
+          {
+            "from": "pre",
+            "to": "split",
+            "fromPort": "out",
+            "toPort": "in"
+          },
+          {
+            "from": "split",
+            "to": "left",
+            "fromPort": "left",
+            "toPort": "value"
+          },
+          {
+            "from": "split",
+            "to": "right",
+            "fromPort": "right",
+            "toPort": "value"
+          },
+          {
+            "from": "left",
+            "to": "join",
+            "fromPort": "out",
+            "toPort": "left"
+          },
+          {
+            "from": "right",
+            "to": "join",
+            "fromPort": "out",
+            "toPort": "right"
+          },
+          {
+            "from": "join",
+            "to": "result",
+            "fromPort": "out",
+            "toPort": "in"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -39,7 +39,7 @@ Status RealtimeEngine::prepare(SampleRate sampleRate, FrameCount maxBlockSize,
     // callback may well be mid-block.
     const RenderGate gate(*this);
 
-    if (m_offlineActive) return fail(EngineError::NotCompiled);
+    if (m_offlineActive || m_outputGraphActive) return fail(EngineError::NotCompiled);
 
     m_prepareInfo.sampleRate = sampleRate;
     m_prepareInfo.maxBlockSize = maxBlockSize;
@@ -128,13 +128,17 @@ Status RealtimeEngine::commitGraph(bool reconfigureNodes) {
     // gate, not merely the final atomic publication.
     // Hand the published snapshot over so compensation delay lines that did not
     // change survive the rebuild with their contents.
-    const std::shared_ptr<const CompiledGraph> previous = m_processor.graph();
+    const std::shared_ptr<const CompiledGraph> previous = sessionGraph();
     std::unique_ptr<RenderGate> reconfigurationGate;
     if (reconfigureNodes ||
         (previous && m_graph.requiresRenderStopped(m_prepareInfo, *previous)))
         reconfigurationGate = std::make_unique<RenderGate>(*this);
     auto compiled = m_graph.compile(m_prepareInfo, previous.get());
     if (!compiled) return fail(compiled.error());
+    if (m_outputGraphActive) {
+        m_suspendedGraph = *compiled;
+        return {};
+    }
 
     // Publishing is a single atomic store, so a routing edit lands without
     // disturbing the renderer. The one exception is a graph that has outgrown
@@ -148,6 +152,35 @@ Status RealtimeEngine::commitGraph(bool reconfigureNodes) {
         m_processor.setGraph(*compiled);
     }
     return {};
+}
+
+Status RealtimeEngine::setOutputGraph(AudioGraph graph) {
+    const RenderGate gate(*this);
+    if (m_offlineActive || m_prepareInfo.offline || m_outputGraphActive || !m_processor.graph())
+        return fail(EngineError::InvalidArgument);
+    auto compiled = graph.compile(m_prepareInfo);
+    if (!compiled) return fail(compiled.error());
+    auto primary = m_processor.graph();
+    m_processor.setGraph(*compiled);
+    m_suspendedGraph = std::move(primary);
+    m_outputGraphActive = true;
+    return {};
+}
+
+void RealtimeEngine::clearOutputGraph() {
+    const RenderGate gate(*this);
+    if (!m_outputGraphActive) return;
+    // setGraph may grow scheduler storage if the primary was edited while
+    // auditioning. The gate also retires all references to the audition node.
+    m_processor.setGraph(m_suspendedGraph);
+    m_suspendedGraph.reset();
+    m_outputGraphActive = false;
+}
+
+void RealtimeEngine::restoreSessionGraph(std::shared_ptr<const CompiledGraph> graph) {
+    const RenderGate gate(*this);
+    if (m_outputGraphActive) m_suspendedGraph = std::move(graph);
+    else m_processor.setGraph(std::move(graph));
 }
 
 void RealtimeEngine::updateMasterMeters(const AudioBlock& output,
@@ -413,7 +446,7 @@ Status RealtimeEngine::renderOffline(
     if (endSample <= startSample) return fail(EngineError::InvalidArgument);
     const FrameCount block = std::min(blockSize, m_prepareInfo.maxBlockSize);
     if (block == 0) return fail(EngineError::BlockTooLarge);
-    if (m_offlineActive) return fail(EngineError::NotCompiled);
+    if (m_offlineActive || m_outputGraphActive) return fail(EngineError::NotCompiled);
     const auto original = m_processor.graph();
     if (!original) return fail(EngineError::NotCompiled);
     struct OfflineScope {

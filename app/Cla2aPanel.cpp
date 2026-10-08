@@ -255,15 +255,15 @@ Cla2aPanel::Cla2aPanel(daw::EngineController* controller, QString channel, QStri
     refresh();
 }
 Cla2aPanel::~Cla2aPanel() { m_timer->stop(); finishAll(); }
-comp::Cla2aInstance* Cla2aPanel::instance() const {
-    return m_controller ? dynamic_cast<comp::Cla2aInstance*>(m_controller->insertInstance(m_channel, m_insert)) : nullptr;
+bool Cla2aPanel::available() const {
+    return m_controller && m_controller->hasInsert(m_channel, m_insert, comp::Cla2aInstance::uid());
 }
 double Cla2aPanel::read(unsigned index) const {
     const auto& p = comp::parameterTable()[index];
-    return instance() ? m_controller->insertParameter(m_channel, m_insert, p.id) : p.defaultValue;
+    return available() ? m_controller->insertParameter(m_channel, m_insert, p.id) : p.defaultValue;
 }
 void Cla2aPanel::write(unsigned index, double value) {
-    if (index >= comp::kParameterCount || !std::isfinite(value) || !instance()) return;
+    if (index >= comp::kParameterCount || !std::isfinite(value) || !available()) return;
     if (!m_gestures[index]) m_gestures[index] = read(index);
     const auto& p = comp::parameterTable()[index]; value = std::clamp(value, p.minValue, p.maxValue);
     if (p.isStepped) value = std::round(value);
@@ -272,7 +272,7 @@ void Cla2aPanel::write(unsigned index, double value) {
 }
 void Cla2aPanel::finish(unsigned index) {
     if (!m_gestures[index]) return;
-    if (instance() && read(index) != *m_gestures[index]) {
+    if (available() && read(index) != *m_gestures[index]) {
         m_controller->commitInsertParameterEdit(m_channel, m_insert, comp::parameterTable()[index].id, *m_gestures[index], "Change VLT 2A");
         emit projectEdited();
     }
@@ -283,14 +283,14 @@ void Cla2aPanel::finishAll() {
     for (unsigned i = 0; i < comp::kParameterCount; ++i) finish(i);
 }
 void Cla2aPanel::refresh() {
-    auto* processor = instance();
+    const bool processor = available();
     for (unsigned i = 0; i < 2; ++i) {
-        m_knobs[i]->setEnabled(processor != nullptr); m_values[i]->setEnabled(processor != nullptr);
+        m_knobs[i]->setEnabled(processor); m_values[i]->setEnabled(processor);
         m_knobs[i]->refreshValue(read(i)); m_values[i]->setText(QString::number(m_knobs[i]->value(), 'f', 2));
     }
-    m_mode->setEnabled(processor != nullptr); m_mode->setChecked(read(2) > .5);
+    m_mode->setEnabled(processor); m_mode->setChecked(read(2) > .5);
     if (!isVisible()) return;
-    const auto telemetry = processor ? processor->consumeTelemetry() : comp::Telemetry{};
+    const auto telemetry = processor ? m_controller->effectMeterSnapshot(m_channel, m_insert) : daw::EffectMeterSnapshot{};
     const auto db = [](float amplitude) { return std::clamp(20 * std::log10(std::max(double(amplitude), 1e-12)), -60., 24.); };
     m_meters[0] = std::max(db(telemetry.input), m_meters[0] - 1.4);
     m_meters[1] = std::max(db(telemetry.output), m_meters[1] - 1.4);
