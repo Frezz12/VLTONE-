@@ -33,6 +33,7 @@
 #include <QGroupBox>
 #include <QImageReader>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -81,6 +82,20 @@ public:
     setTextElideMode(Qt::ElideRight);
   }
 protected:
+  void keyPressEvent(QKeyEvent *event) override {
+    const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
+    auto *item = currentItem();
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
+        modifiers == Qt::NoModifier && item &&
+        (item->flags() & Qt::ItemIsEnabled) &&
+        !item->data(0, Qt::UserRole).toString().isEmpty()) {
+      // Qt's macOS style does not activate tree items on Return by default.
+      emit itemActivated(item, currentColumn());
+      event->accept();
+      return;
+    }
+    QTreeWidget::keyPressEvent(event);
+  }
   void drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const override {
     // The styled native branch otherwise loses its disclosure glyph and paints
     // a separate highlight block beside the selected row.

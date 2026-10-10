@@ -204,6 +204,16 @@ bool runCreatorProcess(const std::filesystem::path &exe,
     const int null = open("/dev/null", O_RDONLY);
     dup2(null, STDIN_FILENO);
     close(null);
+    // The bundled tools name some of their scratch files without a directory
+    // (wamrc's "wamrc-su-XXXXXX" stack-usage file, enabled by our
+    // --stack-bounds-checks, is one), so those files land in the working
+    // directory.  A Finder-launched app inherits "/" as its own working
+    // directory, which is not writable, and every compile then fails with
+    // "make temp file failed".  Anchor the child in the private job
+    // directory that owns this log file instead.
+    const auto workDirectory = log.parent_path();
+    if (!workDirectory.empty())
+      (void)chdir(workDirectory.c_str());
 #ifndef __APPLE__
     rlimit memory{2ULL * 1024 * 1024 * 1024, 2ULL * 1024 * 1024 * 1024};
     setrlimit(RLIMIT_AS, &memory);

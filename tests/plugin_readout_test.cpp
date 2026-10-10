@@ -24,7 +24,7 @@ int main() {
     using Rack = daw::plugins::modulation::ModulationRackInstance;
     std::optional<daw::SlicerSnapshot> retained;
     {
-        auto owner = std::make_unique<daw::EngineController>(daw::EngineController::TestRuntime{});
+        auto owner = std::make_unique<daw::EngineController>();
         auto& c = *owner;
         if (!check(c.initialize(48000, 128, false).isOk(), "headless runtime initializes")) return 1;
         const auto track = c.addTrack(daw::TrackKind::Audio, "Readouts");
@@ -41,7 +41,7 @@ int main() {
         c.setInsertParameter(track, equalizer, gain, 6);
         const auto editorInfo = c.insertEditorSnapshot(track, equalizer);
         check(editorInfo && editorInfo->identity == c.insertIdentity(track, equalizer) &&
-              editorInfo->uid == "daw.equalizer" && !editorInfo->remote && !editorInfo->hasEditor &&
+              editorInfo->uid == "daw.equalizer" && !editorInfo->hasEditor &&
               !c.insertEditorSnapshot(track, "missing"), "editor metadata is an owned, typed snapshot");
         std::vector<daw::PluginParameterReadout> readings{
             {gain, 0}, {enabled, 100000}, {"unknown", 0}, {gain, -1}};

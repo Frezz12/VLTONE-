@@ -158,6 +158,7 @@ int creatorCategoryOrder(std::string_view category) {
 }
 
 CreatorNumberField::CreatorNumberField(QWidget *parent) : QDoubleSpinBox(parent) {
+  setProperty("vlt.customNumericScrub", true);
   setButtonSymbols(NoButtons);
   setKeyboardTracking(false);
   setAlignment(Qt::AlignRight);

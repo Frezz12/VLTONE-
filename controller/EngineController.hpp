@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MidiFile.hpp"
+#include "AudioEdit.hpp"
 #include "MidiRecording.hpp"
 #include "StripSilence.hpp"
 #include "RenderSpec.hpp"
@@ -8,6 +9,7 @@
 #include "PluginReadout.hpp"
 #include "model/Document.hpp"
 #include "recovery/RecoverySnapshot.hpp"
+#include "AudioFailureNotice.hpp"
 #include "UndoStack.hpp"
 #include "AudioAnalysis.hpp"
 #include "AudioMusicalAnalysis.hpp"
@@ -24,7 +26,7 @@
 #include "Internal/SlicerInstance.hpp"
 #include "Job/BackgroundExecutor.hpp"
 
-#include "AudioRuntimeEndpoint.hpp"
+#include "AudioRuntimeOwner.hpp"
 #include "Common/RealtimeSnapshot.hpp"
 #include "Audio/SampleBuffer.hpp"
 #include "Nodes/BasicNodes.hpp"
@@ -120,11 +122,8 @@ struct RecordingPreview {
 
 class EngineController {
 public:
+    /// Local audio runtime shared by the desktop application and headless callers.
     EngineController();
-    struct TestRuntime {};
-    explicit EngineController(TestRuntime);
-    struct SecondaryRuntime {};
-    EngineController(SecondaryRuntime, const EngineController& parent);
     ~EngineController();
 
     EngineController(const EngineController&) = delete;
@@ -294,15 +293,16 @@ public:
     audio::Result initialize(const audio::AudioDeviceConfig& config,
                              bool openDevice = true);
     void shutdown();
-    bool isDeviceOpen() const { return m_deviceOpen && m_runtime.deviceSnapshot().running; }
+    bool isDeviceOpen() const { return m_deviceOpen && m_runtime->deviceSnapshot().running; }
     bool audioDeviceNeedsRecovery() const;
-    audio::Result recoverAudioDevice();
+    audio::Result recoverAudioDevice(bool manualRetry = false);
+    bool audioDeviceRecoveryExhausted() const noexcept { return m_deviceRecoveryAttempts >= 3; }
     double sampleRate() const { return m_sampleRate; }
 
     // ── Document ──
     /// Reset the document. The application shell asks for one ready-to-record
     /// audio lane; low-level callers keep the historically empty document.
-    void newProject(bool createDefaultAudioTrack = false);
+    audio::Result newProject(bool createDefaultAudioTrack = false);
     const ProjectModel& project() const { return m_project; }
     const std::string& projectName() const { return m_project.name; }
     void setProjectName(std::string name);
@@ -438,6 +438,7 @@ public:
     const std::string& aiInstructions() const { return m_project.aiInstructions; }
     bool setNotebookHtml(std::string html);
     bool setNotebookCues(std::vector<NotebookCueModel> cues);
+    bool setArrangementLabels(bool chords, std::vector<ArrangementLabel> labels);
     const std::string& notebookHtml() const { return m_project.notebookHtml; }
     const std::vector<NotebookCueModel>& notebookCues() const {
         return m_project.notebookCues;
@@ -582,12 +583,12 @@ public:
     std::string addPatternInstrument(
         const std::string& patternId,
         const plugins::PluginDescriptor& descriptor,
-        double startSeconds = 0.0);
+        double startSeconds = 0.0, const std::string& ownerClipId = {});
     /// Add one built-in Sampler lane loaded from `filePath`, named after the
     /// file stem, with a one-bar MIDI clip ready to edit.
     std::string addPatternSample(const std::string& patternId,
                                  const std::string& filePath,
-                                 double startSeconds = 0.0);
+                                 double startSeconds = 0.0, const std::string& ownerClipId = {});
     /// Turn summing on or off for an existing folder, re-routing its contents
     /// either into its new bus or back out to wherever they were headed.
     void setFolderSumming(const std::string& folderId, bool summing);
@@ -615,6 +616,8 @@ public:
     void commitSendLevelEdit(const std::string& trackId,
                              const std::string& sendId, float before,
                              const std::string& label = "Set Send Level");
+    bool setSendDestination(const std::string& trackId, const std::string& sendId,
+                             const std::string& destinationTrackId);
     void setSendPreFader(const std::string& trackId, const std::string& sendId,
                          bool preFader);
     void setSendEnabled(const std::string& trackId, const std::string& sendId,
@@ -706,6 +709,7 @@ public:
     /// plus the plugin's own opaque state.
     struct ChainSlotSnapshot {
         InsertModel model;
+        bool preserveUnavailable = false; // Captured placeholder; new loads remain strict.
         std::vector<std::uint8_t> state;
         std::vector<std::uint8_t> rightState;   ///< Dual Mono's second instance
         // Transient immutable resources retain copied Sampler/Slicer audio.
@@ -723,6 +727,13 @@ public:
     /// A channel's FX chain, and — when it was copied whole — everything else
     /// the strip holds.
     struct ChannelSnapshot {
+        std::string rackCutSource; // Transient clipboard move; never serialized.
+        // Rack selections may include the channel's single instrument. Its
+        // private FX stay attached to it, outside the channel insert chain.
+        std::optional<ChainSlotSnapshot> instrument;
+        std::vector<ChainSlotSnapshot> instrumentFx;
+        float instrumentFxVolume = 1.f, instrumentFxPan = 0.f;
+        std::vector<RackGroupModel> rackGroups;
         std::vector<ChainSlotSnapshot> miniModules;
         std::optional<ChainSlotSnapshot> channelColor;
         std::string sourceName;       ///< what it came from, for the paste menu
@@ -735,7 +746,7 @@ public:
         bool mono = false;
         std::string outputBusId;
         std::vector<SendModel> sends;
-        bool empty() const { return inserts.empty() && !hasSettings; }
+        bool empty() const { return inserts.empty() && !instrument && !hasSettings; }
     };
 
     /// One prepared rack is copied to independent new channels. Creation is
@@ -779,10 +790,13 @@ public:
 
     /// Render selected arrangement material and insert the generated audio as
     /// one undoable local edit. Files are staged before the document changes.
+    // The executor may prepare immutable sessions off-thread. Capture and
+    // document commit always remain on the controller thread.
+    using RenderExecutor = std::function<audio::Result(const RenderSessionSpec&, rendering::Report&)>;
     audio::Result bounceInPlace(
         const BounceRequest& request,
         const std::function<bool(const rendering::Progress&)>& onProgress,
-        BounceReport& out);
+        BounceReport& out, const RenderExecutor& execute = {});
 
     std::string freezeUnavailableReason(const std::string& trackId);
     bool isTrackFrozen(const std::string& trackId) const;
@@ -842,6 +856,25 @@ public:
     void setChannelClipboard(ChannelSnapshot snapshot) {
         m_channelClipboard = std::move(snapshot);
     }
+
+    // Local device rack. All positions are insertion boundaries in the original
+    // channel vector; a transfer adjusts them after lifting the selection.
+    const std::vector<RackGroupModel>& rackGroups(const std::string& channelId) const;
+    bool createRackGroup(const std::string& channelId, const std::vector<std::string>& ids,
+                         const std::string& name, std::string* groupId = nullptr);
+    bool removeRackGroup(const std::string& channelId, const std::string& groupId);
+    bool renameRackGroup(const std::string& channelId, const std::string& groupId, const std::string& name);
+    bool setRackParameters(const std::string& channelId, const std::string& slotId,
+                           const std::vector<std::string>& parameterIds);
+    audio::Result captureRackSelection(const std::string& channelId,
+        const std::vector<std::string>& ids, ChannelSnapshot& out);
+    audio::Result pasteRackSelection(const std::string& channelId, const ChannelSnapshot& source,
+        std::size_t index, const std::string& groupId = {}, std::vector<std::string>* added = nullptr);
+    audio::Result transferRackSelection(const std::string& fromChannel,
+        const std::vector<std::string>& ids, const std::string& toChannel, std::size_t index,
+        bool copy, const std::string& groupId = {}, std::vector<std::string>* landed = nullptr);
+    bool removeRackSelection(const std::string& channelId, const std::vector<std::string>& ids);
+    bool bypassRackSelection(const std::string& channelId, const std::vector<std::string>& ids, bool bypassed);
     /// Take one plugin slot off `fromChannel` and put it on `toChannel` at
     /// `index`, carrying its live state. With `copy` the source keeps its own.
     /// One undo entry covers both channels.
@@ -860,6 +893,9 @@ public:
     bool setInsertChannelMode(const std::string& channelId,
                               const std::string& insertId,
                               PluginChannelMode mode);
+    bool insertSupportsChannelMode(const std::string& channelId,
+                                    const std::string& insertId,
+                                    PluginChannelMode mode) const;
     void setInsertEditorChannel(const std::string& channelId,
                                 const std::string& insertId,
                                 PluginEditorChannel channel);
@@ -932,8 +968,7 @@ public:
     PluginIdentity insertIdentity(const std::string& channelId,
                                   const std::string& insertId) const;
     std::optional<PluginEditorSnapshot> insertEditorSnapshot(const std::string& channelId,
-        const std::string& insertId,
-        AudioRuntimeEndpoint::Readout readout = AudioRuntimeEndpoint::Readout::Cached) const;
+        const std::string& insertId) const;
     /// All editor calls are control-thread-only. Identity is mandatory: a late
     /// open/close/resize/idle must never act on a replacement in the same slot.
     bool openInsertEditor(const std::string& channelId, const std::string& insertId,
@@ -947,16 +982,13 @@ public:
         const std::string& insertId, PluginIdentity identity, PluginEditorSize requested);
     bool pumpInsertEditor(const std::string& channelId, const std::string& insertId,
                           PluginIdentity identity);
-    std::uint32_t pollInsertEditorShortcuts(const std::string& channelId, const std::string& insertId,
-                                           PluginIdentity identity, bool enabled);
     /// Fills caller-owned values during this call; never retains the span.
     void readInsertParameters(const std::string& channelId, const std::string& insertId,
                               std::span<PluginParameterReadout> values) const;
     std::string insertParameterText(const std::string& channelId, const std::string& insertId,
         const std::string& parameterId, double value, std::int32_t indexHint = -1) const;
     std::optional<SlicerSnapshot> slicerSnapshot(const std::string& channelId,
-        const std::string& insertId, bool includeActivity = false,
-        AudioRuntimeEndpoint::Readout readout = AudioRuntimeEndpoint::Readout::Cached) const;
+        const std::string& insertId, bool includeActivity = false) const;
     std::optional<EqualizerSnapshot> equalizerSnapshot(const std::string& channelId,
         const std::string& insertId, bool consumeMeters = false);
     std::optional<EqualizerResponse> equalizerResponse(const std::string& channelId,
@@ -1012,8 +1044,6 @@ public:
                                   const std::string& samplerSlotId,
                                   float beforeVolume, float beforePan,
                                   const std::string& label);
-    float samplerFxPeakLeft(const std::string& trackId) const;
-    float samplerFxPeakRight(const std::string& trackId) const;
 
     // ── Audio-clip-scoped insert FX ──
     // Same strip contract as Sampler FX, but owned by one ClipModel.  The
@@ -1040,10 +1070,6 @@ public:
     void commitClipFxLevelEdit(const std::string& trackId,
                                const std::string& clipId, float beforeVolume,
                                float beforePan, const std::string& label);
-    float clipFxPeakLeft(const std::string& trackId,
-                         const std::string& clipId) const;
-    float clipFxPeakRight(const std::string& trackId,
-                          const std::string& clipId) const;
 
     // ── The built-in sampler ──
     //
@@ -1119,13 +1145,15 @@ public:
     /// delay compensation follows). Returns true when the UI should redraw.
     /// Control thread, from the UI's existing periodic tick.
     bool pumpPluginEvents();
+    void serviceAudioHealth(bool allowAutomaticRecovery = true);
+    std::vector<AudioFailureNotice> takeAudioFailureNotices();
+    audio::Result retryInsertRecovery(const std::string& channelId, const std::string& slotId,
+                                     PluginIdentity identity);
+    void reportAudioOperationFailure(std::string operation, const audio::Result& failure);
     using PluginRuntimeState = AudioPluginRuntimeState;
     using PluginRuntimeStatus = AudioPluginRuntimeStatus;
     PluginRuntimeStatus insertRuntimeStatus(const std::string& channelId,
-        const std::string& slotId, AudioRuntimeEndpoint::Readout readout = AudioRuntimeEndpoint::Readout::Current) const;
-    /// Start a fresh process off the control/render threads. Publication is
-    /// completed by pumpPluginEvents; deleting/replacing the slot cancels it.
-    bool restartInsert(const std::string& channelId, const std::string& slotId);
+        const std::string& slotId) const;
     /// Device-free editor drafts only: deliver pending host parameter edits
     /// through one silent block, then service plugin callbacks. Never renders
     /// on the control thread when initialized with a live audio device.
@@ -1163,6 +1191,11 @@ public:
     bool setClipAudioFile(const std::string& trackId,
                           const std::string& clipId,
                           const std::string& filePath);
+    /// Replace selected audio sources on one track atomically, preserving
+    /// placement and mix settings. The whole replacement is one undo step.
+    bool replaceAudioClips(const std::string& trackId,
+                           const std::vector<std::string>& clipIds,
+                           const std::string& filePath);
     /// Persist measured tempo/key facts on a clip. This is document metadata,
     /// so it is undoable but requires no graph rebuild.
     bool setClipMusicalAnalysis(const std::string& trackId,
@@ -1268,6 +1301,9 @@ public:
         PreparedTemplateAudioImport prepared);
 
     // ── Clips ──
+    /// Import a sample into a new Sampler track with a MIDI trigger at the drop
+    /// position. Track, instrument, sample and note form one undo operation.
+    std::string importSampleToMidiTrack(const std::string& filePath, double startSeconds);
     /// Create an audio track named after `trackName` (or the file), import the
     /// file at `startSeconds`, and expose the whole operation as one undo
     /// entry. Returns the new track id; on failure no track and no undo entry
@@ -1354,9 +1390,11 @@ public:
                           double atSeconds);
     /// Join two or more clips into one. Clips must share a track and kind;
     /// relative MIDI/automation data and Pattern ownership are preserved.
+    /// Plain audio joins source views without rendering. Complex audio uses
+    /// an immutable render session; the UI can execute it in the background.
     /// Returns a rich failure reason and writes the resulting clip id on success.
     audio::Result glueClips(const std::vector<ClipAddress>& clips,
-                            std::string& gluedClipId);
+                            std::string& gluedClipId, const RenderExecutor& execute = {});
     void removeClip(const std::string& trackId, const std::string& clipId);
 
     /// Silence a clip without removing it. Discrete, so undoable.
@@ -1368,6 +1406,33 @@ public:
     /// Copy a clip onto the same track, placed immediately after the original.
     /// Returns the new clip's id, or empty when the source isn't found.
     /// Undoable.
+    struct AudioEditTarget {
+        std::string trackId, objectId;
+        bool instrument = false;
+        friend bool operator==(const AudioEditTarget&, const AudioEditTarget&) = default;
+    };
+    AudioEditDocument audioEditDocument(const AudioEditTarget&);
+    std::shared_ptr<const engine::SampleBuffer> cachedAudioEditSamples(const AudioEditTarget&);
+    static std::shared_ptr<const engine::SampleBuffer> renderAudioEdit(const AudioEditDocument&, const audioedit::Continue& = {});
+    bool beginAudioEdit(const AudioEditTarget&);
+    bool updateAudioEdit(const AudioEditDocument&, std::shared_ptr<const engine::SampleBuffer>);
+    bool commitAudioEdit(const std::string& label);
+    void cancelAudioEdit();
+    bool setAudioEdit(const AudioEditTarget&, const AudioEditDocument&, std::shared_ptr<const engine::SampleBuffer>, const std::string& label);
+    bool setAudioEditWindow(const AudioEditTarget&, double first, double last, const std::string& label);
+    bool slipAudioEdit(const AudioEditTarget&, double seconds);
+    struct PreparedCompEdit {
+        AudioEditDocument document;
+        std::shared_ptr<const engine::SampleBuffer> audio;
+    };
+    static PreparedCompEdit prepareCompAudioEdit(ClipModel source, double sampleRate,
+        const std::string& directory, const audioedit::Continue& = {});
+    bool adoptCompAudioEdit(const AudioEditTarget&, PreparedCompEdit);
+
+    std::vector<ClipAddress> linkedClips(const ClipAddress&) const;
+    std::vector<ClipAddress> duplicateLinkedClips(const std::vector<ClipAddress>&);
+    bool makeClipsIndependent(const std::vector<ClipAddress>&);
+    std::string splitLinkedClip(const ClipAddress&, double atSeconds);
     std::string duplicateClip(const std::string& trackId,
                               const std::string& clipId);
     /// Copy an existing clip to an exact timeline position. Used by repeat,
@@ -1407,7 +1472,7 @@ public:
     /// of 0 means one bar at the project's tempo and time signature. Returns the
     /// new clip's id, or empty when the track can't hold MIDI. Undoable.
     std::string addMidiClip(const std::string& trackId, double startSeconds,
-                            double lengthSeconds = 0.0);
+                            double lengthSeconds = 0.0, const std::string& ownerClipId = {});
 
     // ── Takes and comping ──
     //
@@ -1420,6 +1485,10 @@ public:
     /// Open the comp editor on a clip (the expanded, per-take view).
     void setClipExpanded(const std::string& trackId, const std::string& clipId,
                          bool expanded);
+    /// Persist the local MIDI/sequence view without changing musical content
+    /// or adding a navigation action to the musical undo history.
+    void setMidiClipView(const std::string& trackId, const std::string& clipId,
+                         MidiClipView view);
     /// Start a comp gesture: snapshots the clip's comp so the whole stroke can
     /// be undone as one edit. Nesting is a no-op, so a stroke that re-enters is
     /// still a single entry.
@@ -1820,19 +1889,14 @@ public:
     void commitMasterPanEdit(float before,
                              const std::string& label = "Set Master Pan");
     float masterPan() const { return m_project.masterPan; }
+    /// Read left/right/hold together with one runtime lookup per visible meter.
+    AudioMeterSnapshot meterSnapshot(const std::string& channelId,
+        const std::string& clipId = {}, bool sampler = false) const;
     float trackPeak(const std::string& trackId) const;
-    float trackPeakLeft(const std::string& trackId) const;
-    float trackPeakRight(const std::string& trackId) const;
-    float trackPeakHold(const std::string& trackId) const;
     void resetTrackPeakHold(const std::string& trackId);
-    float trackRms(const std::string& trackId) const;
     float masterPeak() const;
-    float masterRms() const;
-    float masterPeakLeft() const;
-    float masterPeakRight() const;
-    float masterPeakHold() const;
-    engine::LoudnessLevels masterLoudness() const { return m_runtime.masterLoudness(); }
-    void resetMasterLoudness() { m_runtime.resetMasterLoudness(); }
+    engine::LoudnessLevels masterLoudness() const { return m_runtime->masterLoudness(); }
+    void resetMasterLoudness() { m_runtime->resetMasterLoudness(); }
     void resetMasterPeakHold();
     engine::RealtimeEngine::MasterSpectrum masterSpectrum() const;
     void addMasterSpectrumConsumer() noexcept;
@@ -1841,18 +1905,18 @@ public:
     // Diagnostics are drained by one control/benchmark consumer, never the UI
     // and benchmark concurrently. Counters are cumulative and never reset live.
     AudioTimingSnapshot callbackMetrics(bool drain = false);
-    AudioTimingSnapshot graphMetrics(bool drain = false) { return m_runtime.timingSnapshot(false, drain); }
+    AudioTimingSnapshot graphMetrics(bool drain = false) { return m_runtime->timingSnapshot(false, drain); }
     std::array<std::uint64_t, 4> audioXruns() const;
-    int lastAudioRenderError() const { return m_runtime.diagnostics().lastRenderError; }
-    std::uint64_t failedAudioBlocks() const { return m_runtime.diagnostics().failedBlocks; }
-    AudioDeviceSnapshot audioDeviceDiagnostics() const { return m_runtime.deviceSnapshot(); }
-    std::uint64_t gatedAudioBlocks() const { return m_runtime.diagnostics().gatedBlocks; }
-    void setAudioProfiling(bool enabled) { m_runtime.setProfiling(enabled); }
-    unsigned audioWorkerCount() const { return m_runtime.diagnostics().workers; }
-    unsigned realtimeAudioWorkerCount() const { return m_runtime.diagnostics().realtimeWorkers; }
-    unsigned workgroupAudioWorkerCount() const { return m_runtime.diagnostics().workgroupWorkers; }
-    bool popAudioProfile(unsigned worker, rt::ProfileEvent& event) { return m_runtime.popProfile(worker, event); }
-    std::uint64_t droppedAudioProfileEvents() const { return m_runtime.diagnostics().droppedProfileEvents; }
+    int lastAudioRenderError() const { return m_runtime->engine.lastRenderError(); }
+    std::uint64_t failedAudioBlocks() const { return m_runtime->engine.failedBlocks(); }
+    AudioDeviceSnapshot audioDeviceDiagnostics() const { return m_runtime->deviceSnapshot(); }
+    std::uint64_t gatedAudioBlocks() const { return m_runtime->engine.gatedBlocks(); }
+    void setAudioProfiling(bool enabled) { m_runtime->setProfiling(enabled); }
+    unsigned audioWorkerCount() const { return m_runtime->engine.workerCount(); }
+    unsigned realtimeAudioWorkerCount() const { return m_runtime->engine.realtimeWorkerCount(); }
+    unsigned workgroupAudioWorkerCount() const { return m_runtime->engine.workgroupWorkerCount(); }
+    bool popAudioProfile(unsigned worker, rt::ProfileEvent& event) { return m_runtime->popProfile(worker, event); }
+    std::uint64_t droppedAudioProfileEvents() const { return m_runtime->engine.droppedProfileEvents(); }
 
     // ── Recording ──
     /// How a recording behaves when it lands on existing material. The mode is
@@ -2055,7 +2119,7 @@ public:
     /// producer may call this, joined before changing device/lifecycle state.
     unsigned configureAudioWorkersForTest(bool realtime, unsigned maxParallelThreads = 0) {
         if (isRecording()) return 0;
-        return m_runtime.nativeForWorkerOrTest().configureWorkersForTest(realtime, maxParallelThreads);
+        return m_runtime.get().configureWorkersForTest(realtime, maxParallelThreads);
     }
     /// Optional ADC/DAC timestamps exercise recording placement and presentation
     /// timing through the production callback without opening an audio device.
@@ -2197,9 +2261,9 @@ public:
     std::string currentInputDeviceUid();
     audio::DeviceInfo currentInputDeviceInfo() const;
     audio::DeviceInfo currentOutputDeviceInfo() const {
-        return m_runtime.currentDevice(false);
+        return m_runtime->currentDevice(false);
     }
-    bool audioDeviceRunning() const { return m_runtime.deviceSnapshot().running; }
+    bool audioDeviceRunning() const { return m_runtime->deviceSnapshot().running; }
     audio::AudioDeviceConfig audioConfiguration() const;
     uint32_t bufferSizeFrames() const { return m_bufferSize; }
     audio::Result applyAudioConfiguration(
@@ -2293,8 +2357,22 @@ private:
     struct ChainReplacement {
         std::string channelId;
         std::span<const ChainSlotSnapshot> contents;
+        const ChannelSnapshot* instrumentState = nullptr;
     };
     bool applyChains(std::span<const ChainReplacement> replacements);
+    struct RackChannelState { std::string channelId; ChannelSnapshot snapshot; bool instrumentChanged = false; };
+    struct RackAutomationAddress { std::string trackId, clipId; AutomationTarget target; };
+    struct RackEditState {
+        std::vector<RackChannelState> channels;
+        std::vector<RackAutomationAddress> automation;
+    };
+    std::vector<RackGroupModel>* mutableRackGroups(const std::string& channelId);
+    bool applyRackEdit(const RackEditState& state);
+    bool commitRackEdit(const RackEditState& before, const RackEditState& after, const std::string& label);
+    audio::Result captureRackChannel(const std::string& channel, bool instrument, RackChannelState& state);
+    audio::Result submitSharedRackTransfer(const std::string& from, const ChannelSnapshot& source,
+        const std::string& to, std::size_t index, bool copy, std::vector<std::string>* landed);
+    bool applyChannelSnapshot(const std::string& channelId, const ChannelSnapshot& state, bool includeRouting);
     /// Push the document's clip list for one track into its player node.
     void syncTrackClips(const TrackModel& track);
     AudioContentSpec::Clips prepareTrackClips(const TrackModel& track);
@@ -2543,6 +2621,8 @@ private:
     audio::Result applyRenderSampleRate(double rate, uint32_t frames = 0);
     audio::Result startConfiguredAudioDevice();
     std::uint64_t m_nextDeviceRecoveryNs = 0;
+    unsigned m_deviceRecoveryAttempts = 0;
+    std::uint64_t m_deviceRecoveryIncident = 0;
 
     // ── Insert plumbing ──
     AudioPluginAddress pluginAddress(const std::string& channelId, const std::string& slotId,
@@ -2616,11 +2696,24 @@ private:
     /// still valid: the file it came from and the precomputed settings it was
     /// rendered through. Keyed by clip id, so a clip that is deleted or given a
     /// different file drops its entry instead of leaving one behind.
+    struct AudioEditGesture {
+        AudioEditTarget target;
+        AudioEditDocument before, after;
+        std::shared_ptr<const engine::SampleBuffer> beforeAudio, afterAudio;
+    };
+    std::optional<AudioEditGesture> m_audioEditGesture;
+    std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_audioEditAudio;
+    bool applyAudioEdit(const AudioEditTarget&, const AudioEditDocument&, std::shared_ptr<const engine::SampleBuffer>);
+    std::shared_ptr<const engine::SampleBuffer> resolveEditedAudio(const AudioEditDocument&);
+    bool m_syncingLinkedContent = false;
+    void syncLinkedNoteTracks(const TrackModel&, bool geometry);
+
     struct ClipSampleCacheEntry {
         std::string path;
         plugins::sampler::PrecomputeSettings settings;
         std::shared_ptr<const plugins::sampler::SampleData> data;
         std::shared_ptr<const WaveformPeaks> waveform;
+        std::string editRevision;
     };
     std::unordered_map<std::string, ClipSampleCacheEntry> m_clipSampleCache;
     /// Content/settings-level reuse behind the clip-id lookup above. Identical
@@ -2631,6 +2724,7 @@ private:
         plugins::sampler::PrecomputeSettings settings;
         std::weak_ptr<const plugins::sampler::SampleData> data;
         std::weak_ptr<const WaveformPeaks> waveform;
+        std::string editRevision;
     };
     std::vector<SharedClipSampleCacheEntry> m_sharedClipSampleCache;
     std::uint64_t m_clipWaveformRevision = 0;
@@ -2672,6 +2766,21 @@ private:
     void cancelClipSampleBake();
     void flushDeferredClipSync();
     std::uint64_t m_pluginEventScanCount = 0;
+    struct PluginRecoveryEntry {
+        AudioFailureNotice notice;
+        bool automaticAttempted = false;
+    };
+    std::unordered_map<std::string, PluginRecoveryEntry> m_pluginRecovery;
+    std::unordered_map<std::string, std::string> m_pluginAutomaticRecoveryUsed;
+    std::vector<AudioFailureNotice> m_audioFailureNotices;
+    std::unordered_map<std::string, AudioFailureNotice> m_audioOverloadNotices;
+    std::unordered_map<std::string, std::pair<std::uint64_t, AudioFailureNotice::State>> m_audioNoticeTransitions;
+    std::uint64_t m_audioHealthProject = 0, m_audioHealthFaultGeneration = 0;
+    const AudioRuntime* m_audioHealthRuntime = nullptr;
+    bool m_audioSafetyReported = false;
+    std::uint64_t m_audioIncidentSequence = 0;
+    void publishAudioFailure(AudioFailureNotice notice);
+    audio::Result recoverInsertEntry(PluginRecoveryEntry& entry);
     bool m_previewParameterEditsPending = false;
     /// Wait for every built-in sampler's latest background bake. Playback and
     /// offline/export paths call this before consuming the graph so a GUI-tick
@@ -2755,6 +2864,7 @@ private:
     /// Marks the track as auto-managed either way.
     void refreshAutomaticMonitoring(bool allowBuild = true);
     void applySmartMonitoring(TrackModel& track);
+    audio::Result validateRecordingInputs(const std::vector<std::string>& trackIds) const;
     bool startRecordingTracksImpl(const std::vector<std::string>& trackIds,
                                   bool requireEveryTarget);
     bool armCountInImpl(const std::vector<std::string>& trackIds, int beats,
@@ -2969,6 +3079,7 @@ private:
         ClipKind kind = ClipKind::Audio;
         double beforeStartSeconds = 0.0;
         double beforeOffsetSeconds = 0.0;
+        double beforeContentOffsetBeats = 0.0;
         double beforeDurationSeconds = 0.0;
         ClipMusicalAnalysisModel beforeMusicalAnalysis;
         ClipWarpModel beforeWarp;
@@ -2988,13 +3099,11 @@ private:
     // first detaches the device; all plugin/node teardown stays on this thread.
     struct WorkerRuntime {};
     explicit EngineController(WorkerRuntime);
-    explicit EngineController(std::shared_ptr<AudioRuntimeEndpoint> endpoint);
     double m_sampleRate = 48000;
     std::uint32_t m_bufferSize = 512;
     bool m_liveDeviceAllowed = false, m_prepared = false, m_isRenderClone = false;
     bool m_deviceOpen = false;
-    std::shared_ptr<AudioRuntimeEndpoint> m_audioRuntime;
-    AudioRuntimeEndpoint& m_runtime;
+    AudioRuntimeOwner m_runtime;
 };
 
 } // namespace daw

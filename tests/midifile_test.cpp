@@ -189,7 +189,7 @@ int main() {
               "MIDI timing overflow is rejected before writing");
         source.notes.front().startBeats = 0;
         {
-            daw::EngineController controller{daw::EngineController::TestRuntime{}};
+            daw::EngineController controller{};
             controller.initialize(48000, 512, false);
             const auto pattern = controller.addPattern("Import owner");
             const auto track = controller.addTrack(daw::TrackKind::Midi, "Keys");
@@ -215,7 +215,7 @@ int main() {
         }
         for (auto outcome : {daw::collab::SharedMutationResult::Submitted,
                              daw::collab::SharedMutationResult::Blocked}) {
-            daw::EngineController controller{daw::EngineController::TestRuntime{}};
+            daw::EngineController controller{};
             controller.initialize(48000, 512, false);
             const auto track = controller.addTrack(daw::TrackKind::Midi, "Keys");
             const auto clip = controller.addMidiClip(track, 2, 1);
@@ -443,7 +443,7 @@ int main() {
 
     // ── Into the document ──
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 512, /*openDevice=*/false).isOk(),
               "controller initialises offline");
         const std::string trackId =
@@ -494,7 +494,7 @@ int main() {
         for (const auto outcome : {
                  daw::collab::SharedMutationResult::Submitted,
                  daw::collab::SharedMutationResult::Blocked}) {
-            daw::EngineController shared{daw::EngineController::TestRuntime{}};
+            daw::EngineController shared{};
             check(shared.initialize(48000, 512, false).isOk(),
                   "shared MIDI import fixture initializes");
             const std::string sharedTrack =
@@ -528,7 +528,7 @@ int main() {
 
     // ── A larger multi-track file spreads over lanes as one edit ──
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, false);
         const std::string trackId =
             controller.addTrack(daw::TrackKind::Instrument, "Keys");
@@ -686,7 +686,7 @@ int main() {
         for (const auto outcome : {
                  daw::collab::SharedMutationResult::Submitted,
                  daw::collab::SharedMutationResult::Blocked}) {
-            daw::EngineController shared{daw::EngineController::TestRuntime{}};
+            daw::EngineController shared{};
             shared.initialize(48000, 512, false);
             const std::string pattern = shared.addPattern("Cloud Pattern");
             const std::string target =
@@ -733,7 +733,7 @@ int main() {
 
     // ── A single-track import joins and extends its Pattern owner ──
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, false);
         const std::string patternId = controller.addPattern("Import Pattern");
         const std::string childId =
@@ -842,7 +842,7 @@ int main() {
 
     // ── Multi-track import stays ordered in a nested Pattern subtree ──
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, false);
         const std::string patternId = controller.addPattern("Nested Import");
         const std::string folderId = controller.addFolder(false, "Sources");

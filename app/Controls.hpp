@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 
 #include "Icons.hpp"
+#include "LockedCursorDrag.hpp"
 #include "model/Document.hpp"
 
 #include <QAbstractButton>
@@ -35,26 +36,6 @@ namespace daw { class EngineController; }
 
 namespace ui {
 class FrameTimer;
-
-/// Relative pointer gesture for controls that must keep moving after the
-/// physical pointer would otherwise reach a screen edge. Track successive
-/// floating-point positions; recenter only at an edge and ignore the warp's
-/// queued events, so mouse and trackpad samples cover the same distance.
-class LockedCursorDrag {
-public:
-    void begin(const QPointF& globalPosition);
-    QPointF takeDelta(const QPointF& globalPosition, bool wrapAtEdge = true);
-    QPointF finish(const QPointF& globalPosition);
-    void cancel();
-    bool active() const { return m_active; }
-
-private:
-    QPointF m_anchor;
-    QPointF m_lastPosition;
-    QPointF m_warpFrom;
-    bool m_warpPending = false;
-    bool m_active = false;
-};
 
 /// Shared navigation chrome for the arrangement and piano roll.
 inline constexpr int kViewControlWidth = 18;
@@ -268,6 +249,7 @@ public:
     /// waiting, which a static shade cannot say apart from "recording".
     void setPulse(bool on);
     void setButtonSize(int w, int h);
+    void setGlyphSize(int size) { m_glyphSize = size; update(); }
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -276,6 +258,7 @@ protected:
 
 private:
     icons::Glyph m_glyph;
+    int m_glyphSize = 0;
     bool m_prominent = false;
     bool m_accentTint = false;
     QColor m_activeColor;
@@ -348,6 +331,9 @@ public:
     void setGain(double gain);
     /// Let a scrollable channel strip keep wheel input for navigation.
     void setWheelEnabled(bool enabled);
+    /// Console strips already show gain above the fader; track headers use
+    /// the floating readout while dragging.
+    void setValueBubbleEnabled(bool enabled) { m_valueBubbleEnabled = enabled; }
     /// Print the dB scale down the left of the slot. Vertical faders only —
     /// there is nowhere to put it on a horizontal one.
     void setScaleVisible(bool visible);
@@ -412,6 +398,7 @@ private:
     bool m_dragging = false;
     bool m_wheelEditing = false;
     bool m_wheelEnabled = true;
+    bool m_valueBubbleEnabled = true;
     bool m_hovered = false;
     bool m_automatable = false;
     bool m_compactKnob = false;
@@ -576,7 +563,7 @@ private:
 class Knob : public QWidget {
     Q_OBJECT
 public:
-    enum class VisualStyle { Standard, SamplerDigital, Gravity, Graphite, Slicer };
+    enum class VisualStyle { Standard, SamplerDigital, Gravity, Graphite, Slicer, RackDigital };
 
     Knob(const QString& caption, QWidget* parent = nullptr);
 
@@ -762,7 +749,7 @@ public:
     ///   Panel — a standalone rounded instrument with a clip lamp above it.
     ///   Console — square stereo bars inside the channel's shared level well,
     ///             aligned to the fader scale, with an audio-side clip latch.
-    ///   Rail  — a single square strip filling its whole widget, meant to be
+    ///   Rail  — one or two square strips filling the widget, meant to be
     ///           flush against an edge with no margin anywhere. The clip
     ///           indicator becomes the top of the strip itself, because a rail
     ///           has no room beside it for a separate lamp.

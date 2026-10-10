@@ -32,6 +32,9 @@ func (s *Server) sendCrashNotification(report model.CrashReport) {
 		report.AppVersion, report.BuildID, report.Platform, report.Reason,
 		report.LastPlugin, report.ID, link)
 	for _, admin := range admins {
+		if !adminCan(admin, "crashes.read") || !s.resolveAdminIdentity(&admin) {
+			continue
+		}
 		if err := s.sendPlainEmail(admin.Email, "VLTONE: new crash report", body); err != nil {
 			log.Printf("send crash notification to %s: %v", admin.ID, err)
 		}

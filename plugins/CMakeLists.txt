@@ -22,6 +22,7 @@ endif()
 
 set(DAW_PLUGINHOST_SOURCES
     Host/Registry.cpp
+    Host/HostedPluginFactory.cpp
     Host/PluginNode.cpp
     Internal/EqualizerInstance.cpp
     Internal/CompressorInstance.cpp

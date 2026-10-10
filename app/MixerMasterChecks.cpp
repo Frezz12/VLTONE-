@@ -21,7 +21,7 @@ bool MixerWidget::checkMasterDockForTest() {
         preferences.setChannelWidth(originalWidth);
     });
     preferences.setMasterVisible(true); preferences.setChannelWidth(100);
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear(); project.invalidateTrackIndex();

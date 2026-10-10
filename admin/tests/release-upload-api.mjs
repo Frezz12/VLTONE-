@@ -9,7 +9,8 @@ createServer((request, response) => {
 
   const allowed = (request.method === "PUT" && artifactPath.test(url.pathname))
     || (request.method === "POST" && screenshotPath.test(url.pathname))
-    || (request.method === "POST" && url.pathname === "/v1/admin/browser-backgrounds");
+    || (request.method === "POST" && url.pathname === "/v1/admin/browser-backgrounds")
+    || (request.method === "POST" && /^\/v1\/admin\/tasks\/[0-9a-f-]+\/attachments$/.test(url.pathname));
   if (!allowed) {
     response.writeHead(404, { "Content-Type": "application/json" });
     return response.end(JSON.stringify({ code: "not_found", path: url.pathname }));

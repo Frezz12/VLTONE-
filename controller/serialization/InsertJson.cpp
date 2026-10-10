@@ -1,3 +1,4 @@
+#include "AudioEdit.hpp"
 #include "serialization/InsertJson.hpp"
 #include "serialization/AssetJson.hpp"
 
@@ -50,6 +51,7 @@ json insertToJson(const InsertModel& i) {
 
     j["format"] = toString(i.format);
     j["uid"] = i.uid;
+    if (i.audioEdit.initialized) j["audioEdit"] = audioedit::toJson(i.audioEdit);
     if (i.miniModule) {
         j["miniModule"] = plugins::mini::toJson(*i.miniModule);
         j["miniModuleMode"] = i.miniModuleMode;
@@ -57,6 +59,7 @@ json insertToJson(const InsertModel& i) {
     }
     j["path"] = i.path;
     j["vendor"] = i.vendor;
+    if (!i.rackParameterIds.empty()) j["rackParameters"] = i.rackParameterIds;
     if (!i.pluginVersion.empty()) j["pluginVersion"] = i.pluginVersion;
     if (!i.parameterFingerprint.empty()) j["parameterFingerprint"] = i.parameterFingerprint;
     if (!i.profileSeed.empty()) j["profileSeed"] = i.profileSeed;
@@ -100,6 +103,7 @@ json insertToJson(const InsertModel& i) {
 
 InsertModel insertFromJson(const json& j) {
     InsertModel i;
+    if (j.contains("audioEdit") && !audioedit::fromJson(j.at("audioEdit"),i.audioEdit)) throw std::runtime_error("invalid sampler audio edit");
     i.id = j.value("id", newUuid());
     i.name = j.value("name", "");
     i.bypassed = j.value("bypassed", false);
@@ -119,6 +123,12 @@ InsertModel insertFromJson(const json& j) {
     }
     i.path = j.value("path", "");
     i.vendor = j.value("vendor", "");
+    if (const auto pins = j.find("rackParameters"); pins != j.end() && pins->is_array()) {
+        for (const auto& pin : *pins) {
+            if (i.rackParameterIds.size() == 8) break;
+            if (pin.is_string()) i.rackParameterIds.push_back(pin.get<std::string>());
+        }
+    }
     i.pluginVersion = j.value("pluginVersion", "");
     i.parameterFingerprint = j.value("parameterFingerprint", "");
     i.profileSeed = j.value("profileSeed", "");

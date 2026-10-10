@@ -46,6 +46,7 @@ public:
     /// afterwards and keeps the project-wide M/S controls pinned on the right.
     void setRulerActions(QWidget* actions);
     void setRulerHeight(int height);
+    void setArrangementRows(const QVector<int>& rows);
 
     void rebuild();
     void refreshMeters();
@@ -122,7 +123,9 @@ public:
                         const QStringList& pins = {});
 
 signals:
-    void customTrackIconRequested(const QStringList& trackIds);
+    void rackSelectionRequested(const QString& channel, const QStringList& ids);
+    void arrangementRowHidden(int row);
+    void arrangementLabelRequested(int row);    void customTrackIconRequested(const QStringList& trackIds);
     void sharedPluginsRequested();
     void selectionChanged(const QString& trackId);
     /// The whole selection, whenever it changes. `selectionChanged` carries the
@@ -312,6 +315,7 @@ private:
 
     QWidget* m_viewport = nullptr;    // clips the rows; fixed height
     QWidget* m_rowsHost = nullptr;    // holds every row; moved to scroll
+    QWidget* m_arrangementHeaders = nullptr;
     QWidget* m_ruler = nullptr;
     QHBoxLayout* m_rulerRow = nullptr;
     int m_scrollY = 0;
@@ -367,6 +371,7 @@ private:
     /// The row a plugin is being dragged over, or -1.
     int m_pluginDropRow = -1;
     QString m_projectTemplateDropPath;
+    bool m_sampleDropNewTrack = false;
     bool m_dropIntoFolder = false;
     int m_dropFolderRow = -1;
 };

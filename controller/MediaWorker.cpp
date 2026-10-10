@@ -1,7 +1,6 @@
 #include "MediaWorker.hpp"
 #include "SampleLoader.hpp"
-#include "AudioValueCodec.hpp"
-#include "AudioRuntimePluginFields.hpp"
+#include "WorkerValueCodec.hpp"
 #include "platform/PathUtils.hpp"
 #include <atomic>
 #include <chrono>
@@ -32,6 +31,29 @@ template<class A> void fields(A& a, MusicalAnalysisResult& v) { a(v.algorithmVer
 template<class A> void fields(A& a, WarpTransient& v) { a(v.sourceSeconds, v.strength, v.confidence); }
 template<class A> void fields(A& a, SamplePitchEstimate& v) { a(v.status, v.midiNote, v.frequencyHz, v.cents); }
 }
+namespace daw::plugins::slicer {
+template<class A> void fields(A& a, Slice& v) { a( v.start, v.end, v.key, v.transpose,
+    v.gain, v.pan, v.cutoff, v.resonance, v.filter, v.chokeGroup, v.flags,
+    v.id, v.fineTune, v.normalization, v.fadeInMs, v.fadeOutMs, v.crossfadeMs,
+    v.loopMode, v.locked, v.useGlobalEnvelope, v.attack, v.decay, v.sustain,
+    v.release, v.effect, v.effectX, v.effectY, v.effectMix); }
+
+template<class A> void fields(A& a, AnalysisSettings& v) {
+    a(v.mode, v.targetCount, v.sensitivity, v.seed, v.preAttackMs, v.rootNote,
+        v.scale, v.descending, v.minimumMs, v.zeroCrossing, v.randomSpread,
+        v.sourceBpm, v.gridBeats, v.rangeStart, v.rangeEnd);
+    if (std::uint32_t(v.mode) > std::uint32_t(SliceMode::Manual))
+        worker_value::invalid("unknown slice mode");
+}
+template<class A> void fields(A& a, SliceTable& v) {
+    a(v.count, v.frames, v.nextId, v.chromaticFallback);
+    if (v.count > kMaxSlices) worker_value::invalid("slicer table exceeds slice limit");
+    // Unused array capacity and derived key indices are not state. Rebuild the
+    // lookup from bounded owned slices, using the same rules as native edits.
+    for (std::uint32_t i = 0; i < v.count; ++i) a(v.slices[i]);
+    if constexpr (A::reading) v.rebuild();
+}
+}
 namespace daw {
 namespace media_job {
 enum class Kind : std::uint32_t { Probe, Decode, Musical, Transients, Pitch, Slice };
@@ -58,7 +80,7 @@ template<class A> void fields(A& a, Reply& v) { a(v.version, v.info, v.audio, v.
 }
 namespace {
 using namespace media_job;
-std::atomic<std::shared_ptr<const std::string>> helper;
+std::shared_ptr<const std::string> helper;
 // A folder scan and concurrent editors cannot launch unbounded decoder/model
 // processes. Waiting callers still poll their own cancellation every 20 ms.
 std::counting_semaphore<2> capacity(2);
@@ -85,7 +107,7 @@ std::vector<std::uint8_t> readPacket(const std::filesystem::path& path) {
 audio::Result run(const Request& request, Reply& out, const std::function<bool(double)>& keepGoing) {
     out = {};
     try {
-        const auto executable = helper.load();
+        const auto executable = std::atomic_load(&helper);
         if (!executable) return audio::Result::fail(audio::EngineError::NotInitialized, "media worker is not configured");
         const auto poll = [&] { return !keepGoing || keepGoing(0); };
         if (!poll()) return audio::Result::fail(audio::EngineError::InvalidArgument, "cancelled");
@@ -98,7 +120,7 @@ audio::Result run(const Request& request, Reply& out, const std::function<bool(d
         Slot slot;
         WorkerJob job(std::filesystem::temp_directory_path());
         ProcessAudioResources resources(job.root / "input", [&] { return !poll(); });
-        writePacket(job.root / "media.request", audio_value::encodeResources(resources, request));
+        writePacket(job.root / "media.request", worker_value::encodeResources(resources, request));
         bool cancelled = false;
         nlohmann::json reply;
         const auto result = job.run(*executable, [&](const rendering::Progress& progress) {
@@ -107,7 +129,7 @@ audio::Result run(const Request& request, Reply& out, const std::function<bool(d
         if (cancelled) return audio::Result::fail(audio::EngineError::InvalidArgument, "cancelled");
         if (!result) return result;
         if (!reply.value("media", false)) throw std::runtime_error("unexpected media worker result");
-        auto [decoded] = audio_value::decodeResources<Reply>(readPacket(job.root / "output" / "media.reply"), job.root / "output");
+        auto [decoded] = worker_value::decodeResources<Reply>(readPacket(job.root / "output" / "media.reply"), job.root / "output");
         if (decoded.version != 1) throw std::runtime_error("incompatible media worker result");
         out = std::move(decoded);
         return audio::Result::ok();
@@ -146,7 +168,7 @@ private:
 }
 
 void MediaWorker::install(const std::string& executable) {
-    helper.store(std::make_shared<const std::string>(executable));
+    std::atomic_store(&helper, std::make_shared<const std::string>(executable));
     auto services = std::make_shared<audio::platform::AudioFileServices>();
     services->probe = probe;
     services->open = [](const std::string& path, std::unique_ptr<audio::platform::AudioFileSource>& source,
@@ -159,7 +181,7 @@ void MediaWorker::install(const std::string& executable) {
     audio::platform::setAudioFileServices(std::move(services));
     setSampleLoader(decode);
 }
-bool MediaWorker::enabled() noexcept { return bool(helper.load()); }
+bool MediaWorker::enabled() noexcept { return bool(std::atomic_load(&helper)); }
 audio::Result MediaWorker::probe(const std::string& path, audio::platform::AudioFileInfo& out) {
     Request request; request.path = path;
     Reply reply;
@@ -208,7 +230,7 @@ plugins::slicer::SliceTable MediaWorker::slice(const engine::SampleBuffer& audio
     return run(request, reply, noProgress(keepGoing)) ? reply.slices : plugins::slicer::SliceTable{};
 }
 nlohmann::json MediaWorker::execute(const std::filesystem::path& root, const WorkerJob::Progress& progress) {
-    auto [request] = audio_value::decodeResources<Request>(readPacket(root / "media.request"), root / "input");
+    auto [request] = worker_value::decodeResources<Request>(readPacket(root / "media.request"), root / "input");
     if (request.version != 1) throw std::runtime_error("incompatible media worker request");
     const auto keepGoing = [&] { return progress({rendering::Progress::Stage::Preparing}); };
     Reply reply;
@@ -231,7 +253,7 @@ nlohmann::json MediaWorker::execute(const std::filesystem::path& root, const Wor
     }
     if (!keepGoing()) throw std::runtime_error("cancelled");
     ProcessAudioResources resources(root / "output", [&] { return !keepGoing(); });
-    writePacket(root / "output" / "media.reply", audio_value::encodeResources(resources, reply));
+    writePacket(root / "output" / "media.reply", worker_value::encodeResources(resources, reply));
     return {{"media", true}};
 }
 } // namespace daw

@@ -1,4 +1,5 @@
 #include "MediaWorker.hpp"
+#include "EngineController.hpp"
 #include "SampleLoader.hpp"
 #include "Recording/RecordingEngine.hpp"
 #include "plugins/PluginManager.hpp"
@@ -6,6 +7,7 @@
 #include "SharedProcess.hpp"
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -20,7 +22,7 @@ bool check(bool value, const char* message) {
 int main(int argc, char** argv) try {
     using namespace daw;
     if (argc > 1) {
-        plugins::ipc::SharedProcess child;
+        process::SharedProcess child;
         std::string error;
         if (!child.attach(argc, argv, error)) return 2;
         std::_Exit(71); // Test executable only; production workers have no fault switch.
@@ -56,7 +58,11 @@ int main(int argc, char** argv) try {
         file = platform::pathToUtf8(target);
         if (!check(bool(audio::platform::decodeAudioFile(file, reference)), "capture native compressed audio reference")) return 1;
     }
-    const auto helper = PluginManager::helperPath("daw_worker");
+    // Exercise an installed/staged release helper as well as the build-tree
+    // worker; ordinary unit tests otherwise miss broken bundle load paths.
+    const auto* packagedHelper = std::getenv("VLT_TEST_MEDIA_WORKER");
+    const auto helper = packagedHelper && *packagedHelper
+        ? std::string(packagedHelper) : PluginManager::helperPath("daw_worker");
     MediaWorker::install(helper);
     for (const auto& [file, reference] : compressed) {
         audio::platform::DecodedAudio actual;
@@ -103,6 +109,29 @@ int main(int argc, char** argv) try {
     check(bool(analysis::analyzeAudioFile(path, musical, actualAnalysis)) && actualAnalysis.key.root == expectedAnalysis.key.root &&
         actualAnalysis.key.scale == expectedAnalysis.key.scale && actualAnalysis.tempo.bpm == expectedAnalysis.tempo.bpm,
         "isolated tempo/key analysis matches the native algorithm");
+    {
+        EngineController controller;
+        check(bool(controller.initialize(48000, 512, false)), "prepare timeline media fixture");
+        controller.setRecordDirectory(directory.string());
+        const auto track = controller.addTrack(TrackKind::Audio, "Capture");
+        check(!controller.importAudio(path, track, 0).empty(), "worker-backed sample import creates a timeline clip");
+        controller.seekSeconds(3);
+        check(controller.startRecording(track), "start worker-backed take");
+        controller.seedRecordingForShot(track, .1, [](double) { return .25f; });
+        const auto captured = controller.stopRecording();
+        const auto* recorded = controller.project().findTrack(track);
+        check(!captured.empty() && controller.recordingWarning().empty() && recorded && recorded->clips.size() == 2,
+            "Stop publishes the recorded WAV on the timeline through the packaged decoder");
+
+        MediaWorker::install(helper + ".missing");
+        controller.seekSeconds(4);
+        check(controller.startRecording(track), "start take before decoder failure");
+        controller.seedRecordingForShot(track, .1, [](double) { return .25f; });
+        controller.stopRecording();
+        check(controller.recordingWarning().find("recorded file could not be read") != std::string::npos,
+            "decoder failure on Stop reports the retained WAV instead of silently dropping the take");
+        MediaWorker::install(helper);
+    }
     auto unchanged = decoded;
     check(!MediaWorker::decode(path, unchanged, [] { return false; }) && unchanged == decoded,
         "cancelled decode leaves the previous source unchanged");

@@ -35,12 +35,20 @@ if [[ ! -f "$destination/llvm-20.1.8/lib/cmake/clang/ClangConfig.cmake" ]]; then
 fi
 
 if [[ ! -x "$destination/wamrc/wamrc" ]]; then
+    # Prebuilt LLVM SDKs may contain ThinLTO archives newer than Xcode's ld.
+    # Link those archives with the matching LLVM linker when it is available.
+    linker_args=()
+    if [[ "$(uname -s)" == Darwin && -x "$destination/llvm-20.1.8/bin/ld64.lld" ]]; then
+        linker_args+=("-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=$destination/llvm-20.1.8/bin/ld64.lld")
+    fi
     download wamr-source.tar.gz \
       https://github.com/wasm-micro-runtime/wasm-micro-runtime/archive/25bd7eb63e828e4bd242cc9b38d260b4b31c6605.tar.gz \
       4ea552d9d979f3c3d5f9e298a1594150820d2b76e8328ad68779578edea7a873
     tar -xf "$destination/wamr-source.tar.gz" -C "$destination"
     cmake -S "$destination/wasm-micro-runtime-25bd7eb63e828e4bd242cc9b38d260b4b31c6605/wamr-compiler" \
       -B "$destination/wamrc-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      "${linker_args[@]}" \
+      -DWAMR_BUILD_WITH_CUSTOM_LLVM=1 \
       -DLLVM_DIR="$destination/llvm-20.1.8/lib/cmake/llvm" -DWAMR_BUILD_SIMD=1
     cmake --build "$destination/wamrc-build" --parallel "$jobs"
     mkdir -p "$destination/wamrc"

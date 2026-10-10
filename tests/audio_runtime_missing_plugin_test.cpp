@@ -1,5 +1,4 @@
 #include "AudioRuntime.hpp"
-#include "AudioSessionCodec.hpp"
 #include "platform/PathUtils.hpp"
 
 #include <algorithm>
@@ -17,9 +16,6 @@ bool check(bool value, const char* message) {
     std::fflush(stdout);
     failures += !value;
     return value;
-}
-template<class F> bool rejects(F&& action) {
-    try { action(); return false; } catch (const std::exception&) { return true; }
 }
 struct Directory {
     std::filesystem::path path = std::filesystem::temp_directory_path() /
@@ -153,31 +149,20 @@ void opaqueRoundTrip() {
     original[0].left.pending = {{"last-edit", .75, true}};
     if (!check(bool(runtime.restorePluginCheckpoints(original)), "opaque unavailable state is retained without native loading")) return;
     std::vector<AudioPluginCheckpoint> captured;
-    check(bool(runtime.capturePluginCheckpoints(captured)) && encodeAudioCheckpoints(captured) == encodeAudioCheckpoints(original),
+    check(bool(runtime.capturePluginCheckpoints(captured)) && captured == original,
           "opaque bytes, independent sides, inline flags and pending edits survive capture unchanged");
     auto invalid = original;
     invalid.front().left.state = {123};
     invalid.push_back(original.front()); invalid.back().slotId = "absent";
     check(!runtime.restorePluginCheckpoints(invalid) && bool(runtime.capturePluginCheckpoints(captured)) &&
-          encodeAudioCheckpoints(captured) == encodeAudioCheckpoints(original),
+          captured == original,
           "an invalid checkpoint batch cannot partially replace retained unavailable state");
 
-    Directory directory;
-    ProcessAudioResources resources(directory.path);
-    AudioSessionPacket packet;
-    packet.generation = 1; packet.blockSize = 64; packet.session = imported; packet.checkpoints = captured;
-    auto decoded = decodeAudioSession(encodeAudioSession(packet, resources), directory.path);
-    check(decoded.session.pluginChains.front().slots.front().loadPolicy == AudioPluginLoadPolicy::PreserveUnavailable &&
-          encodeAudioCheckpoints(decoded.checkpoints) == encodeAudioCheckpoints(original),
-          "session wire retains explicit missing policy and every opaque byte for a new process generation");
-    auto bad = packet;
-    bad.session.pluginChains.front().slots.front().loadPolicy = AudioPluginLoadPolicy(255);
-    check(rejects([&] { encodeAudioSession(bad, resources); }), "unknown missing-plugin policy cannot cross the session boundary");
     AudioRuntime restored;
     if (!check(bool(restored.prepare(48000, 64)), "replacement missing-state runtime prepares")) return;
-    restored.buildSession(std::move(decoded.session));
-    check(bool(restored.restorePluginCheckpoints(decoded.checkpoints)) && bool(restored.commitGraph()) &&
-          bool(restored.capturePluginCheckpoints(captured)) && encodeAudioCheckpoints(captured) == encodeAudioCheckpoints(original) &&
+    restored.buildSession(std::move(imported));
+    check(bool(restored.restorePluginCheckpoints(original)) && bool(restored.commitGraph()) &&
+          bool(restored.capturePluginCheckpoints(captured)) && captured == original &&
           !restored.hasPlugin({"source", "missing"}) && rendersTransparent(restored),
           "replacement generation retains unavailable state and plays through the original stereo topology");
     check(!restored.restorePluginCheckpoints(original), "published placeholder targets still reject out-of-transaction checkpoint replacement");
@@ -185,9 +170,12 @@ void opaqueRoundTrip() {
 
 void projectStateOrigin() {
     Directory directory;
-    ProcessAudioResources resources(directory.path);
-    AudioSessionPacket packet;
-    packet.generation = 1; packet.blockSize = 64; packet.session = session();
+    struct PreparedSession {
+        AudioSessionSpec session;
+        std::vector<AudioPluginStateEdit> restores;
+        std::vector<AudioPluginCheckpoint> checkpoints;
+    } packet;
+    packet.session = session();
     auto sampler = plugin("sampler", "daw.sampler");
     sampler.loadPolicy = AudioPluginLoadPolicy::PlaceholderOnly;
     sampler.unavailableReason = "Project state is not yet available.";
@@ -213,10 +201,10 @@ void projectStateOrigin() {
           "placeholder checkpoint marks project bytes instead of claiming a captured native state");
     packet.checkpoints.front().left.pending = {{"pan", -.5}};
     packet.session.pluginChains.front().slots.front().loadPolicy = AudioPluginLoadPolicy::Required;
-    auto decoded = decodeAudioSession(encodeAudioSession(packet, resources), directory.path);
+    auto decoded = packet;
     check(decoded.checkpoints.front().left.projectState && decoded.restores.size() == 1 &&
           decoded.restores.front().state.source && decoded.restores.front().state.source->readSample(0, 31) == .375f,
-          "project-state origin and resource-backed original import survive the process wire");
+          "project-state origin and immutable original import survive a runtime copy");
 
     AudioRuntime missingImport;
     missingImport.prepare(48000, 64);
@@ -231,7 +219,7 @@ void projectStateOrigin() {
     check(current.exists && current.sample && current.sample->readSample(0, 31) == .375f &&
           current.samplePath == edit.state.sourcePath && restored.pluginParameter({"source", "sampler"}, "vol") == .25 &&
           restored.pluginParameter({"source", "sampler"}, "pan") == -.5,
-          "checkpoint replay preserves mapped PCM, preset authority and the newer pending host edit");
+          "checkpoint replay preserves shared PCM, preset authority and the newer pending host edit");
     std::vector<AudioPluginCheckpoint> native;
     check(bool(restored.capturePluginCheckpoints(native)) && native.size() == 1 && !native.front().left.projectState,
           "a healthy native capture replaces the project-origin marker with an actual processor checkpoint");

@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 // a playbook, changes the text, saves, and the desktop picks it up on its next
 // fetch. The API is stubbed — this checks the page, not the backend.
 
-const session = { admin: { id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-26T20:00:00Z" };
+const session = { admin: { is_owner: true, permissions: [], id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-26T20:00:00Z" };
 
 const documents = [
   { id: "main", kind: "main", title: "Main instructions", use_when: "always", tags: [], body: "You are a music producer.", enabled: true, updated_at: "2026-08-25T10:00:00Z", builtin: true },

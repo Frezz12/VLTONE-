@@ -38,3 +38,12 @@ test("release upload proxy streams artifacts and screenshots to a versioned API 
     path: `/v1/admin/releases/${releaseID}/screenshots`,
   });
 });
+
+test("task attachment proxy streams a 10 MiB file including multipart overhead", async ({ request }) => {
+  const response = await request.post(`/release-upload/v1/admin/tasks/${releaseID}/attachments`, {
+    headers: { "X-CSRF-Token": "csrf", Origin: "http://127.0.0.1:3101", Cookie: "vlt_admin_session=test" },
+    multipart: { file: { name: "session.zip", mimeType: "application/zip", buffer: Buffer.alloc(10 * 1024 * 1024, 1) } },
+  });
+  expect(response.ok()).toBe(true);
+  expect((await response.json()).bytes).toBeGreaterThan(10 * 1024 * 1024);
+});

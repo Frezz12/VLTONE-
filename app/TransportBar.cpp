@@ -722,6 +722,7 @@ TransportBar::TransportBar(daw::EngineController* controller, QWidget* parent)
                    0, kToolCount - 1);
     m_rulerFormat = ui::rulerFormatFromInt(
         QSettings().value(ui::kRulerFormatSetting, int(ui::RulerFormat::Bars)).toInt());
+    if (ui::rulerShowsTime(m_rulerFormat)) m_rulerFormat = ui::RulerFormat::BarsAndTime;
     setFixedHeight(ui::kTransportHeight);
     setAttribute(Qt::WA_StyledBackground, false);
     m_backgroundMedia = new ui::ThemeMediaBackground(this);
@@ -1350,7 +1351,7 @@ void TransportBar::setTimeDisplayBars(bool bars) {
 }
 
 void TransportBar::setRulerFormat(ui::RulerFormat format) {
-    format = ui::rulerFormatFromInt(int(format));
+    format = ui::rulerShowsTime(format) ? ui::RulerFormat::BarsAndTime : ui::RulerFormat::Bars;
     if (m_rulerFormat == format) return;
     m_rulerFormat = format;
     updateRulerControls();
@@ -1375,8 +1376,8 @@ void TransportBar::updateRulerControls() {
             const int flag = action->data().toInt();
             const QSignalBlocker blocker(action);
             action->setChecked((int(m_rulerFormat) & flag) != 0);
-            // Keep at least one row visible; the other row can always be added.
-            action->setEnabled(int(m_rulerFormat) != flag);
+            // Bars remain in the fixed header; Time is an optional arrangement row.
+            action->setEnabled(flag != int(ui::RulerFormat::Bars));
         }
     }
 }
@@ -2063,7 +2064,7 @@ bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) 
         std::fprintf(stderr, "Header interaction check failed at line %d\n", line);
         return false;
     };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return fail(__LINE__);
     QWidget host;
     host.resize(1920, 400);
@@ -2228,7 +2229,7 @@ bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) 
 
 bool TransportBar::checkTempoInteractionForTest() {
     const auto fail = [](int line) { std::fprintf(stderr, "BPM interaction check failed at line %d\n", line); return false; };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return fail(__LINE__);
     QWidget host;
     host.resize(1200, 600);

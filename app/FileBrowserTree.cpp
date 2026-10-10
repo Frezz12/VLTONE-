@@ -36,6 +36,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -219,7 +220,8 @@ const ui::browserprefs::Collection* findCollection(
 
 FileBrowserTree::FileBrowserTree(QWidget* parent) : QTreeWidget(parent) {
     setHeaderHidden(true);
-    setRootIsDecorated(true);
+    setRootIsDecorated(false);
+    setExpandsOnDoubleClick(false);
     setUniformRowHeights(true);
     setIndentation(12);
     setIconSize(QSize(18, 18));
@@ -246,6 +248,11 @@ FileBrowserTree::FileBrowserTree(QWidget* parent) : QTreeWidget(parent) {
                 });
             });
 
+    connect(this, &QTreeWidget::itemClicked, this,
+            [](QTreeWidgetItem* item, int) {
+                if (item && isContainer(Kind(item->data(0, kKindRole).toInt())))
+                    item->setExpanded(!item->isExpanded());
+            });
     connect(this, &QTreeWidget::itemExpanded, this, &FileBrowserTree::expandNode);
     connect(this, &QTreeWidget::itemCollapsed, this, &FileBrowserTree::collapseNode);
     connect(this, &QTreeWidget::currentItemChanged, this,
@@ -833,54 +840,32 @@ void FileBrowserTree::populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item
     });
 }
 
-void FileBrowserTree::drawBranches(QPainter* painter, const QRect& rect,
-                                   const QModelIndex& index) const {
-    if (!painter || !index.isValid()) return;
-    painter->save();
-    painter->setRenderHint(QPainter::Antialiasing, true);
-
-    QColor guide = th().textSecondary;
-    guide.setAlpha(th().dark ? 45 : 38);
-    painter->setPen(QPen(guide, 1.0));
-
-    const int step = indentation();
-    int branchX = rect.right() - step / 2;
-    QModelIndex ancestor = index.parent();
-    int ancestorX = branchX - step;
-    while (ancestor.isValid() && ancestorX >= rect.left()) {
-        if (ancestor.row() + 1 < model()->rowCount(ancestor.parent()))
-            painter->drawLine(ancestorX, rect.top(), ancestorX, rect.bottom());
-        ancestor = ancestor.parent();
-        ancestorX -= step;
+void FileBrowserTree::mousePressEvent(QMouseEvent* event) {
+    auto* item = itemAt(event->position().toPoint());
+    if (event->button() == Qt::LeftButton && item &&
+        isContainer(Kind(item->data(0, kKindRole).toInt()))) {
+        // Treat the indentation as part of the row, without QTreeView's
+        // separate disclosure hit target. Expansion happens once on click.
+        QAbstractItemView::mousePressEvent(event);
+        return;
     }
+    QTreeWidget::mousePressEvent(event);
+}
 
-    if (index.parent().isValid()) {
-        const int middle = rect.center().y();
-        painter->drawLine(branchX, rect.top(), branchX, middle);
-        if (index.row() + 1 < model()->rowCount(index.parent()))
-            painter->drawLine(branchX, middle, branchX, rect.bottom());
-        painter->drawLine(branchX, middle, rect.right(), middle);
+void FileBrowserTree::mouseDoubleClickEvent(QMouseEvent* event) {
+    auto* item = itemAt(event->position().toPoint());
+    if (event->button() == Qt::LeftButton && item &&
+        isContainer(Kind(item->data(0, kKindRole).toInt()))) {
+        // A fast second click is still a folder toggle, not file activation.
+        mousePressEvent(event);
+        return;
     }
+    QTreeWidget::mouseDoubleClickEvent(event);
+}
 
-    if (model()->hasChildren(index)) {
-        QColor chevron = th().textSecondary;
-        chevron.setAlpha(205);
-        painter->setPen(QPen(chevron, 1.35, Qt::SolidLine, Qt::RoundCap,
-                             Qt::RoundJoin));
-        const QPointF center(branchX, rect.center().y());
-        QPainterPath path;
-        if (isExpanded(index)) {
-            path.moveTo(center.x() - 3.0, center.y() - 1.5);
-            path.lineTo(center.x(), center.y() + 1.5);
-            path.lineTo(center.x() + 3.0, center.y() - 1.5);
-        } else {
-            path.moveTo(center.x() - 1.5, center.y() - 3.0);
-            path.lineTo(center.x() + 1.5, center.y());
-            path.lineTo(center.x() - 1.5, center.y() + 3.0);
-        }
-        painter->drawPath(path);
-    }
-    painter->restore();
+void FileBrowserTree::drawBranches(QPainter*, const QRect&,
+                                   const QModelIndex&) const {
+    // Indentation conveys hierarchy; the entire folder row is the toggle.
 }
 
 struct FileBrowserTree::DirectoryResult {

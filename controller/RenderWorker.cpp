@@ -78,7 +78,6 @@ void writeSession(const auto& data, const fs::path& root,
     ProcessAudioResources resources(root, cancelled);
     Json manifest{{"version", kVersion}, {"spec", data.spec}, {"rate", data.sampleRate},
         {"block", data.blockSize}, {"revision", data.revision}, {"generation", data.generation},
-        {"hosting", int(data.catalog.hostingMode)}, {"pluginHost", data.catalog.pluginHostPath},
         {"normalize", normalize}, {"analyze", analyze}};
     std::string document;
     require(ProjectSerializer::serializeDocument(data.snapshot.project, document, MediaPaths::Absolute));
@@ -140,11 +139,6 @@ std::pair<bool, bool> readSession(auto& data, const fs::path& root, const Proces
         readFile(privateFile(root, "document.json"))));
     require(data.catalog.cache.load(platform::pathToUtf8(privateFile(root, "catalog.json"))),
             "cannot read render plugin catalogue");
-    const int hosting = manifest.at("hosting").get<int>();
-    require(hosting == int(plugins::HostingMode::Local) || hosting == int(plugins::HostingMode::Isolated),
-            "invalid render plugin hosting mode");
-    data.catalog.hostingMode = plugins::HostingMode(hosting);
-    manifest.at("pluginHost").get_to(data.catalog.pluginHostPath);
     for (const auto& state : manifest.at("states")) {
         require(!cancelled(), "render cancelled");
         const auto bytes = readFile(privateFile(root, state.at("file").get<std::string>()));

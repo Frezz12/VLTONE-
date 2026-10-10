@@ -6,7 +6,7 @@ EngineController::instrumentSlideStatus(const std::string &trackId) {
     auto *track = m_project.findTrack(trackId);
     if (!track)
         return {};
-    const auto status = m_runtime.pluginSlideStatus({trackId, track->instrument.id});
+    const auto status = m_runtime->pluginSlideStatus({trackId, track->instrument.id});
     return {plugins::SlideDelivery(status.mode), status.overloaded, status.clipped};
 }
 void EngineController::setInstrumentSlideSettings(const std::string &trackId, int mode,
@@ -43,7 +43,7 @@ void EngineController::setInstrumentSlideSettings(const std::string &trackId, in
     slot.slideDelivery = mode;
     slot.slideBendRange = range;
     slot.slideReleaseReserve = reserve;
-    m_runtime.setPluginSlide({trackId, slot.id}, mode, range, reserve);
+    m_runtime->setPluginSlide({trackId, slot.id}, mode, range, reserve);
     if (undo)
         m_undo.push(
             "Set Slide Delivery",

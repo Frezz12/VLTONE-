@@ -48,10 +48,7 @@ struct PluginEditorSnapshot {
     PluginIdentity identity;
     std::string name, uid;
     plugins::Format format = plugins::Format::Unknown;
-    bool remote = false, hasEditor = false, open = false;
-    bool openFailed = false;
-    std::uint64_t processId = 0;
-    bool pending = false;
+    bool hasEditor = false, open = false;
 };
 
 struct PluginEditorSize {

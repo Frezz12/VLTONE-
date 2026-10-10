@@ -109,7 +109,7 @@ private slots:
     }
 
     void projectAndUndo() {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         QVERIFY(controller.initialize(48000, 256, false));
         const auto a = controller.addTrack(daw::TrackKind::Audio, "Drums");
         const auto b = controller.addTrack(daw::TrackKind::Midi, "Bass");

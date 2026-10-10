@@ -140,6 +140,7 @@ func TestPostgresAdminManagedCollaborationAccess(t *testing.T) {
 	delete(server.collabAllowedUsers, user.ID)
 
 	admin := model.AdminUser{
+		IsOwner: true, Permissions: []string{},
 		ID: uuid.New(), Email: "admin@example.com", EmailKey: "admin@example.com",
 		Nickname: "Admin", PasswordHash: "unused", Status: model.UserActive,
 	}

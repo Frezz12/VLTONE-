@@ -121,7 +121,7 @@ private slots:
     void cleanup() {
         QDesktopServices::unsetUrlHandler(QStringLiteral("file"));
         QDesktopServices::unsetUrlHandler(QStringLiteral("https"));
-        openedUrl = {};
+        openedUrl = QUrl();
         observedWindow = nullptr;
     }
 

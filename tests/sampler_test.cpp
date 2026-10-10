@@ -880,7 +880,7 @@ int main() {
             recorder.writeWAVFile(wav, tone, 48000);
         }
 
-        EngineController controller{EngineController::TestRuntime{}};
+        EngineController controller{};
         check(controller.initialize(48000, 512, /*openDevice=*/false).isOk(),
               "controller initialises offline");
 
@@ -915,7 +915,7 @@ int main() {
             // the sample are one gesture, so they must be one undo entry —
             // otherwise undoing a drag leaves an empty sampler behind.
             {
-                EngineController drop{EngineController::TestRuntime{}};
+                EngineController drop{};
                 drop.initialize(48000, 512, /*openDevice=*/false);
                 const std::string lane =
                     drop.addTrack(TrackKind::Instrument, "Dropped");
@@ -938,6 +938,35 @@ int main() {
                 const std::string audioLane = drop.addTrack(TrackKind::Audio, "Wave");
                 check(!drop.loadInstrumentSampler(audioLane, wav),
                       "an audio track has no instrument slot to drop onto");
+            }
+
+            {
+                EngineController drop{};
+                drop.initialize(48000, 512, /*openDevice=*/false);
+                const auto depth = drop.undoDepth();
+                const auto count = drop.project().tracks.size();
+                const std::string lane = drop.importSampleToMidiTrack(wav, 3.0);
+                const auto* created = drop.project().findTrack(lane);
+                check(created && created->instrument.uid == "daw.sampler" &&
+                      created->clips.size() == 1 && created->clips.front().kind == ClipKind::Midi &&
+                      created->clips.front().startSeconds == 3.0 &&
+                      created->clips.front().notes.size() == 1 &&
+                      created->clips.front().notes.front().pitch == 60,
+                      "timeline sample drop creates a playable MIDI clip at the drop time");
+                check(drop.undoDepth() == depth + 1, "sample-to-MIDI drop is one undo step");
+                drop.undo();
+                check(!drop.project().findTrack(lane) && drop.project().tracks.size() == count,
+                      "undo removes the entire sample-to-MIDI drop");
+                drop.redo();
+                const auto* restored = drop.project().findTrack(lane);
+                auto* instance = restored ? drop.samplerInstance(lane, restored->instrument.id) : nullptr;
+                check(instance && instance->samplePath() == wav && restored->clips.size() == 1 &&
+                      restored->clips.front().notes.size() == 1,
+                      "redo restores the sample, instrument and MIDI trigger");
+                const auto beforeFailure = drop.undoDepth();
+                check(drop.importSampleToMidiTrack(wav + ".missing", 0).empty() &&
+                      drop.undoDepth() == beforeFailure && drop.project().tracks.size() == count + 1,
+                      "invalid sample leaves no track or undo entry");
             }
 
             const std::string clip = controller.addMidiClip(track, 0.0, 1.0);
@@ -981,7 +1010,9 @@ int main() {
             controller.setInsertParameter(track, slot, "pre.polarity", 0.0);
 
             const std::string mix = (dir / "mix.wav").string();
-            check(controller.exportMixdown(mix, false).isOk(), "the project renders");
+            const auto mixResult = controller.exportMixdown(mix, false);
+            if (!mixResult) std::fprintf(stderr, "Sampler render: %s\n", mixResult.message().c_str());
+            check(mixResult.isOk(), "the project renders");
             check(liveSampler && !liveSampler->precomputePending(),
                   "export synchronously flushes a pending sampler bake");
             audio::platform::DecodedAudio decoded;
@@ -1067,7 +1098,7 @@ int main() {
             const std::string package = (dir / "project.vlt").string();
             check(controller.saveProject(package).isOk(), "the project saves");
 
-            EngineController reopened{EngineController::TestRuntime{}};
+            EngineController reopened{};
             reopened.initialize(48000, 512, false);
             const audio::Result reopenedResult = reopened.openProject(package);
             if (!reopenedResult)

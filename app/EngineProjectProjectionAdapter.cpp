@@ -217,8 +217,10 @@ public:
                 track.expanded,
                 track.automationExpanded,
             };
-            for (const daw::ClipModel& clip : track.clips)
+            for (const daw::ClipModel& clip : track.clips) {
                 clipExpanded[clip.id] = clip.expanded;
+                if (clip.kind == daw::ClipKind::Midi) clipMidiViews[clip.id] = clip.midiView;
+            }
         }
 
         visitInserts(current, [&](const std::string&, const daw::InsertModel& slot,
@@ -267,6 +269,10 @@ public:
                 if (const auto found = clipExpanded.find(clip.id);
                     found != clipExpanded.end()) {
                     clip.expanded = found->second;
+                }
+                if (const auto found = clipMidiViews.find(clip.id);
+                    clip.kind == daw::ClipKind::Midi && found != clipMidiViews.end()) {
+                    clip.midiView = found->second;
                 }
             }
         }
@@ -549,6 +555,7 @@ public:
         missing.clear();
         trackLocal.clear();
         clipExpanded.clear();
+        clipMidiViews.clear();
         pluginLocal.clear();
         publicationAssetSources.clear();
         ++probeGeneration;
@@ -804,6 +811,7 @@ public:
     std::vector<daw::NotebookCueModel> notebookCues;
     std::unordered_map<std::string, TrackLocalState> trackLocal;
     std::unordered_map<std::string, bool> clipExpanded;
+    std::unordered_map<std::string, daw::MidiClipView> clipMidiViews;
     std::unordered_map<std::string, PluginLocalState> pluginLocal;
 };
 
@@ -953,7 +961,7 @@ bool checkEngineProjectProjectionForTest(QString* error) {
     asset.originalName = "tone.wav";
 
     AssetCache cache(temporary.filePath(QStringLiteral("cache")));
-    daw::EngineController engine{daw::EngineController::TestRuntime{}};
+    daw::EngineController engine{};
     if (!engine.initialize(48000.0, 128, /*openDevice=*/false))
         return fail(QStringLiteral("cannot initialize projection engine"));
 

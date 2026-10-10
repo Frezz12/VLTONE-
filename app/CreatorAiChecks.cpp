@@ -101,7 +101,7 @@ bool CreatorWindow::runAiCheck(const QString &directory) {
     theme.accent = QColor("#c5bc7d");
     ThemeManager::instance().applyCustomTheme(theme, false);
   }
-  daw::EngineController controller{daw::EngineController::TestRuntime{}};
+  daw::EngineController controller{};
   check(bool(controller.initialize(48000, 256, false)),
         "AI check controller initializes");
   CreatorWindow window(&controller);

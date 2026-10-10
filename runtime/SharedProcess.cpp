@@ -1,5 +1,4 @@
 #include "SharedProcess.hpp"
-#include "PluginProcessProtocol.hpp"
 #include "platform/PathUtils.hpp"
 
 #include <charconv>
@@ -24,8 +23,9 @@
 extern char** environ;
 #endif
 
-namespace daw::plugins::ipc {
+namespace daw::process {
 namespace {
+constexpr std::size_t kMaxMappingBytes = 512u * 1024u * 1024u;
 std::uint64_t argument(int argc, char** argv, std::string_view name) {
     for (int i = 1; i < argc; ++i) {
         const std::string_view value(argv[i]);
@@ -55,7 +55,7 @@ struct Fd {
 };
 bool ownFd(Fd& out, int fd) {
     if (fd < 0) return false;
-    const int moved = ::fcntl(fd, F_DUPFD_CLOEXEC, 7);
+    const int moved = ::fcntl(fd, F_DUPFD_CLOEXEC, 6);
     ::close(fd);
     out.reset(moved);
     return moved >= 0;
@@ -69,10 +69,9 @@ struct SharedProcess::Impl {
     std::uint64_t id = 0;
     bool child = false;
 #ifdef _WIN32
-    Handle mapping, wake, audioWake, process, job;
+    Handle mapping, wake, process, job;
 #else
-    Fd mapping, wake, childWake, audioWake, childAudioWake, life, childLife;
-    Fd audioControlRead, audioControlWrite;
+    Fd mapping, wake, childWake, life, childLife;
     pid_t pid = 0;
 #endif
 };
@@ -91,7 +90,7 @@ std::size_t SharedProcess::size() const noexcept { return m->bytes; }
 std::uint64_t SharedProcess::processId() const noexcept { return m->id; }
 
 bool SharedProcess::create(std::size_t bytes, std::string& error) {
-    if (m->memory || bytes < sizeof(Header) || bytes > kMaxMappingBytes) {
+    if (m->memory || bytes == 0 || bytes > kMaxMappingBytes) {
         error = "invalid shared-memory capacity"; return false;
     }
     m->bytes = bytes;
@@ -100,12 +99,11 @@ bool SharedProcess::create(std::size_t bytes, std::string& error) {
     m->mapping.reset(::CreateFileMappingW(INVALID_HANDLE_VALUE, &security,
         PAGE_READWRITE, 0, DWORD(bytes), nullptr));
     m->wake.reset(::CreateEventW(&security, FALSE, FALSE, nullptr));
-    m->audioWake.reset(::CreateEventW(&security, FALSE, FALSE, nullptr));
-    if (m->mapping && m->wake && m->audioWake)
+    if (m->mapping && m->wake)
         m->memory = static_cast<std::byte*>(::MapViewOfFile(m->mapping.value,
             FILE_MAP_ALL_ACCESS, 0, 0, bytes));
 #else
-    char path[] = "/tmp/vlt-plugin-XXXXXX";
+    char path[] = "/tmp/vlt-worker-XXXXXX";
     const int fd = ::mkstemp(path);
     if (fd >= 0) ::unlink(path); // private, anonymous after creation
     if (!ownFd(m->mapping, fd) || ::ftruncate(m->mapping.value, off_t(bytes)) != 0) {
@@ -119,62 +117,53 @@ bool SharedProcess::create(std::size_t bytes, std::string& error) {
     }
     const bool wakeA = ownFd(m->wake, wakes[0]);
     const bool wakeB = ownFd(m->childWake, wakes[1]);
-    int audioWakes[2];
-    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, audioWakes) != 0) {
-        error = "could not create audio wake socket"; return false;
-    }
-    const bool audioA = ownFd(m->audioWake, audioWakes[0]);
-    const bool audioB = ownFd(m->childAudioWake, audioWakes[1]);
     int lives[2];
     if (::pipe(lives) != 0) { error = "could not create lifetime pipe"; return false; }
     const bool lifeA = ownFd(m->childLife, lives[0]);
     const bool lifeB = ownFd(m->life, lives[1]);
-    if (!wakeA || !wakeB || !audioA || !audioB || !lifeA || !lifeB) {
+    if (!wakeA || !wakeB || !lifeA || !lifeB) {
         error = "could not isolate inherited descriptors"; return false;
     }
-    if (::fcntl(m->wake.value, F_SETFL, O_NONBLOCK) != 0 ||
-        ::fcntl(m->audioWake.value, F_SETFL, O_NONBLOCK) != 0) {
+    if (::fcntl(m->wake.value, F_SETFL, O_NONBLOCK) != 0) {
         error = "could not configure nonblocking wake"; return false;
     }
 #ifdef __APPLE__
     const int yes = 1;
-    if (::setsockopt(m->wake.value, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes)) != 0 ||
-        ::setsockopt(m->audioWake.value, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes)) != 0) {
+    if (::setsockopt(m->wake.value, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes)) != 0) {
         error = "could not configure wake socket"; return false;
     }
 #endif
 #endif
-    if (!m->memory) { error = "could not map plugin transport"; return false; }
+    if (!m->memory) { error = "could not map worker transport"; return false; }
     return true;
 }
 
 bool SharedProcess::launch(const std::string& executable, std::string& error) {
     if (!m->memory || m->id || m->child) { error = "invalid launch state"; return false; }
     if (executable.empty() || executable.find('\0') != std::string::npos) {
-        error = "invalid host executable path"; return false;
+        error = "invalid worker executable path"; return false;
     }
 #ifdef _WIN32
     const auto path = platform::pathFromUtf8(executable).wstring();
     // A Windows executable path cannot contain a quote. Its final component
     // is a filename, so it cannot end in an unescaped directory separator.
     if (path.find(L'"') != std::wstring::npos || path.back() == L'\\') {
-        error = "invalid host executable path"; return false;
+        error = "invalid worker executable path"; return false;
     }
     std::wstring command = L"\"" + path + L"\" --vlt-mapping=" +
         std::to_wstring(reinterpret_cast<std::uintptr_t>(m->mapping.value)) +
         L" --vlt-wake=" + std::to_wstring(reinterpret_cast<std::uintptr_t>(m->wake.value)) +
-        L" --vlt-audio-wake=" + std::to_wstring(reinterpret_cast<std::uintptr_t>(m->audioWake.value)) +
         L" --vlt-bytes=" + std::to_wstring(m->bytes);
     m->job.reset(::CreateJobObjectW(nullptr, nullptr));
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!m->job || !::SetInformationJobObject(m->job.value, JobObjectExtendedLimitInformation,
-            &limits, sizeof(limits))) { error = "could not create host job"; return false; }
+            &limits, sizeof(limits))) { error = "could not create worker job"; return false; }
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     Handle null;
     null.reset(::CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (!null) { error = "could not isolate host standard streams"; return false; }
+    if (!null) { error = "could not isolate worker standard streams"; return false; }
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -184,14 +173,13 @@ bool SharedProcess::launch(const std::string& executable, std::string& error) {
     std::vector<std::byte> attributes(attributeBytes);
     startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributes.data());
     if (!::InitializeProcThreadAttributeList(startup.lpAttributeList, 2, 0, &attributeBytes)) {
-        error = "could not initialize host attributes"; return false;
+        error = "could not initialize worker attributes"; return false;
     }
-    HANDLE inherited[]{m->mapping.value, m->wake.value, m->audioWake.value, null.value};
+    HANDLE inherited[]{m->mapping.value, m->wake.value, null.value};
     // Atomic job assignment avoids a suspended child escaping if its parent
     // dies between CreateProcess and AssignProcessToJobObject.
     const bool configured = ::SetHandleInformation(m->mapping.value, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) &&
         ::SetHandleInformation(m->wake.value, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) &&
-        ::SetHandleInformation(m->audioWake.value, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) &&
         ::UpdateProcThreadAttribute(startup.lpAttributeList, 0,
         PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr) &&
         ::UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
@@ -203,15 +191,14 @@ bool SharedProcess::launch(const std::string& executable, std::string& error) {
     const auto code = ::GetLastError();
     ::SetHandleInformation(m->mapping.value, HANDLE_FLAG_INHERIT, 0);
     ::SetHandleInformation(m->wake.value, HANDLE_FLAG_INHERIT, 0);
-    ::SetHandleInformation(m->audioWake.value, HANDLE_FLAG_INHERIT, 0);
     ::DeleteProcThreadAttributeList(startup.lpAttributeList);
-    if (!created) { error = "could not launch plugin host (Windows " + std::to_string(code) + ")"; return false; }
+    if (!created) { error = "could not launch worker (Windows " + std::to_string(code) + ")"; return false; }
     ::CloseHandle(process.hThread);
     m->process.reset(process.hProcess);
     m->id = process.dwProcessId;
 #else
     std::vector<std::string> args{executable, "--vlt-mapping=3", "--vlt-wake=4",
-        "--vlt-life=5", "--vlt-audio-wake=6", "--vlt-bytes=" + std::to_string(m->bytes)};
+        "--vlt-life=5", "--vlt-bytes=" + std::to_string(m->bytes)};
     std::vector<char*> argv;
     for (auto& arg : args) argv.push_back(arg.data());
     argv.push_back(nullptr);
@@ -226,17 +213,16 @@ bool SharedProcess::launch(const std::string& executable, std::string& error) {
     checked(posix_spawn_file_actions_adddup2(&actions, m->mapping.value, 3));
     checked(posix_spawn_file_actions_adddup2(&actions, m->childWake.value, 4));
     checked(posix_spawn_file_actions_adddup2(&actions, m->childLife.value, 5));
-    checked(posix_spawn_file_actions_adddup2(&actions, m->childAudioWake.value, 6));
     for (int fd = 0; fd < 3; ++fd)
         checked(posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", O_RDWR, 0));
     short flags = POSIX_SPAWN_SETPGROUP;
 #ifdef __APPLE__
     flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
 #elif defined(__GLIBC__) && __GLIBC_PREREQ(2, 34)
-    checked(posix_spawn_file_actions_addclosefrom_np(&actions, 7));
+    checked(posix_spawn_file_actions_addclosefrom_np(&actions, 6));
 #else
     const long maximum = ::sysconf(_SC_OPEN_MAX);
-    for (int fd = 7; fd < maximum; ++fd)
+    for (int fd = 6; fd < maximum; ++fd)
         if (::fcntl(fd, F_GETFD) >= 0) checked(posix_spawn_file_actions_addclose(&actions, fd));
 #endif
     checked(posix_spawnattr_setflags(&attr, flags));
@@ -244,8 +230,8 @@ bool SharedProcess::launch(const std::string& executable, std::string& error) {
     if (!result) result = posix_spawn(&m->pid, executable.c_str(), &actions, &attr, argv.data(), environ);
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
-    m->childWake.reset(); m->childAudioWake.reset(); m->childLife.reset();
-    if (result) { m->pid = 0; error = "could not launch plugin host (POSIX " + std::to_string(result) + ")"; return false; }
+    m->childWake.reset(); m->childLife.reset();
+    if (result) { m->pid = 0; error = "could not launch worker (POSIX " + std::to_string(result) + ")"; return false; }
     m->id = std::uint64_t(m->pid);
 #endif
     return true;
@@ -255,42 +241,32 @@ bool SharedProcess::attach(int argc, char** argv, std::string& error) {
     const auto bytes = argument(argc, argv, "--vlt-bytes=");
     const auto mapping = argument(argc, argv, "--vlt-mapping=");
     const auto wake = argument(argc, argv, "--vlt-wake=");
-    const auto audioWake = argument(argc, argv, "--vlt-audio-wake=");
-    if (bytes < sizeof(Header) || bytes > kMaxMappingBytes || !mapping || !wake || !audioWake) {
+    if (bytes == 0 || bytes > kMaxMappingBytes || !mapping || !wake) {
         error = "invalid transport arguments"; return false;
     }
     m->bytes = std::size_t(bytes); m->child = true;
 #ifdef _WIN32
     m->mapping.reset(reinterpret_cast<HANDLE>(std::uintptr_t(mapping)));
     m->wake.reset(reinterpret_cast<HANDLE>(std::uintptr_t(wake)));
-    m->audioWake.reset(reinterpret_cast<HANDLE>(std::uintptr_t(audioWake)));
     ::SetHandleInformation(m->mapping.value, HANDLE_FLAG_INHERIT, 0);
     ::SetHandleInformation(m->wake.value, HANDLE_FLAG_INHERIT, 0);
-    ::SetHandleInformation(m->audioWake.value, HANDLE_FLAG_INHERIT, 0);
     m->memory = static_cast<std::byte*>(::MapViewOfFile(m->mapping.value,
         FILE_MAP_ALL_ACCESS, 0, 0, m->bytes));
     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     ::_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 #else
-    if (mapping != 3 || wake != 4 || audioWake != 6 || argument(argc, argv, "--vlt-life=") != 5) {
+    if (mapping != 3 || wake != 4 || argument(argc, argv, "--vlt-life=") != 5) {
         error = "invalid inherited descriptors"; return false;
     }
-    m->mapping.reset(3); m->wake.reset(4); m->childLife.reset(5); m->audioWake.reset(6);
-    for (int fd = 3; fd <= 6; ++fd) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
-    int control[2];
-    if (::pipe(control) != 0) { error = "could not create local audio wake"; return false; }
-    const bool controlRead = ownFd(m->audioControlRead, control[0]);
-    const bool controlWrite = ownFd(m->audioControlWrite, control[1]);
-    if (!controlRead || !controlWrite || ::fcntl(m->audioControlWrite.value, F_SETFL, O_NONBLOCK) != 0) {
-        error = "could not configure local audio wake"; return false;
-    }
+    m->mapping.reset(3); m->wake.reset(4); m->childLife.reset(5);
+    for (int fd = 3; fd <= 5; ++fd) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     struct stat info{};
     if (::fstat(3, &info) != 0 || info.st_size != off_t(bytes)) {
         error = "shared-memory size mismatch"; return false;
     }
     void* memory = ::mmap(nullptr, m->bytes, PROT_READ | PROT_WRITE, MAP_SHARED, 3, 0);
     if (memory != MAP_FAILED) m->memory = static_cast<std::byte*>(memory);
-    // Main/DSP threads may hang inside foreign code. An independent lifetime
+    // Worker threads may hang inside foreign code. An independent lifetime
     // watcher still observes the parent's pipe closing and ends this group.
     std::thread([] {
         char byte;
@@ -300,12 +276,12 @@ bool SharedProcess::attach(int argc, char** argv, std::string& error) {
         std::_Exit(1);
     }).detach();
 #endif
-    if (!m->memory) { error = "could not attach plugin transport"; return false; }
+    if (!m->memory) { error = "could not attach worker transport"; return false; }
     return true;
 }
 
-bool SharedProcess::signal(bool audio) noexcept {
-    const auto wake = audio ? m->audioWake.value : m->wake.value;
+bool SharedProcess::signal() noexcept {
+    const auto wake = m->wake.value;
 #ifdef _WIN32
     return ::SetEvent(wake) != 0;
 #else
@@ -318,36 +294,22 @@ bool SharedProcess::signal(bool audio) noexcept {
     return count == 1 || (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
 #endif
 }
-bool SharedProcess::wait(int timeoutMs, bool audio) {
-    const auto wake = audio ? m->audioWake.value : m->wake.value;
+bool SharedProcess::wait(int timeoutMs) {
+    const auto wake = m->wake.value;
 #ifdef _WIN32
     const auto result = ::WaitForSingleObject(wake, timeoutMs < 0 ? INFINITE : DWORD(timeoutMs));
     return result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT;
 #else
-    pollfd descriptors[2]{{wake, POLLIN, 0}, {m->audioControlRead.value, POLLIN, 0}};
+    pollfd descriptor{wake, POLLIN, 0};
     int ready;
-    do { ready = ::poll(descriptors, audio ? 2 : 1, timeoutMs); } while (ready < 0 && errno == EINTR);
+    do { ready = ::poll(&descriptor, 1, timeoutMs); } while (ready < 0 && errno == EINTR);
     if (!ready) return true;
     if (ready < 0) return false;
     char bytes[64];
-    if (audio && (descriptors[1].revents & POLLIN)) {
-        ssize_t count;
-        do { count = ::read(m->audioControlRead.value, bytes, sizeof(bytes)); } while (count < 0 && errno == EINTR);
-        return count > 0;
-    }
-    if (!(descriptors[0].revents & POLLIN)) return false;
+    if (!(descriptor.revents & POLLIN)) return false;
     ssize_t count;
     do { count = ::recv(wake, bytes, sizeof(bytes), 0); } while (count < 0 && errno == EINTR);
     return count > 0;
-#endif
-}
-bool SharedProcess::wakeAudioThread() noexcept {
-#ifdef _WIN32
-    return ::SetEvent(m->audioWake.value) != 0;
-#else
-    const char byte = 1;
-    const auto count = ::write(m->audioControlWrite.value, &byte, 1);
-    return count == 1 || (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
 #endif
 }
 bool SharedProcess::running() {
@@ -383,4 +345,4 @@ void SharedProcess::stop() {
     m->id = 0;
 }
 
-} // namespace daw::plugins::ipc
+} // namespace daw::process

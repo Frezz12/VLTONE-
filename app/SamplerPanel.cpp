@@ -1,9 +1,10 @@
-#include "PluginStyle.hpp"
 #include "graphics/ScenePaintSource.hpp"
 #include "graphics/SceneRecordingTag.hpp"
 #include "graphics/SceneRecorder.hpp"
 #include <QHashFunctions>
 #include "SamplerPanel.hpp"
+#include "AudioEditPanel.hpp"
+#include <QTabWidget>
 #include "AudioImportPreparation.hpp"
 #include <QThreadPool>
 #include <QPointer>
@@ -929,6 +930,10 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, QString channelId,
     : SamplerPanel(controller, Context::Instrument, std::move(channelId),
                    std::move(slotId), parent) {}
 
+void SamplerPanel::showDefaultPage() {
+    if(auto* tabs=findChild<QTabWidget*>("SamplerTabs"))tabs->setCurrentIndex(m_context==Context::Clip?1:0);
+}
+
 SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
                            QString ownerId, QString objectId, QWidget* parent)
     : QWidget(parent), m_controller(controller), m_channelId(std::move(ownerId)),
@@ -946,7 +951,17 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
     splitter->setChildrenCollapsible(false);
     splitter->setHandleWidth(0);
     splitter->addWidget(buildFxStrip());
-    splitter->addWidget(buildSamplerBody());
+    auto* tabs = new QTabWidget(this);
+    tabs->setObjectName(QStringLiteral("SamplerTabs"));
+    tabs->setDocumentMode(true);
+    tabs->addTab(buildSamplerBody(), tr("Sampler"));
+    m_audioEditor = new AudioEditPanel(m_controller,
+        {m_channelId.toStdString(),m_slotId.toStdString(),m_context == Context::Instrument},tabs);
+    tabs->addTab(m_audioEditor,tr("Editor"));
+    connect(m_audioEditor,&AudioEditPanel::projectEdited,this,&SamplerPanel::projectEdited);
+    connect(m_audioEditor,&AudioEditPanel::liveEdited,this,&SamplerPanel::liveEdited);
+    tabs->setCurrentIndex(m_context == Context::Clip ? 1 : 0);
+    splitter->addWidget(tabs);
     splitter->setSizes({118, 842});
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
@@ -1089,9 +1104,9 @@ QTabBar#SamplerToolsTabs::tab:hover { color: %TEXT%; background: %HOVER%; }
 #SamplerButton { padding: 3px 10px; min-height: 18px; font-size: 11px; }
 QComboBox { font-size: 11px; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-            .replace("%SURFACE%", pluginStyle::shell().name())
-            .replace("%TOP%", t.edgeLight(pluginStyle::shell()).name())
-            .replace("%BOTTOM%", t.edgeDark(pluginStyle::shell()).name())
+            .replace("%SURFACE%", t.surface.name())
+            .replace("%TOP%", t.panelTop().name())
+            .replace("%BOTTOM%", t.panelBottom().name())
             .replace("%EDGE%", t.edgeLight(t.panelTop()).name())
             .replace("%SHADOW%", t.edgeDark(t.panelBottom()).name())
             .replace("%CONTROL_TOP%", t.controlTop().name())
@@ -1109,7 +1124,7 @@ QComboBox { font-size: 11px; }
             .replace("%DIM%", mixColors(t.textSecondary, t.background, 0.35).name())
             .replace("%BYPASS%", mixColors(Theme::mute(), t.background, 0.45).name())
             .replace("%NAMEPLATE%", mixColors(t.surface, t.accent, 0.17).name())
-            .replace("%BG%", pluginStyle::shell().name()));
+            .replace("%BG%", t.background.name()));
     for (auto* add : findChildren<QToolButton*>(QStringLiteral("SamplerInsertAddArea")))
         add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 14));
 }
@@ -1207,7 +1222,8 @@ ui::Knob* SamplerPanel::knob(const QString& parameterId, const QString& captionT
         control->setToolTip(QString::fromStdString(info->name));
     }
     if (compact) control->setCompact(true);
-    control->setVisualStyle(ui::Knob::VisualStyle::Slicer);
+    // The sampler and clip editor retain their original digital controls.
+    control->setVisualStyle(ui::Knob::VisualStyle::SamplerDigital);
     control->setObjectName(QStringLiteral("SamplerParameter.") + parameterId);
     if (m_context == Context::Instrument) control->setProperty("parameterId", parameterId);
     control->installEventFilter(this);
@@ -1795,8 +1811,8 @@ QWidget* SamplerPanel::buildSamplerBody() {
                 const double root = readParameter(QStringLiteral("rootnote"));
                 const double editedPitch =
                     readParameter(QStringLiteral("stretch.pitch"));
-                m_controller->previewFile(clip->filePath, false,
-                                          double(pitch) - root + editedPitch);
+                if (auto data = m_controller->cachedClipSampleData(m_channelId.toStdString(),m_slotId.toStdString()); data && data->audio)
+                    m_controller->previewBuffer(data->audio,clip->filePath,false,double(pitch)-root+editedPitch);
             }
         };
         m_keyboard->noteOff = [this](int pitch) {
@@ -2432,20 +2448,18 @@ void SamplerPanel::refresh() {
                 inserts = &fx->inserts;
                 volume = fx->volume;
                 pan = fx->pan;
-                peakLeft = m_controller->samplerFxPeakLeft(
-                    m_channelId.toStdString());
-                peakRight = m_controller->samplerFxPeakRight(
-                    m_channelId.toStdString());
+                const auto levels = m_controller->meterSnapshot(m_channelId.toStdString(), {}, true);
+                peakLeft = levels.left;
+                peakRight = levels.right;
             }
         } else if (const daw::ClipModel* clip = m_controller->audioClip(
                        m_channelId.toStdString(), m_slotId.toStdString())) {
             inserts = &clip->inserts;
             volume = clip->gain;
             pan = clip->pan;
-            peakLeft = m_controller->clipFxPeakLeft(
-                m_channelId.toStdString(), m_slotId.toStdString());
-            peakRight = m_controller->clipFxPeakRight(
-                m_channelId.toStdString(), m_slotId.toStdString());
+            const auto levels = m_controller->meterSnapshot(m_channelId.toStdString(), m_slotId.toStdString());
+            peakLeft = levels.left;
+            peakRight = levels.right;
             // Before the first private insert exists the track meter is the
             // closest truthful reading; once a chain exists its private meter
             // takes over without changing the strip.
@@ -2609,8 +2623,9 @@ bool SamplerWaveform::checkPeakUpdatesForTest() {
 }
 
 bool SamplerPanel::checkLayoutForTest() {
+    if (!AudioEditPanel::checkForTest()) return false;
     if (!SamplerWaveform::checkPeakUpdatesForTest()) return false;
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto descriptor = controller.pluginManager().find(
         daw::plugins::Format::Internal, "daw.sampler");
@@ -2633,6 +2648,10 @@ bool SamplerPanel::checkLayoutForTest() {
         // The Clip shell also needs to fit while its file/target is missing.
         SamplerPanel panel(&controller, context, QString::fromStdString(track),
                            QString::fromStdString(slot));
+        auto* primaryTabs = panel.findChild<QTabWidget*>("SamplerTabs");
+        check(primaryTabs && primaryTabs->currentIndex() == (context == Context::Clip ? 1 : 0),
+              "clip opens editor, instrument opens sampler");
+        primaryTabs->setCurrentIndex(0);
         panel.show();
         auto* tabs = panel.findChild<QTabBar*>("SamplerToolsTabs");
         auto* scroll = panel.findChild<QScrollArea*>("SamplerBodyScroll");

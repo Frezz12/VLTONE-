@@ -782,10 +782,8 @@ void FileBrowserPanel::applyTheme() {
         .arg(t.surfaceElevated.name(), t.textPrimary.name(), t.accent.name()));
     const QString edge = m_onLeft ? QStringLiteral("border-right")
                                   : QStringLiteral("border-left");
-    // Every size in the sheet below is the design size times the browser's own
-    // zoom. Scaling here rather than with a QFont on the panel is what keeps
-    // the *relative* sizes — a 10 px caption over an 11 px row — instead of
-    // flattening them all to one scaled base.
+    // Browser zoom belongs to the content; keep the panel chrome at its
+    // design size so it stays aligned with the other workspace headers.
     const auto px = [this](double base) {
         return QString::number(std::max(1, int(std::lround(base * m_zoom))));
     };
@@ -806,13 +804,13 @@ void FileBrowserPanel::applyTheme() {
 #BrowserTabs QToolButton#BrowserTabButton:checked {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %CONTROL_TOP%,stop:1 %CONTROL_BOTTOM%);
     border-color: %SELECTEDGE%; border-top-color: %LIGHT%; border-bottom-color: %ACCENT%; }
-#BrowserTitle { color: %TEXT1%; font-size: %TITLEPX%px; font-weight: 600;
+#BrowserTitle { color: %TEXT1%; font-size: 11px; font-weight: 600;
                 letter-spacing: 0.5px; }
-#BrowserFileLabel { color: %TEXT2%; font-size: %SMALLPX%px; }
+#BrowserFileLabel { color: %TEXT2%; font-size: 10px; }
 #BrowserSearch { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                             stop:0 %RECESS%, stop:1 %WELL%);
                  border: 1px solid %SEP%; border-top-color: %RECESS%; border-bottom-color: %LIGHT%; border-radius: %RADIUS%px;
-                 padding: %PADPX%px 6px; color: %TEXT1%; font-size: %BODYPX%px; }
+                 padding: 4px 6px; color: %TEXT1%; font-size: 12px; }
 #BrowserPreview { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                              stop:0 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
                   border-top: 1px solid %SEP%; }
@@ -826,11 +824,8 @@ QTreeWidget::item:selected { background: %SELECT%; color: %TEXT1%;
                              border: 1px solid %SELECTEDGE%; }
 QTreeWidget::branch { background: transparent; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-                      .replace("%TITLEPX%", px(11))
-                      .replace("%SMALLPX%", px(10))
                       .replace("%BODYPX%", px(12))
                       .replace("%ROWPADPX%", px(2))
-                      .replace("%PADPX%", px(4))
                       .replace("%EDGE%", edge)
                       .replace("%SURFACE%", t.surface.name())
                       .replace("%PANEL_TOP%", t.panelTop().name())

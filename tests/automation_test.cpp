@@ -329,7 +329,7 @@ int main() {
     // behaviour the whole editor depends on — a gesture is live and free, and
     // becomes exactly one entry when it is let go.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, /*openDevice=*/false);
         const std::string trackId = controller.addTrack(daw::TrackKind::Audio, "Keys");
         daw::AutomationTarget target;
@@ -403,7 +403,7 @@ int main() {
 
     // ── Realtime compilation and history ───────────────────────────────────
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, /*openDevice=*/false);
         controller.setTempo(120.0);
         const std::string track =
@@ -424,7 +424,7 @@ int main() {
         controller.shutdown();
     }
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, /*openDevice=*/false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Audio, "Undo target");
@@ -448,7 +448,7 @@ int main() {
         controller.shutdown();
     }
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, /*openDevice=*/false);
         const std::string first =
             controller.addTrack(daw::TrackKind::Audio, "First");
@@ -488,7 +488,7 @@ int main() {
         controller.shutdown();
     }
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 512, /*openDevice=*/false);
         controller.setTempo(120.0);
         const std::string track =
@@ -562,7 +562,7 @@ int main() {
 
     // A passive lane follows the last touched parameter, until the user draws.
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.initialize(48000, 512, false);
         const std::string track = c.addTrack(daw::TrackKind::Audio, "Follow");
         const std::string slot = c.addInsert(track,

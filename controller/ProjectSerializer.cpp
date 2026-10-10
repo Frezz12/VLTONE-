@@ -1,4 +1,6 @@
+#include "AudioEdit.hpp"
 #include "ProjectSerializer.hpp"
+#include "serialization/RackJson.hpp"
 #include "model/ChannelColor.hpp"
 #include "model/MiniModules.hpp"
 #include "SlideJson.hpp"
@@ -12,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <unordered_set>
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -491,6 +494,8 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
     for (const auto& lane : c.lanes) lanes.push_back(laneToJson(lane));
     json result{
         {"id", c.id},
+        {"contentId", c.contentId.empty() ? c.id : c.contentId},
+        {"contentOffsetBeats", c.contentOffsetBeats},
         {"name", c.name},
         {"file", name},
         {"startSeconds", c.startSeconds},
@@ -511,6 +516,7 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
         // the reader to guess. Costs 16 bytes on an audio clip.
         {"kind", toString(c.kind)},
         {"patternClipId", c.patternClipId},
+        {"patternPartId", c.patternPartId},
         {"notes", std::move(notes)},
         {"takes", std::move(takes)},
         {"comp", std::move(comp)},
@@ -526,6 +532,16 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
         {"inserts", insertsToJson(c.inserts)},
         {"expanded", c.expanded},
     };
+    if (c.kind == ClipKind::Midi && c.midiView != MidiClipView{}) {
+        result["midiView"] = {{"sequence", c.midiView.sequence},
+                              {"pitch", c.midiView.pitch},
+                              {"stepBeats", c.midiView.stepBeats}};
+    }
+    if (c.audioEdit.initialized) {
+        auto edit = c.audioEdit;
+        for (auto& source : edit.sources) source.filePath = mediaReference(source.filePath, media);
+        result["audioEdit"] = audioedit::toJson(edit);
+    }
     if (!c.slideNotes.empty()) result["slideNotes"] = slides::toJson(c.slideNotes);
     if (!c.warp.empty()) {
         json markers = json::array();
@@ -566,6 +582,12 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
         }
         result["offlineProcess"] = std::move(offline);
     }
+    if(c.kind==ClipKind::Pattern&&c.contentStorage()->patternInitialized) {
+        result["patternParts"]=json::array();
+        for(const auto& part:c.contentStorage()->patternParts)
+            result["patternParts"].push_back({{"id",part.id},{"trackId",part.trackId},{"contentId",part.contentId},
+                {"startBeats",part.startBeats},{"durationBeats",part.durationBeats},{"offsetBeats",part.offsetBeats}});
+    }
     if (withHistory && !c.offlineHistory.empty()) {
         auto versions = json::array();
         for (const auto& version : c.offlineHistory) {
@@ -592,6 +614,37 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir,
                                           platform::pathFromUtf8(file));
     }
     c.startSeconds = j.value("startSeconds", 0.0);
+    c.contentId = j.value("contentId", c.id);
+    c.contentOffsetBeats = j.value("contentOffsetBeats", 0.0);
+    if (const auto view = j.find("midiView"); view != j.end() && view->is_object()) {
+        c.midiView.sequence = view->value("sequence", false);
+        c.midiView.pitch = std::clamp(view->value("pitch", 60), 0, 127);
+        const double step = view->value("stepBeats", 0.25);
+        c.midiView.stepBeats = std::isfinite(step)
+            ? std::clamp(step, 1.0 / 64.0, 4.0) : 0.25;
+    }
+    c.patternPartId=j.value("patternPartId",std::string{});
+    if(j.contains("patternParts")) {
+        const auto& parts=j.at("patternParts");
+        if(!parts.is_array()||parts.size()>65536)throw std::runtime_error("invalid Pattern composition");
+        std::unordered_set<std::string> ids;
+        for(const auto& value:parts) {
+            PatternPartModel part{value.at("id"),value.at("trackId"),value.at("contentId"),value.at("startBeats"),
+                value.at("durationBeats"),value.at("offsetBeats")};
+            if(part.id.empty()||!ids.insert(part.id).second||part.trackId.empty()||part.contentId.empty()||
+                !std::isfinite(part.startBeats)||!std::isfinite(part.durationBeats)||part.durationBeats<=0||
+                !std::isfinite(part.offsetBeats)||part.offsetBeats<0)throw std::runtime_error("invalid Pattern part");
+            c.contentStorage()->patternParts.push_back(std::move(part));
+        }
+        c.contentStorage()->patternInitialized=true;
+    }
+    if (j.contains("audioEdit")) {
+        if (!audioedit::fromJson(j.at("audioEdit"), c.audioEdit)) throw std::runtime_error("invalid audio edit document");
+        for (auto& source : c.audioEdit.sources) {
+            if (!source.filePath.empty() && platform::pathFromUtf8(source.filePath).is_relative())
+                source.filePath = platform::pathToUtf8(platform::pathFromUtf8(mediaDir) / platform::pathFromUtf8(source.filePath).filename());
+        }
+    }
     c.durationSeconds = j.value("durationSeconds", 0.0);
     c.offsetSeconds = j.value("offsetSeconds", 0.0);
     c.fadeInSeconds = j.value("fadeInSeconds", 0.0);
@@ -788,8 +841,14 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"instrument", insertToJson(t.instrument)},
         {"sends", std::move(sends)},
         {"inserts", insertsToJson(t.inserts)},
+        {"rackGroups", serialization::rackGroupsToJson(t.rackGroups)},
         {"clips", std::move(clips)},
     };
+    if (t.instrument.audioEdit.initialized) {
+        auto edit = t.instrument.audioEdit;
+        for (auto& source : edit.sources) source.filePath = mediaReference(source.filePath, media);
+        track["instrument"]["audioEdit"] = audioedit::toJson(edit);
+    }
     if (!t.iconId.empty()) track["iconId"] = t.iconId;
     track["miniModules"] = insertsToJson(t.miniModules);
     if (t.channelColor && t.miniModules.empty()) track["miniModules"].push_back(insertToJson(migrateColorToMiniModule(*t.channelColor)));
@@ -854,6 +913,9 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
         t.inputEnabled = true;
     t.recordMode = trackRecordModeFromString(j.value("recordMode", "global"));
     if (j.contains("instrument")) t.instrument = insertFromJson(j.at("instrument"));
+    for (auto& source : t.instrument.audioEdit.sources)
+        if (!source.filePath.empty() && platform::pathFromUtf8(source.filePath).is_relative())
+            source.filePath = platform::pathToUtf8(platform::pathFromUtf8(mediaDir) / platform::pathFromUtf8(source.filePath));
     t.miniModules = insertsFromJson(j, "miniModules");
     if (t.miniModules.size() > plugins::mini::kMaxModules) throw std::runtime_error("too many mini modules");
     if (supportsChannelColor(t.kind) && j.contains("channelColor") && j.at("channelColor").is_object()) {
@@ -892,6 +954,7 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
         for (const auto& js : sends) t.sends.push_back(sendFromJson(js));
     }
     t.inserts = insertsFromJson(j, "inserts");
+    t.rackGroups = serialization::rackGroupsFromJson(j, "rackGroups", t.inserts);
     if (j.contains("clips")) {
         const auto& clips = j.at("clips");
         if (clips.is_array()) t.clips.reserve(clips.size());
@@ -926,6 +989,14 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["keyRoot"] = project.keyRoot;
     root["scale"] = project.scale;
     root["aiInstructions"] = project.aiInstructions;
+    const auto labels = [](const auto& values) {
+        json rows = json::array();
+        for (const auto& value : values)
+            rows.push_back({{"id", value.id}, {"text", value.text},
+                {"startBeats", value.startBeats}, {"durationBeats", value.durationBeats}});
+        return rows;
+    };
+    root["arrangement"] = {{"chords", labels(project.chords)}, {"sections", labels(project.sections)}};
     if (!project.notebookHtml.empty() || !project.notebookCues.empty()) {
         json cues = reservedArray(project.notebookCues.size());
         for (const auto& cue : project.notebookCues) {
@@ -943,9 +1014,25 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["masterVolume"] = project.masterVolume;
     root["masterPan"] = project.masterPan;
     root["masterInserts"] = insertsToJson(project.masterInserts);
+    root["masterRackGroups"] = serialization::rackGroupsToJson(project.masterRackGroups);
     root["masterMiniModules"] = insertsToJson(project.masterMiniModules);
     json tracks = reservedArray(project.tracks.size());
     for (const auto& t : project.tracks) tracks.push_back(trackToJson(t, media));
+    json contents = json::object();
+    for (auto& track : tracks) for (auto& clip : track["clips"]) {
+        const std::string id = clip.at("contentId");
+        json content;
+        for (const char* key : {"kind", "file", "asset", "notes", "slideNotes", "lanes", "takes", "comp", "audioEdit", "patternParts"}) {
+            if (clip.contains(key)) { content[key] = clip[key]; if (std::string_view(key) != "kind") clip.erase(key); }
+        }
+        if (clip.contains("automation") && clip["automation"].is_object()) {
+            content["automation"] = clip["automation"];
+            content["automation"].erase("target");
+            clip["automation"] = {{"target",clip["automation"]["target"]}};
+        }
+        if (!contents.contains(id)) contents[id] = std::move(content);
+    }
+    root["clipContents"] = std::move(contents);
     root["tracks"] = std::move(tracks);
     if (!project.clipLibrary.empty()) {
         json library = reservedArray(project.clipLibrary.size());
@@ -961,8 +1048,31 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     return root;
 }
 
-audio::Result documentFromJson(ProjectModel& out, const json& root,
+audio::Result documentFromJson(ProjectModel& out, const json& input,
                                const std::string& mediaDir) {
+    json root = input;
+    try {
+    if(root.contains("clipContents") && !root["clipContents"].is_object())
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,"clip content registry must be an object");
+    if (root.contains("clipContents") && root["clipContents"].is_object() && root.contains("tracks")) {
+        for (auto& track : root["tracks"]) if (track.contains("clips")) for (auto& clip : track["clips"]) {
+            const auto id = clip.value("contentId",std::string());
+            if (!root["clipContents"].contains(id))
+                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"missing clip content");
+            const auto& content = root["clipContents"][id];
+            if(!content.is_object() || !content.contains("kind") ||
+               (clip.contains("kind") && clip["kind"] != content["kind"]))
+                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"clip content type mismatch");
+            const auto target = clip.value("automation",json::object());
+            for (auto it = content.begin(); it != content.end(); ++it) clip[it.key()] = it.value();
+            if (target.is_object() && target.contains("target")) clip["automation"]["target"] = target["target"];
+        }
+    }
+
+    } catch (const std::exception& error) {
+        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
+            std::string("invalid clip content registry: ") + error.what());
+    }
     if (!root.is_object()) {
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,
                                    "project document is not a JSON object");
@@ -1000,6 +1110,31 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         out.keyRoot = root.value("keyRoot", 0);
         out.scale = root.value("scale", std::string("major"));
         out.aiInstructions = root.value("aiInstructions", std::string());
+        if (root.contains("arrangement") && root.at("arrangement").is_object()) {
+            const auto readLabels = [&](const char* key, auto& values) {
+                const auto& arrangement = root.at("arrangement");
+                if (!arrangement.contains(key) || !arrangement.at(key).is_array()) return;
+                std::unordered_set<std::string> ids;
+                for (const auto& row : arrangement.at(key)) {
+                    if (values.size() == 4096) break;
+                    if (!row.is_object()) continue;
+                    ArrangementLabel label{row.value("id", std::string()), row.value("text", std::string()),
+                        row.value("startBeats", 0.0), row.value("durationBeats", 4.0)};
+                    if (label.text.empty() || label.text.size() > 256 ||
+                        !std::isfinite(label.startBeats) || label.startBeats < 0.0 ||
+                        !std::isfinite(label.durationBeats) || label.durationBeats <= 0.0 ||
+                        !std::isfinite(label.startBeats + label.durationBeats)) continue;
+                    if (label.id.empty() || ids.contains(label.id)) label.id = newUuid();
+                    ids.insert(label.id);
+                    values.push_back(std::move(label));
+                }
+                std::stable_sort(values.begin(), values.end(), [](const auto& a, const auto& b) {
+                    return a.startBeats < b.startBeats;
+                });
+            };
+            readLabels("chords", out.chords);
+            readLabels("sections", out.sections);
+        }
         if (root.contains("notebook") && root.at("notebook").is_object()) {
             const auto& notebook = root.at("notebook");
             out.notebookHtml = notebook.value("html", std::string());
@@ -1034,6 +1169,7 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         out.masterVolume = root.value("masterVolume", 1.0f);
         out.masterPan = root.value("masterPan", 0.0f);
         out.masterInserts = insertsFromJson(root, "masterInserts");
+        out.masterRackGroups = serialization::rackGroupsFromJson(root, "masterRackGroups", out.masterInserts);
         out.masterMiniModules = insertsFromJson(root, "masterMiniModules");
         if (out.masterMiniModules.size() > plugins::mini::kMaxModules) throw std::runtime_error("too many master mini modules");
         if (root.contains("tracks")) {
@@ -1068,7 +1204,22 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
                                    std::string("bad project data: ") +
                                        error.what());
     }
+    // Reject dangling canonical references before the resolver generates
+    // child placements; otherwise a damaged part would silently disappear.
+    std::unordered_map<ClipContentId,ClipKind> contentTypes;
+    for (const auto& track : out.tracks) for (const auto& clip : track.clips)
+        contentTypes.emplace(clip.contentId,clip.kind);
+    for (const auto& track : out.tracks) for (const auto& clip : track.clips)
+        if (clip.kind == ClipKind::Pattern) for (const auto& part : clip.contentStorage()->patternParts) {
+            const auto* lane = out.findTrack(part.trackId);
+            const auto content = contentTypes.find(part.contentId);
+            if (!lane || !trackAccepts(lane->kind,ClipKind::Midi) || content == contentTypes.end() || content->second != ClipKind::Midi) {
+                out = ProjectModel{};
+                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"Pattern part refers to unavailable MIDI content or track");
+            }
+        }
     migrateMiniModules(out,root.value("version",1)<12);
+    out.resolveClipContents();
     collab::ensureStableCollaborationIds(out);
     return audio::Result::ok();
 }
@@ -1339,12 +1490,15 @@ audio::Result ProjectSerializer::save(const ProjectModel& project,
         path = platform::pathToUtf8(destination);
     };
     const auto copyTrackMedia = [&](TrackModel& t) {
+        for (auto& source : t.instrument.audioEdit.sources) copyMedia(source.filePath);
         for (auto& c : t.clips) {
             copyMedia(c.filePath);
+            for (auto& source : c.audioEdit.sources) copyMedia(source.filePath);
             copyMedia(c.offlineProcess.renderedFilePath);
             for (auto& take : c.takes) copyMedia(take.filePath);
             for (auto& version : c.offlineHistory) {
                 copyMedia(version.source.filePath);
+                for (auto& source : version.source.audioEdit.sources) copyMedia(source.filePath);
                 for (auto& take : version.source.takes) copyMedia(take.filePath);
             }
         }

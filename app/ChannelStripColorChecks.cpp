@@ -43,7 +43,7 @@ bool ChannelStrip::checkColorForTest() {
   };
   daw::collab::CommandGateway gateway;
   ::collab::CollaborationCommandBridge bridge(nullptr, &gateway);
-  daw::EngineController controller{daw::EngineController::TestRuntime{}};
+  daw::EngineController controller{};
   if (!controller.initialize(48000, 256, false))
     return false;
   controller.attachSharedMutationSink(bridge);
@@ -311,7 +311,7 @@ bool ChannelStrip::checkColorForTest() {
   check(master.findChild<ui::MiniModuleRack *>() != nullptr,
         "Master exposes rack");
   {
-    daw::EngineController large{daw::EngineController::TestRuntime{}};
+    daw::EngineController large{};
     large.initialize(48000, 256, false);
     std::string first, last;
     for (int i = 0; i < 40; ++i) {
@@ -358,10 +358,8 @@ bool ChannelStrip::checkColorForTest() {
     large.addMiniModule(last, daw::plugins::mini::builtin("chorus"));
     mixer.syncFromModel({QString::fromStdString(last)});
     settle();
-    QScrollBar *horizontal = nullptr;
-    for (auto *area : mixer.findChildren<QScrollArea *>())
-      if (area->horizontalScrollBar()->maximum() > 0)
-        horizontal = area->horizontalScrollBar();
+    auto* channels = mixer.findChild<QScrollArea *>("MixerChannelsScroll");
+    QScrollBar *horizontal = channels ? channels->horizontalScrollBar() : nullptr;
     if (horizontal)
       horizontal->setValue(horizontal->maximum());
     settle();

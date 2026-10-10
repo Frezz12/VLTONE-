@@ -21,7 +21,7 @@ template <class Queue, class Event> void appendTimedMidi(Queue &queue, Event eve
 
 MidiInputStamp EngineController::midiInputStamp() const noexcept {
     const auto ns = std::uint64_t(engine::presentationNowNs());
-    return {ns, m_runtime.inputBeatsAt(ns), m_runtime.transportSnapshot().tempo};
+    return {ns, m_runtime->inputBeatsAt(ns), m_runtime->transportSnapshot().tempo};
 }
 
 void EngineController::resetMidiInput() {
@@ -260,7 +260,7 @@ void EngineController::captureMidiParameter(const std::string &trackId, const st
         if (firstTouch && initial != capture.midiInitialParameters.end())
             capture.midiRecording.parameter({}, parameter, found->name, initial->second, 0, 0);
         capture.midiRecording.parameter({}, parameter, found->name, value, beat, order);
-        m_runtime.setPluginAutomationOverride(pluginAddress(trackId, slot), parameter);
+        m_runtime->setPluginAutomationOverride(pluginAddress(trackId, slot), parameter);
     }
 }
 
@@ -469,6 +469,11 @@ std::vector<ClipModel>
 EngineController::midiRecordingLanding(const TrackModel &before,
                                        const FinalizedRecordingTrack &recording) {
     TrackModel track = before;
+    std::unordered_map<ClipContentId,std::shared_ptr<ClipContent>> contents;
+    for (auto& clip : track.clips) if (!clip.contentId.empty()) {
+        auto [entry, inserted] = contents.try_emplace(clip.contentId, clip.contentStorage());
+        if (!inserted) clip.bindContent(entry->second);
+    }
     landMidiCapture(track, recording);
     return std::move(track.clips);
 }
@@ -522,6 +527,94 @@ void EngineController::landMidiCapture(TrackModel &track,
                 target = &clip;
                 break;
             }
+        // A linked view is a window over one musical source. Land the pass
+        // in that source's coordinates without rebasing or trimming its peers.
+        if (target && (target->contentOffsetBeats != 0 || !target->patternPartId.empty() ||
+            linkedClips({track.id,target->id}).size() > 1)) {
+            const double offset = target->contentOffsetBeats != 0
+                ? target->contentOffsetBeats / bps : target->offsetSeconds;
+            double from = offset + pass.startSeconds - target->startSeconds;
+            const double to = from + length;
+            if (to <= 0) continue;
+            std::optional<ClipModel> prefix;
+            if (from < 0) {
+                // A pass can begin before this source exists. Retain that
+                // leading performance as its own clip instead of dropping it.
+                auto lead=sliceMidiPerformance(data,0,-from*bps);
+                if (!lead.empty()) {
+                    auto& clip=prefix.emplace();clip.id=newUuid();clip.kind=ClipKind::Midi;
+                    clip.name="Recorded MIDI";clip.color=track.color;clip.startSeconds=pass.startSeconds;
+                    clip.durationSeconds=-from;clip.patternClipId=patternAt(pass.startSeconds);
+                    clip.notes=std::move(lead.notes);clip.lanes=std::move(lead.lanes);clip.slideNotes=std::move(lead.slideNotes);
+                }
+                data = sliceMidiPerformance(data,-from*bps,length*bps); from = 0;
+            }
+            ClipModel source = *target;
+            source.startSeconds = 0; source.offsetSeconds = 0; source.contentOffsetBeats = 0;
+            source.durationSeconds = std::max(offset + target->durationSeconds,to);
+            for (const auto& note : source.notes)
+                source.durationSeconds = std::max(source.durationSeconds,(note.startBeats+note.lengthBeats)/bps);
+            for (const auto& lane : source.lanes) for (const auto& point : lane.points)
+                source.durationSeconds = std::max(source.durationSeconds,point.beats/bps+1.0/m_sampleRate);
+            for (const auto& take : source.takes)
+                source.durationSeconds = std::max(source.durationSeconds,take.clipOffsetSeconds+take.lengthSeconds);
+            for (const auto& lane : m_project.tracks) for (const auto& peer : lane.clips)
+                if (peer.contentId == target->contentId && !peer.contentId.empty())
+                    source.durationSeconds = std::max(source.durationSeconds,
+                        (peer.contentOffsetBeats != 0 ? peer.contentOffsetBeats/bps : peer.offsetSeconds) + peer.durationSeconds);
+            const bool overdub = recording.semantics.midiOverdubMerge;
+            const bool layers = recording.semantics.mode == RecordMode::Layers ||
+                (recording.semantics.loopEnabled && recording.semantics.loopCreatesTakes);
+            ClipModel audible = source;
+            audible.notes.clear(); audible.slideNotes.clear(); audible.lanes.clear();
+            audible.takes.clear(); audible.comp.clear();
+            if (source.takes.empty()) {
+                audible.notes=source.notes;audible.lanes=source.lanes;audible.slideNotes=source.slideNotes;
+            } else {
+                TrackModel sourceTrack; sourceTrack.clips.push_back(source);
+                for (const auto& part : midiPlaybackClips(sourceTrack,recording.midiTempo)) {
+                    auto performance = sliceMidiPerformance({part.notes,part.lanes,part.slideNotes},0,part.durationSeconds*bps);
+                    mergeMidiPerformance(audible,std::move(performance),part.startSeconds*bps,
+                        (part.startSeconds+part.durationSeconds)*bps);
+                }
+            }
+            if (overdub) {
+                std::erase_if(data.lanes,[&](const auto& lane) {
+                    return std::none_of(lane.points.begin(),lane.points.end(),[](const auto& p){return p.eventOrder!=0;}) &&
+                        std::any_of(audible.lanes.begin(),audible.lanes.end(),[&](const auto& old){return sameMidiLaneTarget(old,lane);});
+                });
+                mergeMidiPerformance(audible,std::move(data),from*bps,to*bps);
+            } else if (!layers) {
+                auto head = sliceMidiPerformance({audible.notes,audible.lanes,audible.slideNotes},0,from*bps,false);
+                auto tail = sliceMidiPerformance({audible.notes,audible.lanes,audible.slideNotes},to*bps,source.durationSeconds*bps);
+                audible.notes.clear(); audible.lanes.clear(); audible.slideNotes.clear();
+                mergeMidiPerformance(audible,std::move(head),0,from*bps);
+                mergeMidiPerformance(audible,std::move(tail),to*bps,source.durationSeconds*bps);
+                mergeMidiPerformance(audible,std::move(data),from*bps,to*bps);
+            }
+            if ((!layers && !overdub) || (overdub && source.takes.empty())) {
+                source.notes = std::move(audible.notes); source.lanes = std::move(audible.lanes);
+                source.slideNotes = std::move(audible.slideNotes); source.takes.clear(); source.comp.clear();
+            } else {
+                promoteToTake(source);
+                TakeModel take; take.id = newUuid(); take.name = overdub ? "MIDI overdub" : "Take " + std::to_string(source.takes.size()+1);
+                if (overdub) { take.notes=std::move(audible.notes);take.lanes=std::move(audible.lanes);take.slideNotes=std::move(audible.slideNotes); }
+                else {
+                    ClipModel performance; mergeMidiPerformance(performance,std::move(data),from*bps,to*bps);
+                    take.notes=std::move(performance.notes);take.lanes=std::move(performance.lanes);take.slideNotes=std::move(performance.slideNotes);
+                }
+                take.lengthSeconds=source.durationSeconds;take.color=takeColor(track.color,source.takes.size());
+                const auto takeId=take.id;source.takes.push_back(std::move(take));
+                if (overdub) selectWholeTake(source,takeId);
+                else setCompRange(source,takeId,recording.semantics.trimTakesToRegion ? from : offset,
+                    recording.semantics.trimTakesToRegion ? to : std::max(to,offset+target->durationSeconds));
+            }
+            *target->contentStorage() = *source.contentStorage();
+            target->durationSeconds=std::max(target->durationSeconds,pass.endSeconds-target->startSeconds);
+            if (layers && recording.semantics.autoExpandAfterRecord) target->expanded=true;
+            if (prefix) track.clips.push_back(std::move(*prefix));
+            continue;
+        }
         // A newly recorded layer uses the visible clip origin. Rebase the old
         // audible range once before merging, rather than mixing source and
         // visible coordinates in notes, take placements and comp windows.

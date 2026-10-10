@@ -55,7 +55,7 @@ int main() {
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);
 
-    daw::EngineController source{daw::EngineController::TestRuntime{}};
+    daw::EngineController source{};
     check(source.initialize(48000.0, 512, false).isOk(),
           "source controller initializes");
     source.newProject();
@@ -165,7 +165,7 @@ int main() {
               !storedSampler->instrument.stateFile.empty(),
           "Sampler slot and exact state chunk are referenced by the template");
 
-    daw::EngineController opened{daw::EngineController::TestRuntime{}};
+    daw::EngineController opened{};
     check(opened.initialize(48000.0, 512, false).isOk(),
           "open controller initializes");
     opened.newProject();
@@ -213,7 +213,7 @@ int main() {
               daw::ProjectSerializer::save(stored, package.string()).isOk(),
           "missing-plugin import fixture saves without disturbing package state");
 
-    daw::EngineController destination{daw::EngineController::TestRuntime{}};
+    daw::EngineController destination{};
     check(destination.initialize(48000.0, 512, false).isOk(),
           "destination controller initializes");
     destination.newProject();

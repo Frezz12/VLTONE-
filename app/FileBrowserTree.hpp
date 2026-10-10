@@ -144,6 +144,8 @@ protected:
     /// and the instrument slot already accept from the desktop — so the browser
     /// needs no private drag format and those targets need no new code.
     void startDrag(Qt::DropActions supportedActions) override;
+    void mousePressEvent(class QMouseEvent* event) override;
+    void mouseDoubleClickEvent(class QMouseEvent* event) override;
     void keyPressEvent(class QKeyEvent* event) override;
     void contextMenuEvent(class QContextMenuEvent* event) override;
     void drawBranches(class QPainter* painter, const QRect& rect,
@@ -155,7 +157,7 @@ private:
     void populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item);
     void populate(QTreeWidgetItem* parent, const QString& path);
     /// Fill a node the first time it is opened (it carries a placeholder child
-    /// until then, which is what draws the expander arrow).
+    /// until then, which enables lazy expansion).
     void expandNode(QTreeWidgetItem* item);
     void collapseNode(QTreeWidgetItem* item);
     /// Re-read one directory in place, keeping selection and open children.

@@ -2,6 +2,8 @@
 #include <QApplication>
 #include <QEventLoop>
 #include <QKeyEvent>
+#include <QGraphicsView>
+#include <QGraphicsScene>
 #include <QListWidget>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -92,6 +94,31 @@ int main(int argc,char** argv) {
     check(bar->value()==before+24,"native precision scrolling keeps its exact pixel distance");
     bar->setValue(bar->maximum()-2);wheel(list.viewport(),{},QPoint(0,-120));wait(220);
     check(bar->value()==bar->maximum(),"motion stops at the scroll range boundary");
+
+    // Graphics canvases use signed scrollbar ranges: zero is a scene
+    // coordinate, not the upper/left navigation boundary.
+    QGraphicsScene graphScene;
+    QGraphicsView graph(&graphScene);
+    graph.setSceneRect(-2000,-2000,4000,4000);
+    graph.resize(400,300);graph.show();wait(30);
+    auto* graphX=graph.horizontalScrollBar();auto* graphY=graph.verticalScrollBar();
+    graphX->setValue(10);graphY->setValue(10);
+    const int graphStep=QApplication::wheelScrollLines()*graphY->singleStep();
+    wheel(graph.viewport(),{},QPoint(0,120));wait(220);
+    check(graphY->value()==10-graphStep && graphY->value()<0,
+          "canvas wheel crosses zero into negative scene coordinates");
+    const int negativeY=graphY->value();
+    wheel(graph.viewport(),{},QPoint(0,120));wait(220);
+    check(graphY->value()==negativeY-graphStep,
+          "canvas wheel keeps scrolling above the scene origin");
+    wheel(graph.viewport(),{},QPoint(120,0));wait(220);
+    check(graphX->value()<0,"canvas wheel also supports negative horizontal coordinates");
+    graphY->setValue(graphY->minimum()+2);
+    wheel(graph.viewport(),{},QPoint(0,120));wait(220);
+    check(graphY->value()==graphY->minimum(),"signed canvas respects its real minimum");
+    wheel(graph.viewport(),{},QPoint(0,-120));
+    check(graphY->value()>graphY->minimum(),"wheel reverses immediately at a negative boundary");
+    wait(220);
 
     QPointF integerPosition{500,500};QWidget integerCanvas;integerCanvas.resize(200,200);integerCanvas.show();wait(20);
     for(int i=0;i<20;++i)

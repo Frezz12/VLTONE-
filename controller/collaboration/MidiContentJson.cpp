@@ -1,5 +1,6 @@
 #include "MidiContentJson.hpp"
 #include "ProjectSerializer.hpp"
+#include "serialization/LegacyClipContent.hpp"
 #include "SlideJson.hpp"
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,9 @@ json wrapper(const ClipModel &clip) {
     project.tracks.push_back(std::move(track));
     std::string bytes;
     ProjectSerializer::serializeDocument(project, bytes);
-    return json::parse(bytes);
+    auto root = json::parse(bytes);
+    serialization::expandLegacyClipContent(root);
+    return root;
 }
 bool keys(const json &j, std::initializer_list<const char *> allowed) {
     if (!j.is_object())

@@ -31,6 +31,8 @@ inline PluginFormat toDocumentFormat(plugins::Format format) noexcept {
 /// orphan its saved state or an editor window that is open on it.
 inline void applyDescriptor(InsertModel& slot,
                             const plugins::PluginDescriptor& descriptor) {
+    if (slot.uid != descriptor.uid || slot.format != toDocumentFormat(descriptor.format))
+        slot.rackParameterIds.clear();
     slot.format = toDocumentFormat(descriptor.format);
     slot.uid = descriptor.uid;
     slot.path = descriptor.path;

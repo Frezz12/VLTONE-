@@ -19,7 +19,7 @@ SHOTS = {
     "render": {"DAW_SHOT_EXPORT": "mix"},
     "mixer": {"DAW_SHOT_MIXER": "420"},
     "pattern": {"DAW_SHOT_PATTERN": "editor"},
-    "sampler": {"DAW_SHOT_SAMPLER": "sample"},
+    "sampler": {"DAW_SHOT_SAMPLER": "sample", "DAW_SHOT_DELAY": "10000"},
     "equalizer": {"DAW_SHOT_EQUALIZER": "1", "DAW_SHOT_DELAY": "900"},
     "plugins": {"DAW_SHOT_PLUGINS": "0"},
     "ai": {"DAW_SHOT_AI": "complete"},
@@ -88,8 +88,8 @@ def main() -> None:
                     **{key: str(sample) if value == "sample" else value for key, value in options.items()},
                 })
                 print(f"[{locale}] {name}", flush=True)
-                run([str(executable), "--screenshot", str(source), "--theme", "logic", "--language", locale],
-                    cwd=executable.parent, env=environment, timeout=30)
+                run([str(executable), "--screenshot", str(source), "--theme", "dark", "--language", locale],
+                    cwd=executable.parent, env=environment, timeout=120)
                 width = png_width(source)
                 if width < 400:
                     raise RuntimeError(f"Screenshot is unexpectedly narrow: {source} ({width}px)")

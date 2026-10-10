@@ -3,15 +3,16 @@
 import Link from "next/link";
 import { ArrowUpRight, Search, Users, X } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { canVisit, canAdmin, type AdminIdentity } from "./admin-permissions";
 import { adminNavigation } from "./admin-navigation";
 
-export function AdminCommandMenu({ dialog }: { dialog: RefObject<HTMLDialogElement | null> }) {
+export function AdminCommandMenu({ dialog, admin }: { dialog: RefObject<HTMLDialogElement | null>; admin?: AdminIdentity }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const links = useRef<Array<HTMLAnchorElement | null>>([]);
   const search = query.trim().toLowerCase();
-  const destinations = adminNavigation.flatMap(group => group.links).filter(item => `${item.label} ${item.keywords}`.toLowerCase().includes(search));
-  const options = query.trim().length >= 2 ? [...destinations, { href: `/users?q=${encodeURIComponent(query.trim())}`, label: `Найти пользователя: ${query.trim()}`, icon: Users, keywords: "" }] : destinations;
+  const destinations = adminNavigation.flatMap(group => group.links).filter(item => canVisit(admin, item.href)).filter(item => `${item.label} ${item.keywords}`.toLowerCase().includes(search));
+  const options = query.trim().length >= 2 && canAdmin(admin, "users.read") ? [...destinations, { href: `/users?q=${encodeURIComponent(query.trim())}`, label: `Найти пользователя: ${query.trim()}`, icon: Users, keywords: "" }] : destinations;
 
   useEffect(() => { setSelected(0); }, [query]);
   useEffect(() => { if (dialog.current?.open) links.current[selected]?.scrollIntoView({ block: "nearest" }); }, [selected, dialog]);

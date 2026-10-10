@@ -10,7 +10,7 @@
 
 namespace daw {
 namespace {
-std::atomic<std::shared_ptr<const SampleLoader>> sourceLoader;
+std::shared_ptr<const SampleLoader> sourceLoader;
 struct CachedSource {
     std::weak_ptr<const engine::SampleBuffer> sample;
     std::filesystem::file_time_type modified;
@@ -20,7 +20,7 @@ std::mutex sourceMutex;
 std::unordered_map<std::string, CachedSource> sourceCache;
 }
 void setSampleLoader(SampleLoader loader) {
-    sourceLoader.store(loader ? std::make_shared<const SampleLoader>(std::move(loader)) : nullptr);
+    std::atomic_store(&sourceLoader, loader ? std::make_shared<const SampleLoader>(std::move(loader)) : nullptr);
 }
 audio::Result loadSampleBuffer(const std::string& path,
     std::shared_ptr<const engine::SampleBuffer>& out,
@@ -39,7 +39,7 @@ audio::Result loadSampleBuffer(const std::string& path,
                 if (auto sample = cached->second.sample.lock()) { out = std::move(sample); return audio::Result::ok(); }
         }
         std::shared_ptr<const engine::SampleBuffer> decoded;
-        if (const auto loader = sourceLoader.load()) {
+        if (const auto loader = std::atomic_load(&sourceLoader)) {
             if (const auto result = (*loader)(path, decoded, keepGoing); !result) return result;
         } else {
             audio::platform::AudioFileReader reader;

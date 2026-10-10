@@ -89,8 +89,8 @@ if(DAW_BUILD_TESTS)
                 add_test(NAME creator_ui_${creator_theme}_${creator_locale}_${creator_scale}
                     COMMAND $<TARGET_FILE:daw> --creator-check --theme ${creator_theme} --language ${creator_locale})
                 set_tests_properties(creator_ui_${creator_theme}_${creator_locale}_${creator_scale} PROPERTIES
-                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${creator_scale};DAW_CREATOR_CHECK_DIR=${PROJECT_SOURCE_DIR}/artifacts/creator-ui-${creator_theme}-${creator_locale}-${creator_scale}"
-                    TIMEOUT 60 RUN_SERIAL TRUE)
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${creator_scale};DAW_CREATOR_CHECK_DIR=${PROJECT_SOURCE_DIR}/artifacts/creator-ui-${creator_theme}-${creator_locale}-${creator_scale};VLT_CREATOR_TOOLS=${CMAKE_BINARY_DIR}/bin/CreatorTools"
+                    TIMEOUT 300 RUN_SERIAL TRUE)
                 add_test(NAME creator_ai_${creator_theme}_${creator_locale}_${creator_scale}
                     COMMAND $<TARGET_FILE:daw> --creator-check --theme ${creator_theme} --language ${creator_locale})
                 set_tests_properties(creator_ai_${creator_theme}_${creator_locale}_${creator_scale} PROPERTIES
@@ -109,6 +109,27 @@ if(DAW_BUILD_TESTS)
         endforeach()
     endforeach()
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(numeric_field_test ../tests/numeric_field_test.cpp)
+    target_include_directories(numeric_field_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(numeric_field_test PRIVATE Qt6::Widgets)
+    add_test(NAME numeric_field_test COMMAND numeric_field_test)
+    set_tests_properties(numeric_field_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    qt_add_executable(audio_edit_ui_test ../tests/audio_edit_ui_test.cpp
+        AudioEditPanel.cpp AudioEditPanel.hpp Controls.cpp Controls.hpp
+        Icons.cpp GlassPanel.cpp GlassPanel.hpp Theme.cpp Typography.cpp)
+    target_include_directories(audio_edit_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(audio_edit_ui_test PRIVATE daw_controller vlt_gpu_scene
+        vlt_ui_frame_clock Qt6::Widgets Qt6::Svg Qt6::WebEngineCore Qt6::WebEngineQuick)
+    add_test(NAME audio_edit_ui_test COMMAND audio_edit_ui_test)
+    set_tests_properties(audio_edit_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60)
+    qt_add_executable(notification_center_test ../tests/notification_center_test.cpp
+        NotificationCenter.cpp NotificationCenter.hpp Theme.cpp Theme.hpp Typography.cpp Typography.hpp)
+    target_include_directories(notification_center_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(notification_center_test PRIVATE Qt6::Widgets Qt6::Test Qt6::WebEngineCore Qt6::WebEngineQuick)
+    add_test(NAME notification_center_test COMMAND notification_center_test)
+    set_tests_properties(notification_center_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     qt_add_executable(update_checker_test ../tests/update_checker_test.cpp
         UpdateChecker.cpp UpdateChecker.hpp LocalizationManager.cpp LocalizationManager.hpp)
     target_include_directories(update_checker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -240,6 +261,15 @@ if(DAW_BUILD_TESTS)
     target_link_libraries(waveform_gpu_test PRIVATE daw_controller vlt_gpu_scene)
     add_test(NAME waveform_gpu_test COMMAND waveform_gpu_test)
     set_tests_properties(waveform_gpu_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    qt_add_executable(creator_navigation_test ../tests/creator_navigation_test.cpp
+        CreatorCanvas.cpp CreatorCanvas.hpp CreatorStyle.cpp CreatorStyle.hpp
+        Theme.cpp Theme.hpp Typography.cpp Icons.cpp)
+    target_include_directories(creator_navigation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/controller)
+    target_link_libraries(creator_navigation_test PRIVATE daw_pluginhost vlt_ui_frame_clock
+        Qt6::Widgets Qt6::Svg Qt6::WebEngineCore Qt6::WebEngineQuick)
+    add_test(NAME creator_navigation_test COMMAND creator_navigation_test)
+    set_tests_properties(creator_navigation_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     qt_add_executable(scroll_motion_test ../tests/scroll_motion_test.cpp)
     target_link_libraries(scroll_motion_test PRIVATE vlt_ui_frame_clock)
     add_test(NAME scroll_motion_test COMMAND scroll_motion_test)
@@ -382,9 +412,22 @@ foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_
     endif()
 endforeach()
 if(DAW_BUILD_TESTS)
+    add_test(NAME rack_ui_test COMMAND daw --selftest)
+    set_tests_properties(rack_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RACK_ONLY=1;DAW_TEST_SCAN_PATH=$<TARGET_FILE:daw_scan>"
+        TIMEOUT 120)
+    if(TARGET daw_test_rack_clap)
+        add_dependencies(daw daw_test_rack_clap)
+        set_property(TEST rack_ui_test APPEND PROPERTY ENVIRONMENT
+            "DAW_TEST_RACK_CLAP_PATH=$<TARGET_FILE:daw_test_rack_clap>")
+    endif()
     add_test(NAME plugin_drag_lifecycle_test COMMAND daw --plugin-interaction-check)
     set_tests_properties(plugin_drag_lifecycle_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 30)
+    add_test(NAME midi_sequence_ui_test COMMAND daw --pianoworkflowcheck)
+    set_tests_properties(midi_sequence_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SEQUENCE_CHECK_ONLY=1"
+        TIMEOUT 60)
 endif()
 
 # Ship the complete family inside the executable on every platform. No font
@@ -481,6 +524,10 @@ target_link_libraries(daw PRIVATE daw_controller vlt_browser_surface vlt_gpu_sce
                                   OpenSSL::Crypto RtMidi::rtmidi)
 if(DAW_BUILD_TESTS)
     add_test(NAME timeline_clip_undo_drag_ui_test COMMAND $<TARGET_FILE:daw> --timelineclipcheck)
+    add_test(NAME recording_stop_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(recording_stop_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RECORD_STOP_ONLY=1"
+        TIMEOUT 45 RUN_SERIAL TRUE)
     set_tests_properties(timeline_clip_undo_drag_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90 RUN_SERIAL TRUE)
     add_test(NAME audio_timeline_scroll_test COMMAND $<TARGET_FILE:daw> --audio-scroll-check)
@@ -492,12 +539,12 @@ if(DAW_BUILD_TESTS)
     add_test(NAME plugin_batch_ui_test COMMAND $<TARGET_FILE:daw> --pluginbatchcheck)
     foreach(builtin_panel equalizer gravity graphit)
         string(TOUPPER "${builtin_panel}" builtin_panel_flag)
-        add_test(NAME ${builtin_panel}_process_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
-        set_tests_properties(${builtin_panel}_process_ui_test PROPERTIES
+        add_test(NAME ${builtin_panel}_native_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+        set_tests_properties(${builtin_panel}_native_ui_test PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_${builtin_panel_flag}_ONLY=1;DAW_SELFTEST_VERBOSE=1;DAW_PLUGIN_DIAGNOSTICS=1"
             TIMEOUT 60 RUN_SERIAL TRUE)
         if(WIN32)
-            set_tests_properties(${builtin_panel}_process_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            set_tests_properties(${builtin_panel}_native_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         endif()
     endforeach()
@@ -509,6 +556,10 @@ if(DAW_BUILD_TESTS)
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${color_scale}"
             TIMEOUT 60 RUN_SERIAL TRUE)
     endforeach()
+    add_test(NAME project_dialogs_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(project_dialogs_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PROJECT_DIALOGS_ONLY=1"
+        TIMEOUT 45 RUN_SERIAL TRUE)
     add_test(NAME clip_library_ui_test COMMAND $<TARGET_FILE:daw> --cliplibrarycheck)
     foreach(mini_theme dark light)
         foreach(mini_language en ru)
@@ -538,29 +589,26 @@ if(DAW_BUILD_TESTS)
     endif()
     if(DAW_ENABLE_VST)
         add_dependencies(daw daw_test_vst_shell)
+        if(APPLE)
+            set(DAW_APP_TEST_VST_SHELL_PATH "$<TARGET_BUNDLE_DIR:daw_test_vst_shell>")
+        else()
+            set(DAW_APP_TEST_VST_SHELL_PATH "$<TARGET_FILE:daw_test_vst_shell>")
+        endif()
+        add_test(NAME plugin_embedded_editor_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+        set_tests_properties(plugin_embedded_editor_ui_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_EMBEDDED_ONLY=1;DAW_TEST_VST_SHELL_PATH=${DAW_APP_TEST_VST_SHELL_PATH}"
+            TIMEOUT 30 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(plugin_embedded_editor_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
         add_test(NAME plugin_editor_idle_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
         set_tests_properties(plugin_editor_idle_ui_test PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_IDLE_ONLY=1;DAW_TEST_VST_SHELL_PATH=$<TARGET_FILE:daw_test_vst_shell>"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_IDLE_ONLY=1;DAW_TEST_VST_SHELL_PATH=${DAW_APP_TEST_VST_SHELL_PATH}"
             TIMEOUT 60 RUN_SERIAL TRUE)
         if(WIN32)
             set_tests_properties(plugin_editor_idle_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-        endif()
-    endif()
-    if(DAW_ENABLE_CLAP)
-        add_dependencies(daw daw_test_fault_clap)
-        add_test(NAME plugin_isolation_ui_test COMMAND $<TARGET_FILE:daw> --selftest --language ru)
-        set_tests_properties(plugin_isolation_ui_test PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_ISOLATION_ONLY=1;DAW_TEST_FAULT_CLAP_PATH=$<TARGET_FILE:daw_test_fault_clap>;DAW_ISOLATION_SCREENSHOT_DIR=${CMAKE_BINARY_DIR}/test-artifacts/plugin-isolation"
-            TIMEOUT 45 RUN_SERIAL TRUE)
-        if(WIN32)
-            set_tests_properties(plugin_isolation_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
-                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-            add_test(NAME plugin_remote_editor_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
-            set_tests_properties(plugin_remote_editor_ui_test PROPERTIES
-                ENVIRONMENT "QT_QPA_PLATFORM=windows;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PLUGIN_REMOTE_EDITOR_ONLY=1;DAW_TEST_FAULT_CLAP_PATH=$<TARGET_FILE:daw_test_fault_clap>"
-                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
-                TIMEOUT 60 RUN_SERIAL TRUE)
         endif()
     endif()
     set_tests_properties(midi_input_ui_test PROPERTIES
@@ -698,6 +746,21 @@ if(DAW_PACKAGE)
             MACOSX_BUNDLE_ICON_FILE "daw.icns"
             MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+        # A build-tree bundle must use workers from this build, too. Otherwise
+        # an earlier packaged helper can silently retain an incompatible job
+        # protocol until the next install step.
+        add_custom_target(daw_bundle_helpers
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:daw>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:daw_scan>" "$<TARGET_FILE:daw_guard>"
+                "$<TARGET_FILE:daw_reporter>" "$<TARGET_FILE:daw_worker>"
+                "$<TARGET_FILE_DIR:daw>"
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "$<TARGET_FILE_DIR:daw>/daw_audio"
+                "$<TARGET_FILE_DIR:daw>/daw_plugin_host"
+            DEPENDS daw_scan daw_guard daw_reporter daw_worker
+            VERBATIM)
+        add_dependencies(daw daw_bundle_helpers)
     endif()
 endif()
 
@@ -731,8 +794,14 @@ if(DAW_PACKAGE)
         # belong in Contents/MacOS. Installed from here rather than from their
         # own directories so they land after the bundle has been laid down and
         # before macdeployqt walks it.
-        install(TARGETS daw_scan daw_guard daw_reporter daw_plugin_host daw_worker daw_audio
+        install(TARGETS daw_scan daw_guard daw_reporter daw_worker
                 RUNTIME DESTINATION "${DAW_BUNDLE_NAME}.app/Contents/MacOS")
+        # Every helper is a separate dyld root. It cannot inherit the main
+        # application's search path for the deployed @rpath dependencies.
+        foreach(helper daw_scan daw_guard daw_reporter daw_worker)
+            set_property(TARGET ${helper} APPEND PROPERTY INSTALL_RPATH
+                         "@executable_path/../Frameworks")
+        endforeach()
     endif()
     if(WIN32)
         # Qt 6.8's app helper emits TARGET_FILE without quotes, so an executable

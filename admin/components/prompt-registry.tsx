@@ -4,6 +4,7 @@ import { api } from "@vlt/api-client";
 import { History, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AdminShell } from "./admin-shell";
+import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 
 // The assistant's instructions. The main prompt tells it how to operate the
@@ -28,6 +29,7 @@ type Revision = { id: string; body: string; created_at: string };
 
 export function PromptRegistry() {
   const { session, error } = useAdmin();
+  const canWrite = canAdmin(session?.admin, "prompts.write");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [version, setVersion] = useState("");
   const [selected, setSelected] = useState<string>("");
@@ -126,7 +128,7 @@ export function PromptRegistry() {
             Основной промпт и плейбуки. Версия: <span className="vlt-code">{version || "—"}</span>
           </p>
         </div>
-        <button className="vlt-button" onClick={create} disabled={busy}>Новый плейбук</button>
+        <button className="vlt-button" onClick={create} disabled={!canWrite || busy}>Новый плейбук</button>
       </div>
       {error && <div className="vlt-error">{error}</div>}
       <div className="detail-grid">
@@ -141,35 +143,35 @@ export function PromptRegistry() {
                 </span>
               </div>
               <label className="sr-only" htmlFor="prompt-title">Название</label>
-              <input
+              <input readOnly={!canWrite}
                 id="prompt-title" className="vlt-input" value={draft.title} placeholder="Название"
                 onChange={(event) => setDraft({ ...draft, title: event.target.value })}
               />
               <label className="sr-only" htmlFor="prompt-use-when">Когда применять</label>
-              <input
+              <input readOnly={!canWrite}
                 id="prompt-use-when" className="vlt-input" value={draft.use_when}
                 placeholder="Когда применять — эту строку модель читает в индексе"
                 style={{ marginTop: 8 }}
                 onChange={(event) => setDraft({ ...draft, use_when: event.target.value })}
               />
               <label className="sr-only" htmlFor="prompt-tags">Теги</label>
-              <input
+              <input readOnly={!canWrite}
                 id="prompt-tags" className="vlt-input" value={draft.tags.join(", ")}
                 placeholder="Теги через запятую" style={{ marginTop: 8 }}
                 onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) })}
               />
               <label className="sr-only" htmlFor="prompt-body">Текст промпта</label>
-              <textarea
+              <textarea readOnly={!canWrite}
                 id="prompt-body" className="vlt-input" value={draft.body} spellCheck={false}
                 style={{ marginTop: 8, minHeight: 460, fontFamily: "var(--vlt-font-sans)" }}
                 onChange={(event) => setDraft({ ...draft, body: event.target.value })}
               />
               <div className="vlt-row" style={{ marginTop: 12, gap: 8 }}>
-                <button className="vlt-button" onClick={save} disabled={busy}><Save size={15} /> Сохранить</button>
-                <button className="vlt-button vlt-button-secondary" onClick={revert} disabled={busy}><RotateCcw size={15} /> Вернуть встроенный</button>
+                <button className="vlt-button" onClick={save} disabled={!canWrite || busy}><Save size={15} /> Сохранить</button>
+                <button className="vlt-button vlt-button-secondary" onClick={revert} disabled={!canWrite || busy}><RotateCcw size={15} /> Вернуть встроенный</button>
                 <button className="vlt-button vlt-button-secondary" onClick={history} disabled={busy}><History size={15} /> История</button>
                 {draft.kind !== "main" && (
-                  <button className="vlt-button vlt-button-secondary danger-zone" onClick={remove} disabled={busy}><Trash2 size={15} /> Удалить</button>
+                  <button className="vlt-button vlt-button-secondary danger-zone" onClick={remove} disabled={!canWrite || busy}><Trash2 size={15} /> Удалить</button>
                 )}
               </div>
               {status && <p className="vlt-subtitle" style={{ marginTop: 10 }}>{status}</p>}

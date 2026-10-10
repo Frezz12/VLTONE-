@@ -1,5 +1,6 @@
 #include "model/MiniModules.hpp"
 #include "ChannelStripPreset.hpp"
+#include "serialization/RackJson.hpp"
 
 #include "serialization/InsertJson.hpp"
 #include "platform/PathUtils.hpp"
@@ -104,6 +105,7 @@ audio::Result ChannelStripPreset::save(
         {"pan", snapshot.pan},
         {"plugins", std::move(plugins)},
     };
+    root["rackGroups"] = serialization::rackGroupsToJson(snapshot.rackGroups);
     root["miniModules"]=json::array();
     for(const auto& module:snapshot.miniModules) {
         auto model=module.model;makePortable(model);
@@ -192,6 +194,9 @@ audio::Result ChannelStripPreset::load(EngineController::ChannelSnapshot& out,
             }
             loaded.inserts.push_back(std::move(slot));
         }
+        std::vector<InsertModel> rackInserts;
+        for (const auto& slot : loaded.inserts) rackInserts.push_back(slot.model);
+        loaded.rackGroups = serialization::rackGroupsFromJson(root, "rackGroups", rackInserts);
         out = std::move(loaded);
         return audio::Result::ok();
     } catch (const json::exception& error) {

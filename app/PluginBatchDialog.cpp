@@ -346,7 +346,7 @@ void PluginBatchDialog::apply() {
 }
 
 bool PluginBatchDialog::checkForTest(const QString& screenshotPath) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     const auto lead = controller.addTrack(daw::TrackKind::Audio, "Lead");
     const auto doubleTrack = controller.addTrack(daw::TrackKind::Audio, "Double");

@@ -40,6 +40,7 @@ void projectInsert(InsertModel& insert, const std::string& location,
     insert.editorChannel = PluginEditorChannel::Left;
     insert.windowX = insert.windowY = insert.windowWidth = insert.windowHeight = 0;
     insert.windowOpen = false;
+    insert.rackParameterIds.clear();
     sanitizeAsset(insert.stateAsset);
     sanitizeAsset(insert.rightStateAsset);
     for (PluginAssetBinding& binding : insert.assetBindings)
@@ -105,6 +106,8 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
             "project/clipLibrary", "Project clip libraries are not supported by the current cloud format."});
         document.clipLibrary.clear();
     }
+    document.masterRackGroups.clear();
+    for (auto& track : document.tracks) track.rackGroups.clear();
     document.coverImagePath.clear();
     document.loopStartSeconds = 0.0;
     document.loopEndSeconds = 0.0;
@@ -158,6 +161,7 @@ CloudDocumentProjection projectForCloudSnapshotV1(const ProjectModel& source) {
             }
             clip.filePath.clear();
             clip.expanded = false;
+            clip.midiView = {};
             // Offline history contains local audio paths and has no shared
             // asset protocol yet. Reject publication instead of uploading
             // paths or silently discarding the user's original versions.
@@ -254,7 +258,7 @@ bool containsLocalPathOrUiState(const ProjectModel& document,
             const ClipModel& clip = track.clips[clipIndex];
             const std::string clipLocation =
                 location + "/clip:" + std::to_string(clipIndex);
-            if (!clip.filePath.empty() || clip.expanded || !clip.offlineProcess.empty() ||
+            if (!clip.filePath.empty() || clip.expanded || clip.midiView != MidiClipView{} || !clip.offlineProcess.empty() ||
                 inspectInsertsForLeak(clip.inserts, clipLocation,
                                       firstLocation)) {
                 if (firstLocation && firstLocation->empty())

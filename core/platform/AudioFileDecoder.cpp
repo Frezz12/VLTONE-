@@ -20,7 +20,8 @@
 namespace audio::platform {
 
 namespace {
-std::atomic<std::shared_ptr<const AudioFileServices>> fileServices;
+// Xcode's libc++ supports shared_ptr atomic operations, but not atomic<shared_ptr>.
+std::shared_ptr<const AudioFileServices> fileServices;
 // libsndfile's own container list, minus the ones nothing produces. `caf` and
 // `w64` are here because the sampler already offered them and libsndfile does
 // read both — platform_test writes and decodes one of each rather than taking
@@ -61,7 +62,7 @@ bool isDecodableExtension(const std::string& extLower) {
 }
 
 Result probeAudioFile(const std::string& path, AudioFileInfo& out) {
-    if (const auto services = fileServices.load()) return services->probe(path, out);
+    if (const auto services = std::atomic_load(&fileServices)) return services->probe(path, out);
     if (nativeAudioPath(path)) {
         AudioFileReader reader;
         const auto result = reader.open(path);
@@ -95,7 +96,7 @@ Result decodeAudioFile(const std::string& path, DecodedAudio& out,
             return Result::fail(EngineError::InvalidArgument, "cancelled");
         // A process-backed reader prepares immutable PCM at open. Preserve the
         // caller's decode budget before asking that worker to decode a long file.
-        if (const auto services = fileServices.load()) {
+        if (const auto services = std::atomic_load(&fileServices)) {
             AudioFileInfo info;
             if (const auto probed = services->probe(path, info); !probed) return probed;
             if (!info.channels || info.channels > 32 ||
@@ -151,14 +152,14 @@ AudioFileReader& AudioFileReader::operator=(AudioFileReader&& other) noexcept {
 }
 
 void setAudioFileServices(std::shared_ptr<const AudioFileServices> services) {
-    fileServices.store(std::move(services));
+    std::atomic_store(&fileServices, std::move(services));
 }
 
 Result AudioFileReader::open(const std::string& path, const std::function<bool()>& keepGoing) {
     close();
     if (!m_impl) m_impl = std::make_unique<Impl>();
     if (keepGoing && !keepGoing()) return Result::fail(EngineError::InvalidArgument, "cancelled");
-    if (const auto services = fileServices.load()) {
+    if (const auto services = std::atomic_load(&fileServices)) {
         std::unique_ptr<AudioFileSource> source;
         const auto result = services->open(path, source, keepGoing);
         if (!result) return result;

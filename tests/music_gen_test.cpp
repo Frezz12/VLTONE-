@@ -30,7 +30,7 @@ static bool mentions(const std::string& text, const char* needle) {
 int main() {
     // ── The brief ──
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.setTempo(96.0);
         c.setTimeSignature(3, 4);
         c.setProjectKey(9, "natural_minor");   // A minor

@@ -1,4 +1,5 @@
 #include "plugins/PluginManager.hpp"
+#include "Host/HostedPluginFactory.hpp"
 
 #include "Internal/InternalFactory.hpp"
 #include "Scan/ScanProtocol.hpp"
@@ -263,8 +264,7 @@ PluginManager::PluginManager(std::string cachePath)
     : m_cachePath(std::move(cachePath)),
       m_instanceId(gNextPluginManagerId.fetch_add(
                        1, std::memory_order_relaxed) + 1),
-      m_scannerPath(helperPath("daw_scan")),
-      m_pluginHostPath(helperPath("daw_plugin_host")) {}
+      m_scannerPath(helperPath("daw_scan")) {}
 
 PluginManager::~PluginManager() {
     cancelScan();
@@ -1045,7 +1045,7 @@ void PluginManager::clearBlacklist() {
 
 std::unique_ptr<plugins::PluginInstance> PluginManager::instantiate(
     const PluginDescriptor& descriptor) {
-    return plugins::createHostedPlugin(descriptor, {m_hostingMode, m_pluginHostPath});
+    return plugins::createHostedPlugin(descriptor);
 }
 
 } // namespace daw

@@ -65,6 +65,10 @@ constexpr int kKnobSize = 34;
 constexpr int kSourceWidth = 150;
 constexpr int kMaxSketchNotes = 768;
 
+const daw::ClipModel* sourcePatternClip(const daw::TrackModel* pattern,
+                                      const daw::ClipModel* source,
+                                      const std::string& patternClipId);
+
 // Pattern rows are a scrolling list. Turning the wheel over a parameter must
 // scroll that list, never make an unnoticed mix edit.
 class PatternLevelKnob final : public ui::FaderWidget {
@@ -244,6 +248,10 @@ public:
         setToolTip(QObject::tr("Open piano roll"));
     }
 
+    void setPatternClip(const QString& id) {
+        if (m_patternClipId == id) return;
+        m_patternClipId = id; m_cachedRevision = std::numeric_limits<std::uint64_t>::max(); update();
+    }
     void setTimeRange(double start, double length, double barSeconds) {
         if (m_rangeStart == start && m_rangeLength == length && m_barSeconds == barSeconds) return;
         m_rangeStart = start;
@@ -330,7 +338,7 @@ private:
         int low = 127;
         int high = 0;
         for (const auto& clip : previewClips) {
-            if (clip.kind != daw::ClipKind::Midi) continue;
+            if (clip.kind != daw::ClipKind::Midi || (!m_patternClipId.isEmpty() && clip.patternClipId != m_patternClipId.toStdString())) continue;
             for (const auto& note : clip.notes) {
                 low = std::min(low, note.pitch);
                 high = std::max(high, note.pitch);
@@ -355,7 +363,7 @@ private:
         // full model pass now happens only after a note revision or resize; a
         // hover repaint simply fills the cached path.
         for (const auto& clip : previewClips) {
-            if (clip.kind != daw::ClipKind::Midi) continue;
+            if (clip.kind != daw::ClipKind::Midi || (!m_patternClipId.isEmpty() && clip.patternClipId != m_patternClipId.toStdString())) continue;
             for (const auto& note : clip.notes) {
                 if ((visited++ % stride) != 0) continue;
                 const double start = clip.startSeconds - clip.offsetSeconds +
@@ -377,6 +385,7 @@ private:
 
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
+    QString m_patternClipId;
     QPainterPath m_cachedNotes;
     QSize m_cachedSize;
     std::uint64_t m_cachedRevision =
@@ -599,8 +608,8 @@ PatternWindow::PatternWindow(daw::EngineController* controller, QWidget* parent)
     applyTheme();
 }
 
-void PatternWindow::setPattern(const QString& patternId) {
-    if (m_patternId == patternId) {
+void PatternWindow::setPattern(const QString& patternId, const QString& clipId) {
+    if (m_patternId == patternId && m_patternClipId == clipId) {
         // A hidden internal editor is refreshed by showEvent.  Rebuilding its
         // complete row tree here as well makes every open pay twice before the
         // first frame is visible.
@@ -608,6 +617,7 @@ void PatternWindow::setPattern(const QString& patternId) {
         return;
     }
     m_patternId = patternId;
+    m_patternClipId = clipId;
     if (isVisible()) refresh();
 }
 
@@ -664,6 +674,8 @@ void PatternWindow::refresh() {
     }
     setWindowTitle(tr("%1 — Pattern")
                        .arg(QString::fromStdString(pattern->name)));
+    if (!m_patternClipId.isEmpty()) { const auto count = m_controller->linkedClips({m_patternId.toStdString(),m_patternClipId.toStdString()}).size();
+        if (count > 1) setWindowTitle(windowTitle() + tr(" · Linked: %1").arg(count)); }
     const QStringList ids = childTrackIds();
     if (!rowStructureMatches(ids) || !syncRowsFromModel()) rebuildRows();
 }
@@ -678,7 +690,10 @@ QStringList PatternWindow::childTrackIds() const {
             track.kind == daw::TrackKind::Audio ||
             (track.kind == daw::TrackKind::Folder && track.summing) ||
             track.kind == daw::TrackKind::Group;
-        if (channel && ownsTrack(&track))
+        const bool hasPart=m_patternClipId.isEmpty() ||
+            std::any_of(track.clips.begin(),track.clips.end(),[&](const auto& clip){return clip.patternClipId==m_patternClipId.toStdString();}) ||
+            track.kind==daw::TrackKind::Folder || track.kind==daw::TrackKind::Group;
+        if (channel && ownsTrack(&track) && hasPart)
             ids.push_back(QString::fromStdString(track.id));
     }
     return ids;
@@ -1399,7 +1414,7 @@ bool PatternWindow::syncRowsFromModel() {
     double rangeEnd = 0.0;
     if (const auto* pattern = project.findTrack(m_patternId.toStdString())) {
         for (const auto& clip : pattern->clips) {
-            if (clip.kind != daw::ClipKind::Pattern) continue;
+            if (clip.kind != daw::ClipKind::Pattern || (!m_patternClipId.isEmpty() && clip.id != m_patternClipId.toStdString())) continue;
             rangeStart = std::min(rangeStart, clip.startSeconds);
             rangeEnd = std::max(rangeEnd, clip.startSeconds + clip.durationSeconds);
         }
@@ -1426,6 +1441,7 @@ bool PatternWindow::syncRowsFromModel() {
         auto* sketch = dynamic_cast<SourceSketch*>(row->findChild<QWidget*>(
             QStringLiteral("PatternSourceSketch")));
         if (!mute || !solo || !name || !fader || !pan || !sketch) return false;
+        sketch->setPatternClip(m_patternClipId);
 
         row->setAccessibleName(
             tr("Pattern source %1").arg(QString::fromStdString(track->name)));
@@ -1474,8 +1490,9 @@ void PatternWindow::showInstrumentMenu() {
     QMenu* plugins = ui::buildPluginMenu(
         this, m_controller, true,
         [this](const daw::plugins::PluginDescriptor& descriptor) {
+            const auto* owner=sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),nullptr,m_patternClipId.toStdString());
             const std::string id = m_controller->addPatternInstrument(
-                m_patternId.toStdString(), descriptor);
+                m_patternId.toStdString(), descriptor,owner?owner->startSeconds:0.0,m_patternClipId.toStdString());
             if (id.empty()) {
                 QMessageBox::warning(
                     this, tr("Instrument could not be loaded"),
@@ -1500,13 +1517,17 @@ void PatternWindow::showInstrumentMenu() {
 void PatternWindow::addSampleFiles(const QStringList& paths,
                                    double startSeconds,
                                    int insertionIndex) {
+    if(!m_patternClipId.isEmpty()) {
+        const auto* owner=sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),nullptr,m_patternClipId.toStdString());
+        if(owner)startSeconds=owner->startSeconds;
+    }
     bool changed = false;
     QStringList failed;
     QStringList added;
     for (const QString& path : paths) {
         if (!ui::isAudioFile(path)) continue;
         const std::string id = m_controller->addPatternSample(
-            m_patternId.toStdString(), path.toStdString(), startSeconds);
+            m_patternId.toStdString(), path.toStdString(), startSeconds,m_patternClipId.toStdString());
         const bool loaded = !id.empty();
         changed |= loaded;
         if (loaded) added.push_back(QString::fromStdString(id));
@@ -1595,9 +1616,22 @@ void PatternWindow::renameSource(const QString& trackId) {
 void PatternWindow::duplicateSource(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     if (!ownsTrack(track)) return;
+    const auto undoStart=m_controller->undoDepth();
+    std::string selectedContent;
+    if(const auto* owner=sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),nullptr,m_patternClipId.toStdString()))
+        selectedContent=owner->contentId;
     const std::string copy =
         m_controller->duplicateTrack(trackId.toStdString(), /*withInserts=*/true);
     if (copy.empty()) return;
+    if(!m_patternClipId.isEmpty()) {
+        std::vector<std::string> remove;
+        if(const auto* lane=m_controller->project().findTrack(copy))for(const auto& part:lane->clips) {
+            const auto* root=m_controller->project().patternOwner(part);
+            if(!root || root->contentId!=selectedContent)remove.push_back(part.id);
+        }
+        for(const auto& id:remove)m_controller->removeClip(copy,id);
+    }
+    m_controller->collapseUndo(undoStart,"Duplicate Pattern Source");
     const QString copyId = QString::fromStdString(copy);
     setSelectedSources({copyId}, copyId);
     m_selectionAnchorId = copyId;
@@ -1608,7 +1642,14 @@ void PatternWindow::duplicateSource(const QString& trackId) {
 void PatternWindow::removeSource(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     if (!ownsTrack(track)) return;
-    m_controller->removeTrack(trackId.toStdString());
+    if(m_patternClipId.isEmpty())m_controller->removeTrack(trackId.toStdString());
+    else {
+        std::vector<std::string> parts;
+        for(const auto& clip:track->clips)if(clip.patternClipId==m_patternClipId.toStdString())parts.push_back(clip.id);
+        const auto undoStart=m_controller->undoDepth();
+        for(const auto& id:parts)m_controller->removeClip(trackId.toStdString(),id);
+        m_controller->collapseUndo(undoStart,"Remove Pattern Source");
+    }
     m_selectedIds.removeAll(trackId);
     if (m_primaryId == trackId) m_primaryId.clear();
     if (m_selectionAnchorId == trackId) m_selectionAnchorId.clear();
@@ -1630,7 +1671,7 @@ void PatternWindow::deleteSelectedSources() {
 
     const std::size_t undoStart = m_controller->undoDepth();
     for (auto it = doomed.crbegin(); it != doomed.crend(); ++it)
-        m_controller->removeTrack(it->toStdString());
+        removeSource(*it);
     m_controller->collapseUndo(undoStart, "Delete Pattern Sources");
 
     m_selectedIds.clear();
@@ -1671,7 +1712,8 @@ void PatternWindow::transposeSelectedSourcesBy(int semitones) {
             m_controller->project().findTrack(id.toStdString());
         if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) continue;
         for (const auto& clip : track->clips) {
-            if (clip.kind != daw::ClipKind::Midi || daw::midiNotes(clip).empty()) continue;
+            if (clip.kind != daw::ClipKind::Midi || daw::midiNotes(clip).empty() ||
+                (!m_patternClipId.isEmpty() && clip.patternClipId != m_patternClipId.toStdString())) continue;
             Job job{id.toStdString(), clip.id, daw::midiNotes(clip)};
             for (auto& note : job.notes) note.pitch += semitones;
             jobs.push_back(std::move(job));
@@ -1743,17 +1785,17 @@ double patternBarBeats(const daw::ProjectModel& project) {
            double(std::max(1, project.timeSigDenominator));
 }
 
-const daw::ClipModel* firstSourceMidi(const daw::TrackModel* track) {
+const daw::ClipModel* firstSourceMidi(const daw::TrackModel* track, const std::string& patternClipId = {}) {
     if (track) for (const auto& clip : track->clips)
-        if (clip.kind == daw::ClipKind::Midi) return &clip;
+        if (clip.kind == daw::ClipKind::Midi && (patternClipId.empty() || clip.patternClipId == patternClipId)) return &clip;
     return nullptr;
 }
 
 const daw::ClipModel* sourcePatternClip(const daw::TrackModel* pattern,
-                                        const daw::ClipModel* source) {
+                                        const daw::ClipModel* source, const std::string& patternClipId = {}) {
     if (pattern) for (const auto& clip : pattern->clips)
         if (clip.kind == daw::ClipKind::Pattern &&
-            (!source || clip.id == source->patternClipId)) return &clip;
+            (!patternClipId.empty() ? clip.id == patternClipId : (!source || clip.id == source->patternClipId))) return &clip;
     return nullptr;
 }
 } // namespace
@@ -1763,8 +1805,8 @@ void PatternWindow::fillRhythm(const QString& trackId, int divisionsPerBar) {
     const auto& project = m_controller->project();
     const auto* track = project.findTrack(trackId.toStdString());
     if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return;
-    const auto* clip = firstSourceMidi(track);
-    const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), clip);
+    const auto* clip = firstSourceMidi(track, m_patternClipId.toStdString());
+    const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), clip, m_patternClipId.toStdString());
     const double bar = patternBarBeats(project);
     const double length = clip ? daw::secondsToBeats(clip->durationSeconds, project.tempo)
         : owner ? daw::secondsToBeats(owner->durationSeconds, project.tempo) : bar;
@@ -1796,21 +1838,21 @@ bool PatternWindow::replaceSourceNotes(const QString& trackId,
     const auto* track = project.findTrack(trackId.toStdString());
     if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi) || notes.empty() ||
         !std::isfinite(lengthBeats) || lengthBeats <= 0.0) return false;
-    const auto* source = firstSourceMidi(track);
-    const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source);
+    const auto* source = firstSourceMidi(track, m_patternClipId.toStdString());
+    const auto* owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source, m_patternClipId.toStdString());
     const std::string id = track->id;
     const double start = source ? source->startSeconds : owner ? owner->startSeconds : 0.0;
     const double duration = std::max(daw::beatsToSeconds(lengthBeats, project.tempo),
                                      source ? source->durationSeconds : 0.0);
     const std::size_t undoStart = m_controller->undoDepth();
     const std::string clipId = source ? source->id
-        : m_controller->addMidiClip(id, start, duration);
+        : m_controller->addMidiClip(id, start, duration,m_patternClipId.toStdString());
     if (clipId.empty()) return false;
     // Re-resolve after addMidiClip: it can allocate a Pattern owner and invalidate
     // model pointers. Extending the owner keeps a long imported phrase audible.
     track = project.findTrack(id);
-    source = firstSourceMidi(track);
-    owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source);
+    source = firstSourceMidi(track, m_patternClipId.toStdString());
+    owner = sourcePatternClip(project.findTrack(m_patternId.toStdString()), source, m_patternClipId.toStdString());
     std::vector<std::pair<std::string, std::string>> trims{{id, clipId}};
     if (owner) trims.emplace_back(m_patternId.toStdString(), owner->id);
     const auto ownerId = owner ? owner->id : std::string{};
@@ -1866,11 +1908,13 @@ void PatternWindow::openRoll(const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     if (!ownsTrack(track) || !daw::trackAccepts(track->kind, daw::ClipKind::Midi)) return;
     for (const auto& clip : track->clips) {
-        if (clip.kind != daw::ClipKind::Midi) continue;
+        if (clip.kind != daw::ClipKind::Midi || (!m_patternClipId.isEmpty() && clip.patternClipId != m_patternClipId.toStdString())) continue;
         emit openPianoRollRequested(trackId, QString::fromStdString(clip.id));
         return;
     }
-    const std::string clip = m_controller->addMidiClip(trackId.toStdString(), 0.0);
+    const auto* owner=sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),nullptr,m_patternClipId.toStdString());
+    const std::string clip = m_controller->addMidiClip(trackId.toStdString(), owner?owner->startSeconds:0.0,
+        owner?owner->durationSeconds:0.0,m_patternClipId.toStdString());
     if (clip.empty()) return;
     emit projectEdited();
     emit openPianoRollRequested(trackId, QString::fromStdString(clip));
@@ -2022,7 +2066,7 @@ bool PatternWindow::checkInteractionGesturesForTest() {
 }
 
 bool PatternWindow::checkEditingForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto sampler = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
     if (!sampler) return false;

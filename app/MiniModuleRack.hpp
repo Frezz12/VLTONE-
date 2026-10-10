@@ -13,7 +13,7 @@ class MiniModuleRack final : public QWidget {
   Q_OBJECT
 public:
   MiniModuleRack(daw::EngineController *, QString channel,
-                 QWidget *parent = nullptr);
+                 QWidget *parent = nullptr, bool compact = false);
   ~MiniModuleRack() override;
   void sync(bool automation);
   void finishEdits();
@@ -47,6 +47,7 @@ private:
   int m_stripWidth = 100;
   int m_assignedHeight = 0;
   bool m_syncing = false;
+  bool m_compact = false;
   std::vector<daw::InsertModel> m_models;
   std::vector<MiniModuleCard *> m_cards;
 };

@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
         audio.getChannel(0)[i] = sample; audio.getChannel(1)[i] = sample;
     }
     audio::AudioRecorder recorder; recorder.initialize(48000, 2); recorder.writeWAVFile(file, audio, 48000);
-    daw::EngineController controller{daw::EngineController::TestRuntime{}}; if (!controller.initialize(48000, 256, false)) return 1;
+    daw::EngineController controller{}; if (!controller.initialize(48000, 256, false)) return 1;
     daw::ProjectModel project; project.tempo = 120;
     daw::TrackModel track; track.id = daw::newUuid(); track.kind = daw::TrackKind::Audio; track.name = "Drums";
     daw::ClipModel clip; clip.id = daw::newUuid(); clip.filePath = file; clip.kind = daw::ClipKind::Audio;

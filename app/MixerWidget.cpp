@@ -3,6 +3,8 @@
 #include "UiFrameClock.hpp"
 #include <QElapsedTimer>
 #include "MixerWidget.hpp"
+#include "RackWidget.hpp"
+#include <QStackedWidget>
 #include "ChannelViewState.hpp"
 #include <QApplication>
 #include <QEvent>
@@ -35,6 +37,7 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QToolButton>
+#include <QTimer>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -136,6 +139,12 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     m_headerGlyph = new QLabel(m_header);
     m_headerGlyph->setFixedSize(16, 16);
     auto* title = new QLabel(tr("MIXER"), m_header);
+    m_headerTitle = title;
+    m_viewToggle = new QToolButton(m_header);
+    m_viewToggle->setObjectName("MixerRackToggle");
+    m_viewToggle->setFixedSize(24, 24);
+    m_viewToggle->setFocusPolicy(Qt::StrongFocus);
+    connect(m_viewToggle, &QToolButton::clicked, this, [this] { setRackMode(!m_rackMode); });
     title->setObjectName("MixerTitle");
     m_headerCount = new QLabel(m_header);
     m_headerCount->setObjectName(QStringLiteral("MixerHeaderCount"));
@@ -162,7 +171,8 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     });
 
     head->addWidget(m_headerAccent);
-    head->addWidget(m_headerGlyph);
+    m_headerGlyph->hide();
+    head->addWidget(m_viewToggle);
     head->addWidget(title);
     head->addWidget(m_headerCount);
     head->addStretch(1);
@@ -197,7 +207,7 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     m_masterHost = new QWidget(body);
     m_masterHost->setObjectName(QStringLiteral("MixerMasterHost"));
@@ -216,7 +226,7 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     masterScroll->setWidgetResizable(true);
     masterScroll->setFrameShape(QFrame::NoFrame);
     masterScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    masterScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    masterScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     m_scroll->viewport()->installEventFilter(this);
     connect(m_scroll->horizontalScrollBar(), &QScrollBar::valueChanged,
@@ -237,7 +247,23 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     auto* edge = new MasterFoldEdge(m_masterDock);
     m_masterEdge = edge;
     bodyRow->addWidget(m_masterDock);
-    outer->addWidget(body, 1);
+    m_views = new QStackedWidget(this);
+    m_views->addWidget(body);
+    m_rack = new RackWidget(controller, m_views);
+    m_views->addWidget(m_rack);
+    outer->addWidget(m_views, 1);
+    connect(m_rack, &RackWidget::editorRequested, this, &MixerWidget::pluginEditorRequested);
+    connect(m_rack, &RackWidget::automationRequested, this, &MixerWidget::automatePluginRequested);
+    connect(m_rack, &RackWidget::sendAutomationRequested, this, &MixerWidget::automateSendRequested);
+    connect(m_rack, &RackWidget::channelRequested, this, &MixerWidget::trackSelected);
+    connect(m_rack, &RackWidget::trackCreated, this, &MixerWidget::trackCreated);
+    connect(m_rack, &RackWidget::edited, this, [this](bool structural) {
+        emit channelEdited(m_rack->channelId(), true);
+        if (structural) {
+            QTimer::singleShot(0, this, &MixerWidget::rebuild);
+            emit structureChanged();
+        }
+    });
 
     edge->started = [this] {
         m_masterDragging = true; m_masterDragStartWidth = m_masterDock->width();
@@ -268,6 +294,27 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     applyTheme();
     rebuild();
     updateMasterGeometry();
+    setRackMode(QSettings().value("ui/rackMode", false).toBool());
+}
+
+bool MixerWidget::rackCommand(const QString& command) {
+    return m_rackMode && m_rack && m_rack->command(command);
+}
+void MixerWidget::setRackMode(bool enabled) {
+    const bool changed = m_rackMode != enabled;
+    if (m_rack) m_rack->finishEdits();
+    m_rackMode = enabled;
+    m_views->setCurrentIndex(enabled ? 1 : 0);
+    m_viewToggle->setIcon(icons::icon(enabled ? icons::Glyph::Layers : icons::Glyph::Mixer, th().accent, 16));
+    m_viewToggle->setToolTip(enabled ? tr("Show mixer") : tr("Show rack"));
+    m_viewToggle->setAccessibleName(m_viewToggle->toolTip());
+    m_headerTitle->setText(enabled ? tr("RACK") : tr("MIXER"));
+    m_headerCount->setText(enabled ? m_rack->channelName() : tr("%1 channels").arg(m_channels.size() + 1));
+    m_masterToggle->setVisible(!enabled);
+    if (enabled) { m_rack->setChannel(m_selectedTrackId); m_headerCount->setText(m_rack->channelName()); m_rack->setFocus(); }
+    else syncVisibleStrips();
+    QSettings().setValue("ui/rackMode", enabled);
+    if (changed) emit rackModeChanged(enabled);
 }
 
 void MixerWidget::applyTheme() {
@@ -338,8 +385,7 @@ QScrollBar#MixerNavigationBar::handle:pressed {
 }
 
 int MixerWidget::masterExpandedWidth() const {
-    const auto* bar = m_masterScroll->verticalScrollBar();
-    return m_channelWidth + (bar->maximum() > 0 ? bar->sizeHint().width() : 0);
+    return m_channelWidth;
 }
 
 void MixerWidget::updateMasterToggle() {
@@ -395,6 +441,7 @@ double MixerWidget::faderGainForTest(const QString& trackId) const {
 }
 
 void MixerWidget::syncFromModel(const QStringList& trackIds) {
+    if (m_rack) { m_rack->sync(); if (m_rackMode) m_headerCount->setText(m_rack->channelName()); }
     QSet<QString> affected(trackIds.begin(), trackIds.end());
     for (const auto& id : trackIds) {
         if (const auto* track = m_controller->project().findTrack(id.toStdString());
@@ -411,7 +458,7 @@ void MixerWidget::syncFromModel(const QStringList& trackIds) {
 }
 
 void MixerWidget::refreshAutomationValues() {
-    if (!isVisible()) return;
+    if (!isVisible() || m_rackMode) return;
     for (ChannelStrip* strip : m_strips) {
         if (stripIsVisible(strip)) strip->refreshAutomationValues();
     }
@@ -426,7 +473,7 @@ bool MixerWidget::checkCollaborationPresenceForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     controller.initialize(48000.0, 512, false);
     const QString trackId =
         QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "A"));
@@ -510,7 +557,7 @@ bool MixerWidget::checkLayoutForTest() {
     });
     preferences.setChannelWidth(ui::MixerPreferences::kDefaultWidth);
     preferences.setMasterVisible(true);
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear();
@@ -527,7 +574,9 @@ bool MixerWidget::checkLayoutForTest() {
             insert.name = "Effect " + std::to_string(j + 1);
             track.inserts.push_back(std::move(insert));
         }
-        for (int j = 0; j < i % 5; ++j) {
+        // The menu test compiles this routing. Its destination bus must not
+        // send back into itself when the send tap is changed transactionally.
+        for (int j = 0; j < (i == 2 ? 0 : i % 5); ++j) {
             daw::SendModel send;
             send.id = track.id + "-send-" + std::to_string(j);
             send.destinationTrackId = "layout-2";
@@ -594,6 +643,9 @@ bool MixerWidget::checkLayoutForTest() {
                 ? daw::EngineController::kMasterChannelId : strip->trackId().toStdString());
             const int filledCount = models ? int(models->size()) : 0;
             const int stripSlots = strip->isMaster() ? std::max(2, int(project.masterInserts.size()) + 1) : expectedSlots;
+            if (strip->insertSlotCount() != stripSlots || slotButtons.size() != filledCount)
+                std::fprintf(stderr, "FAIL slots %s: slots %d/%d buttons %lld/%d\n", strip->trackId().toUtf8().constData(),
+                    strip->insertSlotCount(), stripSlots, qlonglong(slotButtons.size()), filledCount);
             ok &= strip->insertSlotCount() == stripSlots && slotButtons.size() == filledCount;
             for (int i = 0; i < slotButtons.size(); ++i) {
                 ok &= slotButtons[i]->property("insertSlotIndex").toInt() == i &&
@@ -631,12 +683,24 @@ bool MixerWidget::checkLayoutForTest() {
                 strip->findChild<ui::LevelMeter*>(), strip->findChild<ui::PanKnob*>(),
                 strip->findChild<QWidget*>(QStringLiteral("ChannelGainReadout")),
                 strip->findChild<QWidget*>(QStringLiteral("ChannelPeakReadout"))};
-            for (auto* control : controls)
-                ok &= well && control && well->rect().contains(
+            for (auto* control : controls) {
+                const bool contained = well && control && well->rect().contains(
                     QRect(control->mapTo(well, QPoint{}), control->size()));
+                if (!contained && control && well) {
+                    const QRect rect(control->mapTo(well, QPoint{}), control->size());
+                    std::fprintf(stderr, "FAIL control %s: %s %d,%d %dx%d in %dx%d\n", strip->trackId().toUtf8().constData(),
+                        control->metaObject()->className(), rect.x(), rect.y(), rect.width(), rect.height(), well->width(), well->height());
+                }
+                ok &= contained;
+            }
             for (auto* button : strip->findChildren<QAbstractButton*>()) {
                 if (!button->isVisibleTo(strip)) continue;
-                ok &= strip->rect().contains(QRect(button->mapTo(strip, QPoint{}), button->size()));
+                const QRect rect(button->mapTo(strip, QPoint{}), button->size());
+                const bool contained = strip->rect().contains(rect);
+                if (!contained) std::fprintf(stderr, "FAIL button %s %s: %d,%d %dx%d in %dx%d\n",
+                    strip->trackId().toUtf8().constData(), button->objectName().toUtf8().constData(),
+                    rect.x(), rect.y(), rect.width(), rect.height(), strip->width(), strip->height());
+                ok &= contained;
             }
         }
         std::fprintf(stderr, "%s layout: %s\n", ok ? "PASS" : "FAIL", stage);
@@ -667,8 +731,14 @@ bool MixerWidget::checkLayoutForTest() {
             secondMixer.channelWidth() != width || slider->value() != width ||
             QSettings().value(ui::MixerPreferences::kWidthSetting).toInt() != width ||
             mixer.m_slots[3] != retainedStrip || controller.undoDepth() != undoDepth ||
-            std::abs(mixer.m_scroll->horizontalScrollBar()->value() - qRound(anchor * channelStride(width))) > 1)
+            std::abs(mixer.m_scroll->horizontalScrollBar()->value() - qRound(anchor * channelStride(width))) > 1) {
+            std::fprintf(stderr, "FAIL mixer width %d: peer=%d slider=%d saved=%d stable=%d undo=%zu/%zu scroll=%d expected=%d max=%d\n",
+                width, secondMixer.channelWidth(), slider->value(), QSettings().value(ui::MixerPreferences::kWidthSetting).toInt(),
+                mixer.m_slots[3] == retainedStrip, controller.undoDepth(), undoDepth,
+                mixer.m_scroll->horizontalScrollBar()->value(), qRound(anchor * channelStride(width)),
+                mixer.m_scroll->horizontalScrollBar()->maximum());
             return false;
+        }
     }
     slider->setValue(140);
     if (value->value() != 140) return false;
@@ -837,6 +907,9 @@ bool MixerWidget::stripIsVisible(const ChannelStrip* strip) const {
 }
 
 void MixerWidget::wireStrip(ChannelStrip* strip) {
+    connect(strip, &ChannelStrip::rackSelectionRequested, this, [this](const QString& channel, const QStringList& ids) {
+        m_rack->setChannel(channel); m_rack->selectDevices(ids); emit trackSelected(channel);
+    });
     strip->setStripWidth(m_channelWidth);
     ui::perf::sample("mixer.strip.created", 1);
         connect(strip, &ChannelStrip::selectRequested, this,
@@ -909,7 +982,7 @@ void MixerWidget::rebuild() {
     m_insertSlotCount = 2;
     for (const auto& track : project.tracks)
         if (daw::carriesAudio(track))
-            m_insertSlotCount = std::max(m_insertSlotCount, int(track.inserts.size()) + 1);
+            m_insertSlotCount = std::max(m_insertSlotCount, ui::channelInsertRows(project, track.id));
     for (const auto& track : project.tracks) {
         if (!daw::carriesAudio(track)) continue;
         const auto id = QString::fromStdString(track.id);
@@ -932,7 +1005,7 @@ void MixerWidget::rebuild() {
     m_stripsHost->setMinimumWidth(channelsWidth(int(m_channels.size()), m_channelWidth));
     auto* master = previous.take(QString());
     const auto state = ui::channelViewState(project, {});
-    const int masterSlots = std::max(2, int(project.masterInserts.size()) + 1);
+    const int masterSlots = ui::channelInsertRows(project, {});
     if (master && (master->insertSlotCount() != masterSlots ||
                    master->property("channelViewState").toByteArray() != state)) {
         if (master->hasActiveGesture()) m_deferredRackChange = true;
@@ -952,7 +1025,7 @@ void MixerWidget::rebuild() {
     for (auto* strip : previous) { strip->hide(); strip->deleteLater(); }
     m_masterHost->setMinimumHeight(master->naturalHeight());
     m_stripsHost->setMinimumHeight(0);
-    m_headerCount->setText(tr("%1 channels").arg(m_channels.size() + 1));
+    m_headerCount->setText(m_rackMode ? m_rack->channelName() : tr("%1 channels").arg(m_channels.size() + 1));
     m_syncingStrips = false;
     syncVisibleStrips();
     syncFromModel();
@@ -1002,7 +1075,7 @@ void MixerWidget::syncVisibleStrips() {
     if (m_deferredRackChange) {
         for (auto* strip : m_strips) {
             const int expectedSlots = strip->isMaster()
-                ? std::max(2, int(m_controller->project().masterInserts.size()) + 1) : m_insertSlotCount;
+                ? ui::channelInsertRows(m_controller->project(), {}) : m_insertSlotCount;
             if (!strip->hasActiveGesture() && (strip->insertSlotCount() != expectedSlots ||
                 strip->property("channelViewState").toByteArray() !=
                 ui::channelViewState(m_controller->project(), strip->trackId().toStdString()))) {
@@ -1104,7 +1177,7 @@ void MixerWidget::refreshMeters() {
     // window is minimised. The low-rate control poll wakes playback changes.
     if (m_controller->isPlaying() || m_controller->isRecording()) m_meterTimer->start();
     else m_meterTimer->stop();
-    if (!isVisible()) return;
+    if (!isVisible() || m_rackMode) return;
     for (ChannelStrip* strip : m_strips) {
         if (stripIsVisible(strip)) strip->refreshMeter();
     }
@@ -1112,9 +1185,10 @@ void MixerWidget::refreshMeters() {
 
 void MixerWidget::setSelectedTrack(const QString& trackId) {
     m_selectedTrackId = trackId;
+    if (m_rack) { m_rack->setChannel(trackId); if (m_rackMode) m_headerCount->setText(m_rack->channelName()); }
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     for (ChannelStrip* strip : m_strips) {
         strip->setSelected(strip->isMaster()
-            ? track && track->kind == daw::TrackKind::Master : strip->trackId() == trackId);
+            ? (trackId == daw::EngineController::kMasterChannelId || (track && track->kind == daw::TrackKind::Master)) : strip->trackId() == trackId);
     }
 }

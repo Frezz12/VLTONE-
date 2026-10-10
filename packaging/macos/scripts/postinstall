@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+# Installer supplies the selected target volume as its third argument.
+target_volume="${3:-/}"
+case "$target_volume" in
+    /*) ;;
+    *) echo "VLTONE: invalid installation volume" >&2; exit 1 ;;
+esac
+app="${target_volume%/}/Applications/VLTONE.app"
+if [ ! -d "$app" ] || [ -L "$app" ]; then
+    echo "VLTONE: installed application not found at $app" >&2
+    exit 1
+fi
+identifier=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist")
+if [ "$identifier" != "com.vltstudio.pro" ]; then
+    echo "VLTONE: unexpected application identifier at $app" >&2
+    exit 1
+fi
+
+# Remove only quarantine, retaining signatures and all other metadata.
+# -s prevents following any symlink out of the installed application.
+/usr/bin/xattr -r -s -d com.apple.quarantine "$app"
+echo "VLTONE: installed in $app; quarantine removed."
+exit 0

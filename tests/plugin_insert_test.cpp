@@ -131,11 +131,16 @@ int main() {
     fixturePlugins.waitForScan();
     check(fixturePlugins.lastScanError().empty(), "the isolated fixture scan finishes");
 
-    daw::EngineController ctrl{daw::EngineController::TestRuntime{}};
-    check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
+    const auto initialize = [&](daw::EngineController& controller, std::uint32_t blockSize = 512) {
+        const auto ready = controller.initialize(48000, blockSize, false);
+        controller.pluginManager().copyCatalogFrom(fixturePlugins);
+        return ready;
+    };
+
+    daw::EngineController ctrl{};
+    check(initialize(ctrl).isOk(),
           "the controller initialises without a device");
 
-    ctrl.pluginManager().copyCatalogFrom(fixturePlugins);
 
     // A component reload belongs to one native side, not the entire dual-mono
     // slot. Keeping the other instance also preserves opaque, unmirrored state.
@@ -521,9 +526,9 @@ int main() {
     // Multi-source routing remains a real project operation (including render,
     // undo, legacy loading and both instances of a dual-mono plugin).
     {
-        daw::EngineController multi{daw::EngineController::TestRuntime{}};
-        check(multi.initialize(48000, 128, false).isOk(), "multi-sidechain engine initializes");
-        multi.pluginManager().copyCatalogFrom(fixturePlugins);
+        daw::EngineController multi{};
+        check(initialize(multi, 128).isOk(), "multi-sidechain engine initializes");
+
         const auto target = multi.importAudioToNewTrack(tonePath, 0);
         const auto keyA = multi.importAudioToNewTrack(tonePath, 0);
         const auto keyB = multi.importAudioToNewTrack(tonePath, 0);
@@ -547,9 +552,9 @@ int main() {
               "an invalid source cannot partially apply the selection");
         const auto saved = (dir / "multi-sidechain.vlt").string();
         check(multi.saveProject(saved).isOk(), "multi-sidechain project saves");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
-        reopened.initialize(48000, 128, false);
-        reopened.pluginManager().copyCatalogFrom(fixturePlugins);
+        daw::EngineController reopened{};
+        initialize(reopened, 128);
+
         check(reopened.openProject(saved).isOk() &&
                   reopened.insertModel(target, slot)->sidechainTrackIds == std::vector<std::string>{keyA, keyB},
               "all sidechain sources survive a project reopen");
@@ -825,9 +830,9 @@ int main() {
                   (fs::path(sessionDir) / "project.json").string(), "").isOk(),
               "the plugin recovery manifest loads");
 
-        daw::EngineController recovered{daw::EngineController::TestRuntime{}};
-        recovered.initialize(48000, 512, /*openDevice=*/false);
-        recovered.pluginManager().copyCatalogFrom(fixturePlugins);
+        daw::EngineController recovered{};
+        initialize(recovered);
+
         check(recovered.restoreRecoveryProject(
                   std::move(recoveredModel), sessionDir).isOk(),
               "a crash journal activates through the full plugin-state load path");
@@ -893,9 +898,9 @@ int main() {
         ctrl.exportMixdown(beforePath, false);
         const float beforePeak = peakOf(beforePath);
 
-        daw::EngineController reloaded{daw::EngineController::TestRuntime{}};
-        reloaded.initialize(48000, 512, /*openDevice=*/false);
-        reloaded.pluginManager().copyCatalogFrom(fixturePlugins);
+        daw::EngineController reloaded{};
+        initialize(reloaded);
+
 
         check(reloaded.openProject(packageDir).isOk(), "the project reloads");
         const std::vector<daw::InsertModel>* reloadedGravity =
@@ -1030,8 +1035,8 @@ int main() {
   }]
 })";
 
-        daw::EngineController old{daw::EngineController::TestRuntime{}};
-        old.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController old{};
+        initialize(old);
         check(old.openProject(legacy.string()).isOk(),
               "a v1 project without plugin fields loads");
         const std::vector<daw::InsertModel>* slots =
@@ -1054,8 +1059,8 @@ int main() {
     "inserts": [], "clips": []
   }]
 })";
-        daw::EngineController oldSampler{daw::EngineController::TestRuntime{}};
-        oldSampler.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController oldSampler{};
+        initialize(oldSampler);
         check(oldSampler.openProject(v2.string()).isOk(),
               "a v2 sampler project without samplerFx loads");
         const daw::TrackModel* migrated =
@@ -1073,8 +1078,8 @@ int main() {
     // plugin reports; storing plain values in the lane would make the drawn
     // curve meaningless the moment it was pointed at another parameter.
     {
-        daw::EngineController automated{daw::EngineController::TestRuntime{}};
-        automated.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController automated{};
+        initialize(automated);
         const std::string midiTrack =
             automated.addTrack(daw::TrackKind::Instrument, "Synth");
 
@@ -1133,6 +1138,8 @@ int main() {
         const float rampQuarter = sampleAt(0.5);
         const float rampHalf = sampleAt(2.0);
         const float rampSevenEighths = sampleAt(3.5);
+        std::printf("Automation samples: %.6f %.6f %.6f; live gain: %.6f\n",
+                    rampQuarter, rampHalf, rampSevenEighths, liveBeforeExport);
         check(std::fabs(rampQuarter - 0.25f) < 0.02f,
               "a quarter of the way in, the parameter is a quarter of the way up");
         check(std::fabs(rampHalf - 1.0f) < 0.02f, "halfway, halfway");
@@ -1159,8 +1166,8 @@ int main() {
 
     // ── Routed audio bypasses sampler-owned FX, then hears track FX ──
     {
-        daw::EngineController routed{daw::EngineController::TestRuntime{}};
-        routed.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController routed{};
+        initialize(routed);
         const std::string source =
             routed.addTrack(daw::TrackKind::Audio, "Routed Source");
         routed.importAudio(tonePath, source, 0.0);
@@ -1198,8 +1205,8 @@ int main() {
     // soloing anything left every instrument and MIDI track playing. With a
     // synth in the project — which is most projects — solo did nothing at all.
     {
-        daw::EngineController solo{daw::EngineController::TestRuntime{}};
-        solo.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController solo{};
+        initialize(solo);
         const std::string audio = solo.addTrack(daw::TrackKind::Audio, "Audio");
         solo.importAudio(tonePath, audio, 0.0);
 
@@ -1220,6 +1227,7 @@ int main() {
         const std::string bothPath = (dir / "solo-both.wav").string();
         check(solo.exportMixdown(bothPath, false).isOk(), "exports both tracks");
         const float bothPeak = peakOf(bothPath);
+        std::printf("Instrument mix peak: %.6f\n", bothPeak);
         check(bothPeak > 0.9f, "the instrument's steady tone dominates the mix");
 
         // Solo the audio track: the synth has to go, and the tone stays.
@@ -1236,6 +1244,7 @@ int main() {
         const std::string synthPath = (dir / "solo-synth.wav").string();
         solo.exportMixdown(synthPath, false);
         const float synthPeak = peakOf(synthPath);
+        std::printf("Solo instrument peak: %.6f\n", synthPeak);
         check(synthPeak > 0.9f, "soloing the instrument keeps it audible");
 
         // A bus carrying a soloed track must stay open, or the solo silences
@@ -1263,8 +1272,8 @@ int main() {
     // inserts. Signal arrived, the meter moved, and every plugin on the bus did
     // nothing at all.
     {
-        daw::EngineController routed{daw::EngineController::TestRuntime{}};
-        routed.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController routed{};
+        initialize(routed);
         const std::string src = routed.addTrack(daw::TrackKind::Audio, "Source");
         routed.importAudio(tonePath, src, 0.0);
         const std::string bus = routed.addTrack(daw::TrackKind::Bus, "Bus");
@@ -1293,8 +1302,8 @@ int main() {
     // Pre-fader, with the track's own fader down, so the *only* path to the
     // master is send → bus → the bus's plugin.
     {
-        daw::EngineController sent{daw::EngineController::TestRuntime{}};
-        sent.initialize(48000, 512, /*openDevice=*/false);
+        daw::EngineController sent{};
+        initialize(sent);
         const std::string src = sent.addTrack(daw::TrackKind::Audio, "Source");
         sent.importAudio(tonePath, src, 0.0);
         const std::string bus = sent.addTrack(daw::TrackKind::Bus, "Reverb");
@@ -1350,9 +1359,9 @@ int main() {
     // with the slot, so the paste is the tuned plugin rather than a fresh one
     // wearing the same name.
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
-        c.initialize(48000, 512, /*openDevice=*/false);
-        c.pluginManager().copyCatalogFrom(fixturePlugins);
+        daw::EngineController c{};
+        initialize(c);
+
 
         const std::string a = c.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = c.addTrack(daw::TrackKind::Audio, "B");
@@ -1483,8 +1492,8 @@ int main() {
         const std::string left("left\0opaque\xff", 12), right("right\0opaque\xfe", 13);
         { std::ofstream stream(stateDir / slot.stateFile, std::ios::binary); stream.write(left.data(), left.size()); }
         { std::ofstream stream(stateDir / slot.rightStateFile, std::ios::binary); stream.write(right.data(), right.size()); }
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
-        check(bool(controller.initialize(48000, 256, false)) && bool(controller.openProject(source.string())),
+        daw::EngineController controller{};
+        check(bool(initialize(controller, 256)) && bool(controller.openProject(source.string())),
               "unavailable native plugin keeps project editable");
         check(!controller.hasInsert(track.id, slot.id), "unavailable slot does not claim a native instance");
         fs::remove_all(source);

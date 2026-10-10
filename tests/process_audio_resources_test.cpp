@@ -30,66 +30,6 @@ float value(unsigned channel, unsigned frame) {
     return float((channel + 1) * 10) + float(frame % 8192) / 8192.f;
 }
 
-void weakReadoutResources(const fs::path& root) {
-    ProcessAudioResources store(root, {}, ProcessAudioResources::Retention::WeakSources);
-    auto source = std::make_shared<SampleBuffer>(2, 32, 48000);
-    std::fill_n(source->writableChannel(0), source->frames(), .25f);
-    std::fill_n(source->writableChannel(1), source->frames(), -.5f);
-    const std::weak_ptr<const SampleBuffer> weak = source;
-    const auto id = store.put(source);
-    const auto records = store.records();
-    const auto loaded = ProcessAudioResources::load(root, records);
-    store.collectExpired();
-    require(store.put(source) == id && store.records().size() == 1 && fs::exists(root / records[0].fileName),
-            "weak readout banks retain and deduplicate a live PCM source");
-    source.reset();
-    require(weak.expired() && fs::exists(root / records[0].fileName),
-            "weak readout bank does not pin obsolete source memory or remove its unacknowledged file");
-    store.collectExpired();
-    require(store.records().empty() && !fs::exists(root / records[0].fileName) &&
-            loaded.at(id)->readSample(0, 19) == .25f && loaded.at(id)->readSample(1, 19) == -.5f,
-            "expired readout file is reclaimed while an already-decoded readonly mapping stays valid");
-    auto next = std::make_shared<SampleBuffer>(1, 8, 44100);
-    const auto nextId = store.put(next);
-    require(nextId != id && store.records().size() == 1,
-            "readout IDs are never reused after collection");
-    const auto nextFile = root / store.records()[0].fileName;
-    const auto retainedFile = root / "held-resource.f32";
-    next.reset();
-    // A nonempty directory guarantees remove() fails on every supported OS.
-    // Retain the actual PCM under another private name, then restore it to
-    // verify a transient filesystem failure can be retried without losing IDs.
-    fs::rename(nextFile, retainedFile);
-    fs::create_directory(nextFile);
-    { std::ofstream busy(nextFile / "busy"); busy << "fixture"; }
-    store.collectExpired();
-    require(store.records().size() == 1 && fs::exists(retainedFile),
-            "failed reclamation retains the resource entry for retry");
-    fs::remove(nextFile / "busy"); fs::remove(nextFile);
-    fs::rename(retainedFile, nextFile);
-    store.collectExpired();
-    require(store.records().empty() && !fs::exists(nextFile),
-            "reclamation retries a previously blocked owned PCM file");
-
-    // Deterministically reuse an allocation address before collectExpired().
-    // Pointer equality must not reuse the preceding owner's immutable ID.
-    alignas(SampleBuffer) std::byte storage[sizeof(SampleBuffer)];
-    const auto allocate = [&] {
-        return std::shared_ptr<SampleBuffer>(new (storage) SampleBuffer(1, 8, 48000),
-            [](SampleBuffer* sample) { sample->~SampleBuffer(); });
-    };
-    auto first = allocate(); first->writableChannel(0)[0] = .125f;
-    const auto firstId = store.put(first); first.reset();
-    auto second = allocate(); second->writableChannel(0)[0] = .75f;
-    const auto secondId = store.put(second);
-    require(firstId != secondId && store.records().size() == 2,
-            "reused source addresses cannot alias expired immutable readout IDs");
-    store.collectExpired();
-    const auto current = ProcessAudioResources::load(root, store.records());
-    require(store.records().size() == 1 && store.records()[0].id == secondId &&
-            store.put(second) == secondId && current.at(secondId)->readSample(0, 0) == .75f,
-            "collecting an expired address owner preserves the replacement's ID and PCM");
-}
 }
 
 int main() try {
@@ -113,15 +53,10 @@ int main() try {
         records = store.records();
         loaded = ProcessAudioResources::load(root, records);
         samples.reset();
-        store.collectExpired();
         require(!original.expired(), "writer pins resource identity until session transfer ends");
     }
     require(original.expired(), "child mapping has no dependency on original PCM allocation");
     const auto mapped = loaded.at(id);
-    ProcessAudioResources::Cache cache;
-    const auto firstCached = ProcessAudioResources::load(root, records, {}, &cache);
-    const auto nextCached = ProcessAudioResources::load(root, records, {}, &cache);
-    require(firstCached.at(id) == nextCached.at(id), "persistent session reads reuse the same immutable mapping");
     require(mapped->fileBacked() && mapped->readOnly() && mapped->channels() == 3 &&
             mapped->frames() == frames && mapped->sampleRate() == 44100,
             "reader maps immutable PCM with exact shape and sample rate");
@@ -156,8 +91,6 @@ int main() try {
     fs::create_directories(truncated);
     fs::copy_file(root / records.front().fileName, truncated / records.front().fileName);
     fs::resize_file(truncated / records.front().fileName, 3ull * frames * sizeof(float) - sizeof(float));
-    require(rejects([&] { ProcessAudioResources::load(truncated, records, {}, &cache); }),
-            "mapping cache cannot alias resource IDs from another generation directory");
     require(rejects([&] { ProcessAudioResources::load(truncated, records); }), "truncated PCM is rejected before mapping");
     require(rejects([&] { SampleBuffer::mapReadOnly(truncated / records.front().fileName, 3, frames, 44100); }),
             "mapping independently validates the opened file size");
@@ -186,7 +119,6 @@ int main() try {
             "non-finite PCM is rejected without leaving a partial file");
     require(mapped->readSample(2, frames - 1) == value(2, frames - 1),
             "mapped source remains usable after writer and temporary readers are destroyed");
-    weakReadoutResources(temp.path / "weak-readouts");
     return 0;
 } catch (const std::exception& error) {
     std::fprintf(stderr, "FAIL %s\n", error.what());

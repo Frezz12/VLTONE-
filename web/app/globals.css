@@ -3,6 +3,7 @@
 @import "../styles/marketing.css";
 @import "../styles/capabilities.css";
 @import "../styles/auth.css";
+@import "../styles/creator.css";
 
 /* Releases */
 .releases-main, .release-detail-main { width: min(1240px, 100%); margin: 0 auto; padding: 30px clamp(18px, 4vw, 48px) 110px; }
@@ -205,26 +206,10 @@
 .manual-problems { display: grid; gap: 7px; }
 .manual-problems > div { padding: 13px 14px; border-left: 2px solid var(--vlt-danger); background: rgba(224, 75, 75, .055); }
 .manual-problems strong { color: #ffb5b5; font-size: 12px; }
-.manual-gallery { display: grid; gap: 14px; margin-top: 26px; }
-.manual-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 18px; }
-.manual-gallery-grid figure > button { aspect-ratio: 3 / 2; }
-.manual-gallery figure { margin: 0; }
-.manual-gallery figure > button { position: relative; display: block; width: 100%; aspect-ratio: var(--shot-ratio); overflow: hidden; border: 0; border-radius: 0; background: var(--vlt-surface-well); }
-.manual-gallery figure img { object-fit: contain; }
-.manual-gallery figure button > span { position: absolute; right: 9px; bottom: 9px; display: inline-flex; min-height: 38px; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--vlt-border-strong); border-radius: 0; color: var(--vlt-text); background: rgba(13, 13, 13, .88); font-size: 11px; font-weight: 500; backdrop-filter: blur(10px); }
-.manual-gallery figure button:hover { border-color: var(--vlt-accent-hover); }
-.manual-gallery figcaption { padding: 9px 2px 0; color: var(--vlt-text-muted); font-size: 12px; line-height: 1.45; }
 .manual-empty { display: grid; min-height: 340px; place-items: center; align-content: center; padding: 40px; border: 0; border-radius: 0; color: var(--vlt-text-muted); text-align: center; }
 .manual-empty h2 { margin: 14px 0 0; color: var(--vlt-text); font-size: 25px; }
 .manual-empty p { max-width: 520px; margin: 7px 0 16px; }
 .manual-empty button { min-height: 42px; padding: 8px 14px; border: 1px solid var(--vlt-border-strong); border-radius: 0; color: var(--vlt-text); background: var(--vlt-surface-raised); }
-.manual-lightbox { width: min(1200px, calc(100vw - 28px)); max-width: none; height: min(94vh, 1000px); max-height: none; padding: 0; overflow: hidden; border: 1px solid var(--vlt-border-strong); border-radius: 0; color: var(--vlt-text); background: var(--vlt-surface-well); }
-.manual-lightbox::backdrop { background: rgb(6 6 6 / 84%); backdrop-filter: blur(5px); }
-.manual-lightbox > div { display: grid; height: 100%; grid-template-rows: 1fr auto; padding: 14px; }
-.manual-lightbox-image { position: relative; min-height: 0; overflow: hidden; border-radius: 0; background: var(--vlt-surface-well); }
-.manual-lightbox-image img { object-fit: contain; }
-.manual-lightbox p { margin: 12px 46px 0 3px; color: var(--vlt-cursor); font-size: 13px; }
-.manual-lightbox-close { position: absolute; z-index: 2; top: 15px; right: 15px; display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--vlt-border-strong); border-radius: 0; color: var(--vlt-text); background: rgba(13, 13, 13, .88); }
 
 @media (hover: hover) and (pointer: fine) {
   .release-highlight-details summary:hover { text-decoration-thickness: 2px; }
@@ -286,12 +271,9 @@
   .mac-dialog-actions .vlt-button { width: 100%; }
 }
 @media (max-width: 560px) {
-  .manual-gallery-grid { grid-template-columns: 1fr; }
   .manual-category-head, .manual-chapter > header { grid-template-columns: 1fr; }
   .manual-chapter { padding: 24px 18px; }
   .manual-shortcuts { grid-template-columns: 1fr; }
-  .manual-gallery figure button > span { width: 38px; justify-content: center; padding: 7px; font-size: 0; }
-  .manual-lightbox { height: calc(100vh - 20px); }
 }
 @media (max-width: 480px) {
   .quota-line { flex-direction: column; }

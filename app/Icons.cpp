@@ -975,13 +975,29 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Glue: {
-        // Two blocks meeting and fusing: the seam between them is what goes.
-        p.setPen(Qt::NoPen);
-        p.setBrush(c);
-        p.drawRoundedRect(QRectF(3.5, 10.0, 8.5, 4.0), 1.6, 1.6);
-        p.drawRoundedRect(QRectF(12.0, 10.0, 8.5, 4.0), 1.6, 1.6);
-        p.setPen(QPen(c, 1.4, Qt::SolidLine, Qt::RoundCap));
-        p.drawLine(QPointF(12.0, 7.0), QPointF(12.0, 17.0));
+        // A squeezable glue tube with a sealed end and narrow applicator.
+        // One shared vector serves the toolbar, menu and precision cursor.
+        p.save();
+        p.translate(12.0, 12.0);
+        p.rotate(45.0);
+        QPainterPath tube;
+        tube.moveTo(-4.0, -9.0);
+        tube.lineTo(4.0, -9.0);
+        tube.lineTo(3.4, 2.0);
+        tube.quadTo(3.3, 3.0, 1.2, 5.0);
+        tube.lineTo(-1.2, 5.0);
+        tube.quadTo(-3.3, 3.0, -3.4, 2.0);
+        tube.closeSubpath();
+        strokePath(p, tube, c, 1.7);
+        p.drawLine(QPointF(-3.8, -6.5), QPointF(3.8, -6.5));
+        p.drawLine(QPointF(-1.4, -1.5), QPointF(1.4, -1.5));
+        QPainterPath nozzle;
+        nozzle.moveTo(-1.2, 5.0);
+        nozzle.lineTo(-1.0, 8.5);
+        nozzle.lineTo(1.0, 8.5);
+        nozzle.lineTo(1.2, 5.0);
+        strokePath(p, nozzle, c, 1.7);
+        p.restore();
         break;
     }
     case Glyph::Dice: {

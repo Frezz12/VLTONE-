@@ -2,7 +2,10 @@
 #include "ScrollMotion.hpp"
 #include "UiPerformance.hpp"
 #include "AudioImportPreparation.hpp"
+#include "MediaWorker.hpp"
 #include "MainWindow.hpp"
+#include "AudioEditPanel.hpp"
+#include "NotificationCenter.hpp"
 #include "KeyboardLayout.hpp"
 #include "MenuActions.hpp"
 #include "WaveformStrip.hpp"
@@ -67,6 +70,7 @@
 #include "InspectorWidget.hpp"
 #include "InternalEditorFrame.hpp"
 #include "MixerWidget.hpp"
+#include "RackWidget.hpp"
 #include "WarpEditorWidget.hpp"
 #include <QToolButton>
 #include "MidiInputManager.hpp"
@@ -972,15 +976,9 @@ struct MainWindow::CloudRecordingRuntime {
 
 MainWindow::MainWindow(bool openDevice, QWidget* parent,
                        collab::CollaborationService* collaboration)
-    : QMainWindow(parent), m_collaboration(collaboration) {
-    m_controller.pluginManager().setHostingMode(daw::PluginManager::HostingMode::Isolated);
+    : QMainWindow(parent), m_controller(),
+      m_collaboration(collaboration) {
     QSettings().remove(QStringLiteral("plugins/isolatedHosting"));
-    const QFileInfo pluginHost(QString::fromStdString(m_controller.pluginManager().pluginHostPath()));
-    if (!pluginHost.isFile() || !pluginHost.isExecutable()) {
-        QTimer::singleShot(0, this, [this] {
-            statusBar()->showMessage(tr("Plugin host is unavailable. Reinstall VLTONE to load external plugins."));
-        });
-    }
     const auto syncDefaultTrackColor = [this] {
         m_controller.setDefaultTrackColor(
             uint32_t(th().accent.rgb()) & 0x00FFFFFFu);
@@ -1237,6 +1235,7 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     buildMenus();
     buildSemanticCommands();
     buildStatusBar();
+    m_audioNotifications = new ui::NotificationCenter(m_workspace);
 
     if (openDevice)
         initializeBlankProject();
@@ -1246,6 +1245,10 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, &MainWindow::refreshUi);
     m_refreshTimer->start(33);
+    m_audioHealthTimer = new QTimer(this);
+    m_audioHealthTimer->setInterval(100);
+    connect(m_audioHealthTimer, &QTimer::timeout, this, &MainWindow::serviceAudioHealth);
+    m_audioHealthTimer->start();
 
     // Cursor movement is a pair of narrow dirty strips and can follow the
     // display without also doubling meter aggregation and plugin polling.
@@ -4799,19 +4802,6 @@ bool MainWindow::startRecovery(bool interactive) {
     // copying the document is invisible next to the 33 ms UI tick.
     m_journalTimer = new QTimer(this);
     connect(m_journalTimer, &QTimer::timeout, this, [this] {
-        if (m_controller.audioDeviceNeedsRecovery()) {
-            // Preserve the closed take before changing device format. A lost
-            // device must never silently resume into the middle of that WAV.
-            if (m_controller.isRecording()) {
-                m_controller.markRecordingInterrupted();
-                stopRecordingNow();
-            }
-            cancelCountIn();
-            const auto recovered = m_controller.recoverAudioDevice();
-            if (!recovered) statusBar()->showMessage(
-                (m_controller.isDeviceOpen() ? tr("Audio recovered: %1") : tr("Audio device unavailable: %1")).arg(QString::fromStdString(recovered.message())), 5000);
-            else statusBar()->showMessage(tr("Audio device reconnected"), 5000);
-        }
         sampleForRecovery();
     });
     m_journalTimer->start(1000);
@@ -5135,7 +5125,7 @@ bool MainWindow::checkAutomationForTest() {
     m_timeline->ensureLaneVisible(laneRow);
     QApplication::processEvents();
     const int y = m_timeline->laneCentreForTest(laneRow);
-    if (y < m_timeline->rulerHeight() || y > m_timeline->height()) {
+    if (y < m_timeline->tracksTop() || y > m_timeline->height()) {
         std::fprintf(stderr, "the automation lane is off screen at y=%d\n", y);
         return false;
     }
@@ -6445,7 +6435,7 @@ bool MainWindow::checkCycleRegionForTest() {
             daw::visibleTracks(m_controller.project()).size() > 1 ? 1 : 0;
         const QPoint cursorProbe(
             std::max(2, regionLeft - 20),
-            probeLane == 0 ? std::max(m_timeline->rulerHeight() + 1,
+            probeLane == 0 ? std::max(m_timeline->tracksTop() + 1,
                                       m_timeline->height() - 2)
                            : m_timeline->laneCentreForTest(probeLane));
         for (int tool : {1, 2, 4, 5, 3}) {
@@ -7136,6 +7126,35 @@ bool MainWindow::checkTrackMixerSyncForTest() {
     m_controller.removeTrack(sendTwo);
     m_controller.removeTrack(sendOne);
     syncViews();
+    const auto effect = m_controller.pluginManager().find(daw::plugins::Format::Internal, "daw.equalizer");
+    if (!effect) return false;
+    const auto rackSource = m_controller.addTrack(daw::TrackKind::Audio, "Rack source");
+    const auto rackTarget = m_controller.addTrack(daw::TrackKind::Audio, "Rack target");
+    const auto slot = m_controller.addInsert(rackSource, *effect);
+    openPluginEditor(QString::fromStdString(rackSource), QString::fromStdString(slot));
+    QApplication::processEvents(); QApplication::processEvents();
+    if (!check(m_pluginEditors.contains(QString::fromStdString(rackSource + '/' + slot)), "rack editor did not open")) return false;
+    if (!check(m_controller.transferRackSelection(rackSource, {slot}, rackTarget, 0, false).isOk(), "rack editor transfer failed")) return false;
+    syncViews(); QApplication::processEvents(); QApplication::processEvents();
+    if (!check(m_pluginEditors.contains(QString::fromStdString(rackTarget + '/' + slot))
+        && !m_pluginEditors.contains(QString::fromStdString(rackSource + '/' + slot)), "open editor did not follow moved device")) return false;
+    m_controller.undo(); syncViews(); QApplication::processEvents(); QApplication::processEvents();
+    if (!check(m_pluginEditors.contains(QString::fromStdString(rackSource + '/' + slot)), "undo did not return editor to source")) return false;
+    m_pluginEditors.value(QString::fromStdString(rackSource + '/' + slot))->close();
+    setMixerVisible(true);
+    activateWindow();
+    m_mixer->setSelectedTrack(QString::fromStdString(rackSource));
+    m_mixer->setRackMode(true);
+    m_mixer->rack()->selectDevices({QString::fromStdString(slot)});
+    m_mixer->rack()->setFocus();
+    QApplication::processEvents();
+    onDuplicateSelectedTrack();
+    if (!check(m_controller.project().findTrack(rackSource)->inserts.size() == 2,
+        "main duplicate shortcut did not route to rack")) return false;
+    m_mixer->setRackMode(false);
+    m_controller.removeTrack(rackTarget);
+    m_controller.removeTrack(rackSource);
+    syncViews(); QApplication::processEvents();
     std::fprintf(stderr, "PASS track/mixer names, numbering, grouping, sends and undo/redo\n");
     return true;
 }
@@ -7396,7 +7415,7 @@ bool MainWindow::checkTimelinePanForTest() {
     const int rowsBefore = m_timeline->verticalScroll();
     const QPoint start(m_timeline->width() / 2,
                        std::min(m_timeline->height() - 20,
-                                m_timeline->rulerHeight() + 80));
+                                m_timeline->tracksTop() + 80));
     const QPoint finish = start - QPoint(80, 40);
     const QPoint globalStart = m_timeline->mapToGlobal(start);
     const QPoint globalFinish = m_timeline->mapToGlobal(finish);
@@ -7429,7 +7448,7 @@ bool MainWindow::checkTimelinePanForTest() {
     m_timeline->clearClipSelection();
     const int pointerX = int(m_timeline->width() * 0.72);
     QCursor::setPos(m_timeline->mapToGlobal(
-        QPoint(pointerX, m_timeline->rulerHeight() + 40)));
+        QPoint(pointerX, m_timeline->tracksTop() + 40)));
     const double timeUnderPointer =
         m_timeline->horizontalScrollForTest() +
         pointerX / m_timeline->pixelsPerSecondForTest();
@@ -7699,7 +7718,7 @@ bool MainWindow::checkTimelineClipGesturesForTest() {
         wavePosition.x() == zoomPosition.x() && zoomPosition.x() == heightPosition.x() &&
         wavePosition.y() < zoomPosition.y() && zoomPosition.y() < heightPosition.y() &&
         heightPosition.x() == verticalScroll->x() &&
-        viewControls->y() == m_timeline->rulerHeight() &&
+        viewControls->y() == m_timeline->tracksTop() &&
         viewControls->geometry().bottom() + 1 == verticalScroll->y() &&
         viewControls->geometry().right() + 1 == m_timeline->width() &&
         verticalScroll->width() == horizontalScroll->height() &&
@@ -8502,10 +8521,7 @@ bool MainWindow::checkSettingsViewportForTest() {
     PluginManagerWindow pluginManager(&m_controller, this);
     daw::PluginManager previewCatalog;
     previewCatalog.copyCatalogFrom(m_controller.pluginManager());
-    if (m_controller.pluginManager().hostingMode() != daw::PluginManager::HostingMode::Isolated ||
-        previewCatalog.hostingMode() != daw::PluginManager::HostingMode::Isolated ||
-        previewCatalog.pluginHostPath() != m_controller.pluginManager().pluginHostPath() ||
-        pluginManager.findChild<QCheckBox*>(QStringLiteral("IsolatedPluginHosting"))) return false;
+
     if (const QString shot = qEnvironmentVariable("DAW_PLUGIN_MANAGER_SCREENSHOT");
         !shot.isEmpty()) {
         pluginManager.resize(920, 620);
@@ -8876,12 +8892,18 @@ bool MainWindow::checkTimelineRulersForTest() {
     if (!button || !button->menu() || !trackHeader || !inspectorHeader ||
         !browserHeader || !scroll || !viewControls) return false;
     const auto originalFormat = m_transport->rulerFormat();
+    const bool originalChords = m_timeline->arrangementRowVisible(1);
+    const bool originalSections = m_timeline->arrangementRowVisible(2);
+    m_timeline->setArrangementRowVisible(1, false);
+    m_timeline->setArrangementRowVisible(2, false);
     const bool originalCounter = m_transport->positionShowsBars();
     const double originalPosition = m_controller.positionSeconds();
     const int originalScroll = m_timeline->verticalScroll();
     const double originalScale = m_timeline->pixelsPerSecondForTest();
     const double originalHorizontal = m_timeline->horizontalScrollForTest();
     const auto restore = qScopeGuard([&] {
+        m_timeline->setArrangementRowVisible(1, originalChords);
+        m_timeline->setArrangementRowVisible(2, originalSections);
         m_transport->setRulerFormat(originalFormat);
         m_transport->setPositionDisplayBars(originalCounter);
         m_controller.seekSeconds(originalPosition);
@@ -8893,8 +8915,9 @@ bool MainWindow::checkTimelineRulersForTest() {
     };
     const auto geometryMatches = [&](int height) {
         QApplication::processEvents();
-        if (m_timeline->rulerHeight() != height || trackHeader->height() != height ||
-            inspectorHeader->height() != height || browserHeader->height() != height ||
+        if (m_timeline->rulerHeight() != ui::kRulerHeight || trackHeader->height() != ui::kRulerHeight ||
+            inspectorHeader->height() != ui::kRulerHeight || browserHeader->height() != ui::kRulerHeight ||
+            m_timeline->tracksTop() != height ||
             viewControls->y() != height ||
             scroll->y() != viewControls->geometry().bottom() + 1 ||
             viewControls->geometry().right() + 1 != m_timeline->width()) return false;
@@ -8923,9 +8946,9 @@ bool MainWindow::checkTimelineRulersForTest() {
     if (!geometryMatches(ui::kRulerHeight) || !bars->isChecked() ||
         bars->isEnabled() || time->isChecked()) return fail("single bars row");
     time->trigger();
-    const int dualHeight = ui::kRulerHeight + ui::kRulerRowHeight;
+    const int dualHeight = ui::kRulerHeight + ui::kArrangementRowHeight;
     if (!geometryMatches(dualHeight) || !bars->isChecked() || !time->isChecked() ||
-        !bars->isEnabled() || !time->isEnabled() || m_transport->positionShowsBars())
+        bars->isEnabled() || !time->isEnabled() || m_transport->positionShowsBars())
         return fail("adding time did not preserve both rows and independent counter");
     m_timeline->setVerticalScroll(24);
     if (!geometryMatches(dualHeight)) return fail("scrolled headers drifted");
@@ -8948,10 +8971,9 @@ bool MainWindow::checkTimelineRulersForTest() {
         if (std::abs(m_controller.positionSeconds() - expectedSample) > 1e-9)
             return fail("ruler row did not seek to the clicked time");
     }
-    bars->trigger();
-    if (!geometryMatches(ui::kRulerHeight) || bars->isChecked() ||
-        !time->isChecked() || time->isEnabled() ||
-        m_timeline->verticalScroll() != dualScroll) return fail("removing bars row");
+    time->trigger();
+    if (!geometryMatches(ui::kRulerHeight) || !bars->isChecked() || time->isChecked() ||
+        m_timeline->verticalScroll() != dualScroll) return fail("removing time row");
     both->trigger();
     if (!geometryMatches(dualHeight)) return fail("combined shortcut");
     {
@@ -8973,7 +8995,46 @@ bool MainWindow::checkTimelineRulersForTest() {
     time->trigger();
     if (!geometryMatches(ui::kRulerHeight) ||
         m_timeline->rulerFormat() != ui::RulerFormat::Bars) return fail("return to bars");
-    std::fprintf(stderr, "PASS Timeline rulers: row choices, aligned headers, scrolling, both seek rows, persistence\n");
+    m_timeline->setArrangementRowVisible(1, true);
+    m_timeline->setArrangementRowVisible(2, true);
+    if (!geometryMatches(ui::kRulerHeight + 2 * ui::kArrangementRowHeight)) return fail("annotation rows changed header height or lane alignment");
+    const auto originalChordsData = m_controller.project().chords;
+    const auto restoreChords = qScopeGuard([&] { m_controller.setArrangementLabels(true, originalChordsData); });
+    const double beatsPerPixel = m_controller.tempo() / (60.0 * originalScale);
+    const double startBeat = (originalHorizontal + 60.0 / originalScale) * m_controller.tempo() / 60.0;
+    m_controller.setArrangementLabels(true, {{"ruler-check", "Am7", startBeat, 160 * beatsPerPixel}});
+    const int chordY = ui::kRulerHeight + ui::kArrangementRowHeight / 2;
+    const auto mouse = [&](QEvent::Type type, QPoint at, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, at, m_timeline->mapToGlobal(at), button, buttons, Qt::ControlModifier);
+        QApplication::sendEvent(m_timeline, &event);
+    };
+    mouse(QEvent::MouseButtonPress, {100, chordY}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {130, chordY}, Qt::NoButton, Qt::LeftButton);
+    if (m_controller.project().chords.front().startBeats != startBeat) return fail("drag preview mutated the document");
+    mouse(QEvent::MouseButtonRelease, {130, chordY}, Qt::LeftButton, Qt::NoButton);
+    if (std::abs(m_controller.project().chords.front().startBeats - startBeat - 30 * beatsPerPixel) > 1e-7) return fail("chord drag did not commit");
+    m_controller.undo();
+    if (std::abs(m_controller.project().chords.front().startBeats - startBeat) > 1e-7) return fail("chord drag undo");
+    mouse(QEvent::MouseButtonPress, {218, chordY}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {238, chordY}, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {238, chordY}, Qt::LeftButton, Qt::NoButton);
+    if (std::abs(m_controller.project().chords.front().durationBeats - 180 * beatsPerPixel) > 1e-7) return fail("chord resize");
+    mouse(QEvent::MouseButtonPress, {100, chordY}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {130, chordY}, Qt::NoButton, Qt::LeftButton);
+    QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(m_timeline, &cancel);
+    mouse(QEvent::MouseButtonRelease, {130, chordY}, Qt::LeftButton, Qt::NoButton);
+    if (std::abs(m_controller.project().chords.front().startBeats - startBeat) > 1e-7) return fail("Escape did not cancel preview");
+    m_timeline->setArrangementRowVisible(1, false);
+    m_timeline->setArrangementRowVisible(1, true);
+    if (m_controller.project().chords.empty()) return fail("hiding deleted chords");
+    const auto trackCount = m_controller.project().tracks.size();
+    mouse(QEvent::MouseButtonPress, {100, chordY}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {100, chordY}, Qt::LeftButton, Qt::NoButton);
+    QKeyEvent eraseLabel(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(m_timeline, &eraseLabel);
+    if (!m_controller.project().chords.empty() || m_controller.project().tracks.size() != trackCount) return fail("Delete must affect only the focused annotation");
+    std::fprintf(stderr, "PASS Timeline rulers: fixed headers, aligned rows, seek, label drag/resize/cancel, undo, visibility persistence\n");
     return true;
 }
 
@@ -9988,18 +10049,14 @@ void MainWindow::sampleForRecovery() {
         // host parameter. Sample one state per idle tick, prioritising editors
         // and missing cache entries so a large project is amortised over time.
         std::vector<std::string> preferredPluginStates;
-        preferredPluginStates.reserve(std::size_t(m_pluginEditors.size() + m_remotePluginEditors.size()) * 2);
+        preferredPluginStates.reserve(std::size_t(m_pluginEditors.size()) * 2);
         for (PluginEditorWindow* editor : m_pluginEditors) {
             if (!editor) continue;
             const std::string stem = editor->insertId().toStdString();
             preferredPluginStates.push_back(stem);
             preferredPluginStates.push_back(stem + "-right");
         }
-        for (const auto& editor : std::as_const(m_remotePluginEditors)) {
-            const auto stem = editor.insertId.toStdString();
-            preferredPluginStates.push_back(stem);
-            preferredPluginStates.push_back(stem + "-right");
-        }
+
         // Cached document edits can still be journalled while monitoring.
         // Only opaque plugin serialization must wait for all live audio tails.
         const bool pluginStateChanged = !m_controller.liveAudioActivity() &&
@@ -10128,7 +10185,6 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
 }
 
 MainWindow::~MainWindow() {
-    for (const auto& key : m_remotePluginEditors.keys()) closeRemotePluginEditor(key);
     delete m_creatorWindow;
     m_creatorWindow = nullptr;
     // Children are destroyed by ~QObject, which runs *after* m_controller — a
@@ -10365,12 +10421,7 @@ void MainWindow::buildLayout() {
                 {"insertId", editor->insertId().toStdString()},
                 {"pluginUid", editor->pluginUid().toStdString()}});
         }
-        for (const auto& editor : std::as_const(m_remotePluginEditors)) {
-            const auto* model = m_controller.insertModel(editor.channelId.toStdString(), editor.insertId.toStdString());
-            if (model) state["openPluginEditors"].push_back({
-                {"channelId", editor.channelId.toStdString()},
-                {"insertId", editor.insertId.toStdString()}, {"pluginUid", model->uid}});
-        }
+
         if (m_pianoRoll && m_pianoRoll->isVisible()) {
             state["pianoRoll"] = {{"trackId", m_pianoRoll->trackId().toStdString()},
                                    {"clipId", m_pianoRoll->clipId().toStdString()},
@@ -10544,6 +10595,22 @@ void MainWindow::buildLayout() {
     m_mixer = new MixerWidget(&m_controller, m_bottomPanel);
     m_mixer->setMinimumHeight(140);
     bottomLayout->addWidget(m_mixer, 1);
+    m_mixerHeight = QSettings().value(m_mixer->rackMode() ? "ui/rackHeight" : "ui/mixerHeight",
+                                     m_mixer->rackMode() ? 320 : 545).toInt();
+    m_bottomPanel->setMinimumHeight(m_mixer->rackMode() ? 280 : 180);
+    connect(m_mixer, &MixerWidget::rackModeChanged, this, [this](bool rack) {
+        QSettings settings;
+        settings.setValue(rack ? "ui/mixerHeight" : "ui/rackHeight", m_mixerHeight);
+        m_mixerHeight = std::max(rack ? 280 : 180,
+            settings.value(rack ? "ui/rackHeight" : "ui/mixerHeight", rack ? 320 : 545).toInt());
+        m_bottomPanel->setMinimumHeight(rack ? 280 : 180);
+        if (m_mixerWindow) {
+            m_mixerWindow->setWindowTitle((rack ? tr("Rack — %1") : tr("Mixer — %1"))
+                .arg(QApplication::applicationDisplayName()));
+            m_mixerWindow->resize(m_mixerWindow->width(), m_mixerHeight + 12);
+        }
+        layoutBottomPanels();
+    });
 
     m_warpPanel = new QWidget(m_arrangementHost);
     m_warpPanel->setObjectName(QStringLiteral("WarpBottomPanel"));
@@ -10579,7 +10646,8 @@ void MainWindow::buildLayout() {
             setMixerVisible(false);
             return;
         }
-        m_mixerHeight = wanted;
+        m_mixerHeight = m_mixer->rackMode() ? std::max(280, wanted) : wanted;
+        QSettings().setValue(m_mixer->rackMode() ? "ui/rackHeight" : "ui/mixerHeight", m_mixerHeight);
         layoutBottomPanels();
     };
     m_mixerHandle = handle;
@@ -10823,6 +10891,32 @@ void MainWindow::buildLayout() {
     });
     m_timeline->setRulerFormat(m_transport->rulerFormat());
     alignRulerHeaders(m_timeline->rulerHeight());
+    const auto syncArrangementHeaders = [this] {
+        m_trackList->setArrangementRows(m_timeline->arrangementRows());
+        layoutBottomPanels();
+    };
+    connect(m_timeline, &TimelineWidget::arrangementRowsChanged, this, syncArrangementHeaders);
+    connect(m_timeline, &TimelineWidget::timeRowVisibilityRequested, this, [this](bool visible) {
+        m_transport->setRulerFormat(visible ? ui::RulerFormat::BarsAndTime : ui::RulerFormat::Bars);
+    });
+    connect(m_trackList, &TrackListWidget::arrangementRowHidden, this,
+        [this](int row) { m_timeline->setArrangementRowVisible(row, false); });
+    connect(m_trackList, &TrackListWidget::arrangementLabelRequested, this,
+        [this](int row) { m_timeline->editArrangementLabel(row); });
+    syncArrangementHeaders();
+    if (auto* button = m_transport->findChild<QToolButton*>(QStringLiteral("RulerFormatButton"))) {
+        auto* menu = button->menu()->addMenu(tr("Arrangement rows"));
+        for (const int row : {1, 2}) {
+            auto* action = menu->addAction(row == 1 ? tr("Chords") : tr("Song sections"));
+            action->setCheckable(true);
+            connect(menu, &QMenu::aboutToShow, action, [this, action, row] {
+                action->setChecked(m_timeline->arrangementRowVisible(row));
+            });
+            connect(action, &QAction::triggered, this, [this, row](bool checked) {
+                m_timeline->setArrangementRowVisible(row, checked);
+            });
+        }
+    }
     connect(m_transport, &TransportBar::positionChanged, this, [this] {
 #ifdef DAW_ENABLE_COLLABORATION
         if (m_collaboration && !m_applyingRemoteTransport) {
@@ -10846,6 +10940,12 @@ void MainWindow::buildLayout() {
     // clicked. Both signals are emitted together and in this order.
     connect(m_trackList, &TrackListWidget::selectionChanged, this,
             &MainWindow::selectTrackFromHeader);
+    connect(m_trackList, &TrackListWidget::rackSelectionRequested, this,
+            [this](const QString& channel, const QStringList& ids) {
+        if (m_mixer && m_mixer->rack()) {
+            m_mixer->rack()->setChannel(channel); m_mixer->rack()->selectDevices(ids);
+        }
+    });
     connect(m_trackList, &TrackListWidget::packRequested, this,
             [this](bool summing) { packSelectionIntoFolder(summing); });
     connect(m_trackList, &TrackListWidget::automateControlRequested, this,
@@ -10993,6 +11093,8 @@ void MainWindow::buildLayout() {
             &MainWindow::openPianoRoll);
     connect(m_timeline, &TimelineWidget::openPatternRequested, this,
             &MainWindow::openPattern);
+    connect(m_timeline, &TimelineWidget::openPatternClipRequested, this,
+            &MainWindow::openPatternClip);
     connect(m_timeline, &TimelineWidget::openWarpEditorRequested, this, &MainWindow::openWarpEditor);
     connect(m_timeline, &TimelineWidget::openSampleEditorRequested, this,
             &MainWindow::openSampleEditor);
@@ -11063,6 +11165,7 @@ void MainWindow::buildLayout() {
         queueUiChange(ui::UiChangeSet::values({trackId}, true));
     });
     connect(m_mixer, &MixerWidget::structureChanged, this, [this] {
+        m_orphanEditorSweepPending = true;
         // The originating mixer rebuilds itself. Only the selected-track peer
         // needs reconstruction; headers and timeline contain no slot widgets.
         if (m_inspector) m_inspector->rebuildForTrack(m_selectedTrackId);
@@ -11971,12 +12074,12 @@ void MainWindow::setInspectorVisible(bool visible) {
 void MainWindow::onDetachMixer() {
     if (m_mixerWindow) return;
     auto* window = new DetachedPanelWindow(
-        tr("Mixer — %1").arg(QApplication::applicationDisplayName()),
+        (m_mixer->rackMode() ? tr("Rack — %1") : tr("Mixer — %1")).arg(QApplication::applicationDisplayName()),
         [this] { onDockMixer(); }, this);
     // The same history actions also belong to the floating panel's window.
     // Reusing them avoids competing shortcuts and preserves custom bindings.
     for (const auto* id : {"edit.undo", "edit.redo", "view.toggleWarp",
-                            "view.toggleMixer"})
+                            "view.toggleMixer", "view.toggleMixerRack"})
         if (const auto* command = m_shortcuts->command(id)) window->addAction(command->action);
     auto* layout = new QVBoxLayout(window);
     layout->setContentsMargins(6, 6, 6, 6);
@@ -11985,6 +12088,8 @@ void MainWindow::onDetachMixer() {
     // QWidget::setParent hides the child even when it was visible while docked.
     m_bottomPanel->show();
     m_mixerWindow = window;
+    window->installEventFilter(this);
+    window->resize(std::max(680, m_bottomPanel->width()), m_mixerHeight + 12);
     if (m_mixerHandle) m_mixerHandle->hide();
     // Warp may still occupy the bottom while the mixer is detached.
     layoutBottomPanels();
@@ -12449,6 +12554,24 @@ void MainWindow::buildMenus() {
             &MainWindow::onNewProjectFromTemplate);
     connect(addCommand(file, "file.open", tr("&Open Project…"), kFile, QKeySequence::Open),
             &QAction::triggered, this, &MainWindow::onOpenProject);
+    auto* recentProjects = file->addMenu(tr("Recent Projects"));
+    recentProjects->setObjectName(QStringLiteral("RecentProjectsMenu"));
+    const auto refreshRecentProjects = [this, recentProjects] {
+        recentProjects->clear();
+        const QStringList paths = ui::recentProjectPaths().mid(0, 8);
+        for (const QString& path : paths) {
+            QString name = ui::projectDisplayName(path);
+            name.replace(QStringLiteral("&"), QStringLiteral("&&"));
+            auto* action = recentProjects->addAction(name);
+            action->setData(path);
+            connect(action, &QAction::triggered, this,
+                    [this, path] { openProjectPath(path); });
+        }
+        if (paths.isEmpty())
+            recentProjects->addAction(tr("No recent projects"))->setEnabled(false);
+    };
+    refreshRecentProjects();
+    connect(recentProjects, &QMenu::aboutToShow, this, refreshRecentProjects);
     file->addSeparator();
     connect(addCommand(file, "file.save", tr("&Save"), kFile, QKeySequence::Save),
             &QAction::triggered, this, &MainWindow::onSaveProject);
@@ -12517,6 +12640,11 @@ void MainWindow::buildMenus() {
     connect(m_offlineRenderAction, &QAction::triggered, this,
             &MainWindow::onOfflineRender);
     m_stripSilenceAction = addCommand(edit, "timeline.strip_silence", tr("Strip Silence…"), kEdit);
+    connect(addCommand(edit, "sampleEditor.audition", tr("Audition Sample Selection"), kEdit),
+            &QAction::triggered, this, [] {
+        for (QWidget* owner = QApplication::focusWidget(); owner; owner = owner->parentWidget())
+            if (auto* editor = qobject_cast<AudioEditPanel*>(owner)) { editor->triggerAction("audition"); return; }
+    });
     connect(m_stripSilenceAction, &QAction::triggered, this, &MainWindow::onStripSilence);
     m_sharedPluginsAction = addCommand(edit, "edit.shared_plugins", tr("Shared Plugins…"), kEdit,
                                       QKeySequence(QStringLiteral("Ctrl+Shift+P")));
@@ -12934,6 +13062,18 @@ void MainWindow::buildMenus() {
     m_showMixerAction->setChecked(true);
     connect(m_showMixerAction, &QAction::toggled, this, &MainWindow::setMixerVisible);
 
+    auto* toggleMixerRack = addCommand(view, "view.toggleMixerRack",
+                                      tr("Switch Mixer / Rack"), kView,
+                                      QKeySequence(Qt::Key_Tab));
+    toggleMixerRack->setAutoRepeat(false);
+    connect(toggleMixerRack, &QAction::triggered, this, [this] {
+        m_mixer->setRackMode(!m_mixer->rackMode());
+        setMixerVisible(true);
+        // Rack takes focus when shown. Give it back to the mixer on return,
+        // so repeated Tab presses never land in a hidden rack parameter field.
+        if (!m_mixer->rackMode()) m_mixer->setFocus(Qt::ShortcutFocusReason);
+    });
+
     m_showWarpAction = addCommand(view, "view.toggleWarp", tr("Show &Warp"), kView,
                                   QKeySequence(Qt::Key_W));
     m_showWarpAction->setCheckable(true);
@@ -13151,7 +13291,7 @@ void MainWindow::applyStartupPluginScanResults() {
 
 void MainWindow::retirePluginEditor(const QString& channelId,
                                     const QString& insertId) {
-    closeRemotePluginEditor(channelId + '/' + insertId);
+
     // The controller is about to destroy this slot's plugin and is telling us
     // while it is still alive. The window has the plugin's own view inside it,
     // so it must let go here — the periodic orphan sweep below runs up to a
@@ -13159,8 +13299,27 @@ void MainWindow::retirePluginEditor(const QString& channelId,
     PluginEditorWindow* editor =
         m_pluginEditors.value(channelId + '/' + insertId, nullptr);
     if (!editor) return;
+    const auto generation = m_controller.projectGeneration();
+    const auto uid = editor->pluginUid();
+    QString destination;
+    const auto match = [&](const std::string& channel, const daw::InsertModel& model) {
+        if (model.id == insertId.toStdString() && model.uid == uid.toStdString())
+            destination = QString::fromStdString(channel);
+    };
+    for (const auto& track : m_controller.project().tracks) {
+        match(track.id, track.instrument);
+        for (const auto& slot : track.inserts) match(track.id, slot);
+        for (const auto& slot : track.samplerFx.inserts) match(track.id, slot);
+    }
+    for (const auto& slot : m_controller.project().masterInserts)
+        match(daw::EngineController::kMasterChannelId, slot);
     editor->detachFromPlugin();
     editor->close();
+    if (!destination.isEmpty()) QTimer::singleShot(0, this, [this, destination, insertId, uid, generation] {
+        const auto* model = m_controller.insertModel(destination.toStdString(), insertId.toStdString());
+        if (m_controller.projectGeneration() == generation && model && model->uid == uid.toStdString())
+            openPluginEditor(destination, insertId);
+    });
 }
 
 void MainWindow::closeOrphanedPluginEditors() {
@@ -13171,6 +13330,7 @@ void MainWindow::closeOrphanedPluginEditors() {
     // this after structural edits/undo/load; ordinary playback frames never
     // rescan every clip and insert merely as a safety net.
     std::vector<PluginEditorWindow*> orphaned;
+    std::vector<std::pair<QString, QString>> moved;
     for (PluginEditorWindow* editor : m_pluginEditors) {
         const std::string channel = editor->channelId().toStdString();
         const std::string wanted = editor->insertId().toStdString();
@@ -13199,11 +13359,28 @@ void MainWindow::closeOrphanedPluginEditors() {
                 }
             }
         }
-        if (!alive) orphaned.push_back(editor);
+        if (!alive) {
+            // Local rack moves preserve slot identity. Reopen the same device
+            // at its new address after detaching the retired native view.
+            QString destination;
+            for (const auto& track : m_controller.project().tracks)
+                if (track.instrument.id == wanted && track.instrument.uid == wantedUid)
+                    destination = QString::fromStdString(track.id);
+            for (const auto& track : m_controller.project().tracks)
+                for (const auto& model : track.inserts)
+                    if (model.id == wanted && model.uid == wantedUid)
+                        destination = QString::fromStdString(track.id);
+            for (const auto& model : m_controller.project().masterInserts)
+                if (model.id == wanted && model.uid == wantedUid)
+                    destination = QString::fromUtf8(daw::EngineController::kMasterChannelId);
+            if (!destination.isEmpty()) moved.emplace_back(destination, editor->insertId());
+            orphaned.push_back(editor);
+        }
     }
     // Closing mutates the registry through the `closing` signal, so it happens
     // outside the loop over it.
-    for (PluginEditorWindow* editor : orphaned) editor->close();
+    for (PluginEditorWindow* editor : orphaned) { editor->detachFromPlugin(); editor->close(); }
+    for (const auto& [channel, slot] : moved) openPluginEditor(channel, slot);
 
     std::vector<SampleEditorWindow*> orphanedSamples;
     for (SampleEditorWindow* editor : m_sampleEditors) {
@@ -13215,159 +13392,44 @@ void MainWindow::closeOrphanedPluginEditors() {
 }
 
 void MainWindow::openPluginEditor(const QString& channelId, const QString& insertId) {
-    const auto channel = channelId.toStdString();
-    const auto slot = insertId.toStdString();
-    const auto snapshot = m_controller.insertEditorSnapshot(
-        channel, slot, daw::AudioRuntimeEndpoint::Readout::Current);
-    if (snapshot && snapshot->remote && snapshot->hasEditor &&
-        m_controller.sharedEditingAllowed()) {
-        const auto state = m_controller.insertRuntimeStatus(channel, slot).state;
-        if (state != daw::EngineController::PluginRuntimeState::Failed &&
-            state != daw::EngineController::PluginRuntimeState::Restarting) {
-            const QString key = channelId + '/' + insertId;
-            if (const auto previous = m_remotePluginEditors.constFind(key);
-                previous != m_remotePluginEditors.cend() && previous->identity != snapshot->identity)
-                closeRemotePluginEditor(key);
-            // A fallback panel still owns its old probe. Release that token
-            // and its edit lease before requesting the helper's new window.
-            if (auto* panel = m_pluginEditors.value(key, nullptr)) panel->close();
-            bool allowed = true;
-#ifdef DAW_ENABLE_COLLABORATION
-            if (m_controller.hasCloudProjectBinding() && m_editLeases)
-                allowed = m_editLeases->ensure(QStringLiteral("plugin:") + insertId);
-#endif
-#ifdef Q_OS_WIN
-            // This request originates in the foreground app. Explicitly let
-            // its already-running helper activate the window the user chose.
-            if (allowed && snapshot->processId)
-                AllowSetForegroundWindow(DWORD(snapshot->processId));
-#endif
-            if (allowed && m_controller.openInsertEditor(channel, slot, snapshot->identity)) {
-                const bool shortcutsEnabled = m_remotePluginEditors.value(key).shortcutsEnabled;
-                m_remotePluginEditors.insert(key, {channelId, insertId, snapshot->identity, false, shortcutsEnabled});
-                if (m_controller.liveNoteTarget(channel) == channel) {
-                    m_liveRemoteInputEditor = key;
-                    m_liveInputEditor = nullptr;
-                    if (m_midiInput) m_midiInput->refreshTarget();
-                }
-                return;
-            }
-#ifdef DAW_ENABLE_COLLABORATION
-            if (allowed && m_editLeases)
-                m_editLeases->release(QStringLiteral("plugin:") + insertId);
-#endif
-        }
-    }
     showPluginEditorPanel(channelId, insertId);
 }
 
-void MainWindow::closeRemotePluginEditor(const QString& key) {
-    const auto found = m_remotePluginEditors.find(key);
-    if (found == m_remotePluginEditors.end()) return;
-    const auto editor = *found;
-    m_remotePluginEditors.erase(found);
-    const auto channel = editor.channelId.toStdString();
-    const auto slot = editor.insertId.toStdString();
-    if (editor.shortcutsEnabled)
-        (void)m_controller.pollInsertEditorShortcuts(channel, slot, editor.identity, false);
-    m_controller.closeInsertEditor(channel, slot, editor.identity);
-    m_controller.queuePluginStateSync(channel, slot);
-    m_journalStale = true;
-    if (m_liveRemoteInputEditor == key) {
-        m_liveRemoteInputEditor.clear();
-        if (m_typingKeyboard) m_typingKeyboard->allNotesOff();
-        if (m_midiInput) m_midiInput->refreshTarget();
-    }
-#ifdef DAW_ENABLE_COLLABORATION
-    if (m_editLeases) m_editLeases->release(QStringLiteral("plugin:") + editor.insertId);
-#endif
-}
 
 void MainWindow::openPluginHostControls(const QString& channelId, const QString& insertId) {
     if (!m_controller.insertModel(channelId.toStdString(), insertId.toStdString())) return;
     const auto key = channelId + '/' + insertId;
-    closeRemotePluginEditor(key);
+
     showPluginEditorPanel(channelId, insertId);
     if (auto* panel = m_pluginEditors.value(key, nullptr)) panel->showParameterPanel();
 }
 
-void MainWindow::serviceRemotePluginEditors() {
-    // Status/identity use the shared readout batch. Only the focused helper
-    // polls shortcuts; a focus change disables its predecessor once.
-#ifdef Q_OS_WIN
-    DWORD foregroundProcess = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
-#endif
-    for (const auto& key : m_remotePluginEditors.keys()) {
-        auto found = m_remotePluginEditors.find(key);
-        if (found == m_remotePluginEditors.end()) continue;
-        const auto channel = found->channelId.toStdString();
-        const auto slot = found->insertId.toStdString();
-        const auto snapshot = m_controller.insertEditorSnapshot(channel, slot);
-        bool allowed = m_controller.sharedEditingAllowed();
-#ifdef DAW_ENABLE_COLLABORATION
-        if (allowed && m_controller.hasCloudProjectBinding()) {
-#ifdef Q_OS_WIN
-            // A native editor cannot be made read-only. Release its GUI and
-            // edit lease when focus returns to another workspace/window.
-            if (found->seenOpen && snapshot && snapshot->processId != foregroundProcess)
-                allowed = false;
-#endif
-            if (allowed && m_editLeases)
-                allowed = m_editLeases->ensure(QStringLiteral("plugin:") + found->insertId);
-        }
-#endif
-        if ((snapshot && snapshot->identity != found->identity) || !allowed) {
-            closeRemotePluginEditor(key);
-            continue;
-        }
-        auto state = m_controller.insertRuntimeStatus(
-            channel, slot, daw::AudioRuntimeEndpoint::Readout::Cached).state;
-        const bool closed = snapshot && !snapshot->open && !snapshot->pending;
-        // Failure can arrive between two observations in the readout batch.
-        // Confirm only this transition before treating a lost GUI as a close.
-        if (closed && state != daw::EngineController::PluginRuntimeState::Failed)
-            state = m_controller.insertRuntimeStatus(channel, slot).state;
-        if (state == daw::EngineController::PluginRuntimeState::Failed ||
-            (snapshot && snapshot->openFailed)) {
-            const auto editor = *found;
-            closeRemotePluginEditor(key);
-            showPluginEditorPanel(editor.channelId, editor.insertId);
-            continue;
-        }
-        if (!snapshot) continue;
-        if (snapshot->open) found->seenOpen = true;
-        else if (closed) {
-            closeRemotePluginEditor(key);
-            continue;
-        }
-#ifdef Q_OS_WIN
-        if (snapshot->processId && foregroundProcess == snapshot->processId &&
-            m_liveRemoteInputEditor != key && m_controller.liveNoteTarget(channel) == channel) {
-            m_liveRemoteInputEditor = key;
-            m_liveInputEditor = nullptr;
-            if (m_midiInput) m_midiInput->refreshTarget();
-        }
-#endif
-        const auto* command = m_shortcuts->command(QStringLiteral("track.automation"));
-        const bool shortcutAvailable = command && command->action && command->action->isEnabled() &&
-            (!m_typingKeyboard || !m_typingKeyboard->isEnabled()) &&
-            m_shortcuts->shortcut(QStringLiteral("track.automation")) == QKeySequence(Qt::Key_A);
-#ifdef Q_OS_WIN
-        const bool shortcutEnabled = shortcutAvailable && snapshot->processId && snapshot->processId == foregroundProcess;
-#else
-        const bool shortcutEnabled = shortcutAvailable;
-#endif
-        if (shortcutEnabled || shortcutEnabled != found->shortcutsEnabled) {
-            const auto count = m_controller.pollInsertEditorShortcuts(channel, slot, found->identity, shortcutEnabled);
-            found->shortcutsEnabled = shortcutEnabled;
-            if (shortcutAvailable)
-                for (std::uint32_t i = 0; i < count; ++i) toggleAutomationLanes();
-        }
-    }
-}
-
 void MainWindow::showPluginEditorPanel(const QString& channelId, const QString& insertId) {
+    m_controller.serviceAudioHealth(false);
+    const auto health = m_controller.insertRuntimeStatus(channelId.toStdString(), insertId.toStdString());
+    if (health.state == daw::AudioPluginRuntimeState::Faulted ||
+        health.state == daw::AudioPluginRuntimeState::AwaitingRecovery ||
+        health.state == daw::AudioPluginRuntimeState::Recovering) {
+        daw::AudioFailureNotice notice;
+        notice.project = m_controller.projectGeneration();
+        notice.address = health.address;
+        notice.incident = health.incident;
+        notice.canRetry = health.canRetry;
+        notice.detail = health.detail;
+        notice.requiresStop = m_controller.liveAudioActivity();
+        notice.recording = m_controller.isRecording() || m_controller.isCountingIn();
+        notice.state = health.state == daw::AudioPluginRuntimeState::AwaitingRecovery
+            ? daw::AudioFailureNotice::State::Waiting : daw::AudioFailureNotice::State::Failed;
+        notice.master = channelId == QString::fromUtf8(daw::EngineController::kMasterChannelId);
+        if (const auto* slot = m_controller.insertModel(channelId.toStdString(), insertId.toStdString()))
+            notice.name = slot->name;
+        if (const auto* track = m_controller.project().findTrack(channelId.toStdString())) {
+            notice.channelName = track->name;
+            notice.instrument = track->instrument.id == insertId.toStdString();
+        }
+        showAudioFailure(notice, true);
+        return;
+    }
     const QString key = channelId + '/' + insertId;
     if (PluginEditorWindow* open = m_pluginEditors.value(key, nullptr)) {
         open->prepareForPresentation();
@@ -13397,12 +13459,7 @@ void MainWindow::showPluginEditorPanel(const QString& channelId, const QString& 
             });
     }
 #endif
-    editor->setAutomationShortcutEnabledProvider([this] {
-        const auto* command = m_shortcuts->command(QStringLiteral("track.automation"));
-        return command && command->action && command->action->isEnabled() &&
-            (!m_typingKeyboard || !m_typingKeyboard->isEnabled()) &&
-            m_shortcuts->shortcut(QStringLiteral("track.automation")) == QKeySequence(Qt::Key_A);
-    });
+
     editor->setHostKeyHandler([this](QKeyEvent* event, bool textEntry) {
         const auto* command = m_shortcuts->command(QStringLiteral("track.automation"));
         if (!textEntry && command && command->action && command->action->isEnabled()) {
@@ -13430,7 +13487,7 @@ void MainWindow::showPluginEditorPanel(const QString& channelId, const QString& 
         return m_typingKeyboard && m_typingKeyboard->handleKeyEvent(event, textEntry);
     });
     connect(editor, &PluginEditorWindow::keyboardFocusReceived, this, [this, editor, frame] {
-        m_liveRemoteInputEditor.clear();
+
         const auto channel = editor->channelId().toStdString();
         const bool playable = m_controller.liveNoteTarget(channel) == channel;
         const bool changed = playable && m_liveInputEditor != editor;
@@ -13577,6 +13634,7 @@ void MainWindow::automateTarget(const daw::AutomationTarget& target) {
 void MainWindow::openSampleEditor(const QString& trackId, const QString& clipId) {
     const QString key = trackId + '/' + clipId;
     if (SampleEditorWindow* open = m_sampleEditors.value(key, nullptr)) {
+        open->showAudioEditor();
         presentInternalWindow(open);
         return;
     }
@@ -13584,41 +13642,8 @@ void MainWindow::openSampleEditor(const QString& trackId, const QString& clipId)
         m_controller.audioClip(trackId.toStdString(), clipId.toStdString());
     if (!clip) return;
 
-    // A layered clip has no audio of its own — its comp decides what plays, and
-    // its `filePath` is empty — so the editor used to open on nothing at all.
-    // The editor works on one piece of audio, so the way in is to make the clip
-    // one: commit the comp, which is what the take stack's own menu offers, and
-    // open on the result. Asked rather than done, because it dissolves the
-    // takes; one undo puts them back.
-    if (daw::isLayered(*clip)) {
-        const int takes = int(clip->takes.size());
-        QMessageBox box(this);
-        box.setIcon(QMessageBox::Question);
-        box.setWindowTitle(tr("Edit layered clip"));
-        box.setText(tr("“%1” holds %2 takes.")
-                        .arg(QString::fromStdString(clip->name))
-                        .arg(takes));
-        box.setInformativeText(
-            tr("The Sample Editor works on a single piece of audio. Committing "
-               "the comp bakes what you hear into the clip and removes the "
-               "takes from the project — their files stay on disk, and one undo "
-               "brings the takes back."));
-        QPushButton* go = box.addButton(tr("Commit and Edit"), QMessageBox::AcceptRole);
-        box.addButton(QMessageBox::Cancel);
-        box.setDefaultButton(go);
-        box.exec();
-        if (box.clickedButton() != go) return;
-
-        m_controller.commitComp(trackId.toStdString(), clipId.toStdString());
-        syncViews();
-        markDirty();
-        clip = m_controller.audioClip(trackId.toStdString(), clipId.toStdString());
-        if (!clip || clip->filePath.empty()) {
-            statusBar()->showMessage(
-                tr("Nothing to edit — the comp produced no audio"), 4000);
-            return;
-        }
-    }
+    // The Editor tab offers an explicit, reversible flattened version for
+    // take/comp material. Opening the sampler does not change the document.
 
     auto* editor = new SampleEditorWindow(&m_controller, trackId, clipId, this);
     m_sampleEditors.insert(key, editor);
@@ -13757,16 +13782,15 @@ bool MainWindow::probePluginEditorSwap(const QString& firstName,
                            const char* stage) {
         PluginEditorWindow* window =
             m_pluginEditors.value(channel + '/' + slot, nullptr);
-        const bool remoteWindow = m_remotePluginEditors.contains(channel + '/' + slot);
         const auto live =
             m_controller.insertEditorSnapshot(channel.toStdString(), slot.toStdString());
         std::fprintf(stderr,
                      "  %-14s window %-3s embedded %-3s instance %-3s (%s)\n",
-                     stage, window || remoteWindow ? "yes" : "no",
-                     remoteWindow ? "isolated" : window && window->isEmbedded() ? "yes" : "no",
+                     stage, window ? "yes" : "no",
+                     window && window->isEmbedded() ? "yes" : "no",
                      live ? "yes" : "NO",
                      live ? live->name.c_str() : "-");
-        return window || remoteWindow;
+        return window;
     };
 
     std::fprintf(stderr, "swap probe: %s -> %s\n", first->name.c_str(),
@@ -13794,9 +13818,7 @@ bool MainWindow::probePluginEditorSwap(const QString& firstName,
     const bool reopened = describe(track, slotId, "after reopen");
     const auto live = m_controller.insertEditorSnapshot(track.toStdString(), slot);
     const auto* panel = m_pluginEditors.value(track + '/' + slotId, nullptr);
-    const bool nativeOpen = live && live->remote
-        ? m_remotePluginEditors.contains(track + '/' + slotId) && live->open
-        : panel && panel->isEmbedded();
+    const bool nativeOpen = panel && panel->isEmbedded();
     const bool ok = openedFirst && reopened && live &&
                     live->uid == second->uid &&
                     (!live->hasEditor || nativeOpen);
@@ -14361,6 +14383,85 @@ bool MainWindow::checkFolderRecordingForTest() {
         return fail("an empty selected folder fell back to another lane");
 
     std::fprintf(stderr, "PASS Folder recording: R pins, selection, occupancy, count-in, capture, Undo/Redo, no new tracks\n");
+    return true;
+}
+
+bool MainWindow::checkRecordingStopForTest() {
+    QTemporaryDir media;
+    if (!media.isValid()) return false;
+    const auto prefsBefore = m_controller.recordingPrefs();
+    const auto directoryBefore = m_controller.recordDirectory();
+    const auto restore = qScopeGuard([&] {
+        daw::MediaWorker::install(daw::PluginManager::helperPath("daw_worker"));
+        if (m_controller.isRecording()) stopRecordingNow();
+        m_controller.stop();
+        m_controller.setRecordingPrefs(prefsBefore);
+        m_controller.setRecordDirectory(directoryBefore);
+    });
+    auto prefs = prefsBefore;
+    prefs.countInBeats = 0;
+    prefs.autoSilence = false;
+    prefs.mode = daw::RecordMode::Overwrite;
+    m_controller.setRecordingPrefs(prefs);
+    m_controller.setRecordDirectory(media.path().toStdString());
+    m_controller.setLoopEnabled(false);
+    const auto track = m_controller.addTrack(daw::TrackKind::Audio, "Stop latency");
+    m_controller.setTrackInputEnabled(track, true);
+    audio::AudioBuffer input(2, 256), output(2, 256);
+    for (unsigned ch = 0; ch < 2; ++ch) std::fill_n(input.getChannel(ch), 256, .25f);
+    // Hold file preparation open long enough to expose playback continuing
+    // behind it. Assert transport ordering, not a machine-dependent stopwatch.
+    bool inspected = false, correctTransport = true, stopping = false;
+    double expectedPosition = 0;
+    int stopMode = 0;
+    auto services = std::make_shared<audio::platform::AudioFileServices>();
+    services->probe = [&](const std::string& path, audio::platform::AudioFileInfo& info) {
+        if (!stopping) return daw::MediaWorker::probe(path, info);
+        inspected = true;
+        correctTransport &= m_controller.isPlaying() == (stopMode == 2);
+        if (stopMode != 2) {
+            QThread::msleep(120);
+            correctTransport &= m_controller.processDeviceBlockForTest(input, output, 256);
+            correctTransport &= std::abs(m_controller.positionSeconds() - expectedPosition) < 1e-8;
+        }
+        return daw::MediaWorker::probe(path, info);
+    };
+    audio::platform::setAudioFileServices(services);
+    for (stopMode = 0; stopMode < 3; ++stopMode) {
+        m_controller.seekSeconds(3.0 + stopMode);
+        const auto count = m_controller.project().findTrack(track)->clips.size();
+        if (!m_controller.startRecording(track)) return false;
+        for (int i = 0; i < 24; ++i)
+            if (!m_controller.processDeviceBlockForTest(input, output, 256)) return false;
+        expectedPosition = m_controller.positionSeconds();
+        inspected = false;
+        correctTransport = true;
+        stopping = true;
+        if (stopMode == 0) onPlayPause();
+        else if (stopMode == 1) onStop();
+        else stopRecordingNow(); // Punch-out must still leave playback rolling.
+        stopping = false;
+        const auto* lane = m_controller.project().findTrack(track);
+        if (!inspected || !correctTransport || m_controller.isRecording() ||
+            m_controller.isPlaying() != (stopMode == 2) || !lane || lane->clips.size() != count + 1 ||
+            std::abs(lane->clips.back().startSeconds - (3.0 + stopMode)) > 1e-8 ||
+            !m_controller.recordingWarning().empty()) {
+            std::fprintf(stderr, "FAIL Recording stop mode=%d inspected=%d transport=%d clips=%zu->%zu warning=%s\n",
+                stopMode, inspected, correctTransport, count, lane ? lane->clips.size() : 0,
+                m_controller.recordingWarning().c_str());
+            return false;
+        }
+        audio::platform::AudioFileInfo info;
+        if (!daw::MediaWorker::probe(lane->clips.back().filePath, info) || info.frames != 24 * 256)
+            return false;
+        if (stopMode == 1 && m_controller.positionSeconds() != 0) return false;
+        m_controller.pause();
+        m_controller.undo();
+        if (m_controller.project().findTrack(track)->clips.size() != count) return false;
+        m_controller.redo();
+        if (m_controller.project().findTrack(track)->clips.size() != count + 1) return false;
+    }
+    std::fprintf(stderr, "PASS Recording stop: Space/Stop pause before slow file preparation, exact WAV frames, undo/redo, punch-out keeps playing\n");
     return true;
 }
 
@@ -15982,6 +16083,10 @@ void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
 }
 
 void MainWindow::openPattern(const QString& patternId) {
+    openPatternClip(patternId, {});
+}
+
+void MainWindow::openPatternClip(const QString& patternId, const QString& clipId) {
     const auto* pattern =
         m_controller.project().findTrack(patternId.toStdString());
     if (!pattern || pattern->kind != daw::TrackKind::Pattern) return;
@@ -16026,7 +16131,7 @@ void MainWindow::openPattern(const QString& patternId) {
                     automateTarget(target);
                 });
     }
-    m_patternWindow->setPattern(patternId);
+    m_patternWindow->setPattern(patternId, clipId);
     presentInternalWindow(m_patternWindow);
 }
 
@@ -16778,9 +16883,11 @@ void MainWindow::toggleProjectPlayback() {
         return;
     }
     if (m_controller.isRecording()) {
-        stopRecordingNow();
+        // Freeze the transport at the key press. Closing and decoding the take
+        // can take time, but must not keep the backing tracks playing meanwhile.
         m_controller.pause();
         syncPlayheadTimer();
+        stopRecordingNow();
         m_playRangeStart = -1.0;
         m_playRangeEnd = -1.0;
         publishSessionTransport(true);
@@ -16832,7 +16939,13 @@ void MainWindow::onStop() {
     // Stop lands the take, but leaves Record engaged — the light is the user's
     // to switch off, and nothing here is a decision to stop recording for good.
     cancelCountIn();
-    if (m_controller.isRecording()) stopRecordingNow();
+    if (m_controller.isRecording()) {
+        // Preserve the end position for MIDI finalization; rewind only after
+        // the take has landed, while silencing playback immediately.
+        m_controller.pause();
+        syncPlayheadTimer();
+        stopRecordingNow();
+    }
     m_controller.stop();
     m_playRangeStart = -1.0;
     m_playRangeEnd = -1.0;
@@ -16842,6 +16955,18 @@ void MainWindow::onStop() {
 }
 
 bool MainWindow::routeEditChord(EditChord chord) {
+    if (m_mixer) {
+        QString action;
+        switch (chord) {
+        case EditChord::Cut: action = "cut"; break;
+        case EditChord::Copy: action = "copy"; break;
+        case EditChord::Paste: action = "paste"; break;
+        case EditChord::Repeat: action = "duplicate"; break;
+        case EditChord::Delete: action = "delete"; break;
+        default: break;
+        }
+        if (!action.isEmpty() && m_mixer->rackCommand(action)) return true;
+    }
     if (m_notebookWindow && m_notebookWindow->ownsEditorFocus()) {
         const QString command = chord == EditChord::Cut ? QStringLiteral("cut")
                               : chord == EditChord::Copy ? QStringLiteral("copy")
@@ -16909,6 +17034,12 @@ bool MainWindow::routeEditChord(EditChord chord) {
     }
 
     for (QWidget* owner = focus; owner; owner = owner->parentWidget()) {
+        if (auto* editor = qobject_cast<AudioEditPanel*>(owner)) {
+            const auto command = chord == EditChord::Cut ? "cut" : chord == EditChord::Copy ? "copy" :
+                chord == EditChord::Paste ? "paste" : chord == EditChord::Delete ? "silence" : "";
+            if (*command) editor->triggerAction(QString::fromLatin1(command));
+            return true;
+        }
         if (auto* library = qobject_cast<ClipLibraryView*>(owner)) {
             if (chord == EditChord::Delete) library->removeSelected();
             return true;
@@ -17045,7 +17176,6 @@ void MainWindow::hideInternalWindow(QWidget* content) {
 }
 
 void MainWindow::closeInternalWindows() {
-    for (const auto& key : m_remotePluginEditors.keys()) closeRemotePluginEditor(key);
     const QList<QWidget*> contents = m_internalEditorFrames.keys();
     for (QWidget* content : contents) {
         const QPointer<QWidget> guarded(content);
@@ -17150,6 +17280,10 @@ void MainWindow::closeAuxiliaryWindows() {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
+    if (watched == m_mixerWindow && ev->type() == QEvent::Resize && m_mixer) {
+        m_mixerHeight = std::max(m_mixer->rackMode() ? 280 : 180, m_mixerWindow->height() - 12);
+        QSettings().setValue(m_mixer->rackMode() ? "ui/rackHeight" : "ui/mixerHeight", m_mixerHeight);
+    }
     switch (ev->type()) {
         case QEvent::Hide: {
             auto* content = qobject_cast<QWidget*>(watched);
@@ -17223,6 +17357,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* ev) {
             if (key->key() == Qt::Key_Control && m_timeline)
                 m_timeline->setSecondaryToolHeld(down);
             if (m_webPanel && m_webPanel->ownsFocus()) break;
+            if (m_notebookWindow && m_notebookWindow->ownsEditorFocus()) break;
             // Never while typing: a name field would swallow half its letters.
             if (auto* focus = QApplication::focusWidget();
                 qobject_cast<QLineEdit*>(focus) ||
@@ -17869,8 +18004,8 @@ void MainWindow::stopRecordingNow() {
     if (!silenceWarning.isEmpty()) statusBar()->showMessage(
         tr("Auto Silence: audio retained without trimming. %1").arg(silenceWarning), 10000);
     const auto warning = QString::fromStdString(m_controller.recordingWarning());
-    if (!warning.isEmpty()) QMessageBox::warning(this, tr("Recording interrupted"),
-        tr("This take contains missing audio or an incomplete file. Available audio has been retained at the paths below. Check it before continuing.\n\n%1").arg(warning));
+    if (!warning.isEmpty()) m_controller.reportAudioOperationFailure("Recording",
+        audio::Result::fail(audio::EngineError::DeviceError, warning.toStdString()));
     syncPlayheadTimer();
     // Record stays engaged: landing a take is not a decision to stop recording,
     // and the next one usually follows straight after with the same settings.
@@ -17928,12 +18063,7 @@ std::string MainWindow::liveInputTarget() const {
             m_controller.liveNoteTarget(channel) == channel)
             preferred = m_liveInputEditor->channelId();
     }
-    if (const auto found = m_remotePluginEditors.constFind(m_liveRemoteInputEditor);
-        found != m_remotePluginEditors.cend() &&
-        !(m_pianoRollFrame && m_pianoRollFrame->isEditorActive())) {
-        const auto channel = found->channelId.toStdString();
-        if (m_controller.liveNoteTarget(channel) == channel) preferred = found->channelId;
-    }
+
     return m_controller.liveNoteTarget(preferred.toStdString());
 }
 
@@ -18251,6 +18381,7 @@ void MainWindow::onAddSendTrack() {
     markDirty();
 }
 void MainWindow::onDuplicateSelectedTrack() {
+    if (m_mixer && m_mixer->rackCommand("duplicate")) return;
     const QStringList selection = selectedTrackIds();
     const QString trackId = !m_selectedTrackId.isEmpty()
                                 ? m_selectedTrackId
@@ -18285,6 +18416,7 @@ void MainWindow::onRemoveSelectedTrack() {
     // the clipboard chords do: with the piano roll in front it would take the
     // track out from under the notes being edited.
     if (routeEditChord(EditChord::Delete)) return;
+    if (m_timeline && m_timeline->hasFocus() && m_timeline->deleteSelectedArrangementLabel()) return;
     // Delete is contextual: a committed region first, then selected clips,
     // otherwise the selected track.
     if (m_timeline && m_timeline->hasRegionSelection()) {
@@ -20063,9 +20195,12 @@ void MainWindow::onSilenceSettings() {
 
 // ── Project I/O ──
 
-void MainWindow::initializeBlankProject() {
+bool MainWindow::initializeBlankProject() {
+    if (!m_controller.newProject(/*createDefaultAudioTrack=*/true)) {
+        serviceAudioHealth();
+        return false;
+    }
     if (m_warpEditor) m_warpEditor->clearClip();
-    m_controller.newProject(/*createDefaultAudioTrack=*/true);
     const auto& tracks = m_controller.project().tracks;
     m_selectedTrackId = tracks.empty()
                             ? QString()
@@ -20074,6 +20209,7 @@ void MainWindow::initializeBlankProject() {
     if (!m_selectedTrackId.isEmpty())
         selectTrackFromHeader(m_selectedTrackId);
     setMixerVisible(true);
+    return true;
 }
 
 void MainWindow::onNewProject() {
@@ -20082,6 +20218,7 @@ void MainWindow::onNewProject() {
     if (!prepareCloudRecordingForProjectTransition()) return;
 #endif
     if (!maybeSaveChanges()) return;
+    if (!initializeBlankProject()) return;
 #ifdef DAW_ENABLE_COLLABORATION
     clearCloudProjectBinding(/*cancelPublication=*/true);
 #endif
@@ -20090,7 +20227,6 @@ void MainWindow::onNewProject() {
     m_journal.setProjectPath({}, {});
     m_journalStale = true;
     m_transport->syncTempo();
-    initializeBlankProject();
     updateWindowTitle();
 }
 
@@ -20191,6 +20327,37 @@ bool MainWindow::openConfiguredStartupTemplate() {
     return loadProjectTemplatePath(path, /*startup=*/true);
 }
 
+bool MainWindow::checkProjectPreviewForTest() {
+    QTemporaryDir temporary;
+    if (!temporary.isValid()) return false;
+    const auto track = m_controller.addTrack(daw::TrackKind::Midi, "Preview Keys");
+    m_controller.addMidiClip(track, 0, 8);
+    syncViews();
+    resize(1100, 720);
+    show();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    const QString path = QDir(temporary.path()).filePath(QStringLiteral("Preview Test.vlt"));
+    if (!doSave(path)) return false;
+    const QImage preview(ui::projectPreviewPath(path));
+    const bool captured = !preview.isNull() && preview.width() <= 960 && preview.height() <= 540 &&
+                          m_controller.project().coverImagePath.empty();
+    const QString screenshot = qEnvironmentVariable("VLT_PROJECT_TIMELINE_SCREENSHOT");
+    if (!screenshot.isEmpty() && !preview.save(screenshot)) return false;
+    QImage cover(320, 180, QImage::Format_RGB32);
+    cover.fill(QColor(180, 60, 80));
+    const QString coverPath = QDir(temporary.path()).filePath(QStringLiteral("cover.png"));
+    if (!cover.save(coverPath)) return false;
+    m_controller.setProjectMetadata("Studio", coverPath.toStdString());
+    if (!doSave(path)) return false;
+    daw::ProjectModel loaded;
+    const bool customPreserved = daw::ProjectSerializer::load(loaded, path.toStdString()) &&
+        !loaded.coverImagePath.empty() &&
+        QImage(QString::fromStdString(loaded.coverImagePath)).pixelColor(0, 0) == cover.pixelColor(0, 0);
+    std::fprintf(stderr, "%s project save: real timeline capture and custom cover survive save/reopen\n",
+                 captured && customPreserved ? "PASS" : "FAIL");
+    return captured && customPreserved;
+}
+
 bool MainWindow::checkStartupTemplateForTest() {
     const QString previous = ui::startupproject::templatePath();
     const auto restorePreference = qScopeGuard([&] {
@@ -20223,7 +20390,7 @@ bool MainWindow::checkStartupTemplateForTest() {
         m_controller.project().tracks.front().name != "Startup Vocal";
 
     // Restore the headless harness invariant for the checks that follow.
-    m_controller.newProject(/*createDefaultAudioTrack=*/false);
+    if (!m_controller.newProject(/*createDefaultAudioTrack=*/false)) return false;
     m_projectPath.clear();
     m_selectedTrackId.clear();
     m_dirty = false;
@@ -20353,11 +20520,8 @@ bool MainWindow::openProjectPath(const QString& path) {
         r = audio::Result::fail(audio::EngineError::Unknown, error.what());
     }
     if (!r) {
-        QMessageBox::warning(this, tr("Open failed"),
-                             tr("Could not open the VLTONE project.\n\n%1\n\n"
-                                "Make sure the project folder still contains a "
-                                "matching .vlt manifest and its Content folder.")
-                                 .arg(QString::fromStdString(r.message())));
+        m_controller.reportAudioOperationFailure("Open project", r);
+        serviceAudioHealth();
         return false;
     }
 #ifdef DAW_ENABLE_COLLABORATION
@@ -20435,14 +20599,22 @@ bool MainWindow::doSave(const QString& packageDir) {
         m_controller.setProjectName(
             QFileInfo(dir).completeBaseName().toStdString());
     }
+    // Capture the arrangement before the save progress dialog covers it. A
+    // separate optional preview leaves the user's chosen cover untouched.
+    const QImage timelinePreview = m_controller.project().coverImagePath.empty() && m_timeline
+        ? m_timeline->grab().toImage() : QImage();
     const auto savedUiRevision = m_projectRevision;
     const auto savedControllerRevision = m_controller.projectRevision();
     auto prepared = std::make_shared<daw::recovery::RecoverySnapshot>(m_controller.prepareProjectSave());
     audio::Result r = audio::Result::fail(audio::EngineError::FileWriteError, "Save interrupted");
     try {
         const auto result = ui::prepareInBackground<audio::Result>(this, tr("Saving project…"),
-            [prepared, path = dir.toStdString()](const auto&) {
-                return daw::EngineController::writePreparedProject(*prepared, path);
+            [prepared, timelinePreview, path = dir.toStdString()](const auto&) {
+                const auto saved = daw::EngineController::writePreparedProject(*prepared, path);
+                if (saved && !timelinePreview.isNull() &&
+                    !ui::saveProjectPreview(QString::fromStdString(path), timelinePreview))
+                    qWarning("Project saved, but its timeline preview could not be written");
+                return saved;
             }, false); // State/media precede one atomic manifest publication.
         if (result) r = *result;
     } catch (const std::exception& error) {
@@ -20570,6 +20742,7 @@ bool MainWindow::saveProjectAs() {
     ui::ProjectSaveDialog dialog(
         displayProjectName(project.name), QString::fromStdString(project.author),
         QString::fromStdString(project.coverImagePath), parentDirectory, this);
+    if (m_timeline) dialog.setTimelinePreview(m_timeline->grab().toImage());
     if (dialog.exec() != QDialog::Accepted) return false;
 
     const ui::ProjectSaveOptions options = dialog.options();
@@ -20826,9 +20999,6 @@ void MainWindow::refreshUi() {
     {
         ui::perf::Scope phase("refreshUi.pluginEvents.ms");
         if (m_controller.pumpPluginEvents()) markDirty();
-        for (auto* editor : std::as_const(m_pluginEditors))
-            if (editor) editor->pollHostShortcuts();
-        serviceRemotePluginEditors();
         const auto automationChange = m_controller.followTouchedAutomation();
         if (automationChange == daw::EngineController::AutomationFollowChange::Structure) {
             syncViews();
@@ -20848,8 +21018,6 @@ void MainWindow::refreshUi() {
                 if (editor && !editor->isClosing())
                     m_controller.queuePluginStateSync(editor->channelId().toStdString(), editor->insertId().toStdString());
             }
-            for (const auto& editor : std::as_const(m_remotePluginEditors))
-                m_controller.queuePluginStateSync(editor.channelId.toStdString(), editor.insertId.toStdString());
         }
         m_controller.pumpPluginStateSync();
         if (!m_deferredSessionMode.isEmpty() && !m_controller.isRecording() && !m_controller.isCountingIn() &&

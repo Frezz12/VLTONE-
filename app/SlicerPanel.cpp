@@ -1557,7 +1557,7 @@ bool SlicerPanel::eventFilter(QObject* object, QEvent* event) {
 }
 
 bool SlicerPanel::checkLayoutForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.slicer");
     if (!descriptor) return false;

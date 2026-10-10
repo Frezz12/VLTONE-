@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QImage>
 #include <QString>
 #include <QStringList>
 
@@ -28,6 +29,7 @@ public:
                       const QString& coverPath, const QString& parentDirectory,
                       QWidget* parent = nullptr);
 
+    void setTimelinePreview(const QImage& image);
     ProjectSaveOptions options() const;
     bool checkForTest() const;
 
@@ -46,6 +48,8 @@ private:
     QPushButton* m_removeCover = nullptr;
     QPushButton* m_save = nullptr;
     QString m_coverPath;
+    QImage m_timelinePreview;
+    QLabel* m_previewHint = nullptr;
 };
 
 class ProjectOpenDialog final : public QDialog {
@@ -59,11 +63,17 @@ public:
 
 private:
     void browse();
+    void updateSelection();
+    void openSelected();
+    void openLocation();
     void applyTheme();
 
     QString m_selectedPath;
     QPushButton* m_browse = nullptr;
-    QWidget* m_projectList = nullptr;
+    QListWidget* m_projectList = nullptr;
+    QPushButton* m_open = nullptr;
+    QPushButton* m_location = nullptr;
+    QLabel* m_selection = nullptr;
 };
 
 struct ProjectTemplateSaveOptions {
@@ -123,7 +133,12 @@ private:
     bool m_libraryChanged = false;
 };
 
+/// Local, optional artwork kept beside the manifest; never replaces a custom cover.
+QString projectPreviewPath(const QString& packagePath);
+bool saveProjectPreview(const QString& packagePath, const QImage& image);
+
 QStringList recentProjectPaths();
+QString projectDisplayName(const QString& packagePath);
 void rememberRecentProject(const QString& packagePath);
 bool checkProjectDialogsForTest(QWidget* parent = nullptr);
 

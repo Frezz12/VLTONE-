@@ -23,7 +23,7 @@ public:
     explicit PatternWindow(daw::EngineController* controller,
                            QWidget* parent = nullptr);
 
-    void setPattern(const QString& patternId);
+    void setPattern(const QString& patternId, const QString& clipId = {});
     const QString& patternId() const { return m_patternId; }
     const QStringList& selectedSourceTrackIds() const { return m_selectedIds; }
     const QString& selectedSourceTrackId() const { return m_primaryId; }
@@ -102,6 +102,7 @@ private:
 
     daw::EngineController* m_controller = nullptr;
     QString m_patternId;
+    QString m_patternClipId;
     QWidget* m_rowsHost = nullptr;
     QVBoxLayout* m_rowsLayout = nullptr;
     QWidget* m_dropIndicator = nullptr;

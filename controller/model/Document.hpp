@@ -1,6 +1,8 @@
 #pragma once
 
 #include "DSP/Curve.hpp"
+#include "model/AudioEditDocument.hpp"
+#include <memory>
 #include "Common/WarpMap.hpp"
 #include "Internal/MiniModuleDefinition.hpp"
 
@@ -272,15 +274,31 @@ struct AutomationTarget {
 ///
 /// A nested object like `ClipSampleEditModel`, absent on every other kind of
 /// clip and written to disk only when it has something to say.
-struct ClipAutomationModel {
-    AutomationTarget target;
-    /// The value held before the first breakpoint, and the whole curve while
-    /// there are none — normalised, like every point.
+struct AutomationCurveContent {
     double defaultValue = 0.0;
-    /// A fresh curve follows its target without driving it. The first real
-    /// point edit activates playback; undoing that edit makes it passive again.
     bool active = false;
-    std::vector<AutomationPoint> points;   // kept sorted by `beats`
+    std::vector<AutomationPoint> points;
+};
+
+/// The target belongs to the placement; the curve can be shared by placements.
+/// References preserve the existing editor API while addressing one canonical
+/// object. Copies are detached snapshots; assignment edits the bound curve.
+struct ClipAutomationModel {
+private:
+    std::shared_ptr<AutomationCurveContent> m_curve;
+public:
+    AutomationTarget target;
+    double& defaultValue;
+    bool& active;
+    std::vector<AutomationPoint>& points;
+    ClipAutomationModel();
+    ClipAutomationModel(const ClipAutomationModel&);
+    ClipAutomationModel(ClipAutomationModel&&) noexcept;
+    ClipAutomationModel& operator=(const ClipAutomationModel&);
+    ClipAutomationModel& operator=(ClipAutomationModel&&) noexcept;
+    void bind(std::shared_ptr<AutomationCurveContent>);
+private:
+    ClipAutomationModel(AutomationTarget, std::shared_ptr<AutomationCurveContent>);
 };
 
 /// A controller lane inside a MIDI clip: mod wheel, expression, pitch bend, or
@@ -497,6 +515,7 @@ struct OfflineProcessModel {
 /// position, mute/color and realtime inserts deliberately stay on the clip.
 struct ClipAudioVersionSource {
     std::string filePath;
+    AudioEditDocument audioEdit;
     AssetRef asset;
     double durationSeconds = 0.0;
     double offsetSeconds = 0.0;
@@ -526,10 +545,44 @@ struct OfflineRenderVersion {
     ClipAudioVersionSource source;
 };
 
-struct ClipModel {
+using ClipContentId = std::string;
+/// One musical part of a Pattern. Arrangement children are resolved views of
+/// this record; instrument tracks and their mixer state are not copied here.
+struct PatternPartModel {
+    std::string id, trackId;
+    ClipContentId contentId;
+    double startBeats = 0, durationBeats = 4, offsetBeats = 0;
+    friend bool operator==(const PatternPartModel&, const PatternPartModel&) = default;
+};
+struct ClipContent {
+    ClipKind kind = ClipKind::Audio;
+    std::string filePath;
+    std::vector<NoteModel> notes;
+    std::vector<SlideNoteModel> slideNotes;
+    std::vector<ControllerLane> lanes;
+    std::vector<TakeModel> takes;
+    std::vector<CompSegment> comp;
+    AssetRef asset;
+    AutomationCurveContent automation;
+    AudioEditDocument audioEdit;
+    bool patternInitialized = false;
+    std::vector<PatternPartModel> patternParts;
+};
+
+/// Per-placement MIDI editor preferences. Both views edit the same notes;
+/// changing the selected pitch or grid never transposes or quantizes a phrase.
+struct MidiClipView {
+    bool sequence = false;
+    int pitch = 60;             // C5 in VLTONE's octave convention
+    double stepBeats = 0.25;    // sixteenth notes, independent of arrangement snap
+    friend bool operator==(const MidiClipView&, const MidiClipView&) = default;
+};
+
+struct ClipInstanceModel {
     std::string id;
+    std::string contentId;
+    double contentOffsetBeats = 0.0;
     std::string name;
-    std::string filePath;         // absolute, or a bare name resolved in Content/
     double startSeconds = 0.0;
     double durationSeconds = 0.0;
     double offsetSeconds = 0.0;
@@ -545,15 +598,14 @@ struct ClipModel {
     int channels = 0;              // source channel count (mono/stereo dots)
     uint32_t color = 0x4A90D9;
     ClipKind kind = ClipKind::Audio;
+    MidiClipView midiView;
     /// The Pattern clip this child MIDI clip belongs to. Empty for ordinary
     /// MIDI/audio clips and for the Pattern clip itself. Keeping the relation on
     /// the child makes independent Pattern instances possible on the same set of
     /// source tracks without hiding ownership in timeline geometry.
     std::string patternClipId;
-    std::vector<NoteModel> notes;  // MIDI clips only
-    std::vector<SlideNoteModel> slideNotes;
+    std::string patternPartId;
     /// Controller/automation curves drawn under the notes. MIDI clips only.
-    std::vector<ControllerLane> lanes;
 
     /// Every attempt recorded into this clip. Empty means a plain single-layer
     /// clip that plays `filePath`/`notes` directly — the shape every clip had
@@ -561,15 +613,13 @@ struct ClipModel {
     ///
     /// Once this is non-empty the clip is a *container*: `comp` decides what
     /// plays, and `filePath`/`notes` are no longer read for playback.
-    std::vector<TakeModel> takes;
     /// The assembled result. Empty while `takes` is empty.
-    std::vector<CompSegment> comp;
     /// Equal-power crossfade used at comp seams. This belongs to the clip so a
     /// frozen recording sounds the same for every collaborator; recording
     /// preferences are only the default for the next capture.
     double compCrossfadeMs = 5.0;
     /// The curve, on an Automation clip. Meaningless on every other kind.
-    ClipAutomationModel automation;
+
     /// Per-instance Sample/Clip Editor state. Optional on disk for backward
     /// compatibility; its defaults reproduce the pre-v4 playback path.
     ClipSampleEditModel sampleEdit;
@@ -591,15 +641,43 @@ struct ClipModel {
     PlaybackInjection playbackInjection;
     /// Whether the comp editor is open on this clip in the arrangement.
     bool expanded = false;
-    AssetRef asset;               // v6 cloud identity; filePath is legacy/cache
 };
+/// One placement of canonical content. Copying makes an isolated snapshot;
+/// ProjectModel rebinds snapshots by contentId when copying an entire document.
+/// All views below address the canonical storage, never mirrored payloads.
+struct ClipModel : ClipInstanceModel {
+private:
+    std::shared_ptr<ClipContent> m_content;
+public:
+    std::string& filePath;
+    std::vector<NoteModel>& notes;
+    std::vector<SlideNoteModel>& slideNotes;
+    std::vector<ControllerLane>& lanes;
+    std::vector<TakeModel>& takes;
+    std::vector<CompSegment>& comp;
+    AssetRef& asset;
+    AudioEditDocument& audioEdit;
+    ClipAutomationModel automation;
+    ClipModel();
+    ClipModel(const ClipModel&);
+    ClipModel(ClipModel&&) noexcept;
+    ClipModel& operator=(const ClipModel&);
+    ClipModel& operator=(ClipModel&&) noexcept;
+    ~ClipModel();
+    std::shared_ptr<ClipContent> contentStorage() const { return m_content; }
+    void bindContent(std::shared_ptr<ClipContent>);
+    void detachContent();
+private:
+    ClipModel(ClipInstanceModel, std::shared_ptr<ClipContent>, AutomationTarget);
+};
+
 
 ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip);
 void applyClipAudioVersion(ClipModel& clip, const ClipAudioVersionSource& source);
 
 /// Shared by local tempo edits and the collaboration reducer. Source offsets
 /// remain source time; musical clip lengths and fades follow the tempo.
-void retimeClipToTempo(ClipModel& clip, double ratio);
+void retimeClipToTempo(ClipModel& clip, double ratio, bool retimeContent = true);
 void retimeClipComp(ClipModel& clip, double ratio);
 ClipWarpModel sliceWarp(const ClipWarpModel& warp, double beginBeat, double endBeat);
 
@@ -665,6 +743,7 @@ struct InsertParameter {
 /// which is exactly the shape every project written before plugin hosting has,
 /// so old files load with no migration step.
 struct InsertModel {
+    AudioEditDocument audioEdit; // Built-in sampler source composition, owned by this slot.
     std::optional<plugins::mini::MiniModuleDefinition> miniModule;
     std::string miniModuleMode;
     bool miniModulePostFx = false;
@@ -694,6 +773,10 @@ struct InsertModel {
     /// upgraded, or the project moved to a machine with a different build.
     std::vector<InsertParameter> parameters;
     std::vector<InsertParameter> rightParameters;
+
+    /// Ordered compact rack cells. Empty selects the first eight parameters.
+    /// Presentation only; neither plugin state nor the shared protocol owns it.
+    std::vector<std::string> rackParameterIds;
 
     /// Host-provided dry/wet, 0…1. Every plugin gets one for free.
     float mix = 1.0f;
@@ -755,6 +838,15 @@ struct TrackFreezeState {
     bool active() const { return !filePath.empty() || !asset.empty(); }
 };
 
+/// A named, non-nested, contiguous range of channel inserts. The insert vector
+/// remains the processing order; grouping never creates another audio node.
+struct RackGroupModel {
+    std::string id;
+    std::string name;
+    std::vector<std::string> insertIds;
+    friend bool operator==(const RackGroupModel&, const RackGroupModel&) = default;
+};
+
 struct TrackModel {
     std::string id;
     TrackKind kind = TrackKind::Audio;
@@ -814,6 +906,7 @@ struct TrackModel {
     SamplerFxModel samplerFx;
     std::vector<SendModel> sends;
     std::vector<InsertModel> inserts;
+    std::vector<RackGroupModel> rackGroups;
     std::vector<ClipModel> clips;
     TrackFreezeState freeze;
     /// Stable appearance key; custom image bytes belong to local theme settings.
@@ -848,6 +941,15 @@ struct NotebookCueModel {
     bool operator==(const NotebookCueModel&) const = default;
 };
 
+/// Musical annotations, independent of audio tracks and their routing.
+struct ArrangementLabel {
+    std::string id;
+    std::string text;
+    double startBeats = 0.0;
+    double durationBeats = 4.0;
+    bool operator==(const ArrangementLabel&) const = default;
+};
+
 struct ProjectMetadata {
     /// Identity for local UI preferences; collapse flags never enter the document.
     std::string miniModuleProjectId;
@@ -873,6 +975,8 @@ struct ProjectMetadata {
     /// data, unlike notebook colours/fonts which remain application settings.
     std::string notebookHtml;
     std::vector<NotebookCueModel> notebookCues;
+    std::vector<ArrangementLabel> chords;
+    std::vector<ArrangementLabel> sections;
     /// The cycle region, in seconds, and whether the playhead is going round
     /// it. Part of the document because it is part of the arrangement: a
     /// reopened project should still be looping the eight bars that were being
@@ -884,6 +988,7 @@ struct ProjectMetadata {
     float masterVolume = 1.0f;
     float masterPan = 0.0f;
     std::vector<InsertModel> masterInserts;
+    std::vector<RackGroupModel> masterRackGroups;
     std::vector<InsertModel> masterMiniModules;
 };
 
@@ -892,7 +997,7 @@ struct ProjectModel : ProjectMetadata {
     // Copies become ordinary editable documents, never inheriting a controller's
     // explicit cache contract or its derived lookup/row allocations.
     ProjectModel(const ProjectModel& other)
-        : ProjectMetadata(other), tracks(other.tracks), clipLibrary(other.clipLibrary) {}
+        : ProjectMetadata(other), tracks(other.tracks), clipLibrary(other.clipLibrary) { resolveClipContents(); }
     ProjectModel(ProjectModel&&) = default;
     ProjectModel& operator=(ProjectModel&&) = default;
     ProjectModel& operator=(const ProjectModel& other) {
@@ -908,6 +1013,15 @@ struct ProjectModel : ProjectMetadata {
     }
     std::vector<TrackModel> tracks;
     std::vector<ClipLibraryEntry> clipLibrary;
+    std::unordered_map<ClipContentId, std::shared_ptr<ClipContent>> clipContents;
+    /// Intern content references after migration/import/restoring track snapshots.
+    void resolveClipContents();
+    /// Migrate a new/legacy child into its parent's canonical composition.
+    void registerPatternPart(const std::string& trackId, const std::string& clipId, bool materialize = true);
+    void initializePatternContent(const std::string& clipId);
+    PatternPartModel* patternPart(const ClipModel& child);
+    const ClipModel* patternOwner(const ClipModel& child) const;
+    void setPatternPartPlacement(const ClipModel& child);
 
     TrackModel* findTrack(const std::string& id);
     const TrackModel* findTrack(const std::string& id) const;

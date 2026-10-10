@@ -542,7 +542,7 @@ void PluginEditorWindow::prepareNativeHostHierarchy() {
 bool PluginEditorWindow::requiresNativeSurface() const {
     if ((m_controller && !m_controller->sharedEditingAllowed()) || (m_editAccessCheck && !m_editAccessCheck())) return false;
     const auto plugin = editorSnapshot();
-    return plugin && plugin->hasEditor && !plugin->remote;
+    return plugin && plugin->hasEditor;
 }
 
 bool PluginEditorWindow::canResizeNativeEditor() const {
@@ -765,9 +765,9 @@ void PluginEditorWindow::clearEditorContent() {
         m_dock = nullptr;
         m_dockGrid = nullptr;
     }
-    m_remoteStatus = nullptr;
-    m_remoteOpen = nullptr;
-    m_remoteRestart = nullptr;
+
+
+
     setMinimumSize(0, 0);
     setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
     if (m_container) {
@@ -831,12 +831,7 @@ void PluginEditorWindow::rebuildEditorContent() {
                      hasNativeEditor ? "yes" : "no");
     }
 
-    if (plugin && plugin->remote) {
-        buildRemoteStatusPanel();
-        finishEditorContent();
-        if (!plugin->hasEditor) m_dockToggle->setChecked(true);
-        return;
-    } else if (hasNativeEditor) {
+    if (hasNativeEditor) {
         // A capability snapshot may arrive after the initial presentation.
         // Protect the workspace before promoting the final native hierarchy.
         prepareNativeHostHierarchy();
@@ -1117,12 +1112,9 @@ void PluginEditorWindow::finishNativeEditorOpen() {
 }
 
 void PluginEditorWindow::finishEditorContent() {
-    // Native and remote editors share the parameter dock. Local generic
-    // editors already expose these controls in their main panel.
-    const auto plugin = editorSnapshot();
-    const bool remote = plugin && plugin->remote;
-    if (m_dockToggle) m_dockToggle->setVisible(m_embedded || remote);
-    if (!m_embedded && !remote) {
+    // Native editors use the dock; generic editors already show parameters.
+    if (m_dockToggle) m_dockToggle->setVisible(m_embedded);
+    if (!m_embedded) {
         m_dockToggle->setChecked(false);
     }
     if (m_dockToggle->isChecked()) setParameterDockVisible(true);
@@ -1199,7 +1191,7 @@ void PluginEditorWindow::detachFromPlugin() {
     // Clear our tokens before vendor callbacks. A late detach must neither
     // close a successor's window nor discard its pending VST3 capability probe.
     // The content token is a probe too: closeEvent and the deferred destructor
-    // both detach, and an isolated successor may still be waiting to open.
+    // both detach, and a replacement may still be waiting to open.
     if (opened) m_controller->closeInsertEditor(m_channelKey, m_insertKey, opened);
     else if (probe) m_controller->closeInsertEditor(m_channelKey, m_insertKey, probe, true);
 }
@@ -1210,21 +1202,19 @@ std::optional<daw::PluginEditorSnapshot> PluginEditorWindow::editorSnapshot() co
 }
 
 void PluginEditorWindow::pollEditorState() {
-    refreshAccessPolicy();
-    if (m_editorReady && m_reopenRemoteAfterRestart && m_controller) {
-        const auto plugin = editorSnapshot();
-        if (plugin && plugin->identity == m_controller->insertIdentity(m_channelKey, m_insertKey) &&
-            m_controller->insertRuntimeStatus(m_channelKey, m_insertKey).state ==
-                daw::EngineController::PluginRuntimeState::Running) {
-            m_reopenRemoteAfterRestart = false;
-            if (plugin->hasEditor) {
-                QTimer::singleShot(0, this, [this] {
-                    if (!m_closing) emit nestedPluginEditorRequested(m_channelId, m_insertId);
-                });
-                return;
-            }
+    if (m_controller) {
+        const auto health = m_controller->insertRuntimeStatus(m_channelKey, m_insertKey);
+        if (health.state == daw::AudioPluginRuntimeState::Faulted ||
+            health.state == daw::AudioPluginRuntimeState::AwaitingRecovery ||
+            health.state == daw::AudioPluginRuntimeState::Recovering) {
+            m_poll->stop();
+            m_editorIdle->stop();
+            m_content->setEnabled(false);
+            return;
         }
     }
+    refreshAccessPolicy();
+
     if (m_editorReady && m_controller &&
         m_contentIdentity != m_controller->insertIdentity(m_channelKey, m_insertKey)) {
         scheduleEditorInitialization(0);
@@ -1233,159 +1223,6 @@ void PluginEditorWindow::pollEditorState() {
     refreshWrapper();
     refreshGenericEditor();
     refreshParameterDock();
-    refreshRemoteStatus();
-}
-
-void PluginEditorWindow::pollHostShortcuts() {
-    if (m_closing || !m_controller) return;
-    const auto count = m_controller->pollInsertEditorShortcuts(
-        m_channelKey, m_insertKey, m_openedOn,
-        isVisible() && m_automationShortcutEnabled && m_automationShortcutEnabled());
-    for (std::uint32_t i = 0; i < count; ++i) {
-        QKeyEvent press(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
-        routeHostKey(&press, false);
-    }
-}
-
-void PluginEditorWindow::buildRemoteStatusPanel() {
-    m_generic = new QWidget(m_content);
-    auto* column = new QVBoxLayout(m_generic);
-    column->setContentsMargins(20, 20, 20, 20);
-    column->setSpacing(12);
-    m_remoteStatus = new QLabel(m_generic);
-    m_remoteStatus->setObjectName(QStringLiteral("PluginRuntimeStatus"));
-    m_remoteStatus->setWordWrap(true);
-    column->addWidget(m_remoteStatus);
-    auto* actions = new QHBoxLayout;
-    m_remoteOpen = new QPushButton(tr("Open plugin window"), m_generic);
-    m_remoteOpen->setObjectName(QStringLiteral("OpenIsolatedPlugin"));
-    m_remoteOpen->setMinimumHeight(28);
-    m_remoteRestart = new QPushButton(tr("Restart plugin"), m_generic);
-    m_remoteRestart->setObjectName(QStringLiteral("RestartIsolatedPlugin"));
-    m_remoteRestart->setMinimumHeight(28);
-    actions->addWidget(m_remoteOpen);
-    actions->addWidget(m_remoteRestart);
-    actions->addStretch();
-    column->addLayout(actions);
-    column->addStretch();
-    connect(m_remoteOpen, &QPushButton::clicked, this, [this] {
-        // Release this panel before opening the helper-owned editor.
-        emit nestedPluginEditorRequested(m_channelId, m_insertId);
-    });
-    connect(m_remoteRestart, &QPushButton::clicked, this, [this] {
-        m_reopenRemoteAfterRestart = m_controller->restartInsert(m_channelKey, m_insertKey);
-        refreshRemoteStatus();
-    });
-    m_contentRow->insertWidget(0, m_generic, 1);
-    m_fallbackContentSize = QSize(520, 220);
-    resize(m_fallbackContentSize);
-    refreshRemoteStatus();
-}
-
-void PluginEditorWindow::refreshRemoteStatus() {
-    if (!m_remoteStatus || !m_controller) return;
-    const auto status = m_controller->insertRuntimeStatus(m_channelKey, m_insertKey);
-    using State = daw::EngineController::PluginRuntimeState;
-    const bool failed = status.state == State::Failed;
-    const bool restarting = status.state == State::Restarting;
-    const auto remote = editorSnapshot();
-    QString message;
-    if (restarting) message = tr("Restarting plugin… Other tracks can keep playing.");
-    else if (failed) message = tr("The plugin stopped responding or failed. Restart it to restore the last confirmed settings.");
-    else if (remote && remote->openFailed)
-        message = tr("The plugin window could not be opened. You can retry or use the parameter panel.");
-    else if (remote && !remote->hasEditor)
-        message = tr("This plugin runs in a separate process. Use the parameter panel to edit it.");
-    else message = tr("This plugin runs in a separate process. Its editor opens in its own window.");
-    if (m_remoteStatus->text() != message) m_remoteStatus->setText(message);
-    m_remoteStatus->setToolTip(QString::fromStdString(status.detail));
-    m_remoteRestart->setVisible(failed || restarting);
-    m_remoteRestart->setEnabled(failed);
-    m_remoteOpen->setVisible(remote && remote->remote && remote->hasEditor);
-    m_remoteOpen->setEnabled(status.state == State::Running);
-    if (m_dock) m_dock->setEnabled(status.state == State::Running && !m_readOnly);
-}
-
-bool PluginEditorWindow::checkIsolationForTest(const std::string& fixturePath) {
-    // Exercise both boundaries used by the app: UI -> audio process -> plugin
-    // process. Native pointers bypass the first boundary and hide cache races.
-    daw::EngineController controller;
-    if (!controller.initialize(48000, 1024, false)) return false;
-    const auto track = controller.addTrack(daw::TrackKind::Audio, "Isolated plugin");
-    daw::plugins::PluginDescriptor descriptor;
-    descriptor.format = daw::plugins::Format::Clap;
-    descriptor.path = fixturePath; descriptor.uid = "com.daw.test.fault";
-    descriptor.name = "Recovery test";
-    const auto slot = controller.addInsert(track, descriptor);
-    if (slot.empty()) return false;
-    using State = daw::EngineController::PluginRuntimeState;
-    const auto originalIdentity = controller.insertIdentity(track, slot);
-    if (!originalIdentity || controller.insertRuntimeStatus(track, slot).state != State::Running) return false;
-    auto* editor = new PluginEditorWindow(&controller, QString::fromStdString(track), QString::fromStdString(slot));
-    editor->show(); editor->initializeEditor();
-    const auto wait = [&](int ms) {
-        QEventLoop loop;
-        QTimer pump;
-        QObject::connect(&pump, &QTimer::timeout, &loop, [&] { controller.pumpPreviewPluginEvents(); });
-        pump.start(5);
-        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
-        loop.exec();
-        editor->pollForTest();
-    };
-    const auto waitUntil = [&](const auto& condition) {
-        QElapsedTimer timer;
-        timer.start();
-        while (!condition() && timer.elapsed() < 3000) wait(20);
-        return condition();
-    };
-    bool ok = waitUntil([&] {
-        return editor->m_editorReady && editor->m_remoteStatus && editor->m_remoteRestart &&
-            editor->m_contentIdentity == originalIdentity && !editor->requiresNativeSurface();
-    });
-    if (!ok) { delete editor; return false; }
-    controller.setInsertParameter(track, slot, "0", 1);
-    ok &= waitUntil([&] {
-        return controller.insertRuntimeStatus(track, slot).state == State::Failed &&
-            editor->m_remoteRestart->isVisible() && editor->m_remoteRestart->isEnabled();
-    });
-    const auto folder = qEnvironmentVariable("DAW_ISOLATION_SCREENSHOT_DIR");
-    if (!folder.isEmpty()) {
-        QDir().mkpath(folder);
-        ok &= editor->grab().save(folder + QStringLiteral("/failed.png"));
-    }
-    editor->m_remoteRestart->click();
-    ok &= waitUntil([&] {
-        return controller.insertRuntimeStatus(track, slot).state == State::Running &&
-            controller.insertIdentity(track, slot) != originalIdentity && editor->m_editorReady &&
-            editor->m_contentIdentity == controller.insertIdentity(track, slot) &&
-            editor->m_remoteRestart &&
-            !editor->m_remoteRestart->isVisible() && editor->m_dockToggle->isVisible();
-    });
-    editor->setParameterDockVisibleForTest(true);
-    wait(30);
-    ok &= editor->m_dock && editor->m_dock->isVisible() && editor->m_dock->isEnabled();
-    if (!folder.isEmpty()) ok &= editor->grab().save(folder + QStringLiteral("/recovered.png"));
-    ok &= editor->m_contentIdentity == controller.insertIdentity(track, slot);
-    editor->setEditAccessCheck([] { return false; });
-    editor->refreshAccessPolicy();
-    ok &= waitUntil([&] {
-        return editor->m_generic && !editor->m_generic->isEnabled() &&
-            !editor->m_genericControls.empty() &&
-            std::all_of(editor->m_genericControls.begin(), editor->m_genericControls.end(),
-                        [](const auto& control) { return !control.value->text().isEmpty(); });
-    });
-    delete editor;
-    const auto internal = controller.addInsert(track, daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
-    if (internal.empty()) return false;
-    editor = new PluginEditorWindow(&controller, QString::fromStdString(track), QString::fromStdString(internal));
-    editor->show(); editor->initializeEditor();
-    ok &= waitUntil([&] {
-        return editor->m_editorReady && dynamic_cast<EqualizerPanel*>(editor->m_generic) &&
-            editor->m_contentIdentity == controller.insertIdentity(track, internal);
-    });
-    delete editor;
-    std::fprintf(stderr, "%s isolated plugin recovery UI\n", ok ? "PASS" : "FAIL");
-    return ok;
 }
 
 void PluginEditorWindow::refreshAccessPolicy() {
@@ -1402,7 +1239,7 @@ void PluginEditorWindow::syncPollTimer() {
     const auto plugin = editorSnapshot();
     const bool needsIdle = shouldPoll && !m_closing && m_editorReady &&
         m_embedded && plugin && plugin->identity == m_openedOn && plugin->open &&
-        !plugin->remote && plugin->format == daw::plugins::Format::Vst;
+        plugin->format == daw::plugins::Format::Vst;
     // This is deliberately independent of pumpPluginEvents' wake-generation
     // fast path and of the slow wrapper/parameter poll. Only the live VST
     // editor needs a periodic turn; the rest of the project stays event-driven.
@@ -1551,6 +1388,7 @@ void PluginEditorWindow::showEvent(QShowEvent* event) {
 }
 
 void PluginEditorWindow::prepareForPresentation() {
+    if(auto* panel=findChild<SamplerPanel*>())panel->showDefaultPage();
     if (!isWindow()) {
         // Geometry persistence belongs to the host frame, but the pixels a
         // foreign GUI needs belong to the plugin. Re-apply that native size on

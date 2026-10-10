@@ -61,7 +61,7 @@ int run(int argc, char **argv, const daw::plugins::PluginDescriptor &descriptor,
   app.setApplicationName(QString::fromStdString(descriptor.uid));
   QSettings::setDefaultFormat(QSettings::IniFormat);
   QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temp.path());
-  daw::EngineController controller{daw::EngineController::TestRuntime{}};
+  daw::EngineController controller{};
   check(bool(controller.initialize(48000, 257, false)),
         "headless engine initializes");
   audio::AudioBuffer source(2, 96000);
@@ -173,7 +173,7 @@ int run(int argc, char **argv, const daw::plugins::PluginDescriptor &descriptor,
   check(bool(controller.saveProject(path)),
         "project saves native editor state");
   {
-    daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+    daw::EngineController reopened{};
     reopened.initialize(48000, 257, false);
     check(bool(reopened.openProject(path)) &&
               std::abs(reopened.insertParameter(track, insert, parameter) -

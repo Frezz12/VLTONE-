@@ -15,7 +15,7 @@ int main(){
  const auto dir=std::filesystem::temp_directory_path()/("vlt-monitor-regression-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
  std::filesystem::create_directories(dir);
  {
-  daw::EngineController c{daw::EngineController::TestRuntime{}};c.initialize(48000,32,false);c.setRecordDirectory(dir.string());c.newProject(true);
+  daw::EngineController c{};c.initialize(48000,32,false);c.setRecordDirectory(dir.string());c.newProject(true);
   const auto first=c.project().tracks.front().id;c.setTrackMonitor(first,true);
   check(std::abs(render(c)-.5f)<1e-5,"new project monitor works without selecting Input 1");
   const auto count=c.graphRebuildCountForTest();for(int i=0;i<100;++i)c.setTrackInputRouting(first,i%2,1+i%2,true);
@@ -43,7 +43,7 @@ int main(){
   check(bool(c.createTracks(request,ids))&&ids.size()==2&&c.project().findTrack(ids.front())->inputEnabled,"track creation defaults to enabled mono input");
  }
  {
-  daw::EngineController c{daw::EngineController::TestRuntime{}};c.initialize(48000,32,false);auto track=c.addTrack(daw::TrackKind::Midi,"Live MIDI");
+  daw::EngineController c{};c.initialize(48000,32,false);auto track=c.addTrack(daw::TrackKind::Midi,"Live MIDI");
   check(c.liveMidiEvent(track,0x90,60,100),"live MIDI accepted");
   std::this_thread::sleep_for(std::chrono::milliseconds(2100));
   check(c.liveAudioActivity(),"held MIDI protects recovery after the recent-event timeout");

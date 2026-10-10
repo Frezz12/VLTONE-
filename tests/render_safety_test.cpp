@@ -136,7 +136,7 @@ int main() {
               "decoder rejects allocations over budget without changing output");
     }
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(bool(controller.initialize(48000, 64, false)), "controller initializes");
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Source");
         check(!controller.importAudio(sourcePath, track, 0).empty(), "source imports");

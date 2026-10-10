@@ -5,6 +5,7 @@ import { api } from "@vlt/api-client";
 import { Bot, Eye, EyeOff, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AdminShell } from "./admin-shell";
+import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 
 type Provider = "openai" | "anthropic";
@@ -30,6 +31,7 @@ const emptyDraft = (): Draft => ({
 
 export function ModelRegistry() {
   const { session, error } = useAdmin();
+  const canWrite = canAdmin(session?.admin, "models.write");
   const [models, setModels] = useState<AIModel[]>();
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [busy, setBusy] = useState(false);
@@ -123,7 +125,7 @@ export function ModelRegistry() {
           <h1 className="vlt-title">Модели AI</h1>
           <p className="vlt-subtitle">Основные модели, которые пользователи видят в чате только по заданному названию.</p>
         </div>
-        <button className="vlt-button" onClick={startNew} disabled={busy}><Plus size={16} aria-hidden /> Новая модель</button>
+        <button className="vlt-button" onClick={startNew} disabled={!canWrite || busy}><Plus size={16} aria-hidden /> Новая модель</button>
       </div>
       {error && <div className="vlt-error">{error}</div>}
       <div className="model-registry-grid">
@@ -153,7 +155,7 @@ export function ModelRegistry() {
             <h2 className="vlt-section-title">{draft.id ? "Настройки модели" : "Новая модель"}</h2>
             {draft.has_api_key && <span className="vlt-badge">ключ сохранён</span>}
           </div>
-          <div className="model-form">
+          <fieldset className="model-form" disabled={!canWrite} style={{ border: 0, padding: 0 }}>
             <label className="vlt-label">Название в программе
               <input className="vlt-input" value={draft.display_name} autoComplete="off" onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} />
               {fieldError("display_name")}
@@ -186,10 +188,10 @@ export function ModelRegistry() {
             </label>
             <label className="vlt-checkbox"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />Показывать модель пользователям</label>
             <label className="vlt-checkbox model-billing-setting"><input type="checkbox" checked={draft.is_free} onChange={(event) => setDraft({ ...draft, is_free: event.target.checked })} /><span><strong>Бесплатная модель</strong><small>Запросы не расходуют лимит пользователя и общий AI-бюджет.</small></span></label>
-          </div>
+          </fieldset>
           <div className="vlt-row model-form-actions">
-            <button className="vlt-button" onClick={() => void save()} disabled={busy}><Save size={16} aria-hidden /> {busy ? "Сохранение…" : "Сохранить"}</button>
-            {draft.id && <button className="vlt-button vlt-button-danger" onClick={() => void remove()} disabled={busy}><Trash2 size={16} aria-hidden /> Удалить</button>}
+            <button className="vlt-button" onClick={() => void save()} disabled={!canWrite || busy}><Save size={16} aria-hidden /> {busy ? "Сохранение…" : "Сохранить"}</button>
+            {draft.id && <button className="vlt-button vlt-button-danger" onClick={() => void remove()} disabled={!canWrite || busy}><Trash2 size={16} aria-hidden /> Удалить</button>}
           </div>
           {status && <p className="model-form-status" role="status">{status}</p>}
         </section>

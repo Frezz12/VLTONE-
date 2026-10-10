@@ -163,7 +163,8 @@ void ScrollMotion::move(QPointF delta,bool precise) {
     if((m_target.x()-m_position.x())*delta.x()<0)m_target.setX(m_position.x());
     if((m_target.y()-m_position.y())*delta.y()<0)m_target.setY(m_position.y());
     m_target+=delta;
-    m_target.setX(std::max(0.,m_target.x()));m_target.setY(std::max(0.,m_target.y()));
+    // The owner clamps its actual range. Graphics canvases legitimately
+    // scroll through negative scene coordinates on both axes.
     const double direct=std::max(.15,1.-preferences.strength()/100.);
     apply(m_position+delta*direct);
     m_from=m_position;m_elapsed=0.;m_duration=.15*100./preferences.speed();

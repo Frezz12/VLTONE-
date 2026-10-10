@@ -1,0 +1,12 @@
+export type Locale = "ru" | "en";
+export type Localized = { ru: string; en: string };
+export const l = (ru: string, en: string): Localized => ({ ru, en });
+export type PortType = "audio" | "number" | "gate" | "function" | "integer" | "array" | "list" | "buffer";
+export type Port = { id: string; name: string; type: PortType; required: boolean; parameter: number; signature: string; capacity: number };
+export type DocumentedPort = Port & { description: string; connection: string };
+export type Parameter = { id: string; name: string; unit: string; minimum: number; maximum: number; initial: number; logarithmic: boolean; modulatable: boolean; choices: string[] };
+export type RegistryNode = { id: string; name: string; category: string; version: number; inputs: Port[]; outputs: Port[]; parameters: Parameter[] };
+export type NodeCopy = { summary: Localized; example: Localized; note?: Localized; related: string[] };
+export type CreatorNode = RegistryNode & NodeCopy;
+export type GuideSection = { id: string; title: Localized; paragraphs?: Localized[]; steps?: Localized[]; code?: string; links?: string[]; diagram?: boolean };
+export type Guide = { slug: string; title: Localized; intro: Localized; sections: GuideSection[] };

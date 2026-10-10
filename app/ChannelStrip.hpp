@@ -80,12 +80,14 @@ public:
     static bool checkColorForTest();
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
+    void refreshPluginHealth();
     bool hasActiveGesture() const;
     /// While the transport runs, mirror volume/pan automation at the playhead;
     /// while stopped, return to the stored static values.
     void refreshAutomationValues();
 
 signals:
+    void rackSelectionRequested(const QString& channel, const QStringList& ids);
     void selectRequested(const QString& trackId);
     void edited(bool localFileDirty = true);
     /// Group IN edits another channel's output; recovery must dirty that source.
@@ -120,8 +122,6 @@ protected:
     void contextMenuEvent(QContextMenuEvent*) override;
 
 private:
-    QHash<QString, QToolButton*> m_isolatedSlotButtons;
-    void refreshIsolatedSlots();
     double m_displayedGain = -1.0;
     double m_displayedPan = -2.0;
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(

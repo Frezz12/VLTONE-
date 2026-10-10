@@ -3,13 +3,14 @@
 type CollaborationAccessSwitchProps = {
   enabled: boolean;
   pending: boolean;
+  disabled?: boolean;
   label: string;
   error?: string;
   success?: string;
   onChange: (enabled: boolean) => void;
 };
 
-export function CollaborationAccessSwitch({ enabled, pending, label, error, success, onChange }: CollaborationAccessSwitchProps) {
+export function CollaborationAccessSwitch({ enabled, pending, disabled, label, error, success, onChange }: CollaborationAccessSwitchProps) {
   return <div className="collaboration-access">
     <div className="collaboration-access-row">
       <button
@@ -19,7 +20,7 @@ export function CollaborationAccessSwitch({ enabled, pending, label, error, succ
         aria-checked={enabled}
         aria-busy={pending}
         aria-label={label}
-        disabled={pending}
+        disabled={pending || disabled}
         onClick={() => onChange(!enabled)}
       >
         <span className="collaboration-access-track" aria-hidden="true"><span /></span>

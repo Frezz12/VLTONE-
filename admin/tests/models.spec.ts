@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const session = { admin: { id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-26T20:00:00Z" };
+const session = { admin: { is_owner: true, permissions: [], id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-26T20:00:00Z" };
 
 test("administrator adds a managed model connection", async ({ page }) => {
   const models: Record<string, unknown>[] = [];

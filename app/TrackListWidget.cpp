@@ -1,7 +1,9 @@
 #include "ScrollMotion.hpp"
+#include "AudioImportPreparation.hpp"
 #include "UiPerformance.hpp"
 #include "UiFrameClock.hpp"
 #include "TrackListWidget.hpp"
+#include "RackDrag.hpp"
 #include "TrackIcons.hpp"
 #include "TrackIconPicker.hpp"
 #include "MenuActions.hpp"
@@ -432,6 +434,10 @@ TrackListWidget::TrackListWidget(daw::EngineController* controller,
     m_rulerRow->addWidget(m_clearMutes);
     m_rulerRow->addWidget(m_clearSolos);
     outer->addWidget(m_ruler);
+    m_arrangementHeaders = new QWidget(this);
+    m_arrangementHeaders->setObjectName("ArrangementHeaders");
+    m_arrangementHeaders->setFixedHeight(0);
+    outer->addWidget(m_arrangementHeaders);
 
     // The rows live on a host widget inside a fixed-height viewport rather than
     // in the column's own layout: a project with thirty tracks has to *scroll*,
@@ -475,11 +481,14 @@ void TrackListWidget::applyTheme() {
                           font-size: 12px; font-weight: 600; padding: 0; }
 #TrackHeaders QLineEdit:focus { background: %WELL%; border-radius: 6px; }
 #TrackHeaders QLabel { color: %TEXT2%; font-size: 9px; }
+#ArrangementRow { background: %SURFACE%; border-bottom: 1px solid %SEP%; }
+#TrackHeaders QLabel#ArrangementRowTitle { color: %TEXT%; font-size: 11px; }
 #TrackListTitle { color: %TEXT%; font-size: 10px; font-weight: 700;
                   letter-spacing: 0.8px; }
 #FolderCount { color: %TEXT2%; font-size: 9px; font-weight: 600; }
 )")
         .replace("%BG%", mixColors(t.background, t.surface, 0.18).name())
+        .replace("%SURFACE%", t.surface.name())
         .replace("%PANEL_TOP%", t.panelTop().name())
         .replace("%PANEL_BOTTOM%", t.panelBottom().name())
         .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
@@ -671,6 +680,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     ui::LevelMeter* meter = nullptr;
     if (channel) {
         fader = new ui::FaderWidget(Qt::Horizontal, container);
+        fader->installEventFilter(this);
         fader->setGain(track.volume);
         fader->setMinimumWidth(kFaderMin);
         fader->setToolTip(tr("Level  %1").arg(ui::formatGainDb(track.volume)));
@@ -696,6 +706,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
                 [this, id] { emit automateControlRequested(id, false); });
 
         pan = new ui::PanKnob(container);
+        pan->installEventFilter(this);
         pan->setFixedSize(kPanWidth, kPanHeight);
         pan->setPan(track.pan);
         pan->setToolTip(tr("Pan  %1").arg(panText(track.pan)));
@@ -714,12 +725,13 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
         connect(pan, &ui::PanKnob::automateRequested, this,
                 [this, id] { emit automateControlRequested(id, true); });
 
-        // One strip, flush against the row's right edge and running its whole
-        // height. Two thin bars with a gap read as a mistake at this width, and
-        // the level being shown is one peak either way.
-        meter = new ui::LevelMeter(Qt::Vertical, 1, container);
+        // Separate L/R rails, flush against the row's right edge. Each channel
+        // gets four pixels, with a one-pixel separator between them.
+        meter = new ui::LevelMeter(Qt::Vertical, 2, container);
         meter->setMeterStyle(ui::LevelMeter::Style::Rail);
-        meter->setFixedWidth(5);
+        meter->setFixedWidth(9);
+        meter->setToolTip(tr("Stereo level · L / R · click to clear the clip indicator"));
+        meter->setAccessibleName(tr("Stereo level: left and right"));
     }
 
     // Keep the same controls alive in both sizes. Only their geometry changes,
@@ -978,8 +990,10 @@ void TrackListWidget::refreshMeters() {
         if (!row.meter || !row.container->isVisible()) continue;
         const QRect rowRect(row.container->mapTo(m_viewport, QPoint{}),
                             row.container->size());
-        if (visible.intersects(rowRect))
-            row.meter->setPeak(m_controller->trackPeak(row.id));
+        if (visible.intersects(rowRect)) {
+            const auto levels = m_controller->meterSnapshot(row.id);
+            row.meter->setPeaks(levels.left, levels.right);
+        }
     }
 }
 
@@ -1400,7 +1414,7 @@ bool TrackListWidget::checkCollaborationPresenceForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     controller.initialize(48000.0, 512, false);
     const QString first =
         QString::fromStdString(controller.addTrack(daw::TrackKind::Audio, "A"));
@@ -1447,7 +1461,7 @@ bool TrackListWidget::checkButtonPaintForTest(QString* error) {
         if (error) *error = message;
         return false;
     };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     controller.initialize(48000.0, 512, false);
     const QString first = QString::fromStdString(
         controller.addTrack(daw::TrackKind::Audio, "Paint A"));
@@ -1712,7 +1726,7 @@ void TrackListWidget::showDropFeedback() {
         indicator->showFolder(rowGeometry(size_t(m_dropFolderRow)));
         return;
     }
-    int y = m_ruler->height();
+    int y = m_viewport->y();
     if (m_dropRow >= int(m_rows.size())) {
         if (!m_rows.empty()) y = rowGeometry(m_rows.size() - 1).bottom();
     } else if (m_dropRow >= 0) {
@@ -1826,8 +1840,13 @@ QString projectTemplateFromMime(const QMimeData* mime) {
 bool TrackListWidget::updateBrowserDropTarget(const QPoint& posInList,
                                               const QMimeData* mime) {
     m_projectTemplateDropPath.clear();
+    m_sampleDropNewTrack = false;
     const auto plugin = pluginFromMime(mime);
-    if (plugin) {
+    if (ui::rack::decode(mime).valid) {
+        const int row = rowAtPosition(posInList);
+        const auto* track = row >= 0 ? m_controller->project().findTrack(m_rows[size_t(row)].id) : nullptr;
+        m_pluginDropRow = track && daw::carriesAudio(*track) ? row : -1;
+    } else if (plugin) {
         m_pluginDropRow = pluginDropRowAt(posInList, plugin->isInstrument);
     } else if (const QString templ = projectTemplateFromMime(mime);
                !templ.isEmpty()) {
@@ -1846,14 +1865,15 @@ bool TrackListWidget::updateBrowserDropTarget(const QPoint& posInList,
             : nullptr;
         m_pluginDropRow = track && track->kind == daw::TrackKind::Pattern
                               ? row : -1;
+        m_sampleDropNewTrack = m_pluginDropRow < 0;
     } else {
         m_pluginDropRow = -1;
         return false;
     }
 
     auto* indicator = static_cast<DropIndicator*>(m_indicator);
-    if (!m_projectTemplateDropPath.isEmpty()) {
-        int y = m_ruler->height();
+    if (!m_projectTemplateDropPath.isEmpty() || m_sampleDropNewTrack) {
+        int y = m_viewport->y();
         if (!m_rows.empty()) y = rowGeometry(m_rows.size() - 1).bottom();
         indicator->showLine(QRect(4, y - 1, width() - 8, 3));
     } else if (m_pluginDropRow < 0) {
@@ -1875,7 +1895,8 @@ void TrackListWidget::dragEnterEvent(QDragEnterEvent* ev) {
 void TrackListWidget::dragMoveEvent(QDragMoveEvent* ev) {
     if (!updateBrowserDropTarget(ev->position().toPoint(), ev->mimeData()))
         return;
-    if (m_pluginDropRow < 0 && m_projectTemplateDropPath.isEmpty()) {
+    if (m_pluginDropRow < 0 && m_projectTemplateDropPath.isEmpty() &&
+        !m_sampleDropNewTrack) {
         ev->ignore();
         return;
     }
@@ -1883,6 +1904,7 @@ void TrackListWidget::dragMoveEvent(QDragMoveEvent* ev) {
 }
 
 void TrackListWidget::dragLeaveEvent(QDragLeaveEvent*) {
+    m_sampleDropNewTrack = false;
     m_pluginDropRow = -1;
     m_projectTemplateDropPath.clear();
     static_cast<DropIndicator*>(m_indicator)->hide();
@@ -1894,6 +1916,8 @@ void TrackListWidget::dropEvent(QDropEvent* ev) {
     updateBrowserDropTarget(ev->position().toPoint(), ev->mimeData());
     const int row = m_pluginDropRow;
     const QString projectTemplate = m_projectTemplateDropPath;
+    const bool sampleDropNewTrack = m_sampleDropNewTrack;
+    m_sampleDropNewTrack = false;
     m_pluginDropRow = -1;
     m_projectTemplateDropPath.clear();
     static_cast<DropIndicator*>(m_indicator)->hide();
@@ -1904,9 +1928,55 @@ void TrackListWidget::dropEvent(QDropEvent* ev) {
         return;
     }
 
+    if (sampleDropNewTrack) {
+        const QStringList files = audioFilesFromMime(ev->mimeData());
+        QString lastTrack;
+        for (const QString& file : files) {
+            const auto revision = m_controller->projectRevision();
+            if (!ui::prepareAudioImport(this, *m_controller, file) ||
+                m_controller->projectRevision() != revision) break;
+            const auto track = m_controller->importSampleToMidiTrack(file.toStdString(), 0.0);
+            if (track.empty()) {
+                QToolTip::showText(QCursor::pos(),
+                    tr("Could not load the sample into Sampler"), this);
+                continue;
+            }
+            lastTrack = QString::fromStdString(track);
+        }
+        if (lastTrack.isEmpty()) {
+            ev->ignore();
+            return;
+        }
+        ev->setDropAction(Qt::CopyAction);
+        ev->accept();
+        emit tracksChanged();
+        emit orderChanged();
+        setSelectedTrack(lastTrack);
+        emit selectionSetChanged(m_selectedIds);
+        emit selectionChanged(lastTrack);
+        return;
+    }
+
     if (row < 0 || row >= int(m_rows.size())) return;
 
     const std::string trackId = m_rows[size_t(row)].id;
+    if (const auto drag = ui::rack::decode(ev->mimeData()); drag.valid) {
+        const auto* track = m_controller->project().findTrack(trackId);
+        const auto channel = track && track->kind == daw::TrackKind::Master
+            ? std::string(daw::EngineController::kMasterChannelId) : trackId;
+        const auto* chain = m_controller->channelInserts(channel);
+        std::vector<std::string> landed;
+        const bool copy = ev->modifiers().testFlag(Qt::AltModifier);
+        const auto result = m_controller->transferRackSelection(drag.channel.toStdString(),
+            ui::rack::ids(drag.ids), channel, chain ? chain->size() : 0, copy, {}, &landed);
+        if (!result) { QToolTip::showText(QCursor::pos(), QString::fromStdString(result.message()), this); return; }
+        QStringList selected; for (const auto& id : landed) selected.push_back(QString::fromStdString(id));
+        ev->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction); ev->accept();
+        emit tracksChanged(); emit orderChanged();
+        setSelectedTrack(QString::fromStdString(trackId));
+        emit rackSelectionRequested(QString::fromStdString(channel), selected);
+        return;
+    }
     const QString preset = channelStripPresetFromMime(ev->mimeData());
     if (!preset.isEmpty()) {
         const audio::Result result = m_controller->applyChannelStripPreset(
@@ -1991,6 +2061,14 @@ void TrackListWidget::dropEvent(QDropEvent* ev) {
 bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
     auto* w = qobject_cast<QWidget*>(obj);
     if (!w) return QWidget::eventFilter(obj, ev);
+
+    // Scrolling across a track control navigates the lanes without editing mix
+    // values. Keep the original pixel deltas and gesture phases for trackpads.
+    if (ev->type() == QEvent::Wheel &&
+        (qobject_cast<ui::FaderWidget*>(w) || qobject_cast<ui::PanKnob*>(w))) {
+        wheelEvent(static_cast<QWheelEvent*>(ev));
+        return true;
+    }
 
     const QString paintRole = w->property("trackButtonPaintRole").toString();
     if (!paintRole.isEmpty()) {
@@ -2337,7 +2415,7 @@ void TrackListWidget::showTrackIconPicker(const QString& id) {
             [this, targets] { emit customTrackIconRequested(targets); });
     const int index = rowIndexOf(id);
     const QPoint at = index >= 0 ? m_rows[std::size_t(index)].icon->mapToGlobal(QPoint(0, kIconSize + 3))
-                                 : mapToGlobal(QPoint(0, m_ruler->height()));
+                                 : mapToGlobal(QPoint(0, m_viewport->y()));
     picker->popup(at);
 }
 
@@ -2646,4 +2724,38 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
             emitSelection();
         }
     });
+}
+
+void TrackListWidget::setArrangementRows(const QVector<int>& rows) {
+    if (auto* layout = m_arrangementHeaders->layout()) {
+        while (auto* item = layout->takeAt(0)) { delete item->widget(); delete item; }
+        delete layout;
+    }
+    auto* layout = new QVBoxLayout(m_arrangementHeaders);
+    layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(0);
+    for (const int row : rows) {
+        auto* band = new QWidget(m_arrangementHeaders);
+        band->setObjectName("ArrangementRow");
+        band->setAttribute(Qt::WA_StyledBackground, true);
+        band->setFixedHeight(ui::kArrangementRowHeight);
+        auto* line = new QHBoxLayout(band);
+        line->setContentsMargins(10, 0, 6, 0); line->setSpacing(4);
+        const QString title = row == 0 ? tr("Time") : row == 1 ? tr("Chords") : tr("Song sections");
+        auto* label = new QLabel(title, band);
+        label->setObjectName("ArrangementRowTitle");
+        line->addWidget(label, 1);
+        const auto button = [&](const QString& text, const QString& tip) {
+            auto* control = new QToolButton(band); control->setText(text);
+            control->setAutoRaise(true); control->setFixedSize(24, 24);
+            control->setToolTip(tip); control->setAccessibleName(tip); line->addWidget(control); return control;
+        };
+        if (row > 0) connect(button(QStringLiteral("+"), row == 1 ? tr("Add chord") : tr("Add section")), &QToolButton::clicked,
+            this, [this, row] { emit arrangementLabelRequested(row); });
+        connect(button(QString::fromUtf8("×"), tr("Hide %1").arg(title)), &QToolButton::clicked,
+            this, [this, row] { emit arrangementRowHidden(row); });
+        layout->addWidget(band);
+    }
+    m_arrangementHeaders->setFixedHeight(rows.size() * ui::kArrangementRowHeight);
+    this->layout()->activate();
+    layoutRows();
 }

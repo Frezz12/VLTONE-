@@ -420,7 +420,8 @@ void serializerV7AndLegacyMigration(const fs::path& dir) {
     check(savedInsert["stateAsset"].value("assetId", "") == "asset-state" &&
               !savedInsert["stateAsset"].contains("audioMetadata"),
           "v8 writes content-addressed plugin state");
-    check(saved["tracks"][0]["clips"][0]["asset"]["audioMetadata"]
+    const auto savedContentId = saved["tracks"][0]["clips"][0].at("contentId").get<std::string>();
+    check(saved.at("clipContents").at(savedContentId)["asset"]["audioMetadata"]
                   .value("sampleRate", 0.0) == 48000.0 &&
               savedInsert["assetBindings"][0].value("key", "") == "sample",
           "v8 nests audio metadata and writes plugin binding keys");

@@ -1024,11 +1024,259 @@ paths:
       parameters:
         - { name: promptId, in: path, required: true, schema: { type: string } }
       responses: { "200": { description: The last 50 revisions } }
+  /v1/admin/team:
+    get:
+      operationId: "adminTeam"
+      summary: "Owner only: list administrators and grantable permissions"
+      security: [{"adminCookie": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  members:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/AdminIdentity"
+                  permissions:
+                    type: "array"
+                    items:
+                      type: "string"
+                required: ["members", "permissions"]
+        "403":
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: "adminSaveMember"
+      summary: "Owner only: grant or revoke access for an existing website account; revokes its admin sessions"
+      security: [{"adminCookie": [], "csrf": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  id:
+                    type: "string"
+                    format: "uuid"
+                required: ["id"]
+        "403":
+          $ref: "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminMemberInput"
+  /v1/admin/tasks:
+    get:
+      operationId: "adminTasks"
+      summary: "Requires tasks.read; returns up to 100 tasks, newest first; excludes archived unless status is supplied"
+      security: [{"adminCookie": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  tasks:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/AdminTask"
+                  next_cursor:
+                    type: "integer"
+                    description: "Pass as before; 0 means end"
+                required: ["tasks", "next_cursor"]
+        "403":
+          $ref: "#/components/responses/Error"
+      parameters: [{"name": "q", "in": "query", "schema": {"type": "string"}}, {"name": "assignee", "in": "query", "schema": {"type": "string"}}, {"name": "status", "in": "query", "schema": {"type": "string"}}, {"name": "before", "in": "query", "schema": {"type": "string"}}]
+    post:
+      operationId: "adminCreateTask"
+      summary: "Requires tasks.write; author is the authenticated administrator"
+      security: [{"adminCookie": [], "csrf": []}]
+      responses:
+        "201":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTask"
+        "403":
+          $ref: "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminTaskInput"
+  /v1/admin/tasks/members:
+    get:
+      operationId: "adminTaskMembers"
+      summary: "Requires tasks.read; names and assignment eligibility only"
+      security: [{"adminCookie": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  members:
+                    type: "array"
+                    items:
+                      type: "object"
+                      properties:
+                        id:
+                          type: "string"
+                          format: "uuid"
+                        nickname:
+                          type: "string"
+                        active:
+                          type: "boolean"
+                      required: ["id", "nickname", "active"]
+                required: ["members"]
+        "403":
+          $ref: "#/components/responses/Error"
+  /v1/admin/tasks/{taskID}:
+    get:
+      operationId: "adminTaskDetail"
+      summary: "Requires tasks.read"
+      security: [{"adminCookie": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  task:
+                    $ref: "#/components/schemas/AdminTask"
+                  comments:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/AdminTaskComment"
+                  attachments:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/AdminTaskAttachment"
+                required: ["task", "comments", "attachments"]
+        "403":
+          $ref: "#/components/responses/Error"
+      parameters: [{"name": "taskID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+    put:
+      operationId: "adminUpdateTask"
+      summary: "Requires tasks.write; version must match; archive with status=archived"
+      security: [{"adminCookie": [], "csrf": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTask"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminTaskInput"
+      parameters: [{"name": "taskID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+  /v1/admin/tasks/{taskID}/comments:
+    post:
+      operationId: "adminTaskComment"
+      summary: "Requires tasks.write"
+      security: [{"adminCookie": [], "csrf": []}]
+      responses:
+        "201":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTaskComment"
+        "403":
+          $ref: "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: "object"
+              properties:
+                body:
+                  type: "string"
+                  minLength: 1
+                  maxLength: 10000
+              required: ["body"]
+      parameters: [{"name": "taskID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+  /v1/admin/tasks/{taskID}/attachments:
+    post:
+      operationId: "adminTaskUpload"
+      summary: "Requires tasks.write; maximum 10 MiB per file, 20 files per task"
+      security: [{"adminCookie": [], "csrf": []}]
+      responses:
+        "201":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTaskAttachment"
+        "403":
+          $ref: "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: "object"
+              properties:
+                file:
+                  type: "string"
+                  format: "binary"
+              required: ["file"]
+      parameters: [{"name": "taskID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+  /v1/admin/tasks/{taskID}/attachments/{attachmentID}:
+    get:
+      operationId: "adminTaskDownload"
+      summary: "Requires tasks.read; private download with attachment disposition"
+      security: [{"adminCookie": []}]
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/octet-stream:
+              schema:
+                type: "string"
+                format: "binary"
+        "403":
+          $ref: "#/components/responses/Error"
+      parameters: [{"name": "taskID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"name": "attachmentID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
+    delete:
+      operationId: "adminTaskDeleteAttachment"
+      summary: "Requires tasks.write"
+      security: [{"adminCookie": [], "csrf": []}]
+      responses:
+        "204":
+          description: "Success"
+        "403":
+          $ref: "#/components/responses/Error"
+      parameters: [{"name": "taskID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"name": "attachmentID", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]
   /v1/admin/auth/login:
     post:
       operationId: adminLogin
       requestBody: { $ref: "#/components/requestBodies/Login" }
-      responses: { "200": { description: Admin session }, "401": { $ref: "#/components/responses/Error" } }
+      responses: { "200": { description: Admin session, content: { application/json: { schema: { $ref: "#/components/schemas/AdminSessionView" } } } }, "401": { $ref: "#/components/responses/Error" } }
   /v1/admin/auth/logout:
     post:
       operationId: adminLogout
@@ -1038,7 +1286,7 @@ paths:
     get:
       operationId: adminGetMe
       security: [{ adminCookie: [] }]
-      responses: { "200": { description: Current administrator and CSRF token }, "401": { $ref: "#/components/responses/Error" } }
+      responses: { "200": { description: Current administrator and CSRF token, content: { application/json: { schema: { $ref: "#/components/schemas/AdminSessionView" } } } }, "401": { $ref: "#/components/responses/Error" } }
   /v1/admin/dashboard:
     get:
       operationId: adminDashboard
@@ -1374,6 +1622,155 @@ components:
       description: Rotating desktop credentials and offline entitlement
       content: { application/json: { schema: { $ref: "#/components/schemas/DesktopSession" } } }
   schemas:
+    AdminIdentity:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        user_id:
+          type: ["string", "null"]
+          format: "uuid"
+        email:
+          type: "string"
+        nickname:
+          type: "string"
+        is_owner:
+          type: "boolean"
+        permissions:
+          type: "array"
+          items:
+            type: "string"
+            enum: ["dashboard.read", "users.read", "users.write", "bugs.read", "bugs.write", "crashes.read", "releases.read", "releases.write", "backgrounds.read", "backgrounds.write", "models.read", "models.write", "prompts.read", "prompts.write", "audit.read", "tasks.read", "tasks.write"]
+        status:
+          enum: ["active", "suspended"]
+      required: ["id", "email", "nickname", "is_owner", "permissions", "status"]
+    AdminSessionView:
+      type: "object"
+      properties:
+        admin:
+          $ref: "#/components/schemas/AdminIdentity"
+        csrf_token:
+          type: "string"
+        expires_at:
+          type: "string"
+          format: "date-time"
+      required: ["admin", "csrf_token", "expires_at"]
+    AdminMemberInput:
+      type: "object"
+      properties:
+        email:
+          type: "string"
+          format: "email"
+        permissions:
+          type: "array"
+          items:
+            type: "string"
+            enum: ["dashboard.read", "users.read", "users.write", "bugs.read", "bugs.write", "crashes.read", "releases.read", "releases.write", "backgrounds.read", "backgrounds.write", "models.read", "models.write", "prompts.read", "prompts.write", "audit.read", "tasks.read", "tasks.write"]
+        enabled:
+          type: "boolean"
+      required: ["email", "permissions", "enabled"]
+    AdminTaskInput:
+      type: "object"
+      properties:
+        title:
+          type: "string"
+          minLength: 1
+          maxLength: 200
+        description:
+          type: "string"
+          maxLength: 20000
+        status:
+          type: "string"
+          enum: ["idea", "planned", "in_progress", "review", "done", "archived"]
+        priority:
+          type: "string"
+          enum: ["low", "normal", "high", "urgent"]
+        assignee_id:
+          type: ["string", "null"]
+          format: "uuid"
+        due_date:
+          type: "string"
+          description: "YYYY-MM-DD or empty string to clear"
+        version:
+          type: "integer"
+          description: "Required current version for PUT; conflict returns 409"
+      required: ["title", "description", "status", "priority", "assignee_id", "due_date"]
+    AdminTask:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        number:
+          type: "integer"
+        title:
+          type: "string"
+        description:
+          type: "string"
+        status:
+          type: "string"
+          enum: ["idea", "planned", "in_progress", "review", "done", "archived"]
+        priority:
+          type: "string"
+          enum: ["low", "normal", "high", "urgent"]
+        author_id:
+          type: "string"
+          format: "uuid"
+        assignee_id:
+          type: ["string", "null"]
+          format: "uuid"
+        due_date:
+          type: ["string", "null"]
+          format: "date-time"
+        version:
+          type: "integer"
+        created_at:
+          type: "string"
+          format: "date-time"
+        updated_at:
+          type: "string"
+          format: "date-time"
+      required: ["id", "number", "title", "description", "status", "priority", "author_id", "assignee_id", "due_date", "version", "created_at", "updated_at"]
+    AdminTaskComment:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        task_id:
+          type: "string"
+          format: "uuid"
+        author_id:
+          type: "string"
+          format: "uuid"
+        body:
+          type: "string"
+        created_at:
+          type: "string"
+          format: "date-time"
+      required: ["id", "task_id", "author_id", "body", "created_at"]
+    AdminTaskAttachment:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        task_id:
+          type: "string"
+          format: "uuid"
+        author_id:
+          type: "string"
+          format: "uuid"
+        name:
+          type: "string"
+        size:
+          type: "integer"
+          maximum: 10485760
+        created_at:
+          type: "string"
+          format: "date-time"
+      required: ["id", "task_id", "author_id", "name", "size", "created_at"]
     BrowserBackgroundList:
       type: object
       required: [backgrounds]

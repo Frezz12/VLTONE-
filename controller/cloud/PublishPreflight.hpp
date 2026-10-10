@@ -13,6 +13,7 @@ enum class PublishIssueKind {
     MissingEntityId,
     InvalidAssetIdentity,
     LocalWarp,
+    ClipContentFormat,
 };
 
 struct PublishIssue {
@@ -45,4 +46,3 @@ bool isSupportedBuiltinV1(const InsertModel& insert) noexcept;
 const char* publishIssueKindName(PublishIssueKind kind) noexcept;
 
 } // namespace daw::cloud
-

@@ -1,4 +1,5 @@
 #include "AudioRuntime.hpp"
+#include "Host/HostedPluginFactory.hpp"
 #include "Host/ParameterDiagnostics.hpp"
 #include "Internal/ChannelColorInstance.hpp"
 #include "Internal/MiniModuleInstance.hpp"
@@ -32,15 +33,16 @@ struct AudioRuntime::StagedPluginPreparation {
     std::vector<std::shared_ptr<plugins::PluginNode>> retained;
     ~StagedPluginPreparation() {
         if (owner && owner->stagedPluginPreparation == this) owner->stagedPluginPreparation = nullptr;
+        if (owner) owner->prunePluginSnapshots();
     }
 };
 
 std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessionPlugins(
     const AudioSessionSpec& session, std::span<const AudioPluginStateEdit> restores,
-    std::span<const AudioPluginCheckpoint> checkpoints, AudioSessionPublication* publication,
-    const std::function<void()>& preparationProgress) {
+    std::span<const AudioPluginCheckpoint> checkpoints, AudioSessionPublication* publication) {
     if (stagedPluginPreparation) throw std::runtime_error("Nested plugin preparation is not supported.");
     auto staged = std::make_shared<StagedPluginPreparation>();
+    staged->owner = this;
     staged->graph = engine.sessionGraph();
     staged->prepare = engine.prepareInfo();
     std::unordered_map<std::string, const AudioGraphSpec::Channel*> descriptions;
@@ -116,7 +118,6 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                 [&](const auto& id) { return descriptions.contains(id); });
         return false;
     };
-    if (preparationProgress) preparationProgress();
     for (const auto& chain : session.pluginChains) {
         for (const auto& spec : chain.slots) {
             const auto* existing = existingSlot(chain, spec);
@@ -147,11 +148,10 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                     }
                 }
                 if (!node) {
-                    auto instance = createConfiguredPlugin(spec, session.hosting);
+                    auto instance = createConfiguredPlugin(spec);
                     if (!instance) throw std::runtime_error("Could not load plugin: " + spec.name);
                     node = std::make_shared<plugins::PluginNode>(spec.name + (right ? " Right" : ""), std::move(instance));
                 }
-                if (preparationProgress) preparationProgress();
                 // Pin before native state/activation: even a rejected import
                 // tears its candidate down outside the render gate.
                 staged->retained.push_back(node);
@@ -175,7 +175,6 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                     node->invalidatePrepare();
                 } else applyStoredParameters(*node,
                     right && !spec.rightParameters.empty() ? spec.rightParameters : spec.parameters);
-                if (preparationProgress) preparationProgress();
                 if (const auto saved = staged->checkpoints.find(key); saved != staged->checkpoints.end()) {
                     const auto imported = staged->imports.find(key);
                     try { restoreCheckpointNode(*node, saved->second,
@@ -183,7 +182,6 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                     catch (const std::exception& error) { throw StateImportFailure(error.what()); }
                     node->invalidatePrepare();
                 }
-                if (preparationProgress) preparationProgress();
                 node->setSidechainConnected(sidechain(chain, spec));
                 if (!node->isPreparedFor(staged->prepare)) {
                     node->prepare(staged->prepare);
@@ -191,6 +189,24 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                     node->markPrepared(staged->prepare);
                 }
                 if (!node->isReady()) throw std::runtime_error("Prepared plugin is unavailable: " + spec.name);
+                // Retain accepted project bytes without a second vendor save.
+                // Sampler/Slicer need their native absolute-path checkpoint.
+                auto recovery = snapshotPluginNode(*node,
+                    {chain.channelId, spec.id, right, node->instanceId()}, false);
+                const auto importedState = staged->imports.find(key);
+                const auto checkpoint = staged->checkpoints.find(key);
+                if (recovery.supportsState && importedState != staged->imports.end() && !recovery.ownsSample) {
+                    recovery.state = importedState->second.state.state;
+                    recovery.stateCaptured = !recovery.state.empty();
+                } else if (recovery.supportsState && checkpoint != staged->checkpoints.end() &&
+                           !checkpoint->second.projectState) {
+                    recovery.state = checkpoint->second.state;
+                    recovery.stateCaptured = checkpoint->second.hasState;
+                } else if (recovery.supportsState) {
+                    try { recovery = snapshotPluginNode(*node, recovery.address, true); }
+                    catch (const std::exception&) { recovery.stateCaptured = false; }
+                }
+                retainPluginSnapshot(recovery);
                 } catch (const StateImportFailure&) { throw;
                 } catch (const std::exception& error) {
                     if (spec.loadPolicy == AudioPluginLoadPolicy::Required) throw;
@@ -209,26 +225,19 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                     staged->retained.push_back(node);
                 if (!staged->nodes.emplace(key, std::move(node)).second)
                     throw std::runtime_error("Duplicate prepared plugin address: " + spec.id);
-                if (preparationProgress) preparationProgress();
             }
         }
     }
     if (publication) {
-        publication->plugins.reserve(targets.size());
         publication->imported.reserve(staged->imports.size());
-        for (const auto& [key, target] : targets) {
+        for (const auto& [key, imported] : staged->imports) {
             const auto& [channel, slot, right] = key;
-            const auto& [spec, existing] = target;
+            const auto& [spec, existing] = targets.at(key);
             const auto prepared = staged->nodes.find(key);
             const auto node = prepared != staged->nodes.end() ? prepared->second
                 : existing ? (right ? existing->rightNode : existing->node) : nullptr;
             AudioPluginAddress address{channel, slot, right};
-            if (node && node->instance()) {
-                address.instance = node->instanceId();
-                publication->plugins.push_back(address);
-            }
-            const auto imported = staged->imports.find(key);
-            if (imported == staged->imports.end()) continue;
+            if (node && node->instance()) address.instance = node->instanceId();
             // Every imported side is unpublished. Native metadata/state access
             // finishes here, before the render gate or topology commit.
             AudioPluginStateSnapshot snapshot;
@@ -236,11 +245,10 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
             else {
                 snapshot.address = address;
                 snapshot.descriptor = spec->descriptor;
-                snapshot.parameters = imported->second.parameters;
+                snapshot.parameters = imported.parameters;
             }
             snapshot.sample.reset();
             publication->imported.push_back(std::move(snapshot));
-            if (preparationProgress) preparationProgress();
         }
     }
     staged->owner = this;
@@ -254,9 +262,9 @@ bool AudioRuntime::stagedSessionPluginsCurrent(const std::shared_ptr<StagedPlugi
 }
 
 std::unique_ptr<plugins::PluginInstance> AudioRuntime::createConfiguredPlugin(
-    const AudioPluginSpec& spec, const plugins::HostingConfiguration& hosting) {
+    const AudioPluginSpec& spec) {
     std::string error;
-    auto instance = plugins::createHostedPlugin(spec.descriptor, hosting, &error);
+    auto instance = plugins::createHostedPlugin(spec.descriptor, &error);
     if (!instance && !error.empty()) throw std::runtime_error("Could not load plugin " + spec.name + ": " + error);
     if (!instance) return {};
     const auto& descriptor = instance->descriptor();
@@ -280,7 +288,7 @@ bool AudioRuntime::pluginMatches(const InsertSlot& live, const AudioPluginSpec& 
             live.configuration.requireExactVersion == wanted.requireExactVersion &&
             live.configuration.requiredVersion == wanted.requiredVersion &&
             live.configuration.requiredParameterFingerprint == wanted.requiredParameterFingerprint;
-    const auto& descriptor = live.node->instance()->descriptor();
+    const auto& descriptor = live.node->descriptor();
     if (wanted.requiredFormat != plugins::Format::Unknown && descriptor.format != wanted.requiredFormat) return false;
     return !wanted.requireExactVersion ||
         (descriptor.version == wanted.requiredVersion &&
@@ -294,6 +302,7 @@ bool AudioRuntime::needsPluginReplacement(const InsertSlot* existing, const Audi
     if (spec.loadPolicy == AudioPluginLoadPolicy::PlaceholderOnly) return node->instance() != nullptr;
     if (!node->instance()) return spec.loadPolicy == AudioPluginLoadPolicy::Required ||
         existing->configuration.loadPolicy == AudioPluginLoadPolicy::PlaceholderOnly;
+    if (node->faultBypassed()) return false;
     if (const auto* mini = dynamic_cast<const plugins::mini::MiniModuleInstance*>(node->instance()))
         return !spec.miniModule || !plugins::mini::sameAudioGraph(
             mini->definition(), mini->mode(), *spec.miniModule, spec.miniModuleMode) ||
@@ -356,7 +365,7 @@ std::vector<AudioPluginAddress> AudioRuntime::retiringPlugins(std::span<const Au
 bool AudioRuntime::applyStoredParameters(plugins::PluginNode& node,
     std::span<const InsertParameter> values) {
     auto* instance = node.instance();
-    if (!instance) return false;
+    if (!instance || node.faultBypassed()) return false;
     for (const auto& parameter : values) {
         const auto index = instance->parameterIndexForId(parameter.id);
         if (index < 0) continue;
@@ -371,8 +380,7 @@ bool AudioRuntime::applyStoredParameters(plugins::PluginNode& node,
     return !values.empty();
 }
 
-bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain,
-    const plugins::HostingConfiguration& hosting) {
+bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain) {
     auto& channel = channels[chain.channelId];
     // Only Clip FX needs a second map entry before the common lookup can run.
     if (chain.kind == AudioPluginChainSpec::Kind::ClipFx) channel.clipFx.try_emplace(chain.clipId);
@@ -448,7 +456,7 @@ bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain,
         if (!loaded.node) {
             if (stagedPluginPreparation) throw std::runtime_error("Prepared plugin is missing: " + slot.id);
             auto instance = slot.loadPolicy == AudioPluginLoadPolicy::PlaceholderOnly
-                ? nullptr : createConfiguredPlugin(slot, hosting);
+                ? nullptr : createConfiguredPlugin(slot);
             if (!instance && slot.loadPolicy == AudioPluginLoadPolicy::Required) continue;
             loaded.slotId = slot.id;
             loaded.uid = slot.uid;
@@ -459,9 +467,8 @@ bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain,
         const bool unblocked = loaded.configuration.loadPolicy == AudioPluginLoadPolicy::PlaceholderOnly &&
             slot.loadPolicy != AudioPluginLoadPolicy::PlaceholderOnly;
         loaded.configuration = slot;
-        loaded.hosting = hosting;
         loaded.channelMode = slot.channelMode;
-        if (auto* mini = dynamic_cast<plugins::mini::MiniModuleInstance*>(loaded.node->instance())) {
+        if (auto* mini = loaded.node->faultBypassed() ? nullptr : dynamic_cast<plugins::mini::MiniModuleInstance*>(loaded.node->instance())) {
             if (!slot.miniModule) continue;
             if (mini->definition() != *slot.miniModule || mini->mode() != slot.miniModuleMode) {
                 if (mini->definition() == *slot.miniModule) {
@@ -490,7 +497,7 @@ bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain,
             }
             if (!preparedLeft) restore(*loaded.node, slot.parameters);
         }
-        if (auto* color = dynamic_cast<plugins::channel_color::ChannelColorInstance*>(loaded.node->instance())) {
+        if (auto* color = loaded.node->faultBypassed() ? nullptr : dynamic_cast<plugins::channel_color::ChannelColorInstance*>(loaded.node->instance())) {
             color->setProfileSeed(slot.profileSeed);
             if (!preparedLeft) restore(*loaded.node, slot.parameters);
         }
@@ -509,7 +516,7 @@ bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain,
             if (!loaded.rightNode) {
                 if (stagedPluginPreparation) throw std::runtime_error("Prepared right plugin is missing: " + slot.id);
                 auto right = slot.loadPolicy == AudioPluginLoadPolicy::PlaceholderOnly
-                    ? nullptr : createConfiguredPlugin(slot, hosting);
+                    ? nullptr : createConfiguredPlugin(slot);
                 if (right || slot.loadPolicy != AudioPluginLoadPolicy::Required) {
                     loaded.rightNode = std::make_shared<plugins::PluginNode>(slot.name + " Right", std::move(right));
                     if (loaded.rightNode->instance())
@@ -527,6 +534,7 @@ bool AudioRuntime::reconcilePluginChain(const AudioPluginChainSpec& chain,
         }
         retainUnavailable(loaded, false);
         retainUnavailable(loaded, true);
+        bindPluginSafety(chain.channelId, loaded);
         rebuilt.push_back(std::move(loaded));
     }
     // The controller consumed retiringPlugins before this operation.

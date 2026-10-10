@@ -46,7 +46,6 @@ struct AudioContentSpec {
 /// Resolved plugin slots, topology and prepared playback. This local resource
 /// description is not an IPC wire format.
 struct AudioSessionSpec {
-    plugins::HostingConfiguration hosting;
     std::vector<AudioPluginChainSpec> pluginChains;
     AudioGraphSpec graph;
     struct Channel {

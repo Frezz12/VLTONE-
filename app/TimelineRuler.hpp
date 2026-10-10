@@ -2,7 +2,8 @@
 
 namespace ui {
 
-// Stored as a bit mask so the two ruler rows can be enabled independently.
+// Keep legacy settings compatible. Timeline normalizes Time to BarsAndTime:
+// bars are fixed in the header, while time is an optional arrangement row.
 enum class RulerFormat { Bars = 1, Time = 2, BarsAndTime = 3 };
 
 constexpr RulerFormat rulerFormatFromInt(int value) {

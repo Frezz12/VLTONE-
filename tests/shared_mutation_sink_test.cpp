@@ -10,6 +10,7 @@
 #include "Recording/RecordingEngine.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
+#include "Internal/SamplerInstance.hpp"
 #include "Internal/GravityInstance.hpp"
 #include "collaboration/ProjectReducer.hpp"
 #include "recovery/CloudRecordingRecovery.hpp"
@@ -211,7 +212,7 @@ void verifySharedAssetMutationGate() {
     check(!tone.empty(), "shared asset fixture writes a WAV");
     if (tone.empty()) return;
 
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "shared asset fixture initializes");
     const std::string trackId =
@@ -343,7 +344,7 @@ void verifySharedAssetMutationGate() {
 }
 
 void verifyGenericMutationRoutes(daw::collab::SharedMutationResult result) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "generic command fixture initializes");
     const std::string track =
@@ -378,7 +379,7 @@ void verifyGenericMutationRoutes(daw::collab::SharedMutationResult result) {
 }
 
 void verifyTakeMoveRoutes(daw::collab::SharedMutationResult result) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "take move fixture initializes");
     daw::ProjectModel project;
@@ -442,7 +443,7 @@ bool allBatches(const FakeSharedMutationSink& sink, int firstCall) {
 }
 
 void verifyGroupMoveBatch(daw::collab::SharedMutationResult result) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     controller.initialize(48000.0, 512, false);
     const auto a = controller.addTrack(daw::TrackKind::Audio, "A");
     const auto b = controller.addTrack(daw::TrackKind::Audio, "B");
@@ -482,7 +483,7 @@ void verifyGroupMoveBatch(daw::collab::SharedMutationResult result) {
 void verifyFolderDuplicateBatch(daw::collab::SharedMutationResult result) {
     const bool submitted =
         result == daw::collab::SharedMutationResult::Submitted;
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "shared folder-duplicate fixture initializes");
     const std::string folder = controller.addFolder(true, "Group");
@@ -550,7 +551,7 @@ void verifyVerifiedAssetActions() {
     };
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         FakeSharedMutationSink commands;
         FakeSharedAssetMutationSink assets;
@@ -574,7 +575,7 @@ void verifyVerifiedAssetActions() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Audio, "Comp drift");
@@ -624,7 +625,7 @@ void verifyVerifiedAssetActions() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string track = controller.addTrack(
             daw::TrackKind::Instrument, "Instrument");
@@ -647,7 +648,7 @@ void verifyVerifiedAssetActions() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string track = controller.addTrack(
             daw::TrackKind::Instrument, "Sampler");
@@ -678,7 +679,7 @@ void verifyVerifiedAssetActions() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string pattern = controller.addPattern("Pattern");
         const std::size_t tracksBefore = controller.project().tracks.size();
@@ -699,7 +700,7 @@ void verifyVerifiedAssetActions() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Audio, "Takes");
@@ -730,7 +731,7 @@ void verifyVerifiedAssetActions() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Audio, "Flatten");
@@ -778,7 +779,7 @@ void verifyVerifiedAssetActions() {
 
 void verifySamplerBatchMutators(daw::collab::SharedMutationResult result) {
     const bool submitted = result == daw::collab::SharedMutationResult::Submitted;
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "shared Sampler fixture initializes");
     const auto sampler = controller.pluginManager().find(
@@ -845,7 +846,7 @@ void verifySamplerBatchMutators(daw::collab::SharedMutationResult result) {
 
 void verifyProjectAndHistoryGates(
     daw::collab::SharedMutationResult result) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "project/history gate fixture initializes");
     controller.setProjectName("Before");
@@ -915,7 +916,7 @@ void verifyNonAssetExitGates(
     project.tracks.push_back(std::move(audio));
     project.tracks.push_back(std::move(midi));
 
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk() &&
               controller.materializeCollaborationProject(std::move(project),
                                                          true)
@@ -1062,7 +1063,7 @@ void verifyCompExitGates(daw::collab::SharedMutationResult result) {
     track.clips.push_back(std::move(clip));
     project.tracks.push_back(std::move(track));
 
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk() &&
               controller.materializeCollaborationProject(std::move(project),
                                                          true)
@@ -1114,7 +1115,7 @@ void verifyTemplateBatch(daw::collab::SharedMutationResult result) {
     const bool submitted = result == daw::collab::SharedMutationResult::Submitted;
     const auto package = std::filesystem::temp_directory_path() /
                          ("vlt-shared-template-" + daw::newUuid() + ".vltt");
-    daw::EngineController source{daw::EngineController::TestRuntime{}};
+    daw::EngineController source{};
     source.initialize(48000.0, 512, false);
     const std::string folder = source.addFolder(false, "Folder");
     const std::string child =
@@ -1123,7 +1124,7 @@ void verifyTemplateBatch(daw::collab::SharedMutationResult result) {
     check(source.saveProjectTemplate(package.string(), "Template").isOk(),
           "shared template fixture saves");
 
-    daw::EngineController destination{daw::EngineController::TestRuntime{}};
+    daw::EngineController destination{};
     destination.initialize(48000.0, 512, false);
     destination.addTrack(daw::TrackKind::Audio, "Existing");
     const std::size_t tracksBefore = destination.project().tracks.size();
@@ -1151,7 +1152,7 @@ void verifyTemplateBatch(daw::collab::SharedMutationResult result) {
 
 void verifyScratchBatchMutators(daw::collab::SharedMutationResult result) {
     const bool submitted = result == daw::collab::SharedMutationResult::Submitted;
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "scratch batch fixture initializes");
     const std::string source =
@@ -1283,6 +1284,77 @@ daw::InsertModel sharedEqualizer() {
     return insert;
 }
 
+void verifySharedRackOperations() {
+    daw::EngineController controller;
+    check(bool(controller.initialize(48000, 256, false)), "shared rack fixture initializes");
+    const auto a = controller.addTrack(daw::TrackKind::Instrument, "Rack source");
+    const auto b = controller.addTrack(daw::TrackKind::Instrument, "Rack destination");
+    const auto& eq = daw::plugins::equalizer::EqualizerInstance::staticDescriptor();
+    const auto first = controller.addInsert(a, eq), second = controller.addInsert(a, eq);
+    controller.setTrackInstrumentPlugin(a, daw::plugins::sampler::SamplerInstance::staticDescriptor());
+    const auto instrument = controller.project().findTrack(a)->instrument.id;
+    controller.addSamplerFxInsert(a, instrument, eq);
+    controller.setSamplerFxVolume(a, instrument, .7f);
+    controller.setSamplerFxPan(a, instrument, -.2f);
+    daw::AutomationTarget target;
+    target.kind = daw::AutomationTargetKind::PluginParameter;
+    target.channelId = a; target.slotId = first; target.parameterId = "output.gain";
+    const auto lane = controller.addAutomationLane(a, target);
+    controller.addAutomationClip(lane, target, 0, 1);
+    const auto depth = controller.undoDepth();
+    FakeSharedMutationSink commands;
+    FakeSharedAssetMutationSink assets;
+    controller.attachSharedMutationSink(commands);
+    controller.attachSharedAssetMutationSink(assets);
+    check(!controller.createRackGroup(a, {first, second}, "Local only"),
+          "cloud rack cannot create local groups");
+    std::size_t completed = 0;
+    const auto applyLatest = [&] {
+        while (completed < assets.requests.size()) {
+            const auto request = assets.requests[completed++];
+            controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request));
+            controller.discardSharedResultRecovery(request.sourcePath + ".vlt-pending.json");
+        }
+        daw::collab::SharedProjectDocument scratch;
+        scratch.project = controller.project();
+        if (commands.genericBodies.empty()) return scratch;
+        daw::collab::ProjectCommand command;
+        command.meta.operationId = daw::newUuid();
+        command.body = commands.genericBodies.back();
+        check(daw::collab::ProjectReducer::apply(scratch, command).accepted(),
+              "rack batch uses the existing shared reducer");
+        return scratch;
+    };
+    check(bool(controller.transferRackSelection(a, {first}, a, 2, false)),
+          "shared rack reorders through one command batch");
+    auto ordered = applyLatest();
+    check(ordered.project.findTrack(a)->inserts.back().id == first,
+          "shared rack reorder preserves device identity");
+    std::vector<std::string> moved;
+    check(bool(controller.transferRackSelection(a, {first, second}, b, 0, false, {}, &moved)),
+          "shared rack queues a complete multi-device transfer");
+    auto transferred = applyLatest();
+    check(transferred.project.findTrack(a)->inserts.empty() &&
+              transferred.project.findTrack(b)->inserts.size() == 2 && moved.size() == 2 &&
+              transferred.project.findTrack(lane)->clips.front().automation.target.channelId == b &&
+              transferred.project.findTrack(lane)->clips.front().automation.target.slotId == moved.front(),
+          "shared rack transfer retargets automation in the same batch");
+    check(bool(controller.transferRackSelection(a, {instrument}, b, 0, true)),
+          "shared rack copies an instrument and its private chain");
+    auto copied = applyLatest();
+    const auto* destination = copied.project.findTrack(b);
+    check(destination->instrument.uid == "daw.sampler" && destination->samplerFx.inserts.size() == 1 &&
+              std::abs(destination->samplerFx.volume - .7f) < 1e-6f &&
+              std::abs(destination->samplerFx.pan + .2f) < 1e-6f,
+          "shared instrument copy keeps private FX and strip levels");
+    check(commands.genericCalls == 3 && allBatches(commands, 0) && controller.undoDepth() == depth &&
+              controller.project().findTrack(a)->inserts.size() == 2 &&
+              controller.project().findTrack(b)->inserts.empty(),
+          "rack cloud actions do not mutate the local document before acceptance");
+    controller.detachSharedAssetMutationSink(assets);
+    controller.detachSharedMutationSink(commands);
+}
+
 void verifySharedChannelBatchMutators(
     daw::collab::SharedMutationResult result) {
     const bool submitted = result == daw::collab::SharedMutationResult::Submitted;
@@ -1311,7 +1383,7 @@ void verifySharedChannelBatchMutators(
     project.tracks.push_back(std::move(target));
     project.tracks.push_back(std::move(bus));
 
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk() &&
               controller.materializeCollaborationProject(std::move(project), true)
                   .isOk(),
@@ -1388,7 +1460,7 @@ void verifySharedChannelBatchMutators(
 }
 
 void verifyFreezeAndDiagnosticsStayLocal() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!check(bool(controller.initialize(48000, 256, false)),
                "freeze boundary controller initializes")) return;
     const auto track = controller.addTrack(daw::TrackKind::Midi, "Freeze boundary");
@@ -1496,7 +1568,7 @@ void verifyCapabilityLedger() {
 void verifyConsumedMutation(daw::collab::SharedMutationResult result) {
     const bool submitted =
         result == daw::collab::SharedMutationResult::Submitted;
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           submitted ? "submitted fixture initializes"
                     : "blocked fixture initializes");
@@ -1575,7 +1647,7 @@ void verifyConsumedMutation(daw::collab::SharedMutationResult result) {
 }
 
 void verifyAtomicMuteGesture(daw::collab::SharedMutationResult result) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "atomic-mute fixture initializes");
     const std::string folder = controller.addFolder(false, "Folder");
@@ -1621,7 +1693,7 @@ void verifyTrackCreationParity() {
         // path disagree with the cloud path, where AddTrack cannot carry it —
         // and the reducer refuses SetTrackProperty::Summing for non-folders,
         // so "just send the command" would fail the whole batch.
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000.0, 512, false).isOk(),
               "pattern parity fixture initializes");
         const std::string pattern = controller.addPattern("Pattern");
@@ -1631,7 +1703,7 @@ void verifyTrackCreationParity() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000.0, 512, false).isOk(),
               "shared pattern fixture initializes");
         FakeSharedMutationSink sink;
@@ -1651,7 +1723,7 @@ void verifyTrackCreationParity() {
     {
         // isFolder() also admits a Pattern, so setFolderSumming used to reach
         // one and submit a command the reducer rejects.
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000.0, 512, false).isOk(),
               "pattern summing gate fixture initializes");
         const std::string pattern = controller.addPattern("Pattern");
@@ -1669,7 +1741,7 @@ void verifyTrackCreationParity() {
         // automationExpanded is LocalOnly, so no command carries it and each
         // participant has to set it for themselves. The cloud branch used to
         // return before doing so, hiding the new lane under a collapsed parent.
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000.0, 512, false).isOk(),
               "automation lane fixture initializes");
         const std::string track =
@@ -1691,7 +1763,7 @@ void verifyTrackCreationParity() {
 
     {
         // The same call must not expand anything when the session refused it.
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000.0, 512, false).isOk(),
               "blocked automation lane fixture initializes");
         const std::string track =
@@ -1783,7 +1855,7 @@ private:
 // the point is that the calls survive the document being swapped underneath
 // them, which ASan/UBSan turn into a hard failure.
 void verifyPointerSafetyAcrossSubmit() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "pointer safety fixture initializes");
 
@@ -1840,7 +1912,7 @@ void verifyPointerSafetyAcrossSubmit() {
 }
 
 void verifyLocalFallback() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(controller.initialize(48000.0, 512, false).isOk(),
           "fallback fixture initializes");
     const std::string first =
@@ -1927,7 +1999,7 @@ void verifyLocalFallback() {
 }
 
 void verifyPitchSettingsBatch(daw::collab::SharedMutationResult result) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(bool(controller.initialize(48000, 128, false)), "pitch sharing fixture initializes");
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Pitch");
     const auto& descriptor = daw::plugins::pitch::PitchCorrectorInstance::staticDescriptor();
@@ -1973,7 +2045,7 @@ void verifySharedMidiComp() {
         segment.startSeconds = double(i) / 2; segment.endSeconds = double(i + 1) / 2; clip.comp.push_back(segment);
     }
     track.clips.push_back(clip); project.tracks.push_back(track);
-    daw::EngineController controller{daw::EngineController::TestRuntime{}}; controller.initialize(48000, 128, false);
+    daw::EngineController controller{}; controller.initialize(48000, 128, false);
     controller.materializeCollaborationProject(project, true);
     FakeSharedMutationSink sink; controller.attachSharedMutationSink(sink);
     const auto flattened = controller.flattenComp(track.id, clip.id);
@@ -1990,9 +2062,121 @@ void verifySharedMidiComp() {
     controller.detachSharedMutationSink(sink);
 }
 
+void verifyLocalAudioReplacement() {
+    const auto original = writeSharedAssetTone();
+    const auto replacement = writeSharedAssetTone();
+    daw::EngineController controller{};
+    if (!check(bool(controller.initialize(48000, 128, false)), "local replacement fixture initializes")) return;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Kicks");
+    const auto first = controller.importAudio(original.string(), track, 1.25);
+    const auto second = controller.importAudio(original.string(), track, 2.75);
+    auto* source = const_cast<daw::ClipModel*>(controller.audioClip(track, first));
+    source->offsetSeconds = 0.002;
+    source->durationSeconds = 0.005;
+    source->gain = 0.5f;
+    source->pan = -0.2f;
+    source->color = 0xabcdef;
+    source->sampleEdit.stretchTime = 2.0;
+    source->musicalAnalysis.algorithmVersion = 1;
+    daw::TakeModel take;
+    take.id = daw::newUuid(); take.filePath = original.string(); take.lengthSeconds = 0.01;
+    source->takes.push_back(take);
+    source->comp.push_back({take.id, 0, 0.005, daw::newUuid()});
+    source->expanded = true;
+    source->offlineHistory.push_back({daw::newUuid(), {}, "Original", daw::captureClipAudioVersion(*source)});
+    source->offlineVersionId = source->offlineHistory.front().id;
+    const auto depth = controller.undoDepth();
+    const auto rebuilds = controller.graphRebuildCountForTest();
+    if (check(controller.replaceAudioClips(track, {first, second, first}, replacement.string()),
+              "local sample replacement accepts a selection including a layered clip")) {
+        const auto* changed = controller.audioClip(track, first);
+        check(changed->id == first && changed->startSeconds == 1.25 && changed->offsetSeconds == 0 &&
+                  std::abs(changed->durationSeconds - 0.02) < 1e-9 && changed->gain == 0.5f &&
+                  changed->pan == -0.2f && changed->color == 0xabcdef && changed->takes.empty() &&
+                  changed->comp.empty() && !changed->expanded && changed->offlineHistory.empty() &&
+                  changed->offlineVersionId.empty() && changed->musicalAnalysis.empty() &&
+                  controller.undoDepth() == depth + 1 && controller.graphRebuildCountForTest() == rebuilds,
+              "replacement resets source-dependent state while preserving identity, placement and mix");
+        check(controller.clipSampleData(track, first) != nullptr &&
+                  controller.audioClip(track, second)->filePath == replacement.string(),
+              "the new source is available for playback on all selected clips");
+        controller.undo();
+        const auto* restored = controller.audioClip(track, first);
+        check(restored->filePath == original.string() && restored->offsetSeconds == 0.002 &&
+                  restored->durationSeconds == 0.005 && restored->takes.size() == 1 &&
+                  restored->comp.size() == 1 && restored->expanded && restored->offlineHistory.size() == 1 &&
+                  controller.audioClip(track, second)->filePath == original.string(),
+              "one Undo restores both sources including the original comp and offline history");
+        controller.redo();
+        check(controller.audioClip(track, first)->filePath == replacement.string() &&
+                  controller.audioClip(track, second)->filePath == replacement.string(),
+              "one Redo reapplies the entire replacement");
+    }
+    std::filesystem::remove(original);
+    std::filesystem::remove(replacement);
+}
+
+void verifyAudioReplacementBatch() {
+    const auto tone = writeSharedAssetTone();
+    daw::EngineController controller{};
+    if (!check(bool(controller.initialize(48000, 128, false)), "replacement fixture initializes")) return;
+    const auto track = controller.addTrack(daw::TrackKind::Audio, "Kicks");
+    const auto first = controller.importAudio(tone.string(), track, 1.25);
+    const auto second = controller.importAudio(tone.string(), track, 2.75);
+    const auto original = controller.project();
+    const auto depth = controller.undoDepth();
+    FakeSharedMutationSink sink;
+    FakeSharedAssetMutationSink assets;
+    controller.attachSharedMutationSink(sink);
+    controller.attachSharedAssetMutationSink(assets);
+    if (check(controller.replaceAudioClips(track, {first, second, first}, tone.string()) &&
+              assets.requests.size() == 1 && sink.genericCalls == 0 && controller.undoDepth() == depth,
+              "shared replacement uploads once and leaves existing audio intact until verified")) {
+        const auto request = assets.requests.back();
+        check(controller.completeSharedAssetMutation(request.requestId, verifiedAsset(request)) ==
+                  daw::collab::SharedMutationResult::Submitted && sink.genericCalls == 1,
+              "shared replacement submits the selection as one command");
+        if (!sink.genericBodies.empty()) {
+            daw::collab::SharedProjectDocument scratch;
+            scratch.project = original;
+            for (auto& clip : scratch.project.findTrack(track)->clips) clip.filePath.clear();
+            daw::collab::ProjectCommand command;
+            command.meta.operationId = daw::newUuid();
+            command.body = sink.genericBodies.back();
+            const auto applied = daw::collab::ProjectReducer::apply(scratch, command);
+            const auto* changed = scratch.project.findTrack(track);
+            check(applied.accepted() && changed && changed->clips.size() == 2 &&
+                      changed->clips[0].asset.assetId == request.assetId &&
+                      changed->clips[1].asset.assetId == request.assetId &&
+                      changed->clips[0].startSeconds == 1.25 && changed->clips[1].startSeconds == 2.75,
+                  "replacement batch passes the reducer and preserves both placements");
+            if (applied.inverse) {
+                auto inverse = *applied.inverse;
+                inverse.meta.operationId = daw::newUuid();
+                check(daw::collab::ProjectReducer::apply(scratch, inverse).accepted() &&
+                          scratch.project.findTrack(track)->clips[0].asset.assetId.empty() &&
+                          scratch.project.findTrack(track)->clips[1].asset.assetId.empty(),
+                      "one shared inverse restores both previous audio sources");
+            }
+        }
+    }
+    assets.result = daw::collab::SharedMutationResult::Blocked;
+    const auto submitted = sink.genericCalls;
+    check(!controller.replaceAudioClips(track, {first, second}, tone.string()) &&
+              sink.genericCalls == submitted && controller.audioClip(track, first)->filePath == tone.string(),
+          "rejected replacement upload never clears existing clips");
+    controller.setSharedEditingAllowed(false);
+    const auto requests = assets.requests.size();
+    check(!controller.replaceAudioClips(track, {first}, tone.string()) && assets.requests.size() == requests,
+          "read-only sessions reject replacement before starting an upload");
+    controller.detachSharedMutationSink(sink);
+    controller.detachSharedAssetMutationSink(assets);
+    std::filesystem::remove(tone);
+}
+
 void verifyDerivedRenderAssets() {
     const auto tone = writeSharedAssetTone();
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!check(bool(controller.initialize(48000, 128, false)), "derived render fixture initializes")) return;
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Render");
     const auto clip = controller.importAudio(tone.string(), track, 0);
@@ -2051,7 +2235,7 @@ void verifyDerivedRenderAssets() {
 
 void verifySharedShelfAndRecordingSilence() {
     const auto tone = writeSharedAssetTone();
-    daw::EngineController controller{daw::EngineController::TestRuntime{}}; controller.initialize(48000, 128, false);
+    daw::EngineController controller{}; controller.initialize(48000, 128, false);
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Shelf");
     const auto clip = controller.importAudio(tone.string(), track, 0);
     std::string entry;
@@ -2091,7 +2275,7 @@ void verifySharedShelfAndRecordingSilence() {
     run.captures.push_back(capture);
     auto repeated = command;
     auto background = std::async(std::launch::async, [base, run, command]() mutable {
-        daw::EngineController worker{daw::EngineController::TestRuntime{}};
+        daw::EngineController worker{};
         const auto result = worker.prepareAutomaticRecordingSilence(base, run, command);
         return std::pair{bool(result), daw::collab::projectCommandToJson(command)};
     });
@@ -2109,7 +2293,7 @@ void verifySharedShelfAndRecordingSilence() {
 }
 
 void verifySessionControlsAndStateUpload() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(bool(controller.initialize(48000, 128, false)), "session state fixture initializes");
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Session");
     const auto insert = controller.addInsert(track, daw::plugins::pitch::PitchCorrectorInstance::staticDescriptor());
@@ -2196,7 +2380,7 @@ void verifyLocalMiniModulesWithAttachedBridge() {
     FakeSharedMutationSink sink;
     sink.cloudBinding = false;
     sink.result = daw::collab::SharedMutationResult::LocalFallback;
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!check(bool(controller.initialize(48000, 256, false)), "initialize mini-module bridge fixture")) return;
     controller.attachSharedMutationSink(sink);
     controller.setSharedEditingAllowed(false); // Offline cloud state must not lock a local document.
@@ -2284,6 +2468,8 @@ int main() {
     verifySharedShelfAndRecordingSilence();
     verifyLocalMiniModulesWithAttachedBridge();
     verifySharedMidiComp();
+    verifyLocalAudioReplacement();
+    verifyAudioReplacementBatch();
     verifyDerivedRenderAssets();
     verifySessionControlsAndStateUpload();
     verifyPitchSettingsBatch(daw::collab::SharedMutationResult::Submitted);
@@ -2325,6 +2511,7 @@ int main() {
     verifyScratchBatchMutators(daw::collab::SharedMutationResult::Blocked);
     verifySharedChannelBatchMutators(
         daw::collab::SharedMutationResult::Submitted);
+    verifySharedRackOperations();
     verifySharedChannelBatchMutators(
         daw::collab::SharedMutationResult::Blocked);
     verifyTrackCreationParity();

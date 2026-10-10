@@ -9,7 +9,7 @@
 
 namespace daw {
 
-// Installed by the application/audio host before starting service threads.
+// Installed by the application before starting service threads.
 // Worker and unit-test executables leave the native algorithms unredirected.
 class MediaWorker final {
 public:

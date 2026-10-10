@@ -88,10 +88,8 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                 "out-of-range VST program is saved as absent metadata");
     preset->stopProcessing(); preset->deactivate();
 
-    for (const auto hosting : {PluginManager::HostingMode::Local, PluginManager::HostingMode::Isolated})
     for (const std::string scope : {"track", "group", "master", "clip", "dual-mono"}) {
-        EngineController controller{EngineController::TestRuntime{}};
-        controller.pluginManager().setHostingMode(hosting, DAW_PLUGIN_HOST_PATH);
+        EngineController controller{};
         require(bool(controller.initialize(48000, kBlock, false)), "initialize controller");
         const auto track = controller.addTrack(TrackKind::Audio, "Voice");
         const auto clip = controller.importAudio(source, track, 0);
@@ -123,7 +121,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                 if (!result) {
                     const auto status = controller.insertRuntimeStatus(channel, slot);
                     std::cerr << descriptor.name << " / " << scope
-                              << (hosting == PluginManager::HostingMode::Isolated ? " / isolated" : " / local")
+                              << " / local"
                               << " / block " << i << ": " << engine::describe(result.error())
                               << "; " << status.detail << '\n';
                 }
@@ -153,7 +151,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                     descriptor.name + " / " + scope + ": export retains audible settings");
         };
         render(0.1f, 0.1f);
-        if (descriptor.format == Format::Vst3 && hosting == PluginManager::HostingMode::Local) {
+        if (descriptor.format == Format::Vst3) {
             // The native editor queues directly in the format, without a
             // PluginNode host event. Export before the next device callback.
             environment("DAW_TEST_VST3_EDITOR_EDIT", "1");
@@ -227,7 +225,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
             checkSplitAudio();
         }
         std::cout << "PASS " << descriptor.name << " / " << scope
-                  << (hosting == PluginManager::HostingMode::Isolated ? " / isolated" : " / local")
+                  << " / local"
                   << ": preset, pending edits, cancellation, live audio\n";
     }
 }

@@ -36,7 +36,7 @@ bool checkPluginPickerForTest(QString* error, const QString& screenshotPath) {
     } restore;
     QSettings().remove("contextPanel/pluginRecent");
 
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return fail("engine initialization");
     const auto effect = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.graphit");
     const auto sampler = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");

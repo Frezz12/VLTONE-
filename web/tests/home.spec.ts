@@ -51,7 +51,7 @@ for (const width of [320, 375, 768, 1440]) {
     await expect(page.locator(".workflow-card")).toHaveCount(3);
     await expect(page.locator(".gallery-switcher button")).toHaveCount(4);
     await expect(page.locator(".vlt-nav")).toBeVisible();
-    await expect(page.locator(".vlt-nav a")).toHaveCount(3);
+    await expect(page.locator(".vlt-nav a")).toHaveCount(4);
     await expect(page.locator(".locale-link")).toBeVisible();
     await expect(page.getByRole("link", { name: "Аккаунт", exact: true })).toBeVisible();
     const header = await page.evaluate(() => {
@@ -81,6 +81,9 @@ test("homepage respects reduced motion", async ({ page }) => {
   await expect(page.locator(".hero-editorial h1 > span").first()).toHaveCSS("animation-name", "none");
   await expect(page.locator(".hero-motion-footer .signal-bar").first()).toHaveCSS("animation-name", "none");
   await expect(page.locator(".ambient-motion-control")).toBeHidden();
+  await expect(page.locator(".hero-screen video")).not.toHaveAttribute("src");
+  await expect(page.locator(".hero-screen video")).toHaveAttribute("poster", /showcase-instrumental/);
+
 });
 
 test("search discovery files expose clean canonical routes", async ({ request }) => {
@@ -157,6 +160,9 @@ test("language preference persists without changing the URL", async ({ page }) =
   await page.getByRole("button", { name: "Necessary only" }).click();
   await expect(page).toHaveURL(/\/manual$/);
   await expect(page.getByRole("heading", { name: "VLTone Manual" })).toBeVisible();
+  // Consent reloads the page after removing ?lang; wait for the new header
+  // to hydrate before sending its first locale-switch click.
+  await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: "Открыть на русском" }).click();
   await expect(page).toHaveURL(/\/manual$/);
   await expect(page.getByRole("heading", { name: "Инструкция VLTone" })).toBeVisible();
@@ -210,11 +216,14 @@ test("homepage keeps its product image and download path without JavaScript", as
   try {
     await page.goto("http://127.0.0.1:3100/");
     await expect(page.locator("h1")).toContainText("Дай форму своему звуку.");
-    await expect(page.locator(".hero-art img")).toBeVisible();
+    await expect(page.locator(".hero-art video")).toBeVisible();
     await expect(page.locator(".hero-copy-panel .vlt-button")).toHaveAttribute("href", "/releases");
     await expect(page.locator(".workflow-copy")).toHaveCount(3);
     await expect(page.locator(".hero-motion-footer .signal-bar").first()).toHaveCSS("animation-play-state", "paused");
     await expect(page.locator(".ambient-motion-control")).toBeHidden();
+    await expect(page.locator(".hero-screen video")).not.toHaveAttribute("src");
+    await expect(page.locator(".hero-screen video")).toHaveAttribute("poster", /showcase-instrumental/);
+
   } finally {
     await context.close();
   }
@@ -253,3 +262,24 @@ test("ambient motion runs without scrolling and can pause and resume", async ({ 
   await expect(feature.locator(".loop-motion").first()).toHaveCSS("animation-name", "none");
   await expect(outro.locator(".phrase-cursor")).toHaveCSS("animation-name", "none");
 });
+
+for (const locale of ["ru", "en"]) {
+  test(`hero video plays, loops and follows the motion toggle in ${locale}`, async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("vlt-cookie-preference-v1", "none"));
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
+    await page.goto("/");
+    const video = page.locator(".hero-screen video");
+    await expect(video).toHaveAttribute("src", new RegExp(`/videos/studio-playback-${locale}\\.mp4\\?v=`));
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0);
+    expect(await video.evaluate((v: HTMLVideoElement) => v.muted && v.loop && v.playsInline)).toBe(true);
+    await page.locator(".ambient-motion-control").click();
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+    await page.locator(".ambient-motion-control").click();
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+    await video.evaluate((v: HTMLVideoElement) => { v.currentTime = v.duration - 0.15; });
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeLessThan(2);
+    await page.locator("footer").scrollIntoViewIfNeeded();
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+  });
+}

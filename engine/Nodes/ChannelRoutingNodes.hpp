@@ -4,6 +4,10 @@
 #include "Graph/Node.hpp"
 
 #include <string>
+#include <atomic>
+#include <memory>
+#include <array>
+#include <limits>
 
 namespace daw::engine {
 
@@ -65,14 +69,27 @@ private:
 class StereoMergeNode final : public Node {
 public:
     explicit StereoMergeNode(std::string name) : m_name(std::move(name)) {}
+    void setSafetyFallback(std::shared_ptr<std::atomic<unsigned>> failure, bool instrument) {
+        m_failure = std::move(failure); m_instrument = instrument;
+    }
 
     std::string_view name() const noexcept override { return m_name; }
     OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void process(const ProcessContext& context) override {
+        const bool failed = m_failure && m_failure->load(std::memory_order_acquire) != 0;
         for (ChannelCount channel = 0;
              channel < context.output.numChannels(); ++channel) {
             const std::span<float> out = context.output.channel(channel);
+            // The third edge carries the original stereo signal. Graph PDC
+            // delays it to the slower branch, including the discovery block.
+            if (failed) {
+                if (!m_instrument && context.inputs.size() > 2 &&
+                    context.inputs[2].numChannels() > channel)
+                    dsp::copyScaled(out, context.inputs[2].channel(channel), 1.0f);
+                else dsp::clear(out);
+                continue;
+            }
             const std::size_t branch = channel == 0 ? 0 : 1;
             if (branch >= context.inputs.size() ||
                 context.inputs[branch].numChannels() == 0) {
@@ -82,17 +99,33 @@ public:
             dsp::copyScaled(out, context.inputs[branch].channel(0), 1.0f);
         }
 
-        if (!context.midiOutput || context.midiInputs.empty() ||
-            !context.midiInputs.front()) {
-            return;
+        if (!context.midiOutput) return;
+        if (failed && m_heldCount) {
+            for (std::size_t i = 0; i < m_held.size(); ++i) {
+                while (m_held[i]) {
+                    if (!context.midiOutput->push(MidiEvent::noteOff(0, std::uint8_t(i / 128), std::uint8_t(i % 128)))) return;
+                    --m_held[i]; --m_heldCount;
+                }
+            }
         }
-        for (const MidiEvent& event : context.midiInputs.front()->events()) {
-            (void)context.midiOutput->push(event);
+        const std::size_t midiBranch = failed ? 2 : 0;
+        if ((failed && m_instrument) || midiBranch >= context.midiInputs.size() || !context.midiInputs[midiBranch]) return;
+        for (const MidiEvent& event : context.midiInputs[midiBranch]->events()) {
+            if (!context.midiOutput->push(event)) break;
+            if (!failed && (event.isNoteOn() || event.isNoteOff())) {
+                auto& held = m_held[std::size_t(event.channel()) * 128 + (event.data1 & 0x7f)];
+                if (event.isNoteOn() && held != std::numeric_limits<std::uint16_t>::max()) { ++held; ++m_heldCount; }
+                else if (event.isNoteOff() && held) { --held; --m_heldCount; }
+            }
         }
     }
 
 private:
     std::string m_name;
+    std::shared_ptr<std::atomic<unsigned>> m_failure;
+    bool m_instrument = false;
+    std::array<std::uint16_t, 16 * 128> m_held{};
+    unsigned m_heldCount = 0;
 };
 
 } // namespace daw::engine

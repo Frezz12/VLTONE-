@@ -242,7 +242,7 @@ audio::Result EngineController::prepareAutomaticRecordingSilence(
         collab::ProjectCommand child; child.body = std::move(body);
         transformed.batch->commands.push_back(std::move(child));
     };
-    EngineController draft(SecondaryRuntime{}, *this);
+    EngineController draft;
     draft.m_project = projected.project;
     std::vector<collab::AddClip> added;
     for (const auto& child : original->batch->commands)

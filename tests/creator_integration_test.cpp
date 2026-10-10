@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
   check(bool(writer.writeWAVFile(wav, source, 48000)), "fixture written");
   const auto before = definition(), after = definition(true);
   {
-    EngineController c{EngineController::TestRuntime{}};
+    EngineController c{};
     c.initialize(48000, 256, false);
     const auto track = c.importAudioToNewTrack(wav, 0);
     const auto slot = c.addMiniModule(track, before);
@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
     // File operations restore the complete typed definition, without the
     // library.
     const auto file = (temporary / "creator.vlt").string();
-    EngineController reopened{EngineController::TestRuntime{}};
+    EngineController reopened{};
     reopened.initialize(48000, 256, false);
     check(bool(c.saveProject(file)) && bool(reopened.openProject(file)) &&
               reopened.miniModules(track)[1].miniModule == after &&
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
           "slot IDs");
   }
   {
-    EngineController c{EngineController::TestRuntime{}};
+    EngineController c{};
     c.initialize(48000, 256, false);
     const auto track = c.importAudioToNewTrack(wav, 0);
     c.setRecordDirectory(temporary.string());

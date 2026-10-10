@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QQuickWindow>
 #include <QEventLoop>
 #include <QResizeEvent>
@@ -33,6 +34,7 @@
 namespace {
 
 constexpr int kTitleHeight = 22;
+constexpr int kCornerRadius = 5;
 constexpr int kResizeBand = 6;
 constexpr int kCornerBand = 12;
 constexpr int kMinimumWidth = 420;
@@ -72,7 +74,10 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     : QFrame(parent), m_settingsKey(std::move(settingsKey)) {
     setObjectName(QStringLiteral("InternalEditorFrame"));
     setProperty("dawInternalEditor", true);
-    setAttribute(Qt::WA_OpaquePaintEvent, false);
+    // paintEvent fills the entire masked surface.
+    // Without this, every native editor update also damages the mixer and
+    // timeline underneath, even while the frame itself stays in one place.
+    setAttribute(Qt::WA_OpaquePaintEvent);
     setMinimumSize(kMinimumWidth, kMinimumHeight);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
@@ -127,6 +132,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
         icons::Glyph::Close, tr("Close editor"), m_titleBar);
     m_closeButton->setObjectName(QStringLiteral("InternalEditorClose"));
     m_closeButton->setButtonSize(24, 20);
+    m_closeButton->setGlyphSize(11);
     m_closeButton->setFocusPolicy(Qt::StrongFocus);
     m_closeButton->setAccessibleName(tr("Close editor"));
     m_closeButton->setAccessibleDescription(
@@ -182,7 +188,6 @@ void InternalEditorFrame::setContent(QWidget* content) {
     // Only this application-owned editor opts into one continuous dark shell.
     // Placement, resize, detach and close continue to use the common host.
     m_pitchChrome = content->property("vlt.pitchChrome").toBool();
-    setAttribute(Qt::WA_OpaquePaintEvent, false);
     applyTheme();
     content->setParent(this);
     m_preferredContentSize = content->property("vlt.compactEditor").toBool()
@@ -335,6 +340,25 @@ QSize InternalEditorFrame::maximumContentSize() const {
 }
 
 bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
+    // Visible editors observe application-wide focus/gesture events. Paint,
+    // timer and style traffic from a large mixer does not concern this frame.
+    switch (event->type()) {
+    case QEvent::UngrabMouse:
+    case QEvent::WindowDeactivate:
+    case QEvent::ApplicationDeactivate:
+    case QEvent::Resize:
+    case QEvent::Move:
+    case QEvent::MouseButtonDblClick:
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseMove:
+    case QEvent::MouseButtonRelease:
+    case QEvent::WindowActivate:
+    case QEvent::ApplicationActivate:
+    case QEvent::FocusIn:
+        break;
+    default:
+        return false;
+    }
     auto* target = qobject_cast<QWidget*>(watched);
     // Application filters see every editor's handles, in reverse installation
     // order. Only this frame's own handles may start or continue its resize.
@@ -486,7 +510,7 @@ void InternalEditorFrame::hideEvent(QHideEvent* event) {
 void InternalEditorFrame::paintEvent(QPaintEvent*) {
     const Theme& theme = ThemeManager::instance().theme();
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setRenderHint(QPainter::Antialiasing, true);
 
     if (m_pitchChrome) {
         QLinearGradient shell(rect().topLeft(), rect().bottomLeft());
@@ -517,11 +541,16 @@ void InternalEditorFrame::paintEvent(QPaintEvent*) {
     // in by the application's accent colour.
     painter.setPen(QPen(theme.edgeDark(theme.surface), 1.0));
     painter.setBrush(Qt::NoBrush);
-    painter.drawRect(rect().adjusted(0, 0, -1, -1));
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                            kCornerRadius - 0.5, kCornerRadius - 0.5);
 }
 
 void InternalEditorFrame::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
+    // Clip child artwork and native plugin surfaces as well as the frame paint.
+    QPainterPath outline;
+    outline.addRoundedRect(QRectF(rect()), kCornerRadius, kCornerRadius);
+    setMask(QRegion(outline.toFillPolygon().toPolygon()));
     updateResizeHandles();
 }
 
@@ -534,9 +563,13 @@ void InternalEditorFrame::showEvent(QShowEvent* event) {
 }
 
 void InternalEditorFrame::applyTheme() {
+    const Theme& theme = ThemeManager::instance().theme();
+    // Custom themes may intentionally supply alpha; only declare opacity when
+    // the complete background is actually filled with opaque colour.
+    setAttribute(Qt::WA_OpaquePaintEvent,
+                 (m_pitchChrome ? theme.accent : theme.surface).alpha() == 255);
     if (m_title) {
         QPalette palette = m_title->palette();
-        const Theme& theme = ThemeManager::instance().theme();
         palette.setColor(QPalette::WindowText,
                          m_active ? theme.textPrimary : theme.textSecondary);
         m_title->setPalette(palette);
@@ -832,25 +865,30 @@ bool InternalEditorFrame::checkPlacementForTest() {
     }
     overlayHost.hide();
     {
-        InternalEditorFrame square(key + QStringLiteral("/corners"), &host);
+        InternalEditorFrame rounded(key + QStringLiteral("/corners"), &host);
         auto* content = new QWidget;
         content->setStyleSheet(QStringLiteral("background: #dc3050;"));
-        square.setContent(content);
-        square.present();
+        rounded.setContent(content);
+        rounded.present();
         for (const QSize size : {QSize(520, 320), QSize(640, 410)}) {
-            square.resize(size);
+            rounded.resize(size);
             QApplication::processEvents();
-            QImage image(square.size() * square.devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
-            image.setDevicePixelRatio(square.devicePixelRatioF());
+            QImage image(rounded.size() * rounded.devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(rounded.devicePixelRatioF());
             image.fill(Qt::transparent);
-            square.render(&image);
-            check(square.mask().isEmpty(), "editor does not clip its corners");
+            rounded.render(&image);
+            check(!rounded.mask().isEmpty(), "editor clips its rounded corners");
+            check(rounded.mask().contains(QPoint(kCornerRadius, 0)) &&
+                  !rounded.mask().contains(QPoint(0, 0)),
+                  "editor keeps a five-pixel corner radius after resizing");
+            check(rounded.testAttribute(Qt::WA_OpaquePaintEvent),
+                  "a filled editor does not repaint the workspace behind it");
             for (const QPoint point : {image.rect().topLeft(), image.rect().topRight(),
                                        image.rect().bottomLeft(), image.rect().bottomRight()})
-                check(image.pixelColor(point).alpha() != 0,
-                      "square editor paints all four corners");
+                check(image.pixelColor(point).alpha() == 0,
+                      "rounded editor clips all four corners and child artwork");
             check(image.pixelColor(image.rect().center()) == QColor("#dc3050"),
-                  "square editor preserves its content");
+                  "rounded editor preserves its content");
         }
     }
     {

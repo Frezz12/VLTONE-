@@ -75,7 +75,7 @@ bool CreatorWindow::runCheck(const QString &directory) {
   };
   daw::collab::CommandGateway gateway;
   ::collab::CollaborationCommandBridge bridge(nullptr, &gateway);
-  daw::EngineController controller{daw::EngineController::TestRuntime{}};
+  daw::EngineController controller{};
   QTemporaryDir temporary;
   check(bool(controller.initialize(48000, 256, false)),
         "Creator controller initialized");
@@ -84,6 +84,29 @@ bool CreatorWindow::runCheck(const QString &directory) {
         "Creator uses the application's attached bridge in a local project");
   CreatorWindow window(&controller);
   window.m_recoveryDirectory = temporary.path();
+  // Explicit website capture: render a real saved graph with current widgets,
+  // isolated preferences and no live device. Normal UI checks are unchanged.
+  const auto websiteProject = qEnvironmentVariable("DAW_CREATOR_WEBSITE_PROJECT");
+  if (!websiteProject.isEmpty()) {
+    CreatorProject shot;
+    QString error;
+    if (directory.isEmpty() || !CreatorProject::open(websiteProject, shot, error)) {
+      check(false, "website Creator project opened");
+      return false;
+    }
+    check(validate(shot.definition).empty(), "website graph validates");
+    window.resize(1600, 1000);
+    window.setProjectForTest(shot);
+    window.show();
+    QApplication::processEvents();
+    window.m_canvas->fitGraph();
+    window.m_canvas->selectNode("interface");
+    QApplication::processEvents();
+    check(window.grab().save(QDir(directory).filePath("creator.png")),
+          "fresh website Creator screenshot saved");
+    window.m_undo->setClean();
+    return failures == 0;
+  }
   auto project = CreatorProject::create("Creator checks", "Motion Chorus");
   auto &d = project.definition;
   d.nodes.push_back(makeNode("chorus", "chorus"));

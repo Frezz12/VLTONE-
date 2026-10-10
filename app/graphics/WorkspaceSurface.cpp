@@ -70,14 +70,6 @@ bool nativeControlAsset(const QWidget* widget) {
            widget->inherits("QSlider") || widget->inherits("QDial") ||
            widget->inherits("QProgressBar") || widget->inherits("QSizeGrip");
 }
-bool belongsToNativeOverlay(const QWidget* widget, const QWidget* source) {
-    for (const QWidget* current = widget; current;
-         current = current->parentWidget()) {
-        if (current->property("vlt.nativeOverlay").toBool()) return true;
-        if (current == source) break;
-    }
-    return false;
-}
 bool startsFreshPointerRoute(QEvent::Type type, Qt::MouseButtons buttons) {
     return type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick ||
            (type == QEvent::MouseMove && buttons == Qt::NoButton);
@@ -287,6 +279,10 @@ WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(
         [this] { if (!m_stopping) m_window->update(); },
         [this](QWidget* widget, const QRegion&) {
             if (m_stopping || !m_source || (widget != m_source && !m_source->isAncestorOf(widget))) return false;
+            // Native plugin chrome/controls use the QWidget backing store.
+            // Claiming their damage here discards it: visit() deliberately
+            // excludes the entire native editor from the Quick scene.
+            if (belongsToNativeOverlay(widget, m_source)) return false;
             m_dirty.insert(widget);
             m_capturePending = true;
             return true;
@@ -994,7 +990,12 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
     if (object == m_window && event->type() == QEvent::Expose && m_window->isExposed())
         QCoreApplication::postEvent(m_source->window(), new QEvent(QEvent::UpdateRequest), Qt::LowEventPriority);
     if (event->type() == QEvent::UpdateRequest && object == m_source->window()) {
-        m_collectedGeometryUpdates = m_geometryExposure && collectWidgetUpdates(m_source, m_dirty);
+        // Collect explicit changes even when an opaque editor covers them.
+        // Qt can omit their Paint events; exposure later must still reveal
+        // current model pixels, rather than the old retained layer.
+        const bool collected = collectWidgetUpdates(m_source, m_dirty);
+        m_collectedGeometryUpdates = m_geometryExposure && collected;
+        if (!m_dirty.isEmpty()) requestCapture();
         // Geometry damage belongs to Qt's next backing-store update, not the
         // next Quick frame. Quick can capture before that queued update arrives.
         m_geometryExposure = false;
@@ -1002,6 +1003,15 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
     if ((object == m_window || object == m_source) && event->type() == QEvent::DevicePixelRatioChange)
         invalidate();
     if (object == m_window || object == m_container) return forwardInput(event);
+    switch (event->type()) {
+    case QEvent::Move: case QEvent::Resize: case QEvent::Show: case QEvent::Hide:
+    case QEvent::ZOrderChange: case QEvent::FocusIn: case QEvent::Paint:
+    case QEvent::Destroy: case QEvent::PaletteChange: case QEvent::FontChange:
+    case QEvent::StyleChange:
+        break;
+    default:
+        return false;
+    }
     auto* widget = qobject_cast<QWidget*>(object);
     if (!widget || widget == m_container || (widget != m_source && !m_source->isAncestorOf(widget))) return false;
     // Moving/resizing a child exposes unchanged siblings and ancestors in the

@@ -19,13 +19,15 @@ bool capturedSide(const AudioPluginStateSnapshot& snapshot,
     auto& bytes = right ? slot.rightState : slot.state;
     auto& parameters = right ? slot.model.rightParameters : slot.model.parameters;
     const auto format = slot.model.format;
-    if (!snapshot.exists || (snapshot.failed && !snapshot.isolated) ||
+    if (!snapshot.exists ||
         (snapshot.supportsState && !snapshot.stateCaptured)) return false;
     bytes = snapshot.state;
     (right ? slot.rightSource : slot.source) = snapshot.sample;
     (right ? slot.rightSourcePath : slot.sourcePath) = snapshot.samplePath;
-    // Native AU controls need not notify the parameter mirror in the document.
-    if (snapshot.failed || format == PluginFormat::AudioUnit ||
+    // Sample instruments and native AU presets may update their live state
+    // before the document mirror. Replaying that older mirror after loading
+    // the captured state would silently reset the duplicate's settings.
+    if (snapshot.ownsSample || format == PluginFormat::AudioUnit ||
         (!snapshot.supportsState && !snapshot.documentParametersAuthoritative))
         parameters = snapshot.parameters;
     appendMissingParameters(parameters, snapshot.parameters);
@@ -108,11 +110,16 @@ audio::Result EngineController::captureInsertState(const std::string& channelId,
     const InsertModel& model, ChainSlotSnapshot& slot) {
     slot = {};
     slot.model = model;
+    slot.preserveUnavailable = !hasInsert(channelId, model.id);
+    if (slot.preserveUnavailable) {
+        if (const auto* state = cachedPluginState(model.id, model)) slot.state = state->bytes;
+        if (const auto* state = cachedPluginState(model.id + "-right", model)) slot.rightState = state->bytes;
+        return audio::Result::ok();
+    }
     const auto id = channelId.empty() ? kMasterChannelId : channelId;
     std::vector<AudioPluginStateRequest> requests{{{id, model.id}}};
     if (model.channelMode == PluginChannelMode::DualMono) requests.push_back({{id, model.id, true}});
-    for (auto& request : requests) request.purpose = AudioPluginSnapshotPurpose::RecoverFailed;
-    const auto snapshots = m_runtime.pluginStateSnapshots(requests);
+    const auto snapshots = m_runtime->pluginStateSnapshots(requests);
     const bool left = capturedSide(snapshots[0], slot);
     const bool right = model.channelMode != PluginChannelMode::DualMono ||
         capturedSide(snapshots[1], slot, true);
@@ -135,8 +142,7 @@ audio::Result EngineController::captureInsertChain(const std::string& channelId,
         requests.push_back({{channel, id}});
         if (model->channelMode == PluginChannelMode::DualMono) requests.push_back({{channel, id, true}});
     }
-    for (auto& request : requests) request.purpose = AudioPluginSnapshotPurpose::RecoverFailed;
-    const auto snapshots = m_runtime.pluginStateSnapshots(requests);
+    const auto snapshots = m_runtime->pluginStateSnapshots(requests);
     std::size_t next = 0;
     for (auto& slot : captured) {
         if (!capturedSide(snapshots[next++], slot) ||
@@ -209,7 +215,11 @@ audio::Result EngineController::appendPluginBatch(
             }
         }
         std::vector<std::vector<std::string>> ids;
-        for (const auto& target : targets) { auto& row = ids.emplace_back(); for (const auto& model : models) row.push_back(newUuid()); }
+        ids.resize(targets.size());
+        for (auto& row : ids) {
+            row.reserve(models.size());
+            for (std::size_t i = 0; i < models.size(); ++i) row.push_back(newUuid());
+        }
         const bool queued = submitSharedDerivedMutation(std::move(files), AssetKind::PluginState,
             [targets, models = std::move(models), bindings, ids, this](const auto& assets) mutable -> collab::CommandBody {
                 for (std::size_t i = 0; i < assets.size(); ++i) {
@@ -320,7 +330,7 @@ audio::Result EngineController::createPluginBatchDraft(
     const PluginBatchTarget& source, std::shared_ptr<EngineController>& out) {
     if (const auto valid = validatePluginBatch({source}); !valid) return valid;
     auto snapshot = captureRecoverySnapshot();
-    auto draft = std::make_shared<EngineController>(SecondaryRuntime{}, *this);
+    auto draft = std::make_shared<EngineController>();
     if (const auto ready = draft->initialize(m_sampleRate, m_bufferSize, false); !ready) return ready;
     draft->m_pluginManager.copyCatalogFrom(m_pluginManager);
     draft->m_project = std::move(snapshot.project);
@@ -416,8 +426,8 @@ audio::Result EngineController::createPluginBatchDraft(
     for (auto& chain : session.pluginChains) for (auto& slot : chain.slots)
         if (slot.bypassed) slot.loadPolicy = AudioPluginLoadPolicy::PreserveUnavailable;
     if (const auto built = draft->publishAudioSession(std::move(session), false, restores); !built) return built;
-    draft->m_runtime.transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = m_project.tempo});
-    draft->m_runtime.transportCommand({.action = AudioTransportCommand::Action::TimeSignature,
+    draft->m_runtime->transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = m_project.tempo});
+    draft->m_runtime->transportCommand({.action = AudioTransportCommand::Action::TimeSignature,
         .numerator = m_project.timeSigNumerator, .denominator = m_project.timeSigDenominator});
     double start = std::numeric_limits<double>::max(), end = 0.0;
     for (const auto& track : draft->m_project.tracks)
@@ -443,7 +453,7 @@ audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineContro
     draft->flushDeferredClipSync();
     draft->flushSamplerPrecompute();
     draft->applyTransportStartPolicy();
-    const auto result = m_runtime.startAudition(draft->m_audioRuntime);
+    const auto result = m_runtime->startAudition(draft->m_runtime.sharedRuntime());
     if (!result) return result;
     m_pluginAuditionOwner = std::move(draft);
     m_pluginAuditionOwner->m_externalPreviewDriven = true;
@@ -452,7 +462,7 @@ audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineContro
 
 void EngineController::stopPluginAudition() {
     if (!m_pluginAuditionOwner) return;
-    m_runtime.stopAudition();
+    m_runtime->stopAudition();
     m_pluginAuditionOwner->m_externalPreviewDriven = false;
     m_pluginAuditionOwner.reset();
 }

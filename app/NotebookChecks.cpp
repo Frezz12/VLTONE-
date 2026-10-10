@@ -78,6 +78,52 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
         QApplication::processEvents(QEventLoop::AllEvents, 20);
     check(run(QStringLiteral("window.bundledFontsReady && getComputedStyle(editor).fontFamily.includes('Inter')")).toBool(),
           "notebook did not load bundled Inter faces");
+    // Editing and the saving/saved transition must keep the live page and its
+    // native visual in place. This used to resize the narrow header and reload
+    // Chromium on project synchronization.
+    int pageReloads = 0;
+    const auto loaded = connect(m_view, &ui::graphics::BrowserSurface::loadStarted,
+                                this, [&] { ++pageReloads; });
+    const auto settle = [](int milliseconds) {
+        QEventLoop loop;
+        QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    run(QStringLiteral(R"JS(
+        window.notebookEditingProbe=true;
+        editor.innerHTML=Array.from({length:60},(_,i)=>'<p>Studio note '+i+'</p>').join('');
+        editor.focus();const caret=document.createRange();caret.selectNodeContents(editor.lastChild);caret.collapse(false);
+        getSelection().removeAllRanges();getSelection().addRange(caret);rememberSelection();
+        document.querySelector('.stage').scrollTop=10000;sendContent();
+    )JS"));
+    settle(180);
+    const QRect editorGeometry = m_view->geometry();
+    const int toolbarHeight = m_toolbar->height();
+    const double scroll = run(QStringLiteral("document.querySelector('.stage').scrollTop")).toDouble();
+    for (int i = 0; i < 4; ++i) {
+        run(QStringLiteral("applyCommand('insertText',' note');"));
+        settle(170);
+        check(m_view->geometry() == editorGeometry && m_toolbar->height() == toolbarHeight,
+              "typing changed the notebook editor geometry");
+    }
+    settle(480);
+    check(m_view->geometry() == editorGeometry && m_toolbar->height() == toolbarHeight,
+          "saved status resized the notebook");
+    check(run(QStringLiteral("editor.innerText.endsWith(' note note note note')")).toBool() &&
+          m_controller->notebookHtml().find(" note note note note") != std::string::npos,
+          "typing did not persist to the project");
+    const QString changed = QString::fromStdString(m_controller->notebookHtml()) + QStringLiteral("<p>Synced line</p>");
+    m_controller->setNotebookHtml(changed.toStdString());
+    syncFromProject();
+    settle(180);
+    check(pageReloads == 0 && run(QStringLiteral("window.notebookEditingProbe === true")).toBool(),
+          "project synchronization reloaded the editor page");
+    check(run(QStringLiteral("editor.innerText.includes('Synced line')")).toBool(),
+          "project synchronization did not update the live document");
+    check(std::abs(run(QStringLiteral("document.querySelector('.stage').scrollTop")).toDouble() - scroll) < 2,
+          "typing or project synchronization jumped the document scroll");
+    disconnect(loaded);
+
     check(run(QStringLiteral(R"JS((()=>{
         editor.textContent='First plain line';editor.focus();
         const r=document.createRange();r.setStart(editor.firstChild,5);r.collapse(true);
@@ -174,6 +220,8 @@ bool NotebookWindow::checkTimedTextForTest(QString* error) {
 }
 
 bool MainWindow::checkNotebookForTest() {
+    populateDemo();
+    activateWindow();
     const bool wasVisible = ui::notebookprefs::visible();
     const bool wasDetached = QSettings().value("notebook/detached", false).toBool();
     setNotebookVisible(true);
@@ -186,6 +234,26 @@ bool MainWindow::checkNotebookForTest() {
               m_notebookContainer->isVisible();
     QString error;
     if (ok) ok = notebook->checkTimedTextForTest(&error);
+    if (ok) {
+        // Synthetic key delivery exercises the application's event filters;
+        // Chromium text insertion and document persistence are checked above.
+        const auto depth = m_controller.undoDepth();
+        const auto selected = m_selectedTrackId.toStdString();
+        const auto* track = m_controller.project().findTrack(selected);
+        const bool muted = track && track->muted;
+        const bool solo = track && track->soloed;
+        for (const auto key : {Qt::Key_M, Qt::Key_S, Qt::Key_T}) {
+            QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier,
+                            QString(QChar(static_cast<char16_t>(key))).toLower());
+            QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+            QApplication::sendEvent(editor, &press);
+            QApplication::sendEvent(editor, &release);
+        }
+        track = m_controller.project().findTrack(selected);
+        ok = track && track->muted == muted && track->soloed == solo &&
+             m_controller.undoDepth() == depth && notebook->isVisible();
+        if (!ok) error = QStringLiteral("notebook typing triggered track shortcuts");
+    }
     if (ui::graphics::gpuWorkspaceEnabled()) {
         ok = ok && centralWidget()->property("vlt.gpuSurfaceActive").toBool();
         if (!ok && error.isEmpty()) error = QStringLiteral("notebook disabled the main GPU scene");
@@ -227,6 +295,13 @@ bool MainWindow::checkNotebookForTest() {
 }
 
 void MainWindow::openNotebookForShot() {
+    if (m_controller.notebookHtml().empty()) m_controller.setNotebookHtml(
+        "<h1>Session notes</h1><p>Friday, 9 October · Rough mix</p>"
+        "<h2>Next pass</h2><ul><li>Bring the vocal forward in the chorus.</li>"
+        "<li>Keep the low end tight around the kick.</li>"
+        "<li>Print a second version with less reverb.</li></ul>"
+        "<blockquote>Leave room for the last phrase.</blockquote>"
+        "<h2>Arrangement</h2><p>Shorten the intro by four bars. Keep the pause before the final chorus.</p>");
     setNotebookVisible(true, false);
     const QString mode = qEnvironmentVariable("DAW_SHOT_NOTEBOOK");
     if (mode.contains(QLatin1String("detached"))) setNotebookDetached(true);

@@ -23,7 +23,7 @@ int main() {
     audio::AudioRecorder recorder; recorder.initialize(48000, 2);
     recorder.writeWAVFile((temp / "source.wav").string(), input, 48000);
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         if (!check(bool(controller.initialize(48000, 256, false)), "headless freeze controller initializes")) return 1;
         controller.setRecordDirectory(temp.string());
         auto id = controller.importAudioToNewTrack((temp / "source.wav").string(), 0.0);
@@ -90,7 +90,7 @@ int main() {
         const auto package = (temp / "session.vlt").string();
         check(bool(controller.saveProject(package)), "freeze and original sources save as portable project");
         {
-            daw::EngineController reopened{daw::EngineController::TestRuntime{}}; reopened.initialize(48000, 256, false);
+            daw::EngineController reopened{}; reopened.initialize(48000, 256, false);
             check(bool(reopened.openProject(package)) && reopened.isTrackFrozen(id), "frozen project reopens with source state intact");
             const auto sourceClip = reopened.project().findTrack(id)->clips.front().id;
             reopened.requestClipSampleData(id, sourceClip);
@@ -115,7 +115,7 @@ int main() {
                 cachedTrack.id = "offline-source"; cachedTrack.kind = daw::TrackKind::Audio;
                 cachedTrack.clips = {original};
                 daw::ProjectModel cachedProject; cachedProject.tracks = {cachedTrack};
-                daw::EngineController cold{daw::EngineController::TestRuntime{}}; cold.initialize(48000, 256, false);
+                daw::EngineController cold{}; cold.initialize(48000, 256, false);
                 check(bool(cold.materializeCollaborationProject(std::move(cachedProject), true)) &&
                       cold.offlineProcessCacheValid({cachedTrack.id, sourceClip}) &&
                       !cold.cachedClipSampleData(cachedTrack.id, sourceClip),
@@ -162,7 +162,7 @@ int main() {
         for (const auto& file : frozen.files) { std::error_code ec; fs::remove(file, ec); }
     }
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};controller.initialize(48000,128,false);controller.setRecordDirectory(temp.string());controller.setTempo(120);
+        daw::EngineController controller{};controller.initialize(48000,128,false);controller.setRecordDirectory(temp.string());controller.setTempo(120);
         auto track=controller.addTrack(daw::TrackKind::Instrument,"Slide freeze");
         for(const auto& plugin:daw::plugins::builtinPlugins())if(plugin.uid=="daw.sampler")controller.setTrackInstrumentPlugin(track,plugin);
         auto slot=controller.project().findTrack(track)->instrument.id;controller.loadSamplerSample(track,slot,(temp/"source.wav").string());controller.setInsertParameter(track,slot,"loop.mode",1);

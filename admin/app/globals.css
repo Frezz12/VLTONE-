@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@vlt/ui/tokens.css";
 @import "./admin-theme.css";
+@import "./team-tasks.css";
 
 .status-dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--vlt-success); }
 .status-dot.off { background: var(--vlt-danger); }

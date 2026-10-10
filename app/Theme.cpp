@@ -187,8 +187,17 @@ ThemeManager::ThemeManager() {
         m_defaultFont = app->font();
 
     m_presets = {
-        // Neutral black/grey chrome, including highlights and selection.
+        // Soft lime marks interaction against the original neutral surfaces. Keep
+        // waveforms neutral and selection translucent so white peaks stay clear.
         make("dark", "Dark", true,
+             grey(18), grey(28), grey(40),
+             grey(237), grey(173),
+             colorFromRgb(0xAED477), colorFromRgb(0xC1E493),
+             grey(192), colorFromRgb(0xAED477),
+             grey(40), grey(64), QColor(174, 212, 119, 48),
+             grey(22), grey(24)),
+        // Preserve the original neutral palette as an explicit choice.
+        make("monochrome", "Monochrome", true,
              grey(18), grey(28), grey(40),
              grey(237), grey(173),
              grey(180), grey(212),

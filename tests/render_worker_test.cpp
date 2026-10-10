@@ -50,7 +50,7 @@ struct TempDirectory {
 // Test executable only: production daw_worker has no fault-mode switch. The
 // parent supplies a normal immutable session and an alternate internal helper.
 int peer(int argc, char** argv) {
-    daw::plugins::ipc::SharedProcess process;
+    daw::process::SharedProcess process;
     std::string error;
     if (!process.attach(argc, argv, error) || process.size() != sizeof(wire::Mailbox)) return 2;
     auto& box = *reinterpret_cast<wire::Mailbox*>(process.data());
@@ -94,7 +94,7 @@ int main(int argc, char** argv) try {
     const auto oldMix = temp.path / "mix.wav", oldStem = temp.path / "stem.wav";
     write(oldMix, "previous completed mix"); write(oldStem, "previous completed stem");
     const auto baseline = names(temp.path);
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     require(bool(controller.initialize(48000, 128, false)), "initialize session capture without device");
     const auto capture = [&](const std::string& mode) {
         daw::rendering::Spec spec;

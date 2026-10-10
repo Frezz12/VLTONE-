@@ -16,7 +16,7 @@ void EngineController::applyChannelColorState(const std::string& id, const std::
     track=m_project.findTrack(id);
     track->channelColor=state;
     const auto settings=channelColorSettings(id);
-    const auto apply = [&] { return m_runtime.configureChannelColor({id, settings.id},
+    const auto apply = [&] { return m_runtime->configureChannelColor({id, settings.id},
         parseChannelColorSeed(settings.profileSeed), settings.parameters, settings.bypassed); };
     if (!apply()) { rebuildGraph(); (void)apply(); }
 }

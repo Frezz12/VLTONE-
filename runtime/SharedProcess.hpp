@@ -6,7 +6,7 @@
 #include <memory>
 #include <string>
 
-namespace daw::plugins::ipc {
+namespace daw::process {
 
 inline constexpr auto kProcessStopWait = std::chrono::seconds(5);
 
@@ -24,9 +24,8 @@ public:
     std::byte* data() const noexcept;
     std::size_t size() const noexcept;
     std::uint64_t processId() const noexcept;
-    bool signal(bool audio = false) noexcept;
-    bool wait(int timeoutMs = -1, bool audio = false);
-    bool wakeAudioThread() noexcept; // child-local lifecycle/stop wake
+    bool signal() noexcept;
+    bool wait(int timeoutMs = -1);
     bool running(); // control thread only
     void stop(); // kill/reap before unmapping; control thread only
 private:
@@ -34,4 +33,4 @@ private:
     std::unique_ptr<Impl> m;
 };
 
-} // namespace daw::plugins::ipc
+} // namespace daw::process

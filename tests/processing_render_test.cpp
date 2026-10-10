@@ -75,7 +75,7 @@ int main() {
     // one undo/redo operation. With no FX layer printed, the bounce re-enters
     // at TrackSource so it cannot traverse a printed stage twice.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 256, false).isOk(),
               "bounce controller initializes headless");
         const std::string track =
@@ -133,7 +133,7 @@ int main() {
     // lane. The covered source segment is muted and the bounce lands on the
     // adjacent audio lane instead.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 256, false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Midi, "MIDI Source");
@@ -169,7 +169,7 @@ int main() {
     // strip. The old semantic injection anchored it to the source track, so
     // moving the clip looked right while the source fader/mute still owned it.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 256, false);
         const std::string source =
             controller.addTrack(daw::TrackKind::Audio, "Route Source");
@@ -206,7 +206,7 @@ int main() {
     // A playable MIDI clip on an ordinary instrument track must print the
     // instrument output, rather than an empty audio file.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 256, false).isOk(),
               "instrument bounce controller initializes headless");
         const std::string instrument = controller.addTrack(
@@ -228,7 +228,7 @@ int main() {
     // Four selected MIDI channels are one render through their shared bus,
     // with clip/track isolation and an atomic, reversible source replacement.
     for (const bool selectClips : {false, true}) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 256, false).isOk(),
               "combined MIDI bounce initializes headless");
         controller.setRecordDirectory(dir.string());
@@ -332,7 +332,7 @@ int main() {
     // An isolated MIDI source inside a Pattern still needs its owner clip as
     // a playback gate. The owner must not admit the other Pattern sounds.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 256, false).isOk(),
               "Pattern bounce controller initializes headless");
         const std::string pattern = controller.addPattern("Beat");
@@ -400,7 +400,7 @@ int main() {
     // Layered offline processing uses the currently heard audio, with portable
     // immutable history and no retained live chain.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 256, false).isOk(), "offline controller initializes headless");
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Offline Source");
         const auto clip = controller.importAudio(tone, track, 0.4);
@@ -412,7 +412,7 @@ int main() {
             daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
         controller.setInsertParameter(track, liveFx, "output.gain", 12.0);
 
-        daw::EngineController rack{daw::EngineController::TestRuntime{}};
+        daw::EngineController rack{};
         rack.initialize(48000, 256, false);
         const auto rackTrack = rack.addTrack(daw::TrackKind::Audio, "Rack");
         const auto equalizer = rack.addInsert(rackTrack,
@@ -482,7 +482,7 @@ int main() {
 
         const auto package = (dir / "processed.vlt").string();
         check(controller.saveProject(package).isOk(), "project package saves offline history");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+        daw::EngineController reopened{};
         reopened.initialize(48000, 256, false);
         check(reopened.openProject(package).isOk(), "project package reopens offline history");
         const auto* reloaded = findClip(reopened, track, clip);
@@ -535,7 +535,7 @@ int main() {
     }
     // file and leaves neither clip with a partial chain/cache mutation.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 256, false);
         const std::string track =
             controller.addTrack(daw::TrackKind::Audio, "Atomic Offline");
@@ -545,7 +545,7 @@ int main() {
         const std::string first = controller.importAudio(tone, track, 0.0);
         const std::string second = controller.importAudio(tone, track, 0.3);
 
-        daw::EngineController rack{daw::EngineController::TestRuntime{}};
+        daw::EngineController rack{};
         rack.initialize(48000, 256, false);
         const std::string rackTrack =
             rack.addTrack(daw::TrackKind::Audio, "Rack");
@@ -587,7 +587,7 @@ int main() {
     // Source trims, stretch and gain are printed once and fully recoverable;
     // history media is never treated as disposable cache or shared local paths.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 256, false);
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Edited audio");
         const auto id = controller.importAudio(tone, track, 1.0);
@@ -602,7 +602,7 @@ int main() {
         clip.gain = 0.6f;
         clip.pan = -0.2f;
         controller.restoreProject(project, "Edited source");
-        daw::EngineController rack{daw::EngineController::TestRuntime{}};
+        daw::EngineController rack{};
         rack.initialize(48000, 256, false);
         const auto rackTrack = rack.addTrack(daw::TrackKind::Audio, "Rack");
         rack.addInsert(rackTrack, daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
@@ -637,7 +637,7 @@ int main() {
 
     // History protects every original comp/take file from explicit take cleanup.
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000, 256, false);
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Comp history");
         const auto id = controller.importAudio(tone, track, 0.0);
@@ -645,7 +645,7 @@ int main() {
         writeTone(takeFile);
         const auto take = controller.addTakeFromFile(track, id, takeFile);
         const auto original = *controller.audioClip(track, id);
-        daw::EngineController rack{daw::EngineController::TestRuntime{}};
+        daw::EngineController rack{};
         rack.initialize(48000, 256, false);
         const auto rackTrack = rack.addTrack(daw::TrackKind::Audio, "Rack");
         rack.addInsert(rackTrack, daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
@@ -669,7 +669,7 @@ int main() {
               "unused-take cleanup preserves historical audio");
         const auto package = (dir / "comp-history.vlt").string();
         check(controller.saveProject(package).isOk(), "comp history package saves");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+        daw::EngineController reopened{};
         reopened.initialize(48000, 256, false);
         check(reopened.openProject(package).isOk() && reopened.restoreOfflineRenderOriginal(address).isOk(),
               "comp history and take media reopen from the portable package");

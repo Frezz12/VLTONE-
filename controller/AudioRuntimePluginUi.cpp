@@ -1,6 +1,5 @@
 #include "AudioRuntime.hpp"
 #include "Host/ParameterDiagnostics.hpp"
-#include "ProcessPluginInstance.hpp"
 #include "Internal/Cla2aInstance.hpp"
 #include "Internal/CompressorInstance.hpp"
 #include "Internal/DelayInstance.hpp"
@@ -59,12 +58,12 @@ plugins::PluginNode* AudioRuntime::pluginNode(const AudioPluginAddress& address)
 
 plugins::PluginInstance* AudioRuntime::pluginInstance(const AudioPluginAddress& address) const {
     auto* node = pluginNode(address);
-    return node ? node->instance() : nullptr;
+    return node && !safetyStopped.load(std::memory_order_acquire) && !node->faultBypassed() ? node->instance() : nullptr;
 }
 
 bool AudioRuntime::hasPlugin(const AudioPluginAddress& address, std::string_view uid) const {
-    const auto* plugin = pluginInstance(address);
-    return plugin && (uid.empty() || plugin->descriptor().uid == uid);
+    const auto* node = pluginNode(address);
+    return node && node->instance() && (uid.empty() || node->descriptor().uid == uid);
 }
 
 std::uint64_t AudioRuntime::pluginInstanceId(const AudioPluginAddress& address) const {
@@ -122,7 +121,7 @@ bool AudioRuntime::setPluginSlide(const AudioPluginAddress& address, int mode, d
 bool AudioRuntime::setPluginAutomationOverride(const AudioPluginAddress& address, const std::string& parameterId) {
     auto* node = pluginNode(address);
     auto* plugin = node ? node->instance() : nullptr;
-    if (!plugin) return false;
+    if (!plugin || node->faultBypassed()) return false;
     if (parameterId.empty()) { node->clearAutomationOverrides(); return true; }
     const auto index = parameterIndex(*plugin, plugin->parameters(), parameterId);
     if (index < 0) return false;
@@ -141,14 +140,17 @@ bool AudioRuntime::setPluginParameter(const AudioPluginAddress& address,
     const std::string& parameterId, double value) {
     auto* node = pluginNode(address);
     auto* plugin = node ? node->instance() : nullptr;
-    if (!plugin) return false;
+    if (!plugin || safetyStopped.load(std::memory_order_acquire) || node->faultBypassed() || !std::isfinite(value)) return false;
     const auto index = parameterIndex(*plugin, plugin->parameters(), parameterId);
     if (index < 0) return false;
     plugins::PluginEvent event;
     event.kind = plugins::PluginEvent::Kind::ParamValue;
     event.paramIndex = std::uint32_t(index);
     event.value = value;
-    node->pushEvent(event);
+    if (!node->pushEvent(event)) return false;
+    auto& edits = checkpointParameterEdits[node->instanceId()];
+    const InsertParameter change{parameterId, value, true};
+    overlayPendingParameters(edits, std::span{&change, 1});
     plugin->setParameterFromHost(std::uint32_t(index), value);
     plugins::logParameterWrite("knob", plugin, index, value);
     return true;
@@ -194,29 +196,29 @@ bool AudioRuntime::activateEqualizerComparison(const AudioPluginAddress& address
 std::optional<PluginEditorSnapshot> AudioRuntime::pluginEditorSnapshot(const AudioPluginAddress& address) const {
     const auto* plugin = pluginInstance(address);
     if (!plugin) return std::nullopt;
-    const auto* remote = dynamic_cast<const plugins::ProcessPluginInstance*>(plugin);
     const auto& descriptor = plugin->descriptor();
-    const auto editorStatus = remote ? remote->editorStatus() : 0;
     return PluginEditorSnapshot{{0, pluginInstanceId(address)}, descriptor.name, descriptor.uid,
-        descriptor.format, remote != nullptr, plugin->hasEditor(), remote ? editorStatus == 1 : plugin->isEditorOpen(),
-        remote && editorStatus == 2, remote ? remote->processId() : 0, remote && editorStatus == 3};
+        descriptor.format, plugin->hasEditor(), plugin->isEditorOpen()};
 }
+
 
 bool AudioRuntime::openPluginEditor(const AudioPluginAddress& address,
     void* parent, plugins::PluginEditorHost* host) {
     auto* plugin = pluginInstance(address);
     if (!plugin) return false;
-    if (dynamic_cast<plugins::ProcessPluginInstance*>(plugin)) return plugin->openEditor(nullptr, nullptr);
     return parent && host && plugin->openEditor(parent, host);
 }
 
 bool AudioRuntime::closePluginEditor(const AudioPluginAddress& address, bool onlyUnattached) {
     if (!address.instance) return false;
     const auto* slot = pluginSlot(address.channelId, address.slotId);
-    if (!slot) return false;
     // A wrapper can close after selection moved to the other dual-mono side.
-    auto node = slot->node;
-    if (!node || node->instanceId() != address.instance) node = slot->rightNode;
+    auto node = slot ? slot->node : nullptr;
+    if ((!node || node->instanceId() != address.instance) && slot) node = slot->rightNode;
+    if (!node || node->instanceId() != address.instance) {
+        const auto retired = retiringEditorNodes.find(address.instance);
+        if (retired != retiringEditorNodes.end()) node = retired->second;
+    }
     if (!node || node->instanceId() != address.instance) return false;
     auto* plugin = node->instance();
     if (!plugin || (onlyUnattached && plugin->isEditorOpen())) return false;
@@ -245,17 +247,9 @@ std::optional<PluginEditorSize> AudioRuntime::resizePluginEditor(const AudioPlug
 
 bool AudioRuntime::pumpPluginEditor(const AudioPluginAddress& address) {
     auto* plugin = pluginInstance(address);
-    if (!plugin || !plugin->isEditorOpen() || plugin->descriptor().format != plugins::Format::Vst ||
-        dynamic_cast<plugins::ProcessPluginInstance*>(plugin)) return false;
+    if (!plugin || !plugin->isEditorOpen() || plugin->descriptor().format != plugins::Format::Vst) return false;
     plugin->pumpMainThread();
     return true;
-}
-
-std::uint32_t AudioRuntime::pollPluginEditorShortcuts(const AudioPluginAddress& address, bool enabled) {
-    auto* remote = dynamic_cast<plugins::ProcessPluginInstance*>(pluginInstance(address));
-    if (!remote) return 0;
-    remote->setAutomationShortcutEnabled(enabled);
-    return remote->takeAutomationShortcuts();
 }
 
 EffectMeterSnapshot AudioRuntime::effectMeterSnapshot(const AudioPluginAddress& address) {
@@ -406,7 +400,7 @@ std::vector<InsertParameter> AudioRuntime::pluginParameterValues(const AudioPlug
         if (parameter.id.empty()) continue;
         const auto value = plugin->parameterValue(parameter.index);
         if (std::isfinite(value))
-            values.push_back({parameter.id, value, plugin->parameterNeedsStateRestore(parameter.index)});
+            values.push_back({parameter.id, value, false});
     }
     return values;
 }
@@ -433,6 +427,7 @@ bool AudioRuntime::clearInstrumentSample(const AudioPluginAddress& address) {
 
 bool AudioRuntime::restoreSlicerState(const AudioPluginAddress& address, const plugins::slicer::ControlState& state) {
     auto* node = pluginNode(address);
+    if (node && node->faultBypassed()) return false;
     auto* slicer = node ? dynamic_cast<plugins::slicer::SlicerInstance*>(node->instance()) : nullptr;
     if (!slicer) return false;
     preservePluginSourceForTransactions(address);
@@ -465,7 +460,7 @@ bool AudioRuntime::flushSamplerPrecompute(bool wait) {
     const auto flush = [&](const auto& slots) {
         for (const auto& slot : slots)
             for (const auto& node : {slot.node, slot.rightNode})
-                if (auto* sampler = node ? dynamic_cast<plugins::sampler::SamplerInstance*>(node->instance()) : nullptr) {
+                if (auto* sampler = node && !node->faultBypassed() ? dynamic_cast<plugins::sampler::SamplerInstance*>(node->instance()) : nullptr) {
                     if (wait) sampler->flushPendingPrecompute();
                     else sampler->pumpMainThread();
                     ready &= !sampler->precomputePending();
@@ -476,6 +471,30 @@ bool AudioRuntime::flushSamplerPrecompute(bool wait) {
         for (const auto& [clipId, clip] : channel.clipFx) flush(clip.inserts);
     }
     return ready;
+}
+
+double AudioRuntime::pluginParameterIncludingPending(const AudioPluginAddress& address,
+    const std::string& parameterId) {
+    // A CLAP/AU host edit may still be queued for the next audio block.
+    // Undo includes pending host edits; painting reads the rendered value
+    // without parking the audio callback.
+    const engine::RealtimeEngine::RenderGate gate(engine);
+    auto* node = pluginNode(address);
+    if (node && node->faultBypassed()) {
+        const auto snapshot = pluginStateSnapshot(address, false);
+        for (const auto& parameter : snapshot.pending) if (parameter.id == parameterId) return parameter.value;
+        for (const auto& parameter : snapshot.parameters) if (parameter.id == parameterId) return parameter.value;
+        return 0;
+    }
+    auto value = pluginParameter(address, parameterId);
+    if (!node || !node->instance()) return value;
+    const auto parameters = node->instance()->parameters();
+    for (const auto& event : node->pendingParameterEvents()) {
+        if (event.paramIndex < parameters.size() &&
+            parameters[event.paramIndex].id == parameterId && std::isfinite(event.value))
+            value = event.value;
+    }
+    return value;
 }
 
 } // namespace daw

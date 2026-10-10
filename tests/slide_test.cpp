@@ -426,7 +426,7 @@ int main() {
               "Freehand simplification measures cent error against the complete original stroke");
     }
     {
-        EngineController c{EngineController::TestRuntime{}};
+        EngineController c{};
         c.initialize(48000, 512, false);
         auto track = c.addTrack(TrackKind::Midi, "Slide edits"), id = c.addMidiClip(track, 0, 12);
         c.setClipMidiObjects(track, id, {base}, {up}, "Fixture");

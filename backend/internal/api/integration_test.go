@@ -457,7 +457,7 @@ func TestPostgresAccountFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := model.AdminUser{ID: uuid.New(), Email: "owner@example.com", EmailKey: "owner@example.com", Nickname: "Owner", PasswordHash: adminHash, Status: model.UserActive}
+	admin := model.AdminUser{IsOwner: true, Permissions: []string{}, ID: uuid.New(), Email: "owner@example.com", EmailKey: "owner@example.com", Nickname: "Owner", PasswordHash: adminHash, Status: model.UserActive}
 	if err := db.Create(&admin).Error; err != nil {
 		t.Fatal(err)
 	}

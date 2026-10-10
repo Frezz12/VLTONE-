@@ -9,7 +9,7 @@ for (const width of [1440, 375]) test(`background collection upload, hide, edit 
   let items: typeof initial[] = [], uploaded = false;
   await page.route("**/api/v1/admin/**", async (route) => {
     const request = route.request(), path = new URL(request.url()).pathname;
-    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
+    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
     if (path.endsWith("/thumbnail") || path.endsWith("/image")) return route.fulfill({ contentType: "image/png", body: png });
     if (request.method() === "PUT") {
       expect(request.headers()["x-csrf-token"]).toBe("csrf");

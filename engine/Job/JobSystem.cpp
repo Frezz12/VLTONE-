@@ -153,18 +153,15 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
     // next pass opens simply keeps working instead of dropping out and back in.
     while (m_completed.load(std::memory_order_acquire) + local <
            m_target.load(std::memory_order_acquire)) {
-        if (mustFinish && m_sink.poll) {
-            local += m_sink.poll(m_sink.context);
-            if (m_completed.load(std::memory_order_acquire) + local >=
-                m_target.load(std::memory_order_acquire)) break;
-        }
+
         if (index >= m_passWorkerCount.load(std::memory_order_relaxed)) break;
         std::uint32_t item = 0;
         if (acquireItem(index, item)) {
             if (waitingSince) { waited += rt::nowNanos() - waitingSince; waitingSince = 0; }
             idleSpins = 0;
             idleSince = {};
-            if (m_sink.execute(m_sink.context, item, index)) ++local;
+            m_sink.execute(m_sink.context, item, index);
+            ++local;
             if (local >= kFlushEvery) {
                 m_completed.fetch_add(local, std::memory_order_release);
                 local = 0;

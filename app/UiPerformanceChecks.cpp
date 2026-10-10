@@ -3,6 +3,7 @@
 #include "MainWindow.hpp"
 #include "InternalEditorFrame.hpp"
 #include "PluginEditorWindow.hpp"
+#include "NotificationCenter.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include "graphics/SceneRecorder.hpp"
 #include "TrackListWidget.hpp"
@@ -27,6 +28,8 @@
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
+#include <QMenu>
+#include <QKeyEvent>
 #include <QMimeData>
 #include <QUrl>
 #include <QFileInfo>
@@ -69,7 +72,7 @@
 #include <cstdio>
 
 bool TimelineWidget::checkInterruptedPointerGestureForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     controller.initialize(48000.0, 512, false);
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.emplace_back();
@@ -185,7 +188,7 @@ bool TimelineWidget::checkGridAppearanceForTest() {
     {
         const Theme savedTheme = th();
         const auto savedTint = ui::selectionTint();
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         auto& project = const_cast<daw::ProjectModel&>(controller.project());
         project.tempo = 120.0;
@@ -226,7 +229,7 @@ bool TimelineWidget::checkGridAppearanceForTest() {
                             raster.setDevicePixelRatio(dpr);
                             raster.fill(palette.background);
                             QPainter p(&raster);
-                            p.setClipRect(QRect(0, timeline.rulerHeight(), 320, 400 - timeline.rulerHeight()));
+                            p.setClipRect(QRect(0, timeline.tracksTop(), 320, 400 - timeline.tracksTop()));
                             timeline.drawLanes(p);
                             return raster;
                         };
@@ -307,13 +310,13 @@ bool TimelineWidget::checkAdaptiveGridForTest() {
                 // Inspect actual grid pixels after a fractional viewport pan.
                 // Beat/bar overlays must not secretly reintroduce dense lines.
                 m_scrollSeconds = stepSeconds * 0.375;
-                QImage raster(width(), rulerHeight() + 5, QImage::Format_ARGB32_Premultiplied);
+                QImage raster(width(), tracksTop() + 5, QImage::Format_ARGB32_Premultiplied);
                 raster.fill(Qt::transparent);
                 { QPainter p(&raster); p.setClipRect(raster.rect()); drawGrid(p); }
                 int lastLine = -1, lines = 0;
                 bool inside = false;
                 for (int x = 0; x < raster.width(); ++x) {
-                    const bool ink = qAlpha(raster.pixel(x, rulerHeight() + 2)) > 0;
+                    const bool ink = qAlpha(raster.pixel(x, tracksTop() + 2)) > 0;
                     if (ink && !inside) {
                         if (lastLine >= 0) ok &= x - lastLine >= stepPixels - 1.01;
                         // Snapping and rendered lines share the same bar-1 origin.
@@ -406,7 +409,16 @@ bool TimelineWidget::checkGestureGridStabilityForTest() {
 }
 
 bool TimelineWidget::checkFileDropPreviewForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    const auto chooseImport = [](int index = 0) {
+        QTimer::singleShot(0, qApp, [index] {
+            if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+                menu->setActiveAction(menu->actions().at(index));
+                QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QApplication::sendEvent(menu, &enter);
+            }
+        });
+    };
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false)) return false;
     const std::string track = controller.addTrack(daw::TrackKind::Audio, "Drop preview");
     TimelineWidget timeline(&controller);
@@ -473,15 +485,127 @@ bool TimelineWidget::checkFileDropPreviewForTest() {
     QApplication::sendEvent(&timeline, &reenter);
     const double expected = timeline.fileDropStart(position, Qt::AltModifier);
     QDropEvent drop(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    chooseImport();
     QApplication::sendEvent(&timeline, &drop);
     const auto* landed = controller.project().findTrack(track);
-    return drop.isAccepted() && !timeline.m_dropActive && timeline.m_dropFile.isEmpty() &&
+    if (!(drop.isAccepted() && !timeline.m_dropActive && timeline.m_dropFile.isEmpty() &&
            landed && landed->clips.size() == 1 &&
-           std::abs(landed->clips.front().startSeconds - expected) < 1e-9;
+           std::abs(landed->clips.front().startSeconds - expected) < 1e-9)) return false;
+
+    // A browser sample dropped on a selected clip replaces only the selected
+    // audio clips on that lane, even when the selection spans other tracks.
+    const std::string first = landed->clips.front().id;
+    const double originalDuration = landed->clips.front().durationSeconds;
+    const std::string second = controller.importAudio(path.toStdString(), track, 6.1);
+    const std::string untouchedClip = controller.importAudio(path.toStdString(), track, 9.2);
+    const std::string otherTrack = controller.addTrack(daw::TrackKind::Audio, "Other lane");
+    const std::string otherClip = controller.importAudio(path.toStdString(), otherTrack, 3.0);
+    timeline.selectClips({{QString::fromStdString(track), QString::fromStdString(first)},
+                          {QString::fromStdString(track), QString::fromStdString(second)},
+                          {QString::fromStdString(otherTrack), QString::fromStdString(otherClip)}});
+    controller.setClipGain(track, first, 0.4f);
+    const auto originalSelectionImage = render();
+    const QString replacement = fixture.filePath("new-kick.wav");
+    for (size_t i = 0; i < samples.size(); ++i)
+        samples[i] = float(0.8 * std::cos(i * 0.1) * std::exp(-double(i) / 2000));
+    if (!writer.open(replacement.toStdString(), 48000, 1) ||
+        !writer.write(&channel, 12000) || !writer.close()) return false;
+    // Avoid a modal preparation dialog in this synthetic drop check.
+    daw::EngineController::PreparedAudio prepared;
+    if (!daw::EngineController::prepareAudio(replacement.toStdString(), 48000, prepared) ||
+        !controller.adoptPreparedAudio(std::move(prepared))) return false;
+    QMimeData replacementMime;
+    replacementMime.setUrls({QUrl::fromLocalFile(replacement)});
+    const QPoint target(timeline.secondsToX(expected + 0.1), timeline.laneTop(0) + 15);
+    QDragEnterEvent replaceEnter(target, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &replaceEnter);
+    if (!replaceEnter.isAccepted() || !timeline.m_dropSingleAudio ||
+        timeline.audioReplacementTargets(target).size() != 2) return false;
+    if (timeline.m_dropReplacementClips.size() != 2 ||
+        timeline.m_dropReplacementClips.at(second).filePath != replacement.toStdString() ||
+        timeline.m_dropReplacementClips.at(second).name != "new-kick" ||
+        std::abs(timeline.m_dropReplacementClips.at(second).durationSeconds - 0.25) > 1e-9 ||
+        controller.audioClip(track, second)->filePath != path.toStdString()) return false;
+    const auto replacementPreview = render();
+    // The non-hovered selected copy shows new media too. Compare inside its
+    // waveform, away from both the dashed outline and the replacement badge.
+    const QRect secondWave(timeline.secondsToX(6.1) + 3, timeline.laneTop(0) + 22,
+                           18, 12);
+    const QRect otherLane(0, timeline.laneTop(1), timeline.width(), timeline.laneBodyHeightAt(1));
+    if (originalSelectionImage.copy(secondWave) == replacementPreview.copy(secondWave) ||
+        originalSelectionImage.copy(otherLane) != replacementPreview.copy(otherLane)) return false;
+    if (const QString shot = qEnvironmentVariable("VLT_FILE_REPLACE_SHOT"); !shot.isEmpty())
+        if (!replacementPreview.save(shot)) return false;
+    const QPoint gap(timeline.secondsToX(5.5), target.y());
+    QDragMoveEvent intoGap(gap, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &intoGap);
+    if (!timeline.audioReplacementTargets(gap).empty() || !timeline.m_dropReplacementClips.empty()) return false;
+    const auto movedAway = render();
+    if (originalSelectionImage.copy(secondWave) != movedAway.copy(secondWave)) return false;
+    QDragLeaveEvent replaceLeave;
+    QApplication::sendEvent(&timeline, &replaceLeave);
+    if (render() != originalSelectionImage || !timeline.m_dropReplacementClips.empty()) return false;
+    QDragEnterEvent replaceReenter(target, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &replaceReenter);
+    QDragMoveEvent back(target, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &back);
+    const auto undoDepth = controller.undoDepth();
+    QDropEvent replaceDrop(target, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    chooseImport();
+    QApplication::sendEvent(&timeline, &replaceDrop);
+    const auto* replaced = controller.audioClip(track, first);
+    if (!replaceDrop.isAccepted() || !replaced || replaced->filePath != replacement.toStdString() ||
+        replaced->name != "new-kick" || replaced->startSeconds != expected ||
+        std::abs(replaced->durationSeconds - 0.25) > 1e-9 || replaced->gain != 0.4f ||
+        controller.audioClip(track, second)->filePath != replacement.toStdString() ||
+        controller.audioClip(track, second)->startSeconds != 6.1 ||
+        controller.audioClip(track, untouchedClip)->filePath != path.toStdString() ||
+        controller.audioClip(otherTrack, otherClip)->filePath != path.toStdString() ||
+        controller.project().findTrack(track)->clips.size() != 3 ||
+        timeline.m_selection.size() != 3 || controller.undoDepth() != undoDepth + 1) return false;
+    controller.undo();
+    if (controller.audioClip(track, first)->filePath != path.toStdString() ||
+        controller.audioClip(track, second)->filePath != path.toStdString() ||
+        std::abs(controller.audioClip(track, first)->durationSeconds - originalDuration) > 1e-9) return false;
+    controller.redo();
+    if (controller.audioClip(track, second)->filePath != replacement.toStdString()) return false;
+    const auto depth = controller.undoDepth();
+    if (controller.replaceAudioClips(track, {first, second}, fixture.filePath("missing.wav").toStdString()) ||
+        controller.replaceAudioClips(track, {first, otherClip}, path.toStdString()) ||
+        controller.undoDepth() != depth ||
+        controller.audioClip(track, first)->filePath != replacement.toStdString()) return false;
+    // Unselected clips and multi-file drags keep ordinary insertion semantics.
+    const QPoint unselected(timeline.secondsToX(9.3), target.y());
+    if (!timeline.audioReplacementTargets(unselected).empty()) return false;
+    QMimeData multiple;
+    multiple.setUrls({QUrl::fromLocalFile(path), QUrl::fromLocalFile(replacement)});
+    QDragEnterEvent multiEnter(target, Qt::CopyAction, &multiple, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &multiEnter);
+    if (timeline.m_dropSingleAudio) return false;
+    QDragLeaveEvent cancel;
+    QApplication::sendEvent(&timeline, &cancel);
+    QDragEnterEvent samplerEnter(gap, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &samplerEnter);
+    const auto beforeSampler = controller.undoDepth();
+    const auto beforeTracks = controller.project().tracks.size();
+    const double samplerStart = timeline.fileDropStart(gap, Qt::NoModifier);
+    QDropEvent samplerDrop(gap, Qt::CopyAction, &replacementMime, Qt::LeftButton, Qt::NoModifier);
+    chooseImport(1);
+    QApplication::sendEvent(&timeline, &samplerDrop);
+    if (!samplerDrop.isAccepted() || controller.project().tracks.size() != beforeTracks + 1 ||
+        controller.undoDepth() != beforeSampler + 1) return false;
+    const auto& sampled = controller.project().tracks.back();
+    if (sampled.instrument.uid != "daw.sampler" || sampled.clips.size() != 1 ||
+        sampled.clips.front().kind != daw::ClipKind::Midi ||
+        sampled.clips.front().startSeconds != samplerStart ||
+        sampled.clips.front().notes.size() != 1) return false;
+    controller.undo();
+    if (controller.project().tracks.size() != beforeTracks) return false;
+    return !timeline.m_dropActive && !timeline.m_dropSingleAudio && timeline.m_dropFile.isEmpty();
 }
 
 bool TimelineWidget::checkClipTrimPreviewForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000.0, 512, false)) return false;
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear();
@@ -571,7 +695,7 @@ bool TimelineWidget::checkClipTrimPreviewForTest() {
     // through the GPU workspace. Controller-only trim tests missed the MIDI
     // head being treated as a move, and an audio-only stretch lookup returned
     // zero for MIDI, magnifying its source offset by 100.
-    daw::EngineController gestures{daw::EngineController::TestRuntime{}};
+    daw::EngineController gestures{};
     if (!gestures.initialize(48000, 512, false)) return false;
     auto& document = const_cast<daw::ProjectModel&>(gestures.project());
     document.tracks.clear(); document.invalidateTrackIndex();
@@ -809,7 +933,7 @@ bool checkMixerPerformance() {
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false)) return false;
     // Real mixer controls with deterministic slots; no device or vendor DSP.
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
@@ -1136,19 +1260,19 @@ bool checkUiScaling() {
           "lost mouse release stops playhead, marquee and time selection");
     if (qEnvironmentVariableIsSet("VLT_POINTER_RELEASE_CHECK_ONLY")) return ok;
     check(TimelineWidget::checkFileDropPreviewForTest(),
-          "file drop ghost tracks duration, snap bypass, reversal, new lane, cancellation and committed position");
+          "live replacement waveforms, hover restoration, track scoping, cancellation and grouped undo/redo");
     if (qEnvironmentVariableIsSet("VLT_FILE_DROP_CHECK_ONLY")) return ok;
     check(TimelineWidget::checkClipTrimPreviewForTest(),
           "live audio/MIDI/Pattern/automation trim stays visible across tile boundaries and reversals");
     if (qEnvironmentVariableIsSet("VLT_CLIP_TRIM_CHECK_ONLY")) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         if (!controller.initialize(48000, 512, false)) return false;
         PianoRollWindow editor(&controller);
         check(editor.checkMidiFileActionsForTest(), "trimmed MIDI piano-roll source bounds, seeking and export");
         return ok;
     }
     const auto settle = [](int ms = 80) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     controller.initialize(48000.0, 512, false);
     TimelineWidget gridProbe(&controller);
     gridProbe.resize(200, 120);
@@ -1621,7 +1745,7 @@ bool ui::checkAudioTimelinePerformance() {
     audio::AudioRecorder writer;
     if (!writer.writeWAVFile(path, source, 48000).isOk()) return false;
     for (unsigned block : {32,64,128,512}) for (bool recording : {false,true}) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000,block,false);
         controller.setRecordDirectory(files.path().toStdString());
         const unsigned realtimeHelpers = controller.configureAudioWorkersForTest(true);
@@ -1819,6 +1943,8 @@ bool ui::checkWorkspaceMotionPerformance() {
 bool MainWindow::checkWorkspaceMotionForTest() {
     const QString targetName = qEnvironmentVariable("VLT_MOTION_TARGET", "sampler");
     if (targetName != "sampler" && targetName != "native" && targetName != "mixer" && targetName != "browser") return false;
+    const bool overMixer = qEnvironmentVariableIntValue("VLT_MOTION_OVER_MIXER") != 0;
+    const bool transparentFrame = qEnvironmentVariableIntValue("VLT_MOTION_TRANSPARENT_FRAME") != 0;
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
@@ -1831,6 +1957,14 @@ bool MainWindow::checkWorkspaceMotionForTest() {
         track.id = "motion-track-" + std::to_string(t);
         track.name = "Track " + std::to_string(t);
         track.kind = daw::TrackKind::Midi;
+        if (overMixer) {
+            for (int i = 0; i < 12; ++i) {
+                daw::InsertModel insert;
+                insert.id = track.id + "-insert-" + std::to_string(i);
+                insert.name = "Effect " + std::to_string(i + 1);
+                track.inserts.push_back(std::move(insert));
+            }
+        }
         for (int c = 0; c < 40; ++c) {
             daw::ClipModel clip;
             clip.id = track.id + "-clip-" + std::to_string(c);
@@ -1852,13 +1986,39 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     auto* editor = m_pluginEditors.isEmpty() ? nullptr : m_pluginEditors.begin().value();
     auto* frame = editor ? m_internalEditorFrames.value(editor, nullptr) : nullptr;
     if (!frame || !editor->isEditorInitialized()) return false;
+    QTimer noticeUpdates;
+    if (qEnvironmentVariableIntValue("VLT_MOTION_NOTICES") != 0) {
+        if (!m_audioNotifications) return false;
+        for (int i = 0; i < 4; ++i) {
+            ui::Notification notice;
+            notice.id = QStringLiteral("motion-notice-%1").arg(i);
+            notice.title = tr("%1 — %2").arg(QStringLiteral("Compressor"), QStringLiteral("Track %1").arg(i + 1));
+            notice.message = tr("Effect disabled. The track continues without it. Recovery will wait until playback and monitoring stop.");
+            notice.incident = i + 1;
+            notice.actions.push_back({tr("Stop and restore"), [] {}});
+            m_audioNotifications->showNotification(std::move(notice));
+        }
+        connect(&noticeUpdates, &QTimer::timeout, this, [this] {
+            ui::Notification notice;
+            notice.id = QStringLiteral("motion-notice-3");
+            notice.title = tr("Audio device unavailable");
+            notice.message = tr("Trying to reconnect the audio device. Any interrupted take has been preserved.");
+            notice.incident = 4;
+            notice.actions.push_back({tr("Reconnect"), [] {}});
+            m_audioNotifications->showNotification(std::move(notice));
+        });
+        noticeUpdates.start(700);
+    }
     if (targetName == "mixer" || targetName == "browser") hideInternalWindow(editor);
     else {
         // The native case exercises the same HWND host as vendor editors; the
         // content remains the deterministic built-in Sampler, not vendor DSP.
         if (targetName == "native") frame->prepareForNativeSurface();
+        // Diagnostic A/B switch confined to this test entry point.
+        if (overMixer && transparentFrame)
+            frame->setAttribute(Qt::WA_OpaquePaintEvent, false);
         frame->resizeForContent(editor->size().expandedTo(editor->minimumSize()));
-        frame->move(100, 130);
+        frame->move(100, overMixer ? 420 : 130);
         frame->present();
     }
     QPointer<ui::graphics::WorkspaceSurface> surface = findChild<ui::graphics::WorkspaceSurface*>();
@@ -1879,6 +2039,28 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     }
     settle(500);
     if (surface && (!surface->quickWindow()->isExposed() || surface->quickWindow()->grabWindow().isNull())) return false;
+    // Count damage separately from scene submissions: a native plugin moves
+    // through Cocoa/Win32 and need not submit a new frame of the workspace.
+    struct PaintProbe final : QObject {
+        QWidget* mixer = nullptr;
+        QWidget* editor = nullptr;
+        bool measuring = false;
+        quint64 mixerPaints = 0, editorPaints = 0, mixerPixels = 0;
+        bool eventFilter(QObject* object, QEvent* event) override {
+            if (!measuring || event->type() != QEvent::Paint) return false;
+            auto* widget = qobject_cast<QWidget*>(object);
+            if (widget && (widget == mixer || mixer->isAncestorOf(widget))) {
+                ++mixerPaints;
+                for (const QRect& rect : static_cast<QPaintEvent*>(event)->region())
+                    mixerPixels += quint64(rect.width()) * rect.height();
+            }
+            if (widget && (widget == editor || editor->isAncestorOf(widget))) ++editorPaints;
+            return false;
+        }
+    } paints;
+    paints.mixer = m_mixer;
+    paints.editor = frame;
+    qApp->installEventFilter(&paints);
     if (targetName == "browser") { setBrowserVisible(true); settle(150); }
     QWidget* target = targetName == "mixer" ? m_mixerHandle : targetName == "browser" ? m_browserHandle
         : frame->findChild<QWidget*>("InternalEditorTitleBar");
@@ -1898,10 +2080,15 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     };
     sendMouse(QEvent::MouseButtonPress, anchor);
     QElapsedTimer travel; travel.start();
+    QElapsedTimer inputInterval; inputInterval.start();
     int inputs = 0, changes = 0;
+    bool lostExposure = false;
     QTimer gesture;
     gesture.setTimerType(Qt::PreciseTimer);
     connect(&gesture, &QTimer::timeout, this, [&] {
+        if (paints.measuring) ui::perf::sample("motion.input.interval.ms", inputInterval.nsecsElapsed() / 1e6);
+        if (paints.measuring && surface && !surface->quickWindow()->isExposed()) lostExposure = true;
+        inputInterval.restart();
         const double phase = travel.elapsed() * 6.283185307179586 / 1600.;
         lastGlobal = anchor + (targetName == "browser" ? QPointF(std::sin(phase) * 80, 0)
             : targetName == "mixer" ? QPointF(0, std::sin(phase) * 100)
@@ -1909,7 +2096,14 @@ bool MainWindow::checkWorkspaceMotionForTest() {
         QWidget* moving = targetName == "mixer" || targetName == "browser" ? target->parentWidget() : frame;
         const QRect before = moving->geometry();
         ui::perf::Scope cost("motion.input.ms");
-        sendMouse(QEvent::MouseMove, lastGlobal);
+        // The overlap benchmark measures repaint work even if another app
+        // takes focus during the run. Gesture routing/cancellation is covered
+        // by the ordinary motion case and InternalEditorFrame's input checks.
+        if (overMixer && (targetName == "native" || targetName == "sampler")) {
+            if (transparentFrame)
+                frame->setAttribute(Qt::WA_OpaquePaintEvent, false);
+            frame->move(QPoint(100, 420) + (lastGlobal - anchor).toPoint());
+        } else sendMouse(QEvent::MouseMove, lastGlobal);
         if (before != moving->geometry()) ++changes;
         ++inputs;
     });
@@ -1919,15 +2113,28 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     const auto staticBefore = m_timeline->staticFramePaintCountForTest();
     const auto tilesBefore = m_timeline->gpuLaneTileBuildsForTest();
     QElapsedTimer measured; measured.start();
-    settle(4800);
+    const double cpuBefore = ui::guiThreadCpuMs();
+    paints.measuring = true;
+    std::printf("WORKSPACE_MOTION_READY pid=%lld over_mixer=%d\n", qint64(QCoreApplication::applicationPid()), overMixer);
+    std::fflush(stdout);
+    settle(qEnvironmentVariableIsSet("VLT_MOTION_MS") ? std::clamp(qEnvironmentVariableIntValue("VLT_MOTION_MS"), 2000, 60000) : 4800);
+    const double guiCpu = ui::guiThreadCpuMs() - cpuBefore;
+    paints.measuring = false;
     gesture.stop(); sendMouse(QEvent::MouseButtonRelease, lastGlobal);
     const auto elapsed = measured.elapsed();
     ui::perf::flush();
     const auto tileBuilds = m_timeline->gpuLaneTileBuildsForTest() - tilesBefore;
+    std::printf("WORKSPACE_MOTION_PAINT gui_cpu_ms=%.3f mixer_paints=%llu editor_paints=%llu mixer_logical_pixels=%llu\n",
+        guiCpu, static_cast<unsigned long long>(paints.mixerPaints),
+        static_cast<unsigned long long>(paints.editorPaints), static_cast<unsigned long long>(paints.mixerPixels));
     std::printf("WORKSPACE_MOTION target=%s backend=%s tracks=%zu inputs=%d changes=%d frames=%d elapsed_ms=%lld timeline_static_paints=%llu lane_tile_builds=%llu\n",
         targetName.toUtf8().constData(), surface ? "gpu" : "widgets", project.tracks.size(), inputs, changes, frames,
         static_cast<long long>(elapsed), static_cast<unsigned long long>(m_timeline->staticFramePaintCountForTest() - staticBefore),
         static_cast<unsigned long long>(tileBuilds));
+    if (lostExposure || (overMixer && targetName == "native" && !paints.editorPaints)) {
+        std::fprintf(stderr, "Motion benchmark lost native exposure; discard these timings\n");
+        return false;
+    }
     // Release can commit a final layout after the last submitted GPU frame.
     // Pixel probes below compare the settled presentation with widget geometry.
     settle(150);
@@ -1988,7 +2195,9 @@ bool MainWindow::checkWorkspaceMotionForTest() {
             return false;
         }
     }
-    return !failed && changes > 20 && (!surface || frames > 20);
+    // A native window's motion is presented by the OS. An unchanged Quick
+    // workspace is allowed to stay asleep beneath it.
+    return !failed && changes > 20 && (!surface || targetName == "native" || frames > 20);
 }
 
 // Real-project fixture, using the complete workspace. It never opens a device

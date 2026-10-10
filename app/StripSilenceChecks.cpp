@@ -25,7 +25,7 @@ bool StripSilenceDialog::checkForTest(const QString& screenshot) {
         std::fprintf(stderr, "%s Strip Silence UI: %s\n", value ? "PASS" : "FAIL", what);
         ok &= value; return value;
     };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     controller.setTempo(120);
     auto prefs = controller.recordingPrefs();

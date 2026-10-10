@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Host/PluginInstance.hpp"
-#include "HostedPluginFactory.hpp"
 #include "plugins/PluginCache.hpp"
 
 #include <atomic>
@@ -82,23 +81,8 @@ struct ScanSnapshot {
 /// it.
 class PluginManager {
 public:
-    using HostingMode = plugins::HostingMode;
     explicit PluginManager(std::string cachePath = PluginCache::defaultPath());
     ~PluginManager();
-    /// Control thread. Applies to newly created external instances; existing
-    /// slots retain their owner until explicitly reloaded. Isolation remains
-    /// opt-in while real-device and third-party compatibility are validated.
-    void setHostingMode(HostingMode mode, std::string executable = {}) {
-        const std::lock_guard lock(m_mutex);
-        m_hostingMode = mode;
-        if (!executable.empty()) m_pluginHostPath = std::move(executable);
-    }
-    HostingMode hostingMode() const noexcept { return m_hostingMode; }
-    const std::string& pluginHostPath() const noexcept { return m_pluginHostPath; }
-
-    PluginManager(const PluginManager&) = delete;
-    PluginManager& operator=(const PluginManager&) = delete;
-
     /// Platform-aware sibling helper lookup shared by scanner and workers.
     static std::string helperPath(std::string name);
 
@@ -116,18 +100,14 @@ public:
     /// scanning jobs nor callbacks into the source manager.
     struct CatalogSnapshot {
         PluginCache cache;
-        HostingMode hostingMode = HostingMode::Local;
-        std::string pluginHostPath;
     };
     CatalogSnapshot catalogSnapshot() const {
         const std::lock_guard lock(m_mutex);
-        return {m_cache, m_hostingMode, m_pluginHostPath};
+        return {m_cache};
     }
     void restoreCatalog(CatalogSnapshot snapshot) {
         const std::lock_guard lock(m_mutex);
         m_cache = std::move(snapshot.cache);
-        m_hostingMode = snapshot.hostingMode;
-        m_pluginHostPath = std::move(snapshot.pluginHostPath);
         m_catalogueRevision.fetch_add(1, std::memory_order_release);
     }
     void copyCatalogFrom(const PluginManager& source) {
@@ -224,8 +204,6 @@ private:
     std::string m_cachePath;
     const std::uint64_t m_instanceId;
     std::string m_scannerPath;
-    std::string m_pluginHostPath;
-    HostingMode m_hostingMode = HostingMode::Local;
     std::chrono::milliseconds m_timeout{30000};
 
     /// Guards the cache. The worker thread writes it, the UI thread reads it,

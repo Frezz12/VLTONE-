@@ -20,7 +20,7 @@ double gain(daw::EngineController& controller, const std::string& track) {
 }
 
 int main() {
-    daw::EngineController draft{daw::EngineController::TestRuntime{}}, target{daw::EngineController::TestRuntime{}};
+    daw::EngineController draft{}, target{};
     if (!check(draft.initialize(48000, 256, false).isOk() && target.initialize(48000, 256, false).isOk(),
                "controllers initialize without audio hardware")) return 1;
     daw::plugins::PluginDescriptor descriptor;

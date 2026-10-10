@@ -81,6 +81,7 @@ AudioRuntime::TransactionId AudioRuntime::captureTransaction() {
         for (const auto& slot : slots) for (const auto& node : {slot.node, slot.rightNode}) {
             if (!node || seen.contains(node.get())) continue;
             remember(node);
+            if (node->faultBypassed()) continue;
             if (dynamic_cast<plugins::channel_color::ChannelColorInstance*>(node->instance()) ||
                 dynamic_cast<plugins::mini::MiniModuleInstance*>(node->instance())) {
                 BuiltinState state; state.node = node;
@@ -122,7 +123,7 @@ void AudioRuntime::preservePluginSourceForTransactions(const AudioPluginAddress&
         if (!source) {
             auto snapshot = pluginStateSnapshot(address, true);
             if (!snapshot.ownsSample) return;
-            if (!snapshot.stateCaptured || snapshot.failed)
+            if (!snapshot.stateCaptured)
                 throw std::runtime_error("Could not capture the instrument source before editing.");
             source = std::make_shared<const AudioPluginStateSnapshot>(std::move(snapshot));
         }
@@ -169,18 +170,32 @@ audio::Result AudioRuntime::restoreTransaction(TransactionId id) {
         if (saved.hasPublished) {
             if (auto result = commitGraph(); !result) {
                 engine.graph() = saved.editable;
+                stopForFailedRollback();
                 return result;
             }
-        } else refreshIsolatedPlugins();
+        }
         engine.graph() = saved.editable;
         return audio::Result::ok();
     } catch (const std::exception& error) {
         engine.graph() = saved.editable;
+        stopForFailedRollback();
         return audio::Result::fail(audio::EngineError::Unknown, error.what());
     }
 }
 
 void AudioRuntime::releaseTransaction(TransactionId id) { sessionTransactions.erase(id); }
+
+void AudioRuntime::prunePluginSnapshots() {
+    std::unordered_set<std::uint64_t> retained;
+    for (const auto& address : pluginAddresses()) retained.insert(address.instance);
+    for (const auto& [id, saved] : sessionTransactions)
+        for (const auto& control : saved->controls)
+            if (const auto* plugin = std::get_if<SavedControl<plugins::PluginNode>>(&control))
+                retained.insert(plugin->node->instanceId());
+    std::erase_if(lastGoodPluginStates, [&](const auto& entry) { return !retained.contains(entry.first); });
+    std::erase_if(checkpointParameterEdits, [&](const auto& entry) { return !retained.contains(entry.first); });
+    std::erase_if(sharedCheckpointBytes, [&](const auto& entry) { return !retained.contains(entry.first); });
+}
 void AudioRuntime::collectTransactionRetirements(TransactionId id) {
     const auto found = sessionTransactions.find(id);
     if (found != sessionTransactions.end()) found->second->retired.clear();
@@ -188,15 +203,11 @@ void AudioRuntime::collectTransactionRetirements(TransactionId id) {
 
 audio::Result AudioRuntime::applySession(AudioSessionSpec session, bool reconfigurePlugins,
     std::span<const AudioPluginStateEdit> restores, std::span<const AudioPluginCheckpoint> checkpoints,
-    AudioSessionPublication* publication,
-    const std::function<void(const AudioSessionPublication&)>& preparePublication,
-    const std::function<void()>& preparationProgress) {
+    AudioSessionPublication* publication, const std::function<void()>& afterCommitBeforeRetire) {
     try {
         AudioSessionPublication preparedPublication;
         auto staging = stageSessionPlugins(session, restores, checkpoints,
-            publication || preparePublication ? &preparedPublication : nullptr, preparationProgress);
-        if (preparePublication) preparePublication(preparedPublication);
-        if (preparationProgress) preparationProgress();
+            publication ? &preparedPublication : nullptr);
         // Both leases outlive the gate: native construction, unused staged
         // processors and retired plugin destruction stay off the render stop.
         std::optional<ScopedAudioTransaction<AudioRuntime>> transaction;
@@ -207,6 +218,11 @@ audio::Result AudioRuntime::applySession(AudioSessionSpec session, bool reconfig
         if (!stagedSessionPluginsCurrent(staging))
             return audio::Result::fail(audio::EngineError::InvalidArgument, "Audio runtime changed during plugin preparation.");
         transaction.emplace(*this);
+        std::unordered_map<std::uint64_t, std::shared_ptr<plugins::PluginNode>> oldEditors;
+        if (afterCommitBeforeRetire) for (const auto& address : pluginAddresses()) {
+            const auto* slot = pluginSlot(address.channelId, address.slotId);
+            oldEditors.emplace(address.instance, address.right ? slot->rightNode : slot->node);
+        }
         auto result = audio::Result::ok();
         try {
             // applySession is a complete topology projection. Omitted chains
@@ -231,11 +247,24 @@ audio::Result AudioRuntime::applySession(AudioSessionSpec session, bool reconfig
             result = audio::Result::fail(audio::EngineError::Unknown, error.what());
         }
         if (result) {
+            if (afterCommitBeforeRetire) {
+                retiringEditorNodes = std::move(oldEditors);
+                try { afterCommitBeforeRetire(); }
+                catch (const std::exception& error) {
+                    retiringEditorNodes.clear();
+                    stopForFailedRollback();
+                    return audio::Result::fail(audio::EngineError::AudioThreadError,
+                        std::string("Could not retire the previous plugin editor: ") + error.what());
+                }
+                retiringEditorNodes.clear();
+            }
             if (publication) *publication = std::move(preparedPublication);
             return result;
         }
-        if (const auto rollback = transaction->restore(); !rollback)
+        if (const auto rollback = transaction->restore(); !rollback) {
+            stopForFailedRollback();
             return audio::Result::fail(rollback.error(), result.message() + "; audio rollback failed: " + rollback.message());
+        }
         return result;
     } catch (const std::exception& error) {
         return audio::Result::fail(audio::EngineError::Unknown, error.what());

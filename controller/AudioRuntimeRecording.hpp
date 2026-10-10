@@ -31,7 +31,7 @@ struct AudioCaptureStatus {
 };
 
 /// One bounded read contains both the capture clock and its peaks. No UI
-/// request borrows recorder storage or needs one IPC call per peak bucket.
+/// request borrows mutable recorder storage.
 struct AudioCapturePeaks {
     AudioCaptureStatus status;
     std::uint64_t firstBucket = 0;

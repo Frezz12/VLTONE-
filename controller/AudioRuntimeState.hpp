@@ -12,15 +12,10 @@
 
 namespace daw {
 
-// Clipboard/Undo preserve healthy pending edits; a failed isolated side may
-// instead expose its last completed checkpoint and confirmed parameter journal.
-enum class AudioPluginSnapshotPurpose { Exact, RecoverFailed };
-
 struct AudioPluginStateRequest {
     AudioPluginAddress address;
     bool includeState = true;
     std::optional<std::string> packagedSample;
-    AudioPluginSnapshotPurpose purpose = AudioPluginSnapshotPurpose::Exact;
 };
 
 struct AudioPluginStateRestore {
@@ -43,10 +38,13 @@ struct AudioPluginStateEdit {
     bool replaceExisting = false;
 };
 
-enum class AudioPluginRuntimeState { Local, Running, Failed, Restarting, Missing };
+enum class AudioPluginRuntimeState { Local, Missing, Faulted, AwaitingRecovery, Recovering };
 struct AudioPluginRuntimeStatus {
     AudioPluginRuntimeState state = AudioPluginRuntimeState::Missing;
     std::string detail;
+    bool canRetry = false;
+    AudioPluginAddress address;
+    std::uint64_t incident = 0;
 };
 
 // A single native-side snapshot. Recovery can retain an older opaque chunk
@@ -55,7 +53,7 @@ struct AudioPluginRuntimeStatus {
 struct AudioPluginStateSnapshot {
     AudioPluginAddress address;
     plugins::PluginDescriptor descriptor;
-    bool exists = false, failed = false, isolated = false;
+    bool exists = false;
     bool supportsState = false, stateCaptured = false;
     bool documentParametersAuthoritative = false;
     bool ownsSample = false;
@@ -66,10 +64,9 @@ struct AudioPluginStateSnapshot {
 };
 
 /// Prepared before a graph becomes audible. Imports carry canonical parameter
-/// mirrors, not native chunks or PCM; identities cover all available sides.
+/// mirrors, not native chunks or PCM.
 struct AudioSessionPublication {
     std::vector<AudioPluginStateSnapshot> imported;
-    std::vector<AudioPluginAddress> plugins;
 };
 
 inline void appendMissingParameters(std::vector<InsertParameter>& destination,
@@ -93,10 +90,6 @@ inline void overlayPendingParameters(std::vector<InsertParameter>& destination,
     }
 }
 
-// Exact snapshots retain edits queued for the next audio block. Recovery only
-// retains isolated-plugin values confirmed by completed processing.
-enum class AudioPluginCheckpointPurpose { Exact, Recovery };
-
 struct AudioPluginCheckpoint {
     struct Side {
         bool hasState = false;
@@ -108,11 +101,13 @@ struct AudioPluginCheckpoint {
         // require the retained StateEdit before pending host edits are replayed.
         // They must never be passed to native loadState as a fresh checkpoint.
         bool projectState = false;
+        bool operator==(const Side&) const = default;
     };
     std::string channelId, slotId, uid;
     plugins::Format format = plugins::Format::Unknown;
     Side left;
     std::optional<Side> right;
+    bool operator==(const AudioPluginCheckpoint&) const = default;
 };
 
 } // namespace daw

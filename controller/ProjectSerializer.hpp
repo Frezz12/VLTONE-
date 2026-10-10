@@ -53,7 +53,7 @@ public:
     /// reader defaults every field, which makes the format additive-tolerant in
     /// both directions — v1-v6 files load here, while additive fields remain
     /// ignorable by older readers.
-    static constexpr int kFormatVersion = 16; // Creator programming graphs and embedded custom nodes
+    static constexpr int kFormatVersion = 18; // Local rack groups and parameter presentation
 
     /// Write `project` into the package directory `packageDir` (created if
     /// needed). Referenced audio is copied into `<packageDir>/Content/`.

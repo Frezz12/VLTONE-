@@ -58,6 +58,7 @@ ClipWarpModel sliceWarp(const ClipWarpModel& warp, double beginBeat, double endB
 ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip) {
     ClipAudioVersionSource source;
     source.filePath = clip.filePath;
+    source.audioEdit = clip.audioEdit;
     source.asset = clip.asset;
     source.durationSeconds = clip.durationSeconds;
     source.offsetSeconds = clip.offsetSeconds;
@@ -82,6 +83,7 @@ ClipAudioVersionSource captureClipAudioVersion(const ClipModel& clip) {
 
 void applyClipAudioVersion(ClipModel& clip, const ClipAudioVersionSource& source) {
     clip.filePath = source.filePath;
+    clip.audioEdit = source.audioEdit;
     clip.asset = source.asset;
     clip.durationSeconds = source.durationSeconds;
     clip.offsetSeconds = source.offsetSeconds;
@@ -113,7 +115,7 @@ void retimeClipComp(ClipModel& clip, double ratio) {
     }
 }
 
-void retimeClipToTempo(ClipModel& clip, double ratio) {
+void retimeClipToTempo(ClipModel& clip, double ratio, bool retimeContent) {
     clip.startSeconds *= ratio;
     const bool stretch = clip.kind == ClipKind::Audio &&
                          (clip.warp.enabled || clip.sampleEdit.stretchMode != ClipStretchMode::Resample);
@@ -124,15 +126,17 @@ void retimeClipToTempo(ClipModel& clip, double ratio) {
     }
     if(clip.kind==ClipKind::Midi) {
         clip.offsetSeconds *= ratio;
-        retimeClipComp(clip,ratio);
-        for(auto& take:clip.takes){take.offsetSeconds*=ratio;take.lengthSeconds*=ratio;}
+        if(retimeContent) {
+            retimeClipComp(clip,ratio);
+            for(auto& take:clip.takes){take.offsetSeconds*=ratio;take.lengthSeconds*=ratio;}
+        }
     }
     if (stretch) {
         if (!clip.warp.enabled) {
             clip.sampleEdit.stretchTime *= ratio;
             if (!clip.warp.empty()) clip.warp.baselineDurationSeconds *= ratio;
         }
-        retimeClipComp(clip, ratio);
+        if(retimeContent) retimeClipComp(clip, ratio);
         // Analysis belongs to the heard clip. Its pitch is unchanged.
         if (clip.musicalAnalysis.tempo.bpm > 0) {
             clip.musicalAnalysis.tempo.bpm /= ratio;
@@ -386,7 +390,8 @@ constexpr double kMinCompSegment = 0.001;
 
 namespace {
 template <class Clip, class Member>
-decltype(auto) midiEntities(Clip& clip, Member member, const std::string& id) {
+auto midiEntities(Clip& clip, Member member, const std::string& id)
+    -> decltype(findTake(clip, id)->*member) {
     if (!clip.takes.empty()) {
         if (!id.empty()) for (auto& take : clip.takes) {
             auto& entities = take.*member;

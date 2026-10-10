@@ -15,7 +15,6 @@
 namespace fs = std::filesystem;
 namespace ap = audio::platform;
 namespace {
-bool isolated = false;
 struct CreationFailure {
     explicit CreationFailure(const char* uid) { set(uid); }
     ~CreationFailure() { set(""); }
@@ -29,7 +28,6 @@ struct CreationFailure {
     }
 };
 void selectHosting(daw::PluginManager& manager) {
-    if (isolated) manager.setHostingMode(daw::PluginManager::HostingMode::Isolated, DAW_PLUGIN_HOST_PATH);
 }
 auto initialize(daw::EngineController& controller, unsigned block) {
     selectHosting(controller.pluginManager());
@@ -108,7 +106,6 @@ ap::DecodedAudio render(daw::EngineController& c, const daw::rendering::Spec& sp
 }
 
 int main(int argc, char** argv) try {
-    isolated = argc == 2 && std::string_view(argv[1]) == "--isolated";
     TempDirectory temp;
     const auto source = temp.path / "tone.wav";
     const auto stemSource = temp.path / "stem-tone.wav";
@@ -120,7 +117,7 @@ int main(int argc, char** argv) try {
         daw::RenderSessionSpec session;
         ap::DecodedAudio reference;
         {
-            daw::EngineController c{daw::EngineController::TestRuntime{}};
+            daw::EngineController c{};
             require(bool(initialize(c, 128)), "initialize detached session");
             const auto a = track(c, source, "Detached");
             const auto slot = c.addInsert(a, plugin(DAW_TEST_CLAP_PATH, "com.daw.test.gain"));
@@ -134,7 +131,6 @@ int main(int argc, char** argv) try {
             require(session.sourceRevision() == c.projectRevision() && session.sourceGeneration() > 0,
                     "snapshot records source identity");
             c.newProject();
-            c.pluginManager().setHostingMode(daw::PluginManager::HostingMode::Local);
         }
         const auto retained = session;
         daw::rendering::Report report;
@@ -150,7 +146,7 @@ int main(int argc, char** argv) try {
         status = daw::EngineController::renderSession(retained, [](const auto&) { return false; }, report);
         require(bool(status) && report.cancelled && report.files.empty(), "detached cancellation");
         require(!daw::EngineController::renderSession({}, {}, report) && report.files.empty(), "reject empty session");
-        daw::EngineController invalid{daw::EngineController::TestRuntime{}};
+        daw::EngineController invalid{};
         auto bad = specFor(temp.path / "invalid-session"); bad.blockSize = 8193;
         session = retained;
         require(!invalid.captureRenderSession(bad, session) && !session.valid(), "failed capture clears stale session");
@@ -165,7 +161,7 @@ int main(int argc, char** argv) try {
     // Larger blocks are automatic only for audio arrangements. A probe makes
     // the activation size observable; MIDI and automation keep device timing.
     for (const std::string kind : {"audio", "midi", "automation"}) {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         require(bool(initialize(c, 128)), "initialize block selection");
         const auto a = track(c, source, "Block probe");
         require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, "review.block-size")).empty(),
@@ -228,7 +224,7 @@ int main(int argc, char** argv) try {
     // pre-roll and output lengths are calculated. Compare every file sample.
     for (const auto* uid : {"review.latency", "review.prepare", "review.callback",
                             "review.unstable"}) {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         require(bool(initialize(c, 64)), "initialize");
         const auto a = track(c, source, "Effect");
         track(c, source, "Parallel");
@@ -248,7 +244,7 @@ int main(int argc, char** argv) try {
     for (unsigned block : {8u, 64u, 512u, 2048u}) {
         for (const auto* uid : {"review.audio-latency", "review.once-restart",
                                 "review.redundant-restart"}) {
-            daw::EngineController c{daw::EngineController::TestRuntime{}};
+            daw::EngineController c{};
             require(bool(initialize(c, block)), "initialize deferred restart");
             const auto a = track(c, source, "Effect");
             const auto b = track(c, source, "Parallel");
@@ -283,7 +279,7 @@ int main(int argc, char** argv) try {
     // same live controller can immediately retry with an explicit FX bypass.
     for (const auto* uid : {"review.activation", "review.process", "review.clone", "review.dual",
                             "review.restart", "review.mode", "review.hardware", "review.nonfinite"}) {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         require(bool(initialize(c, 64)), "initialize failure case");
         const auto a = track(c, source, "Failure source");
         // Include a wide graph: the failure must cross a worker-thread boundary.
@@ -322,7 +318,7 @@ int main(int argc, char** argv) try {
     // Cancellation in a replacement pass must not publish a partial file or
     // turn into another retry. Preserve an existing user export as well.
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         require(bool(initialize(c, 64)), "initialize restart cancellation");
         const auto a = track(c, source, "Cancel");
         require(!c.addInsert(a, plugin(DAW_TEST_RENDER_CLAP_PATH, "review.audio-latency")).empty(),
@@ -348,7 +344,7 @@ int main(int argc, char** argv) try {
     // Different track latency plus additional master latency. Custom windows,
     // pre-roll, partial blocks, mono and stereo all retain the same origin.
     for (unsigned block : {8u, 64u, 512u}) {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         require(bool(initialize(c, block)), "initialize stems");
         const auto a = track(c, stemSource, "Delayed");
         const auto b = track(c, stemSource, "Dry");

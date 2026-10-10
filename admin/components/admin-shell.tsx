@@ -10,6 +10,8 @@ import appIcon from "@/app/icon.png";
 import { adminPollingAllowed, markAdminActivity } from "./admin-activity";
 import { adminNavigation } from "./admin-navigation";
 import { AdminCommandMenu } from "./admin-command-menu";
+import { canAdmin, canVisit, adminHome } from "./admin-permissions";
+import { useAdmin } from "./use-admin";
 import type { AdminSession } from "./use-admin";
 
 type CrashSummary = { id: string; app_version: string; platform: string; reason: string; occurred_at: string };
@@ -18,6 +20,9 @@ const lastCrashKey = "vlt-admin-last-crash";
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { session: access, error: accessError } = useAdmin();
+  const navigation = adminNavigation.map(group => ({ ...group, links: group.links.filter(link => canVisit(access?.admin, link.href)) })).filter(group => group.links.length);
+  useEffect(() => { if (access && pathname === "/" && !canVisit(access.admin, "/")) { const home = adminHome(access.admin); if (home !== "/") router.replace(home); } }, [access, pathname, router]);
   const [latestCrash, setLatestCrash] = useState<CrashSummary>();
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
   const [collapsed, setCollapsed] = useState(false);
@@ -52,7 +57,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     window.addEventListener("keydown", markActive);
     let cancelled = false;
     async function pollCrashes() {
-      if (!adminPollingAllowed()) return;
+      if (!adminPollingAllowed() || !canAdmin(access?.admin, "crashes.read")) return;
       try {
         const result = await api.request<{ crashes: CrashSummary[] }>("/v1/admin/crashes?limit=1");
         if (cancelled || !result.crashes[0]) return;
@@ -80,7 +85,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       window.removeEventListener("pointerdown", markActive);
       window.removeEventListener("keydown", markActive);
     };
-  }, []);
+  }, [access]);
 
   async function enableNotifications() {
     if (!("Notification" in window)) return;
@@ -107,7 +112,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <span className="admin-brand-icon"><NextImage src={appIcon} width={36} height={36} alt="" priority /></span>
         <span className="admin-brand-copy"><strong>VLTone</strong><small>Панель управления</small></span>
       </Link>{mobile && <button className="admin-icon-button" onClick={() => mobileMenu.current?.close()} aria-label="Закрыть навигацию"><X size={18} aria-hidden /></button>}</div>
-      <nav className="admin-nav" aria-label="Администрирование">{adminNavigation.map(group => <div className="admin-nav-group" key={group.label}>
+      <nav className="admin-nav" aria-label="Администрирование">{navigation.map(group => <div className="admin-nav-group" key={group.label}>
         <span className="admin-nav-label">{group.label}</span>
         {group.links.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -116,7 +121,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       </div>)}</nav>
       <div className="admin-side-foot">
         <a className="admin-side-action" aria-label="Открыть сайт" title="Открыть сайт" href="https://vltstudio.ru" target="_blank" rel="noreferrer"><ExternalLink size={18} aria-hidden /><span>Открыть сайт</span></a>
-        <button className="admin-notification-button" aria-label="Уведомления о крашах" title="Уведомления о крашах" onClick={() => void enableNotifications()} disabled={notificationPermission === "granted" || notificationPermission === "denied"}><BellRing size={18} aria-hidden /><span>{notificationPermission === "granted" ? "Уведомления включены" : notificationPermission === "denied" ? "Уведомления запрещены" : "Уведомления о крашах"}</span></button>
+        <button className="admin-notification-button" aria-label="Уведомления о крашах" title="Уведомления о крашах" onClick={() => void enableNotifications()} disabled={!canAdmin(access?.admin, "crashes.read") || notificationPermission === "granted" || notificationPermission === "denied"}><BellRing size={18} aria-hidden /><span>{notificationPermission === "granted" ? "Уведомления включены" : notificationPermission === "denied" ? "Уведомления запрещены" : "Уведомления о крашах"}</span></button>
         <button className="admin-side-action" aria-label="Выйти" title="Выйти" onClick={() => void signOut()} disabled={signingOut}><LogOut size={18} aria-hidden /><span>{signingOut ? "Выходим…" : "Выйти"}</span></button>
         {!mobile && <button className="admin-side-action admin-collapse" aria-label={collapsed ? "Развернуть боковую панель" : "Свернуть боковую панель"} onClick={() => { setCollapsed(!collapsed); try { localStorage.setItem("vlt-admin-sidebar-collapsed", String(!collapsed)); } catch { /* Optional preference. */ } }}>{collapsed ? <PanelLeftOpen size={18} aria-hidden /> : <PanelLeftClose size={18} aria-hidden />}<span>Свернуть панель</span></button>}
         <div className="admin-security-state"><ShieldCheck size={16} aria-hidden /><span>Действия сохраняются в аудите</span></div>
@@ -135,10 +140,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <main className="admin-main" id="admin-main" tabIndex={-1}>
       {shellError && <div className="vlt-error" role="alert">{shellError}</div>}
       {latestCrash && <div className="admin-crash-alert" role="status"><BellRing size={18} aria-hidden /><Link href="/crashes"><strong>Новый краш VLTONE</strong><span>{latestCrash.app_version} · {latestCrash.platform} · {latestCrash.reason}</span></Link><button onClick={() => setLatestCrash(undefined)} aria-label="Закрыть уведомление"><X size={16} /></button></div>}
-      {children}
+      {accessError && <div className="vlt-error" role="alert">{accessError}</div>}
+      {access ? canVisit(access.admin, pathname) ? children : <div className="vlt-card"><h1 className="vlt-title">Нет доступа к разделу</h1><p>Обратитесь к владельцу, чтобы изменить права.</p></div> : <p role="status">Проверяем доступ…</p>}
       </main>
     </div>
-    <AdminCommandMenu dialog={commandMenu} />
+    <AdminCommandMenu dialog={commandMenu} admin={access?.admin} />
     <dialog ref={mobileMenu} className="admin-mobile-menu" aria-label="Навигация админки" onClick={event => { if (event.target === event.currentTarget) mobileMenu.current?.close(); }}><div>{sidebar(true)}</div></dialog>
   </div>;
 }

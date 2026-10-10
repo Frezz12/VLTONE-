@@ -69,7 +69,7 @@ void clearLayout(QVBoxLayout* layout) {
 
 CreateTracksDialog::CreateTracksDialog(daw::EngineController& controller, QWidget* parent)
     : QDialog(parent), m_controller(controller),
-      m_draft(daw::EngineController::SecondaryRuntime{}, controller) {
+      m_draft() {
     setObjectName(QStringLiteral("CreateTracksDialog"));
     setWindowTitle(tr("Create tracks"));
     setWindowModality(Qt::WindowModal);

@@ -14,7 +14,7 @@ for (const width of [1440, 375]) test(`telemetry history, long reports and polli
   const arrivals = Array.from({ length: 25 }, (_, i) => ({ ...sample, id: `burst-${i}`, event_id: `burst-${i}`, recorded_at: new Date(Date.parse("2026-09-07T12:00:00Z") - i * 300000).toISOString() }));
   await page.route("**/api/v1/admin/**", async (route) => {
     const url = new URL(route.request().url()), path = url.pathname;
-    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
+    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
     if (path.endsWith(`/users/${userID}`)) return route.fulfill({ json: { user: { id: userID, nickname: "Тестировщик", email: "tester@example.com", status: "active", created_at: session.started_at }, devices: [], quota: { base_limit: 20000000, adjustment: 0, used_tokens: 0, remaining_tokens: 20000000 }, subscription: { plan: { display_name: "Demo" } }, counts: { launches: 1, crashes: 1, bugs: 0 } } });
     if (path.endsWith("/ledger")) return route.fulfill({ json: { entries: [] } });
     if (path.endsWith("/telemetry") && burst) return route.fulfill({ json: { sessions: [session], samples: url.searchParams.get("before") === "burst-cursor" ? [...arrivals.slice(20), sample] : arrivals.slice(0, 20), next_cursor: url.searchParams.has("before") ? "" : "burst-cursor" } });

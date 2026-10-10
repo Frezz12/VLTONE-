@@ -200,8 +200,10 @@ const at::Points& AutomationCurveView::curve() const {
 double AutomationCurveView::lengthBeats() const {
     const daw::ClipModel* c = clip();
     if (!c || !m_controller) return 16.0;
-    return std::max(0.25, daw::secondsToBeats(c->durationSeconds,
-                                              m_controller->project().tempo));
+    // The editor addresses the shared curve's source time. A trimmed instance
+    // only changes its playback window, never the time of shared breakpoints.
+    return std::max({0.25, c->contentOffsetBeats + daw::secondsToBeats(c->durationSeconds,
+        m_controller->project().tempo), c->automation.points.empty() ? 0.0 : c->automation.points.back().beats});
 }
 
 QRectF AutomationCurveView::plot() const {
@@ -1151,6 +1153,8 @@ void AutomationEditorWindow::updateTitle() {
     setWindowTitle(c && !c->name.empty()
                        ? tr("Automation — %1").arg(QString::fromStdString(c->name))
                        : tr("Automation"));
+    if (c) { const auto count = m_controller->linkedClips({m_trackId.toStdString(), c->id}).size();
+        if (count > 1) setWindowTitle(windowTitle() + tr(" · Linked: %1").arg(count)); }
 }
 
 namespace {

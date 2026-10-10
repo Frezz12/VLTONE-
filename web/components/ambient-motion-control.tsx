@@ -10,7 +10,7 @@ export function AmbientMotionControl({ locale }: { locale: string }) {
   const ru = locale === "ru";
 
   useEffect(() => {
-    const root = button.current?.closest<HTMLElement>(".studio-home");
+    const root = button.current?.closest<HTMLElement>("[data-motion-root], .studio-home");
     if (!root) return;
     const scenes = root.querySelectorAll<HTMLElement>("[data-motion-scene]");
     const observer = new IntersectionObserver(entries => {
@@ -31,7 +31,7 @@ export function AmbientMotionControl({ locale }: { locale: string }) {
   }, []);
 
   useEffect(() => {
-    const root = button.current?.closest<HTMLElement>(".studio-home");
+    const root = button.current?.closest<HTMLElement>("[data-motion-root], .studio-home");
     if (root) root.dataset.motionPaused = String(paused);
   }, [paused]);
 

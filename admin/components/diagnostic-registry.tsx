@@ -6,6 +6,7 @@ import { Download, RefreshCw, Save, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AdminShell } from "./admin-shell";
 import { adminPollingAllowed } from "./admin-activity";
+import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 import { downloadCsv } from "./export-csv";
 
@@ -17,6 +18,7 @@ type Draft = { status: string; internal_note: string };
 
 export function DiagnosticRegistry({ kind }: { kind: "bugs" | "crashes" | "audit" }) {
   const { session, error: sessionError } = useAdmin();
+  const canWrite = canAdmin(session?.admin, "bugs.write");
   const [items, setItems] = useState<Array<BugReport | CrashReport | AuditEntry>>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [error, setError] = useState("");
@@ -86,7 +88,7 @@ export function DiagnosticRegistry({ kind }: { kind: "bugs" | "crashes" | "audit
     </tr></thead><tbody>{visibleItems.map((raw) => {
       if (kind === "bugs") {
         const item = raw as BugReport; const draft = drafts[item.id] ?? { status: item.status, internal_note: item.internal_note ?? "" };
-        return <tr key={item.id}><td><span className="vlt-code">#{item.number}</span><div><strong>{item.title}</strong></div><div className="vlt-muted registry-description">{item.description}</div></td><td><label className="sr-only" htmlFor={`status-${item.id}`}>Статус бага #{item.number}</label><select id={`status-${item.id}`} className="vlt-input" value={draft.status} onChange={(event) => setDrafts((old) => ({ ...old, [item.id]: { ...draft, status: event.target.value } }))}>{statuses.map(status => <option key={status.value} value={status.value}>{status.label}</option>)}</select></td><td><label className="sr-only" htmlFor={`note-${item.id}`}>Внутренняя заметка</label><textarea id={`note-${item.id}`} className="vlt-input registry-note" value={draft.internal_note} onChange={(event) => setDrafts((old) => ({ ...old, [item.id]: { ...draft, internal_note: event.target.value } }))} /></td><td>{new Date(item.created_at).toLocaleString("ru")}</td><td><button className="vlt-button vlt-button-secondary" disabled={!!saving} onClick={() => void saveBug(item.id)}><Save size={15} aria-hidden />{saving === item.id ? "Сохранение…" : "Сохранить"}</button></td></tr>;
+        return <tr key={item.id}><td><span className="vlt-code">#{item.number}</span><div><strong>{item.title}</strong></div><div className="vlt-muted registry-description">{item.description}</div></td><td><label className="sr-only" htmlFor={`status-${item.id}`}>Статус бага #{item.number}</label><select disabled={!canWrite} id={`status-${item.id}`} className="vlt-input" value={draft.status} onChange={(event) => setDrafts((old) => ({ ...old, [item.id]: { ...draft, status: event.target.value } }))}>{statuses.map(status => <option key={status.value} value={status.value}>{status.label}</option>)}</select></td><td><label className="sr-only" htmlFor={`note-${item.id}`}>Внутренняя заметка</label><textarea disabled={!canWrite} id={`note-${item.id}`} className="vlt-input registry-note" value={draft.internal_note} onChange={(event) => setDrafts((old) => ({ ...old, [item.id]: { ...draft, internal_note: event.target.value } }))} /></td><td>{new Date(item.created_at).toLocaleString("ru")}</td><td><button className="vlt-button vlt-button-secondary" disabled={!canWrite || !!saving} onClick={() => void saveBug(item.id)}><Save size={15} aria-hidden />{saving === item.id ? "Сохранение…" : "Сохранить"}</button></td></tr>;
       }
       if (kind === "crashes") {
         const item = raw as CrashReport;

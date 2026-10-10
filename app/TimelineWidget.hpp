@@ -82,6 +82,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
                             QWidget* parent = nullptr);
     ~TimelineWidget() override;
     static bool checkMidiClipOpeningForTest();
+    static bool checkMidiSequenceForTest(const QString& images = {});
     /// Place the shared view controls directly above the right scroll rail.
     void setNavigationControls(QWidget* controls);
     /// Room for the ruler, view-control column and both scroll rails.
@@ -150,6 +151,13 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     void setRulerFormat(ui::RulerFormat format);
     ui::RulerFormat rulerFormat() const { return m_rulerFormat; }
     int rulerHeight() const;
+    int tracksTop() const;
+    // 0 time, 1 chords, 2 song sections. These occupy the track area only.
+    QVector<int> arrangementRows() const;
+    bool arrangementRowVisible(int row) const;
+    void setArrangementRowVisible(int row, bool visible);
+    void editArrangementLabel(int row, const QString& id = {}, double seconds = -1.0);
+    bool deleteSelectedArrangementLabel();
 
     /// Scale only the painted audio envelope. Playback gain and clip gain stay
     /// untouched; 1.0 is the default waveform height.
@@ -335,6 +343,8 @@ signals:
     /// The lanes scrolled vertically; the header column moves with them.
     void verticalScrollChanged(int y);
     void rulerHeightChanged(int height);
+    void arrangementRowsChanged();
+    void timeRowVisibilityRequested(bool visible);
     void projectEdited();
     /// Short, non-modal feedback for an arrangement action that cannot run.
     void operationStatus(const QString& message);
@@ -354,6 +364,7 @@ signals:
     void openPianoRollRequested(const QString& trackId, const QString& clipId);
     /// A Pattern clip or its parent lane was double-clicked.
     void openPatternRequested(const QString& patternId);
+    void openPatternClipRequested(const QString& patternId, const QString& clipId);
     /// A plain audio clip wants the shared Sample/Clip Editor.
     void openSampleEditorRequested(const QString& trackId, const QString& clipId);
     void openWarpEditorRequested(const QString& trackId, const QString& clipId);
@@ -379,6 +390,7 @@ protected:
     void resizeEvent(class QResizeEvent*) override;
     void showEvent(class QShowEvent*) override;
     void hideEvent(class QHideEvent*) override;
+    void mouseDoubleClickEvent(QMouseEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -449,6 +461,32 @@ private:
         QString clipId;
     };
 
+    enum class SequencePart { None, Midi, Sequence, Pitch, Division, Length, Step, Velocity };
+    struct SequenceHit {
+        ClipHit clip;
+        SequencePart part = SequencePart::None;
+        double beat = 0;
+        std::string noteId;
+        int velocity = 100;
+        double height = 1;
+    };
+    bool hitTestSequence(const QPoint& pos, SequenceHit& hit);
+    bool pressSequence(QMouseEvent* event);
+    void moveSequence(QMouseEvent* event);
+    void finishSequence(bool cancel = false);
+    void drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip, const QRectF& body);
+    void drawMidiSequence(QPainter& p, const daw::TrackModel& track,
+                          const daw::ClipModel& clip, const QRectF& body,
+                          std::uint64_t revision);
+    void populateSequenceMenu(QMenu& menu, const ClipHit& hit);
+    void showSequenceControl(const ClipHit& hit, SequencePart part, const QPoint& globalPos);
+    void applyMidiView(const ClipHit& hit, daw::MidiClipView view);
+    QString sequenceToolTip(const SequenceHit& hit) const;
+    SequenceHit m_sequenceDrag;
+    bool m_sequenceEditing = false;
+    double m_sequenceStartY = 0;
+    double m_sequenceVelocity = 100;
+
     double xToSeconds(int x) const;
     int secondsToX(double seconds) const;
     double snap(double seconds, bool enabled) const;
@@ -459,6 +497,7 @@ private:
     bool hitTestClip(const QPoint& pos, ClipHit& out) const;
     bool clearSelectionOnBackground(const QPoint& pos);
     void populateClipActionsMenu(QMenu& menu, const ClipHit& hit);
+    void showClipInformation(const QString& trackId, const QString& clipId);
     /// Arrangement controls preview continuously. These helpers remember only
     /// a history marker and let the controller record small, gesture-specific
     /// deltas at release. Dense MIDI/sample payloads never enter UI history.
@@ -830,6 +869,9 @@ private:
     std::uint64_t m_clipWaveformRevision = 0;
     using PatternSources = std::vector<std::pair<std::string, std::size_t>>;
     std::unordered_map<std::string, std::unordered_map<std::string, PatternSources>> m_patternSources;
+    QString linkedName(const daw::ClipModel& clip) const;
+    mutable std::uint64_t m_linkCountRevision = ~std::uint64_t(0);
+    mutable std::unordered_map<std::string, int> m_linkCounts;
     std::array<std::uint64_t, 3> m_patternSourcesStamp{};
     struct FolderPreviewRow { std::string id; int depth = 0; };
     std::unordered_map<std::string, std::vector<FolderPreviewRow>> m_folderPreviewRows;
@@ -872,6 +914,20 @@ private:
     double m_gridBeats = 0.25;      // 1/16 by default
     bool m_snapEnabled = true;
     ui::RulerFormat m_rulerFormat = ui::RulerFormat::Bars;
+    bool m_showChords = false;
+    bool m_showSections = false;
+    int arrangementRowAt(int y) const;
+    void drawArrangementRows(QPainter& painter);
+    bool showArrangementMenu(QContextMenuEvent*);
+    double arrangementDuration() const;
+    const daw::ArrangementLabel* arrangementLabelAt(int row, int x) const;
+    int m_labelSelectionRow = -1;
+    QString m_labelSelectionId;
+    int m_labelDragRow = -1;
+    bool m_labelResize = false;
+    double m_labelGrabBeat = 0.0;
+    std::uint64_t m_labelProjectRevision = 0;
+    daw::ArrangementLabel m_labelOriginal, m_labelPreview;
     double m_waveformScale = 1.0;
 
     Tool m_tool = Tool::Select;
@@ -1037,10 +1093,16 @@ private:
     double fileDropStart(const QPoint& pos, Qt::KeyboardModifiers modifiers) const;
     QRectF fileDropRect() const;
     void drawFileDropPreview(QPainter& p);
+    QVector<ClipRef> audioReplacementTargets(const QPoint& pos) const;
+    void updateAudioReplacementPreview();
+    std::string m_dropReplacementTrack;
+    std::unordered_map<std::string, daw::ClipModel> m_dropReplacementClips;
+    bool m_dropSingleAudio = false;
     QString m_dropFile;
     double m_dropDuration = 0.0;
     double m_dropMidiBeats = 0.0;
     std::shared_ptr<const daw::WaveformPeaks> m_dropPeaks;
+    std::shared_ptr<const daw::engine::SampleBuffer> m_dropSamples;
     PreviewLoader* m_dropLoader = nullptr;
     MidiPreviewLoader* m_dropMidiLoader = nullptr;
     quint64 m_dropGeneration = 0;

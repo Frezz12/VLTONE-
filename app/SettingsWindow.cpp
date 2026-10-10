@@ -322,6 +322,8 @@ double contrastRatio(const QColor& foreground, const QColor& background) {
 QString presetDisplayName(const Theme& theme) {
     if (theme.id == QLatin1String("dark")) return QCoreApplication::translate(
         "SettingsWindow", "Dark");
+    if (theme.id == QLatin1String("monochrome")) return QCoreApplication::translate(
+        "SettingsWindow", "Monochrome");
     if (theme.id == QLatin1String("dark-blue")) return QCoreApplication::translate(
         "SettingsWindow", "Dark Blue");
     if (theme.id == QLatin1String("studio-gray")) return QCoreApplication::translate(

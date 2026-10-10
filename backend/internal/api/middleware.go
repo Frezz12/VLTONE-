@@ -103,7 +103,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			return
 		}
 		var admin model.AdminUser
-		if err := s.DB.First(&admin, "id = ?", session.AdminUserID).Error; err != nil || admin.Status != model.UserActive {
+		if err := s.DB.First(&admin, "id = ?", session.AdminUserID).Error; err != nil || admin.Status != model.UserActive || !s.resolveAdminIdentity(&admin) {
 			writeError(w, r, http.StatusForbidden, "account_unavailable", "Administrator account is unavailable.", nil)
 			return
 		}

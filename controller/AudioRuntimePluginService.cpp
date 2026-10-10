@@ -9,7 +9,8 @@ namespace daw {
 bool AudioRuntime::advancePluginEdits() {
     // A stopped diagnostic/preview runtime has no device to consume its host
     // event ring. Advance one bounded block without tapping a recording input.
-    if (liveDeviceAllowed || auditionDriven || !prepared) return false;
+    if (safetyStopped.load(std::memory_order_acquire) ||
+        liveDeviceAllowed || auditionDriven || !prepared) return false;
     constexpr engine::FrameCount capacity = 256;
     const auto frames = std::min(capacity, bufferSize);
     if (!frames) return false;
@@ -32,7 +33,7 @@ bool AudioRuntime::pluginAudioActivity() const {
 
 AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
     AudioPluginServiceResult out;
-    out.changed = pumpIsolatedPlugins();
+    if (safetyStopped.load(std::memory_order_acquire)) return out;
     const auto generation = plugins::PluginMainThreadWork::generation();
     const bool compatibilitySweep = ++pluginCompatibilitySweepTicks >= 64;
     const bool pendingCanApply = pendingPitchQualityChanges && !externallyActive && !pluginAudioActivity();
@@ -63,6 +64,8 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
                                     double value = 0, bool touch = false) {
                 out.notices.push_back({type, address, kind, clipId, parameter, value, touch});
             };
+            if (node->takeOverloadNotice()) notice(AudioPluginNotice::Kind::Overload);
+            if (node->faultBypassed()) continue;
             node->beginMainThreadPump();
             if (node->takeStateChanged()) notice(AudioPluginNotice::Kind::StateChanged);
             if (node->takeReloadRequested()) {
@@ -70,13 +73,24 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
                 // replacement has restored successfully. One side's failure
                 // must never destroy the healthy half of a dual-mono slot.
                 const auto snapshot = pluginStateSnapshot(address, true);
-                if (snapshot.exists && !snapshot.failed && (!snapshot.supportsState || snapshot.stateCaptured)) {
-                    auto instance = createConfiguredPlugin(slot.configuration, slot.hosting);
+                if (snapshot.exists && (!snapshot.supportsState || snapshot.stateCaptured)) {
+                    auto instance = createConfiguredPlugin(slot.configuration);
                     if (instance && (!snapshot.supportsState || instance->loadState(snapshot.state))) {
                         replacements[side] = std::make_shared<plugins::PluginNode>(
                             std::string(node->name()), std::move(instance));
                         if (!snapshot.supportsState) applyStoredParameters(*replacements[side], snapshot.parameters);
                         applyStoredParameters(*replacements[side], snapshot.pending);
+                        replacements[side]->copyControlSettingsFrom(*node);
+                        replacements[side]->setPreferredChannelCount(node->preferredChannelCount());
+                        replacements[side]->setSidechainConnected(node->sidechainConnected());
+                        replacements[side]->prepare(engine.prepareInfo());
+                        if (!replacements[side]->isReady()) replacements[side].reset();
+                        else {
+                            replacements[side]->markPrepared(engine.prepareInfo());
+                            auto retained = snapshot;
+                            retained.address.instance = replacements[side]->instanceId();
+                            retainPluginSnapshot(retained);
+                        }
                     }
                 }
                 if (!replacements[side]) out.error = "Could not restore reloaded plugin: " + slot.slotId;
@@ -95,6 +109,10 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
                     (side && gesture)) continue;
                 const auto parameters = node->instance()->parameters();
                 if (event.paramIndex >= parameters.size() || (!gesture && !std::isfinite(event.value))) continue;
+                if (!gesture) {
+                    const std::array<InsertParameter, 1> confirmed{{{parameters[event.paramIndex].id, event.value, true}}};
+                    overlayPendingParameters(checkpointParameterEdits[node->instanceId()], confirmed);
+                }
                 notice(gesture ? AudioPluginNotice::Kind::GestureBegin : AudioPluginNotice::Kind::Parameter,
                     parameters[event.paramIndex].id, event.value,
                     !side && (gesture || node->instance()->isEditorOpen()));
@@ -105,11 +123,22 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
             const auto result = replacePluginNodes(channelId, slot,
                 std::move(replacements[0]), std::move(replacements[1]));
             if (!result) out.error = "Could not publish reloaded plugin: " + slot.slotId;
-            out.changed = true;
+            out.changed |= bool(result);
+            prunePluginSnapshots();
         }
     };
     const auto pumpChain = [&](const auto& id, auto kind, const std::string& clipId, auto& slots) {
-        for (auto& slot : slots) pump(id, kind, clipId, slot);
+        for (auto& slot : slots) {
+            if (safetyStopped.load(std::memory_order_acquire)) break;
+            try { pump(id, kind, clipId, slot); }
+            catch (const std::exception& error) {
+                out.error = "Could not service plugin " + slot.slotId + ": " + error.what();
+                // A thrown lifecycle call may have partially changed its
+                // configuration. Do not keep rendering that unknown state.
+                stopForFailedRollback();
+                prunePluginSnapshots();
+            }
+        }
     };
     using Kind = AudioPluginChainSpec::Kind;
     for (auto& [id, channel] : channels) {
@@ -119,12 +148,13 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
         for (auto& [clipId, clip] : channel.clipFx) pumpChain(id, Kind::ClipFx, clipId, clip.inserts);
         pumpChain(id, Kind::Inserts, {}, channel.inserts);
     }
-    if (reconfigure && hasPublishedGraph) {
+    if (reconfigure && hasPublishedGraph && !safetyStopped.load(std::memory_order_acquire)) {
         auto previous = engine.graph();
         engine.graph() = publishedGraph;
         if (!commitGraph(true)) {
             engine.graph() = std::move(previous);
             out.error = "Could not reconfigure plugin graph.";
+            stopForFailedRollback();
         }
         out.changed = true;
     }

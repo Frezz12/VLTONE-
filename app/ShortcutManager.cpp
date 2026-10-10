@@ -240,7 +240,8 @@ ShortcutManager::RemoteScope ShortcutManager::remoteScopeForId(
         lower == QLatin1String("track.actions")) {
         return RemoteScope::ForbiddenRemote;
     }
-    if (lower.startsWith(QStringLiteral("transport.")) ||
+    if (lower.startsWith(QStringLiteral("sampleeditor.")) ||
+        lower.startsWith(QStringLiteral("transport.")) ||
         lower.startsWith(QStringLiteral("tool.")) ||
         lower.startsWith(QStringLiteral("edit.grid.")) ||
         lower == QLatin1String("edit.snapon") ||

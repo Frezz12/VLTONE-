@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(VLTONE
-    VERSION 0.3.2
+    VERSION 0.5.0
     DESCRIPTION "VLTONE digital audio workstation"
     LANGUAGES C CXX)
 
@@ -142,13 +142,11 @@ add_subdirectory(engine)       # graph-based audio engine (C++23, no deps)
 add_subdirectory(core)
 add_subdirectory(creator)
 add_subdirectory(plugins)      # VST3/CLAP/AU hosting; the only user of the SDKs
-add_subdirectory(runtime)      # bounded process transport and deferred graph adapter
-add_subdirectory(plugin_host)  # daw_plugin_host: one disposable native instance
+add_subdirectory(runtime)      # disposable background-job transport
 add_subdirectory(scanner)      # daw_scan: loads plugins out of process, so a crash is survivable
 add_subdirectory(guard)        # daw_guard: watches the app from outside, so a hang is visible
 add_subdirectory(controller)   # framework-agnostic; no Qt dependency
 add_subdirectory(worker)       # disposable offline runtime; parent publishes outputs
-add_subdirectory(audio_host)   # device + executable audio graph in an owned process
 
 if(DAW_BUILD_TESTS)
     add_subdirectory(tests)
@@ -170,7 +168,6 @@ foreach(directory tests app)
             get_target_property(libraries ${consumer} LINK_LIBRARIES)
             if(kind STREQUAL "EXECUTABLE" AND "daw_controller" IN_LIST libraries)
                 add_dependencies(${consumer} daw_worker)
-                add_dependencies(${consumer} daw_audio)
             endif()
         endforeach()
     endif()

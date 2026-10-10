@@ -32,6 +32,15 @@ public:
         const engine::FrameCount frames =
             std::min<engine::FrameCount>(ctx.numFrames, ctx.outputBuffer->numFrames());
         if (frames == 0) return;
+        if (m_runtime.safetyStopped.load(std::memory_order_acquire)) {
+            for (std::size_t ch = 0; ch < ctx.outputBuffer->numChannels(); ++ch)
+                std::fill_n(ctx.outputBuffer->getChannel(ch), frames, 0.0f);
+            ctx.renderStatus = audio::AudioCallbackContext::RenderStatus::Failed;
+            const auto recorders = m_recorders.read();
+            if (recorders) for (const auto& recorder : *recorders)
+                if (recorder && recorder->isRecording()) recorder->markInterrupted();
+            return;
+        }
 
         // The device buffer is already planar, so the engine renders straight
         // into it — no copy, no interleave.
@@ -174,6 +183,38 @@ void AudioRuntime::configureAudioWorkers(const rt::AudioWorkerConfig& config) {
 
 void AudioRuntime::inheritAudioWorkers(AudioRuntime& secondary) const {
     secondary.configureAudioWorkers(callback->workerConfiguration());
+}
+
+audio::Result AudioRuntime::takeDeviceFrom(AudioRuntime& previous) {
+    if (!previous.devices->isInitialized()) return audio::Result::ok();
+    const auto config = previous.deviceConfiguration();
+    if (!prepared || config.sampleRate != sampleRate || config.bufferSize > bufferSize)
+        return audio::Result::fail(audio::EngineError::SampleRateMismatch,
+            "Device format differs from the prepared audio session.");
+
+    const bool running = previous.devices->isRunning();
+    const bool allowed = previous.liveDeviceAllowed;
+    // setAudioCallback drains the old callback before publishing its successor.
+    if (const auto attached = previous.devices->setAudioCallback(callback.get()); !attached)
+        return attached;
+    if (running) {
+        if (const auto started = previous.devices->start(); !started) {
+            auto restored = previous.devices->setAudioCallback(previous.callback.get());
+            if (restored) restored = previous.devices->start();
+            previous.deviceOpen = previous.devices->isRunning();
+            if (!restored) {
+                previous.stopForFailedRollback();
+                return audio::Result::fail(audio::EngineError::DeviceError,
+                    started.message() + "; previous audio callback could not be restored: " + restored.message());
+            }
+            return started;
+        }
+    }
+    devices.swap(previous.devices);
+    deviceOpen = running;
+    liveDeviceAllowed = allowed;
+    previous.deviceOpen = previous.liveDeviceAllowed = false;
+    return audio::Result::ok();
 }
 
 } // namespace daw

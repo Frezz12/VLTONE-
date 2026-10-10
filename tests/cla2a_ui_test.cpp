@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     if (pointerCheck && !qEnvironmentVariableIntValue("VLT_GPU_WORKSPACE")) {
         check(false, "pointer check requires VLT_GPU_WORKSPACE=1"); return 1;
     }
-    daw::EngineController controller{daw::EngineController::TestRuntime{}}; check(bool(controller.initialize(48000, 257, false)), "headless engine initializes");
+    daw::EngineController controller{}; check(bool(controller.initialize(48000, 257, false)), "headless engine initializes");
     const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.cla2a");
     check(descriptor.has_value() && descriptor->name == "VLT 2A", "plugin browser discovers built-in VLT 2A"); if (!descriptor) return 1;
     // The comparison exports the first second. Keep the clip's live-only
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
     controller.setInsertBypassed(track, insert, true);
     const auto projectPath = temporary.path().toStdString() + "/cla2a.vlt"; check(bool(controller.saveProject(projectPath)), "CLA-2A project saves");
     {
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}}; reopened.initialize(48000, 257, false);
+        daw::EngineController reopened{}; reopened.initialize(48000, 257, false);
         check(bool(reopened.openProject(projectPath)) && reopened.insertParameter(track, insert, "gain") == 48.25 &&
               reopened.insertParameter(track, insert, "peakReduction") == 57 && reopened.insertParameter(track, insert, "mode") == 1 && reopened.insertModel(track, insert)->bypassed,
               "project restores state and host bypass");
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
     }
 
     {
-        daw::EngineController render{daw::EngineController::TestRuntime{}}; render.initialize(48000, 257, false);
+        daw::EngineController render{}; render.initialize(48000, 257, false);
         const auto audio = render.importAudioToNewTrack(sourcePath, 0); const auto fx = render.addInsert(audio, *descriptor);
         render.setInsertParameter(audio, fx, "peakReduction", 50); render.pumpPluginEvents();
         audio::AudioBuffer in(2, 257), out(2, 257); in.clear();
@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
             // live engine carries transport de-click and automation history
             // that a fresh export deliberately does not inherit.
             const auto comparisonProject = temporary.path().toStdString() + "/comparison.vlt";
-            daw::EngineController playback{daw::EngineController::TestRuntime{}};
+            daw::EngineController playback{};
             bool deviceRendered = bool(render.saveProject(comparisonProject)) &&
                 bool(playback.initialize(48000, 257, false)) && bool(playback.openProject(comparisonProject));
             playback.pumpPluginEvents();

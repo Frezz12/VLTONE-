@@ -9,7 +9,7 @@
 namespace daw {
 
 struct AudioPluginNotice {
-    enum class Kind { Parameter, GestureBegin, StateChanged };
+    enum class Kind { Parameter, GestureBegin, StateChanged, Overload };
     Kind kind = Kind::Parameter;
     AudioPluginAddress address;
     AudioPluginChainSpec::Kind chain = AudioPluginChainSpec::Kind::Inserts;

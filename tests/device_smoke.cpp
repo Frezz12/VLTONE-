@@ -1,6 +1,6 @@
 // Manual hardware smoke test — NOT part of ctest, since it opens a real audio
 // device. Run ./bin/device_smoke [output UID] [buffer] [alternate output UID].
-// The graph is silent; all control and telemetry use the production process.
+// The graph is silent; the runtime uses the desktop application path.
 // DAW_DEVICE_SMOKE_RATE selects the rate (defaults to 48000 Hz).
 #include "EngineController.hpp"
 #include "Internal/EqualizerInstance.hpp"
@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <thread>
 
@@ -55,7 +56,7 @@ int main(int argc, char** argv) try {
     daw::EngineController controller;
     if (argc > 1 && std::string(argv[1]) == "--list") {
         if (const auto ready = controller.initialize(48000, 512, false); !ready) {
-            std::printf("FAILED to start audio process: %s\n", ready.message().c_str());
+            std::printf("FAILED to initialize audio runtime: %s\n", ready.message().c_str());
             return 1;
         }
         for (const auto& device : controller.enumerateOutputDevices()) {
@@ -156,6 +157,30 @@ int main(int argc, char** argv) try {
         if (!playbackHealthy(controller, "restored output")) return 8;
     }
 
+    controller.stop();
+    // A real project replacement used to be rejected by the local endpoint
+    // whenever the device was open. Exercise both a populated and empty
+    // successor while checking the stream continues to deliver silent blocks.
+    const auto package = std::filesystem::temp_directory_path() /
+        ("vlt-device-smoke-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".vlt");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{package};
+    if (const auto saved = controller.saveProject(package.string()); !saved) {
+        std::printf("FAILED to save live project: %s\n", saved.message().c_str());
+        return 9;
+    }
+    if (const auto restored = controller.openProject(package.string()); !restored) {
+        std::printf("FAILED to replace live project: %s\n", restored.message().c_str());
+        return 9;
+    }
+    controller.play();
+    if (!playbackHealthy(controller, "replaced project")) return 9;
+    controller.stop();
+    controller.newProject();
+    controller.play();
+    if (!playbackHealthy(controller, "new project")) return 10;
     controller.stop();
     controller.shutdown();
     std::printf("done\n");

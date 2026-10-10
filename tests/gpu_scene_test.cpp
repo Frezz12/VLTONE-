@@ -88,6 +88,14 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override { ++paints; QPainter painter(this); painter.fillRect(rect(), color); }
 };
+class FrameControl final : public ui::FrameWidget {
+public:
+    using ui::FrameWidget::FrameWidget;
+    QColor color = Qt::red;
+    int paints = 0;
+protected:
+    void paintEvent(QPaintEvent*) override { ++paints; QPainter painter(this); painter.fillRect(rect(), color); }
+};
 class HoverRow final : public QWidget {
 public:
     using QWidget::QWidget;
@@ -583,7 +591,37 @@ int main(int argc, char** argv) {
         int(120*dpr), int(25*dpr)) != QColor(Qt::green)) {
         std::cerr << "An explicit update was lost while moving an overlay\n"; return 1;
     }
-    floating.hide(); stationary.hide();
+    floating.hide();
+    {
+        PlainControl nativeFrame(canvas);
+        nativeFrame.setGeometry(95, 10, 80, 55);
+        nativeFrame.setAttribute(Qt::WA_OpaquePaintEvent);
+        nativeFrame.setAttribute(Qt::WA_DontCreateNativeAncestors);
+        nativeFrame.setAttribute(Qt::WA_NativeWindow);
+        nativeFrame.setProperty("vlt.nativeOverlay", true);
+        FrameControl nativeControl(&nativeFrame);
+        nativeControl.setGeometry(4, 4, 40, 30);
+        nativeFrame.show(); nativeControl.show(); nativeFrame.raise();
+        QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
+        canvas->paints = stationary.paints = nativeControl.paints = 0;
+        nativeControl.color = Qt::blue;
+        nativeControl.update();
+        QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
+        if (!nativeControl.paints || canvas->paints || stationary.paints) {
+            std::cerr << "Native editor damage was swallowed or repainted the workspace beneath it: editor="
+                      << nativeControl.paints << " canvas=" << canvas->paints << " stationary=" << stationary.paints << '\n'; return 1;
+        }
+        // A model change under an opaque native editor must survive until the
+        // editor moves away, without rebuilding all other mixer-like controls.
+        stationary.color = Qt::cyan; stationary.update();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        nativeFrame.move(10, 70);
+        QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
+        if (surface->quickWindow()->grabWindow().pixelColor(int(120*dpr), int(25*dpr)) != QColor(Qt::cyan)) {
+            std::cerr << "Moving an opaque editor exposed stale workspace content\n"; return 1;
+        }
+    }
+    stationary.hide();
     // A rounded editor clips all descendants, including opaque children and
     // native control textures. Moving/resizing it must update that clip without
     // rerecording unchanged children or retaining the old rectangular corners.

@@ -146,6 +146,7 @@ public:
     /// Re-read the clip/instrument model, including an FX chain edited from
     /// another surface such as the Context Panel.
     void refresh();
+    void showDefaultPage();
 
 signals:
     /// Nested editors still go through MainWindow's one-window registry.
@@ -219,6 +220,7 @@ private:
     QLabel* m_fileLabel = nullptr;
     QLabel* m_infoLabel = nullptr;
     SamplerWaveform* m_waveform = nullptr;
+    class AudioEditPanel* m_audioEditor = nullptr;
     SamplerEnvelopeView* m_envelope = nullptr;
     SamplerKeyboard* m_keyboard = nullptr;
     QScrollArea* m_keyboardScroll = nullptr;

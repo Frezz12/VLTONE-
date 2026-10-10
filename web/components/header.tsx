@@ -36,6 +36,7 @@ export function Header({ locale }: { locale: string }) {
         <Link className="vlt-brand" href="/" aria-label="VLTone"><BrandMark /><span className="brand-wordmark">VLT<span>one</span></span></Link>
         <nav className="vlt-nav" aria-label={ru ? "Навигация сайта" : "Site navigation"}>
           <Link href="/capabilities" aria-current={pathname.includes("/capabilities") ? "page" : undefined}>{ru ? "Возможности" : "Capabilities"}</Link>
+          <Link className="creator-nav-link" href="/creator" aria-current={/\/(?:ru\/|en\/)?creator(?:\/|$)/.test(pathname) ? "page" : undefined}>Creator<span className="creator-new" aria-label={ru ? "Скоро" : "Coming soon"}>SOON</span></Link>
           <a href="/releases" aria-current={pathname.includes("/releases") ? "page" : undefined}>{ru ? "Скачать" : "Download"}</a>
           <Link href="/manual" aria-current={pathname.includes("/manual") ? "page" : undefined}>{ru ? "Инструкция" : "Manual"}</Link>
         </nav>

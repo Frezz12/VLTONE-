@@ -1,0 +1,6292 @@
+[
+  {
+    "category": "Routing",
+    "id": "input",
+    "inputs": [],
+    "name": "Input",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Routing",
+    "id": "output",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Output",
+    "outputs": [],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Routing",
+    "id": "interface",
+    "inputs": [],
+    "name": "Interface",
+    "outputs": [],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Code",
+    "id": "cpp_function",
+    "inputs": [],
+    "name": "C++ Function",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "function"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "constant",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Constant",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Routing",
+    "id": "gain",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "gain",
+        "name": "Gain",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Gain",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "gain",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 2.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Gain",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Routing",
+    "id": "mix",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "mix",
+        "name": "Mix",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Mix",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "mix",
+        "initial": 0.5,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Mix",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "add",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Add",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "subtract",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Subtract",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "multiply",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Multiply",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "divide",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Divide",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "min",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Minimum",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "max",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Maximum",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "power",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Power",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "abs",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Absolute",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "negate",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Negate",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "sqrt",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Square root",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "sin",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Sine",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "cos",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Cosine",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "clamp",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "min",
+        "name": "Minimum",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "max",
+        "name": "Maximum",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Clamp",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "min",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Minimum",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "max",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Maximum",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "map_range",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "in_min",
+        "name": "Input min",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "in_max",
+        "name": "Input max",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "out_min",
+        "name": "Output min",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "out_max",
+        "name": "Output max",
+        "parameter": 4,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Map Range",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "in_min",
+        "initial": -1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Input min",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "in_max",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Input max",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "out_min",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Output min",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "out_max",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Output max",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "compare",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Compare",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      },
+      {
+        "choices": [
+          ">",
+          "<",
+          "=",
+          ">=",
+          "<="
+        ],
+        "id": "operation",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 4.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Operation",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "select",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Select B",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Select",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Modulation",
+    "id": "smooth",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "time",
+        "name": "Time",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Smooth",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "time",
+        "initial": 20.0,
+        "logarithmic": true,
+        "maximum": 10000.0,
+        "minimum": 0.1,
+        "modulatable": true,
+        "name": "Time",
+        "unit": "ms"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Modulation",
+    "id": "sample_hold",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Trigger",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Sample & Hold",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Modulation",
+    "id": "lfo",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "rate",
+        "name": "Rate",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "amount",
+        "name": "Amount",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "offset",
+        "name": "Offset",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "LFO",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "rate",
+        "initial": 1.0,
+        "logarithmic": true,
+        "maximum": 40.0,
+        "minimum": 0.01,
+        "modulatable": true,
+        "name": "Rate",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "amount",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Amount",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "offset",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000.0,
+        "minimum": -1000.0,
+        "modulatable": true,
+        "name": "Offset",
+        "unit": ""
+      },
+      {
+        "choices": [
+          "Sine",
+          "Triangle",
+          "Saw",
+          "Square"
+        ],
+        "id": "shape",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 3.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Shape",
+        "unit": ""
+      },
+      {
+        "choices": [
+          "Hz",
+          "Tempo"
+        ],
+        "id": "sync",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Clock",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "beats",
+        "initial": 1.0,
+        "logarithmic": true,
+        "maximum": 32.0,
+        "minimum": 0.03125,
+        "modulatable": false,
+        "name": "Cycle length",
+        "unit": "beats"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Modulation",
+    "id": "random",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "rate",
+        "name": "Rate",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "smooth",
+        "name": "Smooth",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Random",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "rate",
+        "initial": 1.0,
+        "logarithmic": true,
+        "maximum": 100.0,
+        "minimum": 0.01,
+        "modulatable": true,
+        "name": "Rate",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "smooth",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Smooth",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "seed",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 2147483647.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Seed",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Analysis",
+    "id": "envelope",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "attack",
+        "name": "Attack",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "release",
+        "name": "Release",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Envelope Follower",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "attack",
+        "initial": 10.0,
+        "logarithmic": true,
+        "maximum": 1000.0,
+        "minimum": 0.1,
+        "modulatable": true,
+        "name": "Attack",
+        "unit": "ms"
+      },
+      {
+        "choices": [],
+        "id": "release",
+        "initial": 100.0,
+        "logarithmic": true,
+        "maximum": 5000.0,
+        "minimum": 1.0,
+        "modulatable": true,
+        "name": "Release",
+        "unit": "ms"
+      },
+      {
+        "choices": [
+          "Peak",
+          "RMS"
+        ],
+        "id": "mode",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Detector",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Analysis",
+    "id": "audio_to_number",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Audio to Number",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [
+          "Mono sum",
+          "Left",
+          "Right"
+        ],
+        "id": "channel",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 2.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Channel",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Routing",
+    "id": "number_to_audio",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Number to Audio",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Generators",
+    "id": "oscillator",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "frequency",
+        "name": "Frequency",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "level",
+        "name": "Level",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Oscillator",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "frequency",
+        "initial": 440.0,
+        "logarithmic": true,
+        "maximum": 20000.0,
+        "minimum": 1.0,
+        "modulatable": true,
+        "name": "Frequency",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "level",
+        "initial": 0.1,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Level",
+        "unit": ""
+      },
+      {
+        "choices": [
+          "Sine",
+          "Triangle",
+          "Saw",
+          "Square"
+        ],
+        "id": "shape",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 3.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Shape",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Generators",
+    "id": "noise",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "level",
+        "name": "Level",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "White Noise",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "level",
+        "initial": 0.1,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Level",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "seed",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 2147483647.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Seed",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "color",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "drive",
+        "name": "Drive",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "tone",
+        "name": "Tone",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Color",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "drive",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 100.0,
+        "minimum": -100.0,
+        "modulatable": true,
+        "name": "Drive",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "tone",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 100.0,
+        "minimum": -100.0,
+        "modulatable": true,
+        "name": "Tone",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "doubler",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "width",
+        "name": "Width",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "humanize",
+        "name": "Humanize",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "softness",
+        "name": "Softness",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Doubler",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "width",
+        "initial": 0.45,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Width",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "humanize",
+        "initial": 0.35,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Humanize",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "softness",
+        "initial": 0.65,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Softness",
+        "unit": "%"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "chorus",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "amount",
+        "name": "Amount",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "rate",
+        "name": "Rate",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "depth",
+        "name": "Depth",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "softness",
+        "name": "Softness",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Chorus",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "amount",
+        "initial": 0.25,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Amount",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "rate",
+        "initial": 0.22,
+        "logarithmic": false,
+        "maximum": 1.5,
+        "minimum": 0.05,
+        "modulatable": true,
+        "name": "Rate",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "depth",
+        "initial": 0.3,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Depth",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "softness",
+        "initial": 0.65,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Softness",
+        "unit": "%"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "flanger",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "amount",
+        "name": "Amount",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "rate",
+        "name": "Rate",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "depth",
+        "name": "Depth",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "softness",
+        "name": "Softness",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Flanger",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "amount",
+        "initial": 0.18,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Amount",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "rate",
+        "initial": 0.08,
+        "logarithmic": false,
+        "maximum": 0.8,
+        "minimum": 0.03,
+        "modulatable": true,
+        "name": "Rate",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "depth",
+        "initial": 0.25,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Depth",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "softness",
+        "initial": 0.7,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Softness",
+        "unit": "%"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "phaser",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "amount",
+        "name": "Amount",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "rate",
+        "name": "Rate",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "depth",
+        "name": "Depth",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "softness",
+        "name": "Softness",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Phaser",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "amount",
+        "initial": 0.22,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Amount",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "rate",
+        "initial": 0.1,
+        "logarithmic": false,
+        "maximum": 1.2,
+        "minimum": 0.03,
+        "modulatable": true,
+        "name": "Rate",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "depth",
+        "initial": 0.3,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Depth",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "softness",
+        "initial": 0.65,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Softness",
+        "unit": "%"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "delay",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "timeMs",
+        "name": "Time",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "bpm",
+        "name": "Local tempo",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "feedback",
+        "name": "Feedback",
+        "parameter": 5,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "mix",
+        "name": "Dry / Wet",
+        "parameter": 6,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "output",
+        "name": "Output",
+        "parameter": 7,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "characterAmount",
+        "name": "Amount",
+        "parameter": 9,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "lowCut",
+        "name": "Low Cut",
+        "parameter": 10,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "highCut",
+        "name": "High Cut",
+        "parameter": 11,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "modDepth",
+        "name": "Depth",
+        "parameter": 12,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "modRate",
+        "name": "Rate",
+        "parameter": 13,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Delay",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [
+          "Host",
+          "BPM",
+          "ms"
+        ],
+        "id": "timeMode",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 2.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Time source",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "timeMs",
+        "initial": 375.0,
+        "logarithmic": true,
+        "maximum": 8000.0,
+        "minimum": 1.0,
+        "modulatable": true,
+        "name": "Time",
+        "unit": "ms"
+      },
+      {
+        "choices": [
+          "1/64",
+          "1/64 D",
+          "1/64 T",
+          "1/32",
+          "1/32 D",
+          "1/32 T",
+          "1/16",
+          "1/16 D",
+          "1/16 T",
+          "1/8",
+          "1/8 D",
+          "1/8 T",
+          "1/4",
+          "1/4 D",
+          "1/4 T",
+          "1/2",
+          "1/2 D",
+          "1/2 T",
+          "1/1",
+          "1/1 D",
+          "1/1 T",
+          "1 bar",
+          "2 bars"
+        ],
+        "id": "division",
+        "initial": 10.0,
+        "logarithmic": false,
+        "maximum": 22.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Division",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "bpm",
+        "initial": 120.0,
+        "logarithmic": false,
+        "maximum": 300.0,
+        "minimum": 30.0,
+        "modulatable": true,
+        "name": "Local tempo",
+        "unit": "BPM"
+      },
+      {
+        "choices": [
+          "Stereo",
+          "Ping Pong"
+        ],
+        "id": "mode",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Routing",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "feedback",
+        "initial": 35.0,
+        "logarithmic": false,
+        "maximum": 95.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Feedback",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "mix",
+        "initial": 25.0,
+        "logarithmic": false,
+        "maximum": 100.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Dry / Wet",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "output",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 18.0,
+        "minimum": -18.0,
+        "modulatable": true,
+        "name": "Output",
+        "unit": "dB"
+      },
+      {
+        "choices": [
+          "Clean",
+          "Telephone",
+          "Radio",
+          "FM",
+          "Tape",
+          "Drive",
+          "Lo-Fi"
+        ],
+        "id": "character",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 6.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Character",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "characterAmount",
+        "initial": 50.0,
+        "logarithmic": false,
+        "maximum": 100.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Amount",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "lowCut",
+        "initial": 20.0,
+        "logarithmic": true,
+        "maximum": 20000.0,
+        "minimum": 20.0,
+        "modulatable": true,
+        "name": "Low Cut",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "highCut",
+        "initial": 20000.0,
+        "logarithmic": true,
+        "maximum": 20000.0,
+        "minimum": 20.0,
+        "modulatable": true,
+        "name": "High Cut",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "modDepth",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 100.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Depth",
+        "unit": "%"
+      },
+      {
+        "choices": [],
+        "id": "modRate",
+        "initial": 0.3,
+        "logarithmic": true,
+        "maximum": 10.0,
+        "minimum": 0.1,
+        "modulatable": true,
+        "name": "Rate",
+        "unit": "Hz"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "compressor",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "ratio",
+        "name": "Ratio",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "threshold",
+        "name": "Threshold",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "makeup",
+        "name": "Makeup",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "attack",
+        "name": "Attack",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "release",
+        "name": "Release",
+        "parameter": 4,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "knee",
+        "name": "Knee",
+        "parameter": 5,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "mix",
+        "name": "Mix",
+        "parameter": 6,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Compressor",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "ratio",
+        "initial": 3.0,
+        "logarithmic": false,
+        "maximum": 20.0,
+        "minimum": 1.0,
+        "modulatable": true,
+        "name": "Ratio",
+        "unit": ":1"
+      },
+      {
+        "choices": [],
+        "id": "threshold",
+        "initial": -18.0,
+        "logarithmic": false,
+        "maximum": 0.0,
+        "minimum": -60.0,
+        "modulatable": true,
+        "name": "Threshold",
+        "unit": "dB"
+      },
+      {
+        "choices": [],
+        "id": "makeup",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 24.0,
+        "minimum": -12.0,
+        "modulatable": true,
+        "name": "Makeup",
+        "unit": "dB"
+      },
+      {
+        "choices": [],
+        "id": "attack",
+        "initial": 10.0,
+        "logarithmic": true,
+        "maximum": 100.0,
+        "minimum": 0.1,
+        "modulatable": true,
+        "name": "Attack",
+        "unit": "ms"
+      },
+      {
+        "choices": [],
+        "id": "release",
+        "initial": 120.0,
+        "logarithmic": true,
+        "maximum": 1500.0,
+        "minimum": 10.0,
+        "modulatable": true,
+        "name": "Release",
+        "unit": "ms"
+      },
+      {
+        "choices": [],
+        "id": "knee",
+        "initial": 6.0,
+        "logarithmic": false,
+        "maximum": 24.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Knee",
+        "unit": "dB"
+      },
+      {
+        "choices": [],
+        "id": "mix",
+        "initial": 100.0,
+        "logarithmic": false,
+        "maximum": 100.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Mix",
+        "unit": "%"
+      },
+      {
+        "choices": [
+          "Soft",
+          "Punch"
+        ],
+        "id": "mode",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Mode",
+        "unit": ""
+      },
+      {
+        "choices": [
+          "Off",
+          "On"
+        ],
+        "id": "autoGain",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Auto Gain",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "eq_band",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "frequency",
+        "name": "Frequency",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "gain",
+        "name": "Gain",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "q",
+        "name": "Q",
+        "parameter": 3,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "EQ Band",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [
+          "Bell",
+          "Low Shelf",
+          "High Shelf",
+          "Low Cut",
+          "High Cut",
+          "Notch",
+          "Band Pass",
+          "Tilt",
+          "All Pass"
+        ],
+        "id": "type",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 8.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Filter type",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "frequency",
+        "initial": 20.0,
+        "logarithmic": true,
+        "maximum": 30000.0,
+        "minimum": 10.0,
+        "modulatable": true,
+        "name": "Frequency",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "gain",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 30.0,
+        "minimum": -30.0,
+        "modulatable": true,
+        "name": "Gain",
+        "unit": "dB"
+      },
+      {
+        "choices": [],
+        "id": "q",
+        "initial": 1.0,
+        "logarithmic": true,
+        "maximum": 40.0,
+        "minimum": 0.025,
+        "modulatable": true,
+        "name": "Q",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Effects",
+    "id": "reverb",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "mix",
+        "name": "Mix",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "decay",
+        "name": "Decay",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "damping",
+        "name": "Damping",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Reverb",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "mix",
+        "initial": 0.25,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Mix",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "decay",
+        "initial": 2.0,
+        "logarithmic": true,
+        "maximum": 12.0,
+        "minimum": 0.1,
+        "modulatable": true,
+        "name": "Decay",
+        "unit": "s"
+      },
+      {
+        "choices": [],
+        "id": "damping",
+        "initial": 0.5,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Damping",
+        "unit": ""
+      },
+      {
+        "choices": [
+          "Room",
+          "Hall"
+        ],
+        "id": "room",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Space",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "exp",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Exponential",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "log",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Natural logarithm",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "log2",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Logarithm 2",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "log10",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Logarithm 10",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "tanh",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Hyperbolic tangent",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "atan",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Arctangent",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "sign",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Sign",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "floor",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Floor",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "ceil",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Ceiling",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "round",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Round",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "fraction",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Fraction",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "linear_to_db",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Linear to dB",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "db_to_linear",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "dB to Linear",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "modulo",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Modulo",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "wrap",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "min",
+        "name": "Minimum",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "max",
+        "name": "Maximum",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Wrap",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "min",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Minimum",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "max",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Maximum",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "fold",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "min",
+        "name": "Minimum",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "max",
+        "name": "Maximum",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Fold",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "min",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Minimum",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "max",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Maximum",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "smoothstep",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "min",
+        "name": "Minimum",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "max",
+        "name": "Maximum",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Smoothstep",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "min",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Minimum",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "max",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Maximum",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "lerp",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "mix",
+        "name": "Position",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Linear interpolation",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "a",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "A",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "b",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "B",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "mix",
+        "initial": 0.5,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Position",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "audio_add",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Add Audio",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "audio_subtract",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Subtract Audio",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "audio_multiply",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Multiply Audio",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "audio_scale",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "gain",
+        "name": "Gain",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Scale Audio",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "gain",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Gain",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "stereo_split",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Split Stereo",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "left",
+        "name": "Left",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "right",
+        "name": "Right",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "ms_encode",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Encode Mid-Side",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "mid",
+        "name": "Mid",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "side",
+        "name": "Side",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "stereo_join",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "left",
+        "name": "Left",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "right",
+        "name": "Right",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Join Stereo",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "left",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Left",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "right",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Right",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Signal",
+    "id": "ms_decode",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "mid",
+        "name": "Mid",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "side",
+        "name": "Side",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Decode Mid-Side",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "mid",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Mid",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "side",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Side",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "and",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "AND",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "or",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "OR",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "xor",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "XOR",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "not",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Gate",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "NOT",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "rising_edge",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Gate",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Rising Edge",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "falling_edge",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Gate",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Falling Edge",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "gate_to_number",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Gate",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Gate to Number",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "number_to_gate",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Number to Gate",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "number_to_integer",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Number to Integer",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 2147483647.0,
+        "minimum": -2147483648.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Math",
+    "id": "integer_to_number",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      }
+    ],
+    "name": "Integer to Number",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Logic",
+    "id": "audio_select",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Select B",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "a",
+        "name": "A",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "b",
+        "name": "B",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Select Audio",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Analysis",
+    "id": "peak",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Peak Detector",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Analysis",
+    "id": "window_rms",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "name": "Window RMS",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "window",
+        "initial": 10.0,
+        "logarithmic": true,
+        "maximum": 1000.0,
+        "minimum": 0.1,
+        "modulatable": false,
+        "name": "Window",
+        "unit": "ms"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Modulation",
+    "id": "attack_release",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "attack",
+        "name": "Attack",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "release",
+        "name": "Release",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Attack / Release",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "attack",
+        "initial": 10.0,
+        "logarithmic": true,
+        "maximum": 10000.0,
+        "minimum": 0.001,
+        "modulatable": true,
+        "name": "Attack",
+        "unit": "ms"
+      },
+      {
+        "choices": [],
+        "id": "release",
+        "initial": 100.0,
+        "logarithmic": true,
+        "maximum": 10000.0,
+        "minimum": 0.001,
+        "modulatable": true,
+        "name": "Release",
+        "unit": "ms"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Modulation",
+    "id": "slew",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "rise",
+        "name": "Rise / second",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "fall",
+        "name": "Fall / second",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Slew Limiter",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "rise",
+        "initial": 10.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Rise / second",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "fall",
+        "initial": 10.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Fall / second",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "history",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "next",
+        "name": "Next",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "write",
+        "name": "Write enable",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Variable / History",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "initial",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": false,
+        "name": "Initial",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "next",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Next",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "accumulator",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "increment",
+        "name": "Increment",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Accumulator",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "increment",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Increment",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "counter",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "gate",
+        "name": "Trigger",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Counter",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "context",
+    "inputs": [],
+    "name": "Time / Context",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "sample_rate",
+        "name": "Sample Rate",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "time",
+        "name": "Time",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "tempo",
+        "name": "Tempo",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "beat",
+        "name": "Beat",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "playing",
+        "name": "Playing",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "delay_buffer",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "reset",
+        "name": "Reset",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "name": "Delay Buffer",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "buffer"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "maximum",
+        "initial": 1000.0,
+        "logarithmic": true,
+        "maximum": 10000.0,
+        "minimum": 0.1,
+        "modulatable": false,
+        "name": "Maximum delay",
+        "unit": "ms"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "delay_read",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "buffer",
+        "name": "Buffer",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "buffer"
+      },
+      {
+        "capacity": 0,
+        "id": "time",
+        "name": "Delay",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Read Delay Tap",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "time",
+        "initial": 100.0,
+        "logarithmic": false,
+        "maximum": 10000.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Delay",
+        "unit": "ms"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Filters",
+    "id": "one_pole",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "coefficient",
+        "name": "Pole",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "One Pole",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "coefficient",
+        "initial": 0.9,
+        "logarithmic": false,
+        "maximum": 0.999999,
+        "minimum": -0.999999,
+        "modulatable": true,
+        "name": "Pole",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Filters",
+    "id": "biquad",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "coefficients",
+        "name": "b0 b1 b2 a1 a2",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Biquad",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Filters",
+    "id": "biquad_coefficients",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "frequency",
+        "name": "Frequency",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "q",
+        "name": "Q",
+        "parameter": 1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "gain",
+        "name": "Gain",
+        "parameter": 2,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Biquad Coefficients",
+    "outputs": [
+      {
+        "capacity": 5,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "frequency",
+        "initial": 1000.0,
+        "logarithmic": true,
+        "maximum": 96000.0,
+        "minimum": 1.0,
+        "modulatable": true,
+        "name": "Frequency",
+        "unit": "Hz"
+      },
+      {
+        "choices": [],
+        "id": "q",
+        "initial": 0.70710678,
+        "logarithmic": true,
+        "maximum": 100.0,
+        "minimum": 0.05,
+        "modulatable": true,
+        "name": "Q",
+        "unit": ""
+      },
+      {
+        "choices": [],
+        "id": "gain",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 60.0,
+        "minimum": -60.0,
+        "modulatable": true,
+        "name": "Gain",
+        "unit": "dB"
+      },
+      {
+        "choices": [
+          "Low Pass",
+          "High Pass",
+          "Band Pass",
+          "Notch",
+          "All Pass",
+          "Bell",
+          "Low Shelf",
+          "High Shelf"
+        ],
+        "id": "type",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 7.0,
+        "minimum": 0.0,
+        "modulatable": false,
+        "name": "Filter type",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Filters",
+    "id": "fir",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "coefficients",
+        "name": "Coefficients",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "FIR",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Filters",
+    "id": "dc_block",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "frequency",
+        "name": "Cutoff",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "DC Block",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "frequency",
+        "initial": 10.0,
+        "logarithmic": true,
+        "maximum": 1000.0,
+        "minimum": 0.1,
+        "modulatable": true,
+        "name": "Cutoff",
+        "unit": "Hz"
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Shaping",
+    "id": "hard_clip",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Audio",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "audio"
+      },
+      {
+        "capacity": 0,
+        "id": "limit",
+        "name": "Limit",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Hard Clip",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "audio"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "limit",
+        "initial": 1.0,
+        "logarithmic": false,
+        "maximum": 1000.0,
+        "minimum": 1e-06,
+        "modulatable": true,
+        "name": "Limit",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Shaping",
+    "id": "curve",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Transfer Curve",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Shaping",
+    "id": "table_lookup",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "table",
+        "name": "Table",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      },
+      {
+        "capacity": 0,
+        "id": "position",
+        "name": "Position",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Table Lookup",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "position",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "modulatable": true,
+        "name": "Position",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "array",
+    "inputs": [],
+    "name": "Array",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "list",
+    "inputs": [],
+    "name": "List",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "list"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "length",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Length",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "get",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      },
+      {
+        "capacity": 0,
+        "id": "index",
+        "name": "Index",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      }
+    ],
+    "name": "Get Element",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      },
+      {
+        "capacity": 0,
+        "id": "valid",
+        "name": "Valid",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "set",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      },
+      {
+        "capacity": 0,
+        "id": "index",
+        "name": "Index",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      },
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Set Element",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "array"
+      },
+      {
+        "capacity": 0,
+        "id": "success",
+        "name": "Success",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "append",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "list"
+      },
+      {
+        "capacity": 0,
+        "id": "value",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Append",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "list"
+      },
+      {
+        "capacity": 0,
+        "id": "success",
+        "name": "Success",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "value",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Value",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "remove",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "list"
+      },
+      {
+        "capacity": 0,
+        "id": "index",
+        "name": "Index",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "integer"
+      }
+    ],
+    "name": "Remove Element",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "list"
+      },
+      {
+        "capacity": 0,
+        "id": "success",
+        "name": "Success",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "clear",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Clear Collection",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "array"
+      },
+      {
+        "capacity": 0,
+        "id": "success",
+        "name": "Success",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "gate"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "sum",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Sum Elements",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "collection_min",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Minimum Element",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "collection_max",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Maximum Element",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "map",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "name": "Map",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "array"
+      }
+    ],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Collections",
+    "id": "reduce",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "collection",
+        "name": "Collection",
+        "parameter": -1,
+        "required": true,
+        "signature": "",
+        "type": "array"
+      },
+      {
+        "capacity": 0,
+        "id": "initial",
+        "name": "Initial",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Reduce",
+    "outputs": [
+      {
+        "capacity": 0,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "initial",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Initial",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Custom",
+    "id": "subgraph",
+    "inputs": [],
+    "name": "Custom Node",
+    "outputs": [],
+    "parameters": [],
+    "version": 1
+  },
+  {
+    "category": "Custom",
+    "id": "subgraph_input",
+    "inputs": [],
+    "name": "Node Input",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "default",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Default",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Custom",
+    "id": "subgraph_output",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Node Output",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "default",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Default",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  },
+  {
+    "category": "Memory",
+    "id": "wire",
+    "inputs": [
+      {
+        "capacity": 0,
+        "id": "in",
+        "name": "Value",
+        "parameter": 0,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "name": "Named Value",
+    "outputs": [
+      {
+        "capacity": 64,
+        "id": "out",
+        "name": "Output",
+        "parameter": -1,
+        "required": false,
+        "signature": "",
+        "type": "number"
+      }
+    ],
+    "parameters": [
+      {
+        "choices": [],
+        "id": "default",
+        "initial": 0.0,
+        "logarithmic": false,
+        "maximum": 1000000.0,
+        "minimum": -1000000.0,
+        "modulatable": true,
+        "name": "Default",
+        "unit": ""
+      }
+    ],
+    "version": 1
+  }
+]

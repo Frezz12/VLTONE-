@@ -297,7 +297,7 @@ int main(int argc, char **) {
   for (unsigned i = 0; i < 256; ++i)
     exact &= whole.outL[i] == (i < 73 ? first.outL[i] : second.outL[i - 73]);
   check(exact, "sample-offset automation matches split processing exactly");
-  EngineController controller{EngineController::TestRuntime{}};
+  EngineController controller{};
   check(bool(controller.initialize(48000, 256, false)),
         "controller initialized");
   const auto track = controller.addTrack(TrackKind::Audio, "Mini modules");
@@ -373,7 +373,7 @@ int main(int argc, char **) {
   std::filesystem::create_directories(directory);
   check(bool(controller.saveProject(directory.string())),
         "project saves module graphs");
-  EngineController reopened{EngineController::TestRuntime{}};
+  EngineController reopened{};
   reopened.initialize(48000, 256, false);
   check(bool(reopened.openProject(directory.string())) &&
             reopened.miniModules(track).size() == 3 &&

@@ -1,5 +1,5 @@
 #include "AudioRuntime.hpp"
-#include "AudioSessionCodec.hpp"
+#include "AudioContentValidation.hpp"
 #include "Host/ParameterDiagnostics.hpp"
 #include "Internal/SamplerInstance.hpp"
 
@@ -10,7 +10,7 @@ namespace daw {
 bool AudioRuntime::buildSession(AudioSessionSpec session) {
     bool parametersApplied = false;
     for (const auto& chain : session.pluginChains)
-        parametersApplied |= reconcilePluginChain(chain, session.hosting);
+        parametersApplied |= reconcilePluginChain(chain);
     buildGraph(session.graph);
     for (auto& channel : session.channels) applyContent(channel.id, std::move(channel.content));
     return parametersApplied;
@@ -86,7 +86,7 @@ void AudioRuntime::applyPluginAutomation(TrackChannel& channel) {
     static const auto empty = std::make_shared<const plugins::PluginNode::AutomationCurves>();
     const auto apply = [&](const std::vector<InsertSlot>& slots) {
         for (const auto& slot : slots) for (const auto& node : {slot.node, slot.rightNode}) {
-            if (!node || !node->instance()) continue;
+            if (!node || !node->instance() || node->faultBypassed()) continue;
             const auto sources = bySlot.find(slot.slotId);
             if (sources == bySlot.end()) { node->setAutomation(empty); continue; }
             auto curves = std::make_shared<plugins::PluginNode::AutomationCurves>();

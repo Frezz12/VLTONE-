@@ -10,10 +10,12 @@
 #
 # The bundle carries its own Qt, PortAudio and libsndfile (macdeployqt copies
 # every non-system dylib and rewrites the load commands). The locally patched
-# macOS RtMidi backend is linked statically. The bundle also carries the three
+# macOS RtMidi backend is linked statically. The bundle also carries the four
 # helper executables the app looks for *next to itself*: daw_scan, which loads
 # third-party plugins out of process, daw_guard, the network-free crash
-# watchdog, and daw_reporter, the restricted diagnostics courier.
+# watchdog, daw_reporter, the restricted diagnostics courier, and daw_worker,
+# the disposable offline worker. The PKG installs into /Applications and its
+# postinstall removes only com.apple.quarantine from the installed app.
 #
 # Signing: the app is ad-hoc signed, which is all an arm64 binary needs to run
 # on the machine that built it. The package is unsigned, so Gatekeeper will ask
@@ -70,17 +72,54 @@ echo "── stage (macdeployqt runs here) ────────────�
 # A clean staging root: pkgbuild packages whatever it finds, so a leftover file
 # from an older layout would be installed into /Applications for good.
 rm -rf "$STAGE"
+# macdeployqt treats the WASI sysroot's .so linker stubs as native libraries
+# and repeatedly tries to rewrite them. Keep the sysroot out of its scan, then
+# restore it to both bundles before validating and signing the release.
+BUILD_SYSROOT="$BUILD/bin/$APP_BUNDLE/Contents/MacOS/CreatorTools/sysroot"
+TOOLS_SYSROOT="$BUILD/bin/CreatorTools/sysroot"
+SAVED_SYSROOT="$(mktemp -d "$BUILD/.creator-sysroot.XXXXXX")"
+restore_creator_sysroot() {
+    if [[ -d "$SAVED_SYSROOT/sysroot" ]]; then
+        mv "$SAVED_SYSROOT/sysroot" "$BUILD_SYSROOT"
+    fi
+    if [[ -d "$SAVED_SYSROOT/tools-sysroot" ]]; then
+        mv "$SAVED_SYSROOT/tools-sysroot" "$TOOLS_SYSROOT"
+    fi
+    rmdir "$SAVED_SYSROOT"
+}
+trap restore_creator_sysroot EXIT
+if [[ -d "$BUILD_SYSROOT" ]]; then
+    mv "$BUILD_SYSROOT" "$SAVED_SYSROOT/sysroot"
+fi
+if [[ -d "$TOOLS_SYSROOT" ]]; then
+    mv "$TOOLS_SYSROOT" "$SAVED_SYSROOT/tools-sysroot"
+fi
 # macdeployqt reports unresolved *optional* Qt modules (QtPdf, QtSvg, the
 # virtual keyboard) that this Qt install does not have; the app does not use
 # them and the deploy still completes, so its exit status is not fatal here.
 cmake --install "$BUILD" --prefix "$STAGE" || true
+restore_creator_sysroot
+trap - EXIT
+if [[ -d "$TOOLS_SYSROOT" ]]; then
+    ditto "$TOOLS_SYSROOT" \
+        "$STAGE/$APP_BUNDLE/Contents/MacOS/CreatorTools/sysroot"
+fi
 test -x "$STAGE/$APP_BUNDLE/Contents/MacOS/$APP_NAME" ||
     { echo "no app was staged"; exit 1; }
 python3 "$ROOT/packaging/prune-qml.py" "$STAGE/$APP_BUNDLE" \
     --source "$ROOT/app/graphics/qml"
-for helper in daw_scan daw_guard daw_reporter; do
+for helper in daw_scan daw_guard daw_reporter daw_worker; do
     test -x "$STAGE/$APP_BUNDLE/Contents/MacOS/$helper" ||
         { echo "$helper is missing from the bundle"; exit 1; }
+    # macdeployqt can rewrite a helper's libraries to @rpath without adding
+    # an LC_RPATH to that executable. The GUI then works while every decode
+    # worker exits in dyld before it can import a sample or finish a take.
+    if ! otool -l "$STAGE/$APP_BUNDLE/Contents/MacOS/$helper" |
+        awk '/cmd LC_RPATH/{rpath=1; next} rpath && /path /{print $2; rpath=0}' |
+        grep -Fx '@executable_path/../Frameworks' >/dev/null; then
+        install_name_tool -add_rpath '@executable_path/../Frameworks' \
+            "$STAGE/$APP_BUNDLE/Contents/MacOS/$helper"
+    fi
 done
 
 # Qt WebEngine is more than a framework: Chromium runs in a helper process and
@@ -167,8 +206,12 @@ done < <(find "$STAGE/$APP_BUNDLE" -type f -print0)
 
 # A package built on a Homebrew machine must not silently depend on that same
 # machine. Fail staging when any Mach-O still names Homebrew or the source tree.
+# Static archives are skipped: they are linked by the bundled clang, never
+# loaded at run time, and `otool -L` lists their member paths (which live under
+# the build tree) instead of load commands.
 bad_dependency=0
 while IFS= read -r -d '' binary; do
+    case "$binary" in *.a) continue ;; esac
     file "$binary" | grep -q 'Mach-O' || continue
     while IFS= read -r dependency; do
         case "$dependency" in
@@ -198,7 +241,8 @@ if [[ -n "${DAW_SIGN_ID:-}" ]]; then
     codesign --force --timestamp --options runtime --sign "$DAW_SIGN_ID" \
         "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_scan" \
         "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_guard" \
-        "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_reporter"
+        "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_reporter" \
+        "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_worker"
     codesign --force --timestamp --options runtime --deep \
         --sign "$DAW_SIGN_ID" "$STAGE/$APP_BUNDLE"
 else
@@ -208,9 +252,50 @@ else
 fi
 codesign --verify --deep --strict "$STAGE/$APP_BUNDLE"
 
+# A dependency-name audit cannot detect an unresolved @rpath. Actually load
+# the signed worker with no IPC arguments: reaching its argument check exits 2.
+python3 - "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_worker" <<'PY'
+import os
+import subprocess
+import sys
+
+environment = {key: value for key, value in os.environ.items()
+               if not key.startswith("DYLD_")}
+result = subprocess.run([sys.argv[1]], env=environment, capture_output=True,
+                        text=True, timeout=15)
+if result.returncode != 2:
+    sys.exit(f"Packaged audio worker failed to load ({result.returncode}):\n"
+             f"{result.stdout}{result.stderr}")
+print("Packaged audio worker loads without developer library paths")
+PY
+
 echo "── package ───────────────────────────────────────────────"
 COMPONENT="$BUILD/$ARTIFACT_NAME-component.pkg"
+COMPONENT_PLIST="$BUILD/components.plist"
+# Always install into /Applications, even when Launch Services knows another
+# copy of VLTONE. Replace obsolete bundle contents when upgrading.
+pkgbuild --analyze --root "$STAGE" "$COMPONENT_PLIST"
+python3 - "$COMPONENT_PLIST" <<'PY'
+import plistlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as stream:
+    components = plistlib.load(stream)
+
+def configure(items):
+    for item in items:
+        item["BundleIsRelocatable"] = False
+        item["BundleOverwriteAction"] = "upgrade"
+        configure(item.get("ChildBundles", []))
+
+configure(components)
+with open(path, "wb") as stream:
+    plistlib.dump(components, stream)
+PY
 pkgbuild --root "$STAGE" \
+         --component-plist "$COMPONENT_PLIST" \
+         --scripts "$ROOT/packaging/macos/scripts" \
          --identifier "$IDENTIFIER" \
          --version "$VERSION" \
          --install-location /Applications \
@@ -219,12 +304,13 @@ pkgbuild --root "$STAGE" \
 # A distribution package rather than the bare component: it is what gives the
 # installer a title, a minimum-OS check and room for a licence later.
 DIST="$BUILD/distribution.xml"
+HOST_ARCHITECTURES="$(lipo -archs "$STAGE/$APP_BUNDLE/Contents/MacOS/$APP_NAME" | tr ' ' ',')"
 cat > "$DIST" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>$APP_NAME $DISPLAY_VERSION</title>
-    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
-    <!-- Spelled out: without it `installer -target CurrentUserHomeDirectory`
+    <options customize="never" require-scripts="false" hostArchitectures="$HOST_ARCHITECTURES"/>
+    <!-- Spelled out: without it installer -target CurrentUserHomeDirectory
          reports success and writes nothing at all. This app goes to
          /Applications, and says so. -->
     <domains enable_anywhere="false" enable_currentUserHome="false"
@@ -250,13 +336,34 @@ echo "── dmg ─────────────────────
 DMG_ROOT="$BUILD/dmg-root"
 rm -rf "$DMG_ROOT"
 mkdir -p "$DMG_ROOT"
-# ditto preserves bundle metadata, resource forks and executable modes.
-ditto "$STAGE/$APP_BUNDLE" "$DMG_ROOT/$APP_BUNDLE"
+# Use an APFS clone to avoid another full temporary copy of the large bundle.
+# Preserve metadata and fall back to ditto on filesystems without cloning.
+if ! cp -cRp "$STAGE/$APP_BUNDLE" "$DMG_ROOT/$APP_BUNDLE"; then
+    rm -rf "$DMG_ROOT/$APP_BUNDLE"
+    ditto "$STAGE/$APP_BUNDLE" "$DMG_ROOT/$APP_BUNDLE"
+fi
+# Validate the copy as well: the staged signature says nothing about bytes
+# lost or changed during copying/packaging.
+codesign --verify --deep --strict "$DMG_ROOT/$APP_BUNDLE"
 ln -s /Applications "$DMG_ROOT/Applications"
 rm -f "$DMG"
 hdiutil create -volname "$APP_NAME $DISPLAY_VERSION" \
     -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG" >/dev/null
 hdiutil verify "$DMG" >/dev/null
+# A valid image checksum does not guarantee a valid application signature.
+# Check the actual shipped bytes from a read-only mount before publishing.
+DMG_VERIFY_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/vltone-dmg-verify.XXXXXX")"
+cleanup_dmg_verify() {
+    hdiutil detach "$DMG_VERIFY_MOUNT" >/dev/null 2>&1 || true
+    rmdir "$DMG_VERIFY_MOUNT" 2>/dev/null || true
+}
+trap cleanup_dmg_verify EXIT
+hdiutil attach "$DMG" -readonly -nobrowse \
+    -mountpoint "$DMG_VERIFY_MOUNT" >/dev/null
+codesign --verify --deep --strict "$DMG_VERIFY_MOUNT/$APP_BUNDLE"
+hdiutil detach "$DMG_VERIFY_MOUNT" >/dev/null
+rmdir "$DMG_VERIFY_MOUNT"
+trap - EXIT
 rm -rf "$DMG_ROOT"
 
 echo

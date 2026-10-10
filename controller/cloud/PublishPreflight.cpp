@@ -201,6 +201,7 @@ bool isSupportedBuiltinV1(const InsertModel& insert) noexcept {
 
 const char* publishIssueKindName(PublishIssueKind kind) noexcept {
     switch (kind) {
+        case PublishIssueKind::ClipContentFormat: return "clip_content_format";
         case PublishIssueKind::LocalWarp: return "local_warp";
         case PublishIssueKind::ThirdPartyPlugin: return "third_party_plugin";
         case PublishIssueKind::UnknownInternalPlugin: return "unknown_internal_plugin";
@@ -213,6 +214,18 @@ const char* publishIssueKindName(PublishIssueKind kind) noexcept {
 PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
     PublishPreflightReport report;
     std::unordered_map<std::string, std::string> seenAssets;
+    std::unordered_set<std::string> contentIds;
+    for (const auto& track : project.tracks) {
+        bool unsupported = track.instrument.audioEdit.initialized;
+        for (const auto& clip : track.clips)
+            unsupported |= clip.audioEdit.initialized || clip.contentOffsetBeats!=0 ||
+                (!clip.contentId.empty() && !contentIds.insert(clip.contentId).second) ||
+                std::any_of(clip.offlineHistory.begin(), clip.offlineHistory.end(),
+                    [](const auto& version) { return version.source.audioEdit.initialized; });
+        if (unsupported) report.blockers.push_back({PublishIssueKind::ClipContentFormat,
+            "track:" + track.id, track.id, {}, track.name,
+            "This server protocol does not support linked clip content or sample editor documents yet."});
+    }
 
     inspectInsertList(project.masterInserts, "master", report, seenAssets);
     inspectInsertList(project.masterMiniModules,"masterMiniModules",report,seenAssets);

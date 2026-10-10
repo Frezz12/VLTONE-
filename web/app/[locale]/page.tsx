@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Image from "next/image";
+import { HeroVideo } from "@/components/hero-video";
 import Link from "next/link";
 import { ArrowDown, ArrowUpRight, ArrowRight, Plus } from "lucide-react";
 import { getTranslations, setRequestLocale } from "next-intl/server";
@@ -77,7 +77,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
       <div className="hero-stage">
         <div className="hero-art" aria-hidden="true">
           <div className="hero-screen">
-            <Image src={heroShot} width={2880} height={1800} alt="" loading="eager" fetchPriority="high" />
+            <HeroVideo locale={locale} poster={heroShot} />
           </div>
         </div>
         <div className="studio-container hero-content">

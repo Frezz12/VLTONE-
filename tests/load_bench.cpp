@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
         profile << "block,generation,position,worker,kind,node,nanoseconds\n";
         nodeMap << "generation,node,name\n";
     }
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (auto result = controller.initialize(rate, 512, /*openDevice=*/true); !result) {
         std::fprintf(stderr, "initialize failed: %s\n", result.message().c_str());
         return 1;

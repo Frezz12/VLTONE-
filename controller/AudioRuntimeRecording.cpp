@@ -18,6 +18,8 @@ bool AudioRuntime::hasActiveCaptures() const {
 
 audio::Result AudioRuntime::startCapture(const AudioCaptureSpec& spec, AudioCaptureStarted& out) {
     out = {};
+    if (safetyStopped.load(std::memory_order_acquire))
+        return audio::Result::fail(audio::EngineError::AudioThreadError, "The audio engine is stopped after a failed rollback.");
     if (spec.channelCount < 1 || spec.channelCount > 2 || spec.inputChannel >= engine::kMaxChannels ||
         nextCaptureId == std::numeric_limits<AudioCaptureId>::max())
         return audio::Result::fail(audio::EngineError::InvalidArgument, "Invalid audio capture configuration.");

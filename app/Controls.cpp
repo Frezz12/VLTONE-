@@ -193,64 +193,6 @@ namespace {
 bool g_automationCreationMode = false;
 }
 
-void LockedCursorDrag::begin(const QPointF& globalPosition) {
-    m_anchor = m_lastPosition = globalPosition;
-    m_warpPending = false;
-    m_active = true;
-}
-
-QPointF LockedCursorDrag::takeDelta(const QPointF& globalPosition, bool wrapAtEdge) {
-    if (!m_active) return {};
-    if (m_warpPending) {
-        // Native input can already have several old-edge samples queued when
-        // setPos runs. Wait for the destination instead of counting them again.
-        if ((globalPosition - m_lastPosition).manhattanLength() >
-            (globalPosition - m_warpFrom).manhattanLength()) return {};
-        m_warpPending = false;
-    }
-    const QPointF delta = globalPosition - m_lastPosition;
-    m_lastPosition = globalPosition;
-    if (wrapAtEdge && !delta.isNull()) {
-        if (const auto* screen = QGuiApplication::screenAt(globalPosition.toPoint())) {
-            const QRect bounds = screen->geometry();
-            QPointF destination = globalPosition;
-            if ((delta.x() < 0 && globalPosition.x() <= bounds.left() + 2) ||
-                (delta.x() > 0 && globalPosition.x() >= bounds.right() - 2))
-                destination.setX(bounds.center().x());
-            if ((delta.y() < 0 && globalPosition.y() <= bounds.top() + 2) ||
-                (delta.y() > 0 && globalPosition.y() >= bounds.bottom() - 2))
-                destination.setY(bounds.center().y());
-            if (destination != globalPosition) {
-                m_warpFrom = globalPosition;
-                m_lastPosition = destination.toPoint();
-                m_warpPending = true;
-                QCursor::setPos(m_lastPosition.toPoint());
-                // A backend without pointer warping must keep ordinary input
-                // working instead of waiting for a move that cannot arrive.
-                if (QCursor::pos() != m_lastPosition.toPoint()) {
-                    m_lastPosition = globalPosition;
-                    m_warpPending = false;
-                }
-            }
-        }
-    }
-    return delta;
-}
-
-QPointF LockedCursorDrag::finish(const QPointF& globalPosition) {
-    if (!m_active) return {};
-    const QPointF delta = takeDelta(globalPosition, false);
-    m_active = false;
-    m_warpPending = false;
-    if (QCursor::pos() != m_anchor.toPoint()) QCursor::setPos(m_anchor.toPoint());
-    return delta;
-}
-
-void LockedCursorDrag::cancel() {
-    m_active = false;
-    m_warpPending = false;
-}
-
 void setAutomationCreationMode(bool enabled) {
     g_automationCreationMode = enabled;
 }
@@ -925,7 +867,7 @@ void IconButton::paintEvent(QPaintEvent*) {
         QColor tint = m_prominent ? t.textPrimary : isChecked() || m_pulse
             ? mixColors(active, t.textPrimary, t.dark ? 0.45 : 0.10)
             : m_idleColor.isValid() ? m_idleColor : t.textPrimary;
-        const int side = m_prominent ? 20 : 18;
+        const int side = m_glyphSize > 0 ? m_glyphSize : m_prominent ? 20 : 18;
         const QRect box((width() - side) / 2, (height() - side) / 2, side, side);
         if (icon().isNull()) icons::paint(p, m_glyph, box, tint);
         else icon().paint(&p, box);
@@ -1010,8 +952,9 @@ void IconButton::paintEvent(QPaintEvent*) {
 
     // The glyph shrinks a hair under the press — the physical part of the
     // "вдавливание".
-    const qreal side = std::min(r.width(), r.height()) *
-                       (m_prominent ? 0.74 : 0.68) * (1.0 - 0.07 * press);
+    const qreal baseSide = m_glyphSize > 0 ? m_glyphSize :
+        std::min(r.width(), r.height()) * (m_prominent ? 0.74 : 0.68);
+    const qreal side = baseSide * (1.0 - 0.07 * press);
     const QRectF box(r.center().x() - side / 2, r.center().y() - side / 2,
                      side, side);
     if (icon().isNull()) {
@@ -1608,6 +1551,7 @@ void FaderWidget::paintEvent(QPaintEvent*) {
 }
 
 void FaderWidget::showBubble() {
+    if (!m_valueBubbleEnabled) return;
     // Anchored to the knob, not the cursor, so the readout tracks the value
     // rather than the hand.
     const double axis = m_compactKnob
@@ -2537,7 +2481,9 @@ void Knob::setCaption(const QString& caption) {
 
 void Knob::setCompact(bool compact) {
     m_compact = compact;
-    if (m_visualStyle == VisualStyle::SamplerDigital || m_visualStyle == VisualStyle::Slicer) {
+    if (m_visualStyle == VisualStyle::RackDigital) {
+        setFixedSize(62, 60);
+    } else if (m_visualStyle == VisualStyle::SamplerDigital || m_visualStyle == VisualStyle::Slicer) {
         setFixedSize(kSamplerKnobWidth, kSamplerKnobHeight);
     } else {
         const int size = compact ? kKnobCompactSize : kKnobSize;
@@ -2566,7 +2512,9 @@ void Knob::setDetent(std::function<double(double)> detent) {
 void Knob::setVisualStyle(VisualStyle style) {
     m_visualStyle = style;
     if (!m_bare) {
-        if (style == VisualStyle::SamplerDigital || style == VisualStyle::Slicer) {
+        if (style == VisualStyle::RackDigital) {
+            setFixedSize(62, 60);
+        } else if (style == VisualStyle::SamplerDigital || style == VisualStyle::Slicer) {
             setFixedSize(kSamplerKnobWidth, kSamplerKnobHeight);
         } else {
             const int size = m_compact ? kKnobCompactSize : kKnobSize;
@@ -2645,15 +2593,17 @@ void Knob::paintEvent(QPaintEvent*) {
     p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
 
-    const bool digital = m_visualStyle == VisualStyle::SamplerDigital;
+    const bool rackDigital = m_visualStyle == VisualStyle::RackDigital ||
+        (m_visualStyle == VisualStyle::SamplerDigital && height() < 72);
+    const bool digital = m_visualStyle == VisualStyle::SamplerDigital || rackDigital;
     const bool gravityStyle = m_visualStyle == VisualStyle::Gravity;
     const bool graphiteStyle = m_visualStyle == VisualStyle::Graphite;
     const int size = m_bare ? m_bare
-                            : digital ? kSamplerKnobSize
+                            : digital ? (rackDigital ? 28 : kSamplerKnobSize)
                                       : (m_compact ? kKnobCompactSize : kKnobSize);
     const double inset = m_bare ? 1.5 : 2.0;
     const QRectF ring(double(width() - size) / 2.0 + inset,
-                      inset + (digital && !m_bare ? 18.0 : 0.0),
+                      inset + (digital && !m_bare ? (rackDigital ? 14.0 : 18.0) : 0.0),
                       size - inset * 2.0, size - inset * 2.0);
     const QPointF centre = ring.center();
     const double radius = ring.width() / 2.0;
@@ -2868,16 +2818,16 @@ void Knob::paintEvent(QPaintEvent*) {
         p.drawLine(centre + direction * 3, centre + direction * 10);
         if (!m_bare) {
             QFont labelFont = font();
-            labelFont.setPixelSize(10);
+            labelFont.setPixelSize(rackDigital ? 9 : 10);
             labelFont.setWeight(QFont::Medium);
             p.setFont(labelFont);
             p.setPen(t.textSecondary);
-            p.drawText(QRect(0, 0, width(), 16), Qt::AlignCenter,
+            p.drawText(QRect(0, 0, width(), rackDigital ? 12 : 16), Qt::AlignCenter,
                        elidedCaption(p, m_caption, width()));
-            labelFont.setPixelSize(11);
+            labelFont.setPixelSize(rackDigital ? 10 : 11);
             p.setFont(labelFont);
             p.setPen(m_dragging ? accent : t.textPrimary);
-            p.drawText(QRect(0, 60, width(), 17), Qt::AlignCenter,
+            p.drawText(QRect(0, rackDigital ? 43 : 60, width(), rackDigital ? 16 : 17), Qt::AlignCenter,
                        elidedCaption(p, text(), width()));
         }
         return;
@@ -3248,8 +3198,7 @@ void LevelMeter::setPeaks(float left, float right) {
     const float release = float(std::pow(0.80, dt / 0.033));
     const float in[2] = {left, right};
     bool dirty = false;
-    // A rail draws one bar out of both sides, so it has to *hold* both even
-    // when it was built as a single channel.
+    // A single-channel rail combines both sides, so it still tracks both.
     const int tracked = m_style == Style::Rail ? 2 : m_channels;
     for (int i = 0; i < tracked; ++i) {
         const float v = std::max(0.0f, in[i]);
@@ -3399,15 +3348,30 @@ void LevelMeter::paintScene(QPainter& p, const QRegion&) {
     }
 
     if (m_style == Style::Rail) {
-        // One strip, edge to edge, square. The two-bar version at this width
-        // read as a pair of hairlines with a gap that looked like a mistake;
-        // the level being shown is a single peak either way.
+        // Edge-to-edge square rails, with L/R kept separate for stereo.
         const QRectF area(rect());
         p.setPen(Qt::NoPen);
         p.setBrush(th().well());
         p.drawRect(area);
-        drawBar(p, area, std::max(m_level[0], m_level[1]),
-                std::max(m_hold[0], m_hold[1]));
+        if (m_channels == 1) {
+            drawBar(p, area, std::max(m_level[0], m_level[1]),
+                    std::max(m_hold[0], m_hold[1]));
+        } else {
+            constexpr qreal gap = 1.0;
+            if (m_orientation == Qt::Vertical) {
+                const qreal width = (area.width() - gap) / 2.0;
+                drawBar(p, QRectF(area.left(), area.top(), width, area.height()),
+                        m_level[0], m_hold[0]);
+                drawBar(p, QRectF(area.left() + width + gap, area.top(), width, area.height()),
+                        m_level[1], m_hold[1]);
+            } else {
+                const qreal height = (area.height() - gap) / 2.0;
+                drawBar(p, QRectF(area.left(), area.top(), area.width(), height),
+                        m_level[0], m_hold[0]);
+                drawBar(p, QRectF(area.left(), area.top() + height + gap, area.width(), height),
+                        m_level[1], m_hold[1]);
+            }
+        }
         if (m_clipped) {
             p.setPen(Qt::NoPen);
             p.setBrush(Theme::record());

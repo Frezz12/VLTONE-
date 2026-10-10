@@ -50,7 +50,7 @@ bool writeWave(const QString& path, qint16 amplitude) {
 }
 
 bool PianoRollWindow::checkWorkflowsForTest(const QString& images) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Midi, "Sampler phrase");
     const auto clipId = controller.addMidiClip(track, 0, 16);
@@ -267,7 +267,7 @@ bool PianoRollWindow::checkWorkflowsForTest(const QString& images) {
 }
 
 bool TimelineWidget::checkMidiClipOpeningForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Midi, "Create then open");
     TimelineWidget timeline(&controller);
@@ -298,7 +298,7 @@ bool TimelineWidget::checkMidiClipOpeningForTest() {
 }
 
 bool PianoRollView::checkVelocityRampForTest(const QString& images) {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Midi, "Velocity ramp");
     const auto clipId = controller.addMidiClip(track, 0, 8);

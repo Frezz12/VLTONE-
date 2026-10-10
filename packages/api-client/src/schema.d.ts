@@ -1439,6 +1439,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/team": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Owner only: list administrators and grantable permissions */
+        get: operations["adminTeam"];
+        /** Owner only: grant or revoke access for an existing website account; revokes its admin sessions */
+        put: operations["adminSaveMember"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Requires tasks.read; returns up to 100 tasks, newest first; excludes archived unless status is supplied */
+        get: operations["adminTasks"];
+        put?: never;
+        /** Requires tasks.write; author is the authenticated administrator */
+        post: operations["adminCreateTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tasks/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Requires tasks.read; names and assignment eligibility only */
+        get: operations["adminTaskMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tasks/{taskID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Requires tasks.read */
+        get: operations["adminTaskDetail"];
+        /** Requires tasks.write; version must match; archive with status=archived */
+        put: operations["adminUpdateTask"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tasks/{taskID}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Requires tasks.write */
+        post: operations["adminTaskComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tasks/{taskID}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Requires tasks.write; maximum 10 MiB per file, 20 files per task */
+        post: operations["adminTaskUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tasks/{taskID}/attachments/{attachmentID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Requires tasks.read; private download with attachment disposition */
+        get: operations["adminTaskDownload"];
+        put?: never;
+        post?: never;
+        /** Requires tasks.write */
+        delete: operations["adminTaskDeleteAttachment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/auth/login": {
         parameters: {
             query?: never;
@@ -1924,6 +2047,89 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AdminIdentity: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            user_id?: string | null;
+            email: string;
+            nickname: string;
+            is_owner: boolean;
+            permissions: ("dashboard.read" | "users.read" | "users.write" | "bugs.read" | "bugs.write" | "crashes.read" | "releases.read" | "releases.write" | "backgrounds.read" | "backgrounds.write" | "models.read" | "models.write" | "prompts.read" | "prompts.write" | "audit.read" | "tasks.read" | "tasks.write")[];
+            /** @enum {unknown} */
+            status: "active" | "suspended";
+        };
+        AdminSessionView: {
+            admin: components["schemas"]["AdminIdentity"];
+            csrf_token: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        AdminMemberInput: {
+            /** Format: email */
+            email: string;
+            permissions: ("dashboard.read" | "users.read" | "users.write" | "bugs.read" | "bugs.write" | "crashes.read" | "releases.read" | "releases.write" | "backgrounds.read" | "backgrounds.write" | "models.read" | "models.write" | "prompts.read" | "prompts.write" | "audit.read" | "tasks.read" | "tasks.write")[];
+            enabled: boolean;
+        };
+        AdminTaskInput: {
+            title: string;
+            description: string;
+            /** @enum {string} */
+            status: "idea" | "planned" | "in_progress" | "review" | "done" | "archived";
+            /** @enum {string} */
+            priority: "low" | "normal" | "high" | "urgent";
+            /** Format: uuid */
+            assignee_id: string | null;
+            /** @description YYYY-MM-DD or empty string to clear */
+            due_date: string;
+            /** @description Required current version for PUT; conflict returns 409 */
+            version?: number;
+        };
+        AdminTask: {
+            /** Format: uuid */
+            id: string;
+            number: number;
+            title: string;
+            description: string;
+            /** @enum {string} */
+            status: "idea" | "planned" | "in_progress" | "review" | "done" | "archived";
+            /** @enum {string} */
+            priority: "low" | "normal" | "high" | "urgent";
+            /** Format: uuid */
+            author_id: string;
+            /** Format: uuid */
+            assignee_id: string | null;
+            /** Format: date-time */
+            due_date: string | null;
+            version: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminTaskComment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            task_id: string;
+            /** Format: uuid */
+            author_id: string;
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminTaskAttachment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            task_id: string;
+            /** Format: uuid */
+            author_id: string;
+            name: string;
+            size: number;
+            /** Format: date-time */
+            created_at: string;
+        };
         BrowserBackgroundList: {
             backgrounds: components["schemas"]["BrowserBackground"][];
         };
@@ -11364,6 +11570,301 @@ export interface operations {
             };
         };
     };
+    adminTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        members: components["schemas"]["AdminIdentity"][];
+                        permissions: string[];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminSaveMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminMemberInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminTasks: {
+        parameters: {
+            query?: {
+                q?: string;
+                assignee?: string;
+                status?: string;
+                before?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tasks: components["schemas"]["AdminTask"][];
+                        /** @description Pass as before; 0 means end */
+                        next_cursor: number;
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminCreateTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTaskInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTask"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminTaskMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        members: {
+                            /** Format: uuid */
+                            id: string;
+                            nickname: string;
+                            active: boolean;
+                        }[];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminTaskDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        task: components["schemas"]["AdminTask"];
+                        comments: components["schemas"]["AdminTaskComment"][];
+                        attachments: components["schemas"]["AdminTaskAttachment"][];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminUpdateTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTaskInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTask"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    adminTaskComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    body: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTaskComment"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminTaskUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTaskAttachment"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminTaskDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskID: string;
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    adminTaskDeleteAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskID: string;
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+        };
+    };
     adminLogin: {
         parameters: {
             query?: never;
@@ -11378,7 +11879,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminSessionView"];
+                };
             };
             401: components["responses"]["Error"];
         };
@@ -11415,7 +11918,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminSessionView"];
+                };
             };
             401: components["responses"]["Error"];
         };

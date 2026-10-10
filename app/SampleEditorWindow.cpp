@@ -55,3 +55,7 @@ void SampleEditorWindow::closeEvent(QCloseEvent* event) {
     emit closing(m_trackId, m_clipId);
     QWidget::closeEvent(event);
 }
+
+void SampleEditorWindow::showAudioEditor() {
+    if(m_panel)m_panel->showDefaultPage();
+}

@@ -84,7 +84,7 @@ int main() {
         check(coherent, "concurrent first/count/enabled edits cannot tear a route within an audio block");
     }
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000,32,false);
         controller.setRecordDirectory(dir.string());
         const auto track=controller.addTrack(daw::TrackKind::Audio,"Input 3");
@@ -115,7 +115,7 @@ int main() {
     }
     // Hundreds of old loop passes must not become hundreds of UI primitives.
     for (bool keepTakes : {false, true}) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000,512,false);
         controller.setRecordDirectory(dir.string());
         const auto track=controller.addTrack(daw::TrackKind::Audio,"Loop");

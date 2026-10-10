@@ -3,12 +3,16 @@
 #include "ClipLibraryView.hpp"
 #include "FileBrowserPanel.hpp"
 #include "TimelineWidget.hpp"
+#include "TrackListWidget.hpp"
+#include "Internal/SamplerInstance.hpp"
 #include "EngineController.hpp"
 #include "Recording/RecordingEngine.hpp"
 #include "Core/AudioBuffer.hpp"
 #include <QApplication>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QUrl>
 #include <QDropEvent>
 #include <QEventLoop>
 #include <QFileInfo>
@@ -24,10 +28,85 @@
 #include <cmath>
 #include <cstdio>
 
+namespace {
+bool checkSampleDropDestinations(const std::string& wav) {
+    bool ok = true;
+    const auto check = [&](bool value, const char* what) {
+        std::fprintf(stderr, "%s sample drop: %s\n", value ? "PASS" : "FAIL", what);
+        ok &= value;
+    };
+    daw::EngineController controller{};
+    if (!controller.initialize(48000, 256, false)) return false;
+    const auto audio = controller.addTrack(daw::TrackKind::Audio, "Audio");
+    TimelineWidget timeline(&controller);
+    TrackListWidget tracks(&controller);
+    timeline.resize(900, 500);
+    tracks.resize(260, 500);
+    timeline.show();
+    tracks.show();
+    QApplication::processEvents();
+    QMimeData sample;
+    sample.setUrls({QUrl::fromLocalFile(QString::fromStdString(wav))});
+    bool prompted = false;
+    QTimer dismissMenu;
+    QObject::connect(&dismissMenu, &QTimer::timeout, &timeline, [&] {
+        for (auto* widget : QApplication::topLevelWidgets()) {
+            if (auto* menu = qobject_cast<QMenu*>(widget); menu && menu->isVisible()) {
+                prompted = true;
+                menu->close();
+            }
+        }
+    });
+    dismissMenu.start(10);
+    const auto drop = [&](QWidget& target, const QPoint& point) {
+        QDragEnterEvent enter(point, Qt::CopyAction, &sample, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&target, &enter);
+        QDragMoveEvent move(point, Qt::CopyAction, &sample, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&target, &move);
+        check(enter.isAccepted() && move.isAccepted(), "destination accepts sample while dragging");
+        QDropEvent event(point, Qt::CopyAction, &sample, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&target, &event);
+        check(event.isAccepted() && !prompted, "drop completes without a choice menu");
+    };
+    const auto count = controller.project().tracks.size();
+    drop(timeline, QPoint(int(6 * timeline.pixelsPerSecondForTest()), timeline.laneCentreForTest(0)));
+    const auto* audioTrack = controller.project().findTrack(audio);
+    check(controller.project().tracks.size() == count && audioTrack &&
+          audioTrack->clips.size() == 1 && audioTrack->clips.front().kind == daw::ClipKind::Audio &&
+          std::abs(audioTrack->clips.front().startSeconds - 6.0) < .01 &&
+          !audioTrack->instrument.isLoaded(), "audio lane receives audio at the drop position");
+    controller.undo();
+
+    for (const bool onHeader : {false, true}) {
+        tracks.rebuild();
+        QApplication::processEvents();
+        const auto depth = controller.undoDepth();
+        const QPoint point = onHeader ? tracks.rowRectForTrack(QString::fromStdString(audio)).center()
+                                     : QPoint(100, tracks.height() - 20);
+        drop(tracks, point);
+        const auto id = tracks.selectedTrackId().toStdString();
+        const auto* created = controller.project().findTrack(id);
+        auto* sampler = created ? controller.samplerInstance(id, created->instrument.id) : nullptr;
+        check(controller.project().tracks.size() == count + 1 && created &&
+              created->instrument.uid == "daw.sampler" && sampler && sampler->samplePath() == wav &&
+              created->clips.size() == 1 && created->clips.front().kind == daw::ClipKind::Midi &&
+              created->clips.front().notes.size() == 1 && created->clips.front().notes.front().pitch == 60 &&
+              created->clips.front().startSeconds == 0.0,
+              onHeader ? "track header creates MIDI clip with the dropped sound"
+                       : "empty track list creates MIDI clip with the dropped sound");
+        check(controller.undoDepth() == depth + 1, "sample import is one undo step");
+        controller.undo();
+        check(controller.project().tracks.size() == count && !controller.project().findTrack(id),
+              "undo removes the new sampler track and clip");
+    }
+    return ok;
+}
+} // namespace
+
 bool checkClipLibraryForTest(const QString& screenshot) {
     bool ok=true;
     const auto check=[&](bool value,const char* what) { std::fprintf(stderr,"%s clip library: %s\n",value?"PASS":"FAIL",what); ok &= value; return value; };
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000,256,false)) return false;
     const auto midiTrack=controller.addTrack(daw::TrackKind::Midi,"Keys");
     const auto midi=controller.addMidiClip(midiTrack,1,8);
@@ -48,6 +127,7 @@ bool checkClipLibraryForTest(const QString& screenshot) {
     audio::AudioBuffer tone(1,48000);
     for (unsigned i=0;i<48000;++i) tone.getChannel(0)[i]=.7f*std::sin(i*.081f)*std::exp(-float(i%6000)/900.f);
     audio::AudioRecorder writer; writer.initialize(48000,1); writer.writeWAVFile(wav,tone,48000);
+    check(checkSampleDropDestinations(wav), "sample drop destinations");
     const auto audioTrack=controller.importAudioToNewTrack(wav,2,"Percussion");
     const auto audio=controller.project().findTrack(audioTrack)->clips.front().id;
     const auto pattern=controller.addPattern("Drum idea");
@@ -168,7 +248,7 @@ bool checkClipLibraryForTest(const QString& screenshot) {
             check(root.grab().save(path.absolutePath()+"/"+path.completeBaseName()+"-narrow.png"),"narrow visual fixture saved");
         }
     }
-    controller.newProject(); browser->refreshClipLibrary();
+    check(bool(controller.newProject()), "new project commits"); browser->refreshClipLibrary();
     check(list->count()==0,"switching projects clears previous project's cards");
     return ok;
 }

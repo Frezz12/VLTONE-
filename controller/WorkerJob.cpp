@@ -19,7 +19,7 @@ namespace daw {
 namespace {
 using namespace rendering::ipc;
 using Clock = std::chrono::steady_clock;
-using plugins::ipc::SharedProcess;
+using process::SharedProcess;
 using Json = nlohmann::json;
 void require(bool ok, const std::string& message) {
     if (!ok) throw std::runtime_error(message);
@@ -102,7 +102,11 @@ audio::Result WorkerJob::run(const std::string& executable, const Progress& prog
                 require(box.done.load(std::memory_order_acquire) != 0, "background worker exited unexpectedly");
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            // Completion already signals this endpoint. Wake immediately for
+            // short media jobs instead of adding a full polling interval.
+            if (!process.wait(20))
+                require(box.done.load(std::memory_order_acquire) != 0,
+                    "background worker connection closed unexpectedly");
         }
         drain();
         require(box.replySize > 0 && box.replySize <= sizeof(box.reply), "invalid worker reply size");

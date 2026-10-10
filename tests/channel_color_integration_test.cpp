@@ -83,7 +83,7 @@ int main() {
     const auto wav=(temporary/"source.wav").string();
     audio::AudioRecorder writer; writer.initialize(48000,2); check(bool(writer.writeWAVFile(wav,source,48000)),"synthetic stereo source written");
     {
-        EngineController c{EngineController::TestRuntime{}}; c.initialize(48000,256,false);
+        EngineController c{}; c.initialize(48000,256,false);
         const auto id=c.importAudioToNewTrack(wav,0);
         // Do not reset the graph: a fresh old project must be transparent from
         // its first block, before any user gesture or transport restart.
@@ -102,7 +102,7 @@ int main() {
         check(!copied.empty() && c.miniModules(copied).empty(),"duplicate of empty rack stays empty");
     }
     for(bool master:{false,true}) {
-        EngineController c{EngineController::TestRuntime{}};c.initialize(48000,256,false);const auto sourceId=c.importAudioToNewTrack(wav,0);
+        EngineController c{};c.initialize(48000,256,false);const auto sourceId=c.importAudioToNewTrack(wav,0);
         const auto id=master?std::string("master"):sourceId;
         const auto mini=c.addMiniModule(id,plugins::mini::builtin("color"));
         const auto fx=c.addInsert(id,plugins::channel_color::ChannelColorInstance::staticDescriptor());
@@ -122,7 +122,7 @@ int main() {
         c.undo();check(difference(before,playback(c,12288),256)<2e-5,"route Undo restores identical rendered sound after the transport fade");
     }
     {
-        EngineController c{EngineController::TestRuntime{}};c.initialize(48000,256,false);
+        EngineController c{};c.initialize(48000,256,false);
         for(const auto kind:{TrackKind::Audio,TrackKind::Midi,TrackKind::Instrument,TrackKind::Pattern,TrackKind::Group,TrackKind::Bus,TrackKind::Aux}) {
             const auto id=c.addTrack(kind,"Channel");check(c.miniModules(id).empty(),"new channels start with empty racks");
             check(!c.addMiniModule(id,plugins::mini::builtin("color")).empty(),"audio channel accepts Color");
@@ -140,13 +140,13 @@ int main() {
         check(c.pasteChannelStrip(target,c.copyChannelStrip(id,true)) && c.undoDepth()==depth+1 && color(c,target).profileSeed==seed && c.insertParameter(target,color(c,target).id,"tone")==-27,"full strip copy includes module and profile");
         c.undo();check(c.miniModules(target).empty(),"strip paste Undo restores empty rack");c.redo();
         const auto preset=(temporary/"color.vlts").string();check(bool(c.saveChannelStripPreset(id,preset)) && bool(c.applyChannelStripPreset(target,preset)) && color(c,target).profileSeed==seed,"portable strip preset restores module");
-        const auto project=(temporary/"color.vlt").string();EngineController opened{EngineController::TestRuntime{}};opened.initialize(48000,256,false);
+        const auto project=(temporary/"color.vlt").string();EngineController opened{};opened.initialize(48000,256,false);
         check(bool(c.saveProject(project)) && bool(opened.openProject(project)) && color(opened,id).profileSeed==seed && opened.insertParameter(id,slot,"drive")==35 && opened.insertParameter(id,slot,"tone")==-27,"project restores ID values and component profile");
-        const auto templ=(temporary/"color.vltt").string();EngineController fromTemplate{EngineController::TestRuntime{}};fromTemplate.initialize(48000,256,false);
+        const auto templ=(temporary/"color.vltt").string();EngineController fromTemplate{};fromTemplate.initialize(48000,256,false);
         check(bool(c.saveProjectTemplate(templ,"Color template")) && bool(fromTemplate.openProjectTemplate(templ)) && color(fromTemplate,fromTemplate.project().tracks.front().id).profileSeed==seed && color(fromTemplate,fromTemplate.project().tracks.front().id).id!=slot,"template remaps module IDs while retaining profile");
     }
     {
-        EngineController c{EngineController::TestRuntime{}}; c.initialize(48000,256,false); const auto id=c.importAudioToNewTrack(wav,0); c.setRecordDirectory(temporary.string());
+        EngineController c{}; c.initialize(48000,256,false); const auto id=c.importAudioToNewTrack(wav,0); c.setRecordDirectory(temporary.string());
         enable(c,id,true); edit(c,id,"drive",75); edit(c,id,"tone",32);
         const auto latency=c.routingGraph()->totalLatency;
         check(latency==48,"COLOR declares exactly 48 frames throughout the channel graph");
@@ -195,7 +195,7 @@ int main() {
         std::printf("MEASURE COLOR automated device/export maximum error %.9g at frame %u\n",error,worstFrame);
         check(error<2e-5 && difference(wet.front(),automated.front())>.001,"Drive and Tone automation produce identical playback and export");
         const auto automatedProject=(temporary/"automated-color.vlt").string();
-        EngineController automatedReopen{EngineController::TestRuntime{}}; automatedReopen.initialize(48000,256,false);
+        EngineController automatedReopen{}; automatedReopen.initialize(48000,256,false);
         check(bool(c.saveProject(automatedProject)) && bool(automatedReopen.openProject(automatedProject)) &&
             automatedReopen.insertParameter(id,color(c,id).id,"drive")==65 && automatedReopen.insertParameter(id,color(c,id).id,"tone")==32,
             "saving after automation preserves the static COLOR controls on reopening");
@@ -207,7 +207,7 @@ int main() {
         check(c.trackNodes(bus)->channelColor==engine::kInvalidNode,"summation does not add a second COLOR stage");
     }
     {
-        EngineController c{EngineController::TestRuntime{}}; c.initialize(48000,256,false); c.setRecordDirectory(temporary.string());
+        EngineController c{}; c.initialize(48000,256,false); c.setRecordDirectory(temporary.string());
         const auto id=c.addTrack(TrackKind::Audio,"Monitor"); c.setTrackInputRouting(id,0,2,true); c.setTrackMonitor(id,true);
         enable(c,id,true); edit(c,id,"drive",85); cold(c);
         const auto* nodes=c.trackNodes(id); const auto graph=c.routingGraph();
@@ -240,7 +240,7 @@ int main() {
     {
         const auto sampler=plugins::sampler::SamplerInstance::staticDescriptor();
         for(bool firstFx:{false,true}) {
-            EngineController c{EngineController::TestRuntime{}}; c.initialize(48000,256,false); const auto id=c.addTrack(TrackKind::Midi,firstFx?"FX synth":"Instrument");
+            EngineController c{}; c.initialize(48000,256,false); const auto id=c.addTrack(TrackKind::Midi,firstFx?"FX synth":"Instrument");
             std::string slot;
             if(firstFx) slot=c.addInsert(id,sampler);
             else { check(c.setTrackInstrumentPlugin(id,sampler),"MIDI instrument loads"); slot=c.project().findTrack(id)->instrument.id; }
@@ -261,7 +261,7 @@ int main() {
         }
     }
     {
-        EngineController c{EngineController::TestRuntime{}}; c.initialize(48000,256,false); c.setRecordDirectory(temporary.string());
+        EngineController c{}; c.initialize(48000,256,false); c.setRecordDirectory(temporary.string());
         const auto id=c.importAudioToNewTrack(wav,0); c.setTrackMono(id,true);
         enable(c,id,true); edit(c,id,"drive",90);
         c.setMiniModulePostFx(id,color(c,id).id,true);
@@ -278,7 +278,7 @@ int main() {
         check(difference(before,after)<2e-5,"freeze preserves mono folding before the magnetic nonlinearity");
     }
     {
-        EngineController c{EngineController::TestRuntime{}}; c.initialize(48000,256,false); const auto sourceTrack=c.importAudioToNewTrack(wav,0);
+        EngineController c{}; c.initialize(48000,256,false); const auto sourceTrack=c.importAudioToNewTrack(wav,0);
         auto model=c.project(); const auto base=*model.findTrack(sourceTrack); model.tracks.clear();
         for(unsigned i=0;i<64;++i) {
             auto track=base; track.id=newUuid(); track.name="COLOR "+std::to_string(i+1); track.volume=1.f/64;

@@ -344,8 +344,6 @@
     "shortcuts": "Keyboard shortcuts",
     "notes": "Good to know",
     "problems": "Troubleshooting",
-    "openImage": "Enlarge",
-    "closeImage": "Close image",
     "noResultsTitle": "No results",
     "noResults": "Try a shorter query or the name of an interface control.",
     "clearSearch": "Clear search",
@@ -383,14 +381,6 @@
                 "problem": "Startup pauses on one plugin",
                 "fix": "Note its name in the startup window. Check Plugin Manager and Blacklist after launch. Rescan after updating or fixing the plugin."
               }
-            ],
-            "figures": [
-              {
-                "slug": "startup",
-                "alt": "VLTone startup window scanning plugins",
-                "caption": "The startup window reports the current loading stage and plugin scan progress.",
-                "ratio": "440 / 224"
-              }
             ]
           },
           {
@@ -401,7 +391,8 @@
               "Use track headers for selection, mute, solo, volume, pan, and record state.",
               "Drag clips along the timeline; the vertical playhead shows playback position.",
               "Toggle Mixer, Inspector, Context Panel, Browser, Web, Notebook, and AI from View.",
-              "Double-click a clip to open its matching audio, piano-roll, or pattern editor."
+              "Double-click a clip to open its matching audio, piano-roll, or pattern editor.",
+              "In the bottom panel, choose Mixer to balance channels or Rack to work with the selected track’s devices. Check the selected track name in the Inspector before adjusting a parameter."
             ],
             "result": "You know where to edit project structure, track sound, and the contents of a selected clip.",
             "shortcuts": [
@@ -424,14 +415,6 @@
               "Select a track, then a clip: the inspector and context panel follow the current selection.",
               "Hide unused panels through View to gain space. Timeline zoom and track height are separate settings.",
               "Closing an instrument window does not disable its sound; bypass and closing an editor are different actions."
-            ],
-            "figures": [
-              {
-                "slug": "arrangement",
-                "alt": "Main workspace with tracks, clips, and Mixer",
-                "caption": "The main window combines transport, track headers, arrangement, context panel, and Mixer.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -474,18 +457,30 @@
                 "fix": "Finish editing the text field; transport keys are deliberately left alone while typing."
               }
             ],
-            "figures": [
-              {
-                "slug": "cycle",
-                "alt": "Arrangement with an active cycle range",
-                "caption": "The cycle range is marked on the ruler; Cycle enables it without moving its boundaries.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "notes": [
               "Time signature is separate from BPM. Set both before recording so the grid matches the phrase.",
               "For comparisons, set a cycle slightly wider than the phrase so effect onsets and tails remain audible.",
               "Returning to the start moves the playhead, not clips. If playback is silent, check that the playhead crosses actual material."
+            ]
+          },
+          {
+            "id": "numeric-fields",
+            "title": "Numeric fields and precise adjustments",
+            "intro": "Numbers in editors, Sampler and the Inspector support vertical dragging and direct text entry.",
+            "preparation": "Select the intended track or clip, then check the parameter name and units: seconds, decibels, percent or semitones.",
+            "steps": [
+              "Point at the number and hold the left mouse button.",
+              "Drag up to increase the value or down to decrease it. The pointer stays in place during the gesture.",
+              "Hold Shift for finer adjustments. Release the mouse button at the desired value.",
+              "For an exact value, double-click the number, type it and press Enter. Escape cancels an unfinished change.",
+              "Scroll the panel with a mouse wheel or trackpad: hovering a numeric field does not change the parameter."
+            ],
+            "result": "The value is adjusted without accidental changes while scrolling the panel.",
+            "problems": [
+              {
+                "problem": "The value stops changing.",
+                "fix": "Check the allowed range and the adjacent boundary: for example, Start cannot exceed End. A control may be disabled when its parameter is unavailable."
+              }
             ]
           },
           {
@@ -584,14 +579,6 @@
                 "fix": "Widen the track header area or reduce nesting; the most important controls remain when space is tight."
               }
             ],
-            "figures": [
-              {
-                "slug": "track-folders",
-                "alt": "Nested folders and selected tracks",
-                "caption": "Folders show hierarchy, while multi-selection packs tracks with one command.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "notes": [
               "Audio plays audio clips; MIDI sends notes to an instrument; Pattern combines rhythm sources; Automation controls a parameter.",
               "A normal folder groups tracks visually. A Summing Folder also combines their audio; check child-channel outputs.",
@@ -633,14 +620,6 @@
               "Moving changes a clip’s position; trimming an edge changes its visible range. Use stretching to change speed, rather than ordinary trimming.",
               "Check the entire selection before bulk operations. Undo restores the last completed action; Redo repeats an undone action.",
               "Zoom in and adjust a short fade to soften a boundary. Listen to the transition with adjacent clips."
-            ],
-            "figures": [
-              {
-                "slug": "context-panel",
-                "alt": "Context panel over selected clips",
-                "caption": "The context panel exposes only the controls relevant to the selected object type.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -678,14 +657,6 @@
               "Use ordinary notes for tasks and structure, and timed text for lines that should appear at a particular position.",
               "Check timestamps by playing from the phrase start. Reordering text and changing its timestamp are different operations.",
               "Save the project after editing the notebook. Before sharing it, check that embedded images are available."
-            ],
-            "figures": [
-              {
-                "slug": "notebook",
-                "alt": "VLTone Notebook with the timed text tab",
-                "caption": "The Timed text tab beside the arrangement.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -729,20 +700,6 @@
                 "fix": "Check the extension filter and folder permissions, then refresh it."
               }
             ],
-            "figures": [
-              {
-                "slug": "browser-samples",
-                "alt": "Sample Browser with a selected audio file and waveform",
-                "caption": "The preview strip lets you audition material before adding it.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "browser-plugins",
-                "alt": "Plugin category in the built-in Browser",
-                "caption": "Plugins have their own category and can be inserted without browsing file paths.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "notes": [
               "MP3 uses the import decoder library; M4A/MP4A and MP4 audio use the native macOS or Windows decoder. Actual support depends on the file codec.",
               "Lower preview level first. Browser preview level and track fader are separate controls.",
@@ -767,14 +724,6 @@
               "Check that you are editing the intended clip; copies of one file can have different boundaries and processing.",
               "Find the intended region first, then set its boundaries. Listen just before and after each boundary.",
               "For local timing adjustments of individual attacks, open Warp Audio from the clip menu; ordinary Stretch changes the whole region’s duration."
-            ],
-            "figures": [
-              {
-                "slug": "audio-editor",
-                "alt": "Audio clip editor with a waveform",
-                "caption": "The clip editor offers a large waveform and precise controls.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -810,14 +759,6 @@
                 "fix": "Check input channels, track arm, OS microphone permission, and the selected audio device."
               }
             ],
-            "figures": [
-              {
-                "slug": "recording",
-                "alt": "Record-enabled project with take options",
-                "caption": "Record Enable exposes take mode, count-in, and monitoring.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "notes": [
               "Before Record, check the physical input and track meter. Microphone access may require OS permission.",
               "If monitoring echoes or doubles, use one monitoring path: hardware monitoring on the interface or software monitoring in the DAW.",
@@ -846,14 +787,6 @@
               "Take layers belong to one clip; duplicating a track makes an independent copy of the entire track.",
               "Do not confuse the active take with the selected clip. Compare takes of the same region using the same playback range.",
               "Save a separate project copy before deleting takes. Collapsing layers does not delete recorded audio."
-            ],
-            "figures": [
-              {
-                "slug": "takes",
-                "alt": "Expanded take layers while recording",
-                "caption": "Each pass remains a separate layer while the parent clip stays a single object.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -972,14 +905,6 @@
                 "fix": "Check Snap to Scale and the selected root and scale."
               }
             ],
-            "figures": [
-              {
-                "slug": "piano-roll",
-                "alt": "Piano roll with selected MIDI notes and a lower lane",
-                "caption": "Selected notes share one context panel and can be edited as a group.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "preparation": "Create a MIDI or instrument track and assign an instrument. MIDI notes contain no audio by themselves.",
             "notes": []
           },
@@ -1020,14 +945,6 @@
               "Transpose or duplicate selected sources to make a variation."
             ],
             "result": "A layered rhythmic or instrumental pattern is controlled as one group.",
-            "figures": [
-              {
-                "slug": "pattern",
-                "alt": "Pattern editor with several instrument sources",
-                "caption": "Pattern editor combines sources, miniature sequences, and core controls.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "notes": [
               "Every source has Fill rhythm: once per bar or every 1/2, 1/4, 1/8, 1/16 or 1/32 of a bar. Fill replaces source notes; the project meter defines bar length.",
               "Drop one .mid/.midi file onto a source row to replace notes without replacing its instrument. MIDI file tracks merge into that source and project tempo is preserved. This import does not carry CC, pitch bend or aftertouch.",
@@ -1046,7 +963,7 @@
             "intro": "Sampler loads a local audio file and turns it into an instrument for MIDI clips or the computer keyboard.",
             "steps": [
               "Create a MIDI track, choose the built-in Sampler in its instrument slot and open its editor.",
-              "Load a local audio file. Check the waveform and Start / End boundaries, which define the played source region.",
+              "Load a local audio file and open the Editor tab. Locate Start and End: these boundaries define the region of the source that will play. Audition its beginning before adjusting the envelope.",
               "Set Root Note, the key that plays the sample without transposition. Adjust gain before adding effects.",
               "Adjust the envelope: Attack softens the onset and Release sets the fade after note release. Very short values may expose a click in the source.",
               "Enable Loop only when the source region should repeat. Without Loop, a short sample ends even if its MIDI note remains held.",
@@ -1063,17 +980,10 @@
                 "fix": "Set the correct root note and check transposition."
               }
             ],
-            "figures": [
-              {
-                "slug": "sampler",
-                "alt": "Built-in Sampler editor with a waveform",
-                "caption": "Sampler shows the waveform and its instrumental playback controls.",
-                "ratio": "1440 / 1200"
-              }
-            ],
             "notes": [
               "The waveform and file actions sit above the Playback, Envelope and Processing tabs. Instrument controls are grouped by purpose.",
-              "Drag controls to adjust parameters; wheel events over knobs and mode selectors do not change their values. The audio-clip editor shows only applicable controls."
+              "Drag controls to adjust parameters; wheel events over knobs and mode selectors do not change their values. The audio-clip editor shows only applicable controls.",
+              "To set Start or End precisely, double-click the number, type a value and press Enter. For a small adjustment, hold the left mouse button on the number and drag up or down; scrolling does not change its value."
             ]
           },
           {
@@ -1133,14 +1043,6 @@
                 "problem": "Drawing stops adding detail",
                 "fix": "A curve is limited to 256 points. Simplify tiny movements or divide the motion into consecutive slides."
               }
-            ],
-            "figures": [
-              {
-                "slug": "slide-editor",
-                "alt": "Slide-note editor with several rises and falls",
-                "caption": "Nodes define pitch over time; the bottom controls copy the shape, manage links and audition the phrase.",
-                "ratio": "960 / 540"
-              }
             ]
           },
           {
@@ -1195,15 +1097,7 @@
               "Click Apply to write the result into the clip. Cancel closes the preview without committing.",
               "Check the result in the grid. One Undo reverses the applied chord; unselected notes remain intact."
             ],
-            "result": "The chord appears at the specified position as ordinary editable MIDI notes.",
-            "figures": [
-              {
-                "slug": "chord-generator",
-                "alt": "Chord Generator settings in Piano Roll",
-                "caption": "Set root, type, inversion and length before applying the result.",
-                "ratio": "603 / 468"
-              }
-            ]
+            "result": "The chord appears at the specified position as ordinary editable MIDI notes."
           },
           {
             "id": "midi-recording",
@@ -1236,7 +1130,7 @@
             "title": "Mixer and channel strip",
             "intro": "Mixer represents tracks as strips with inserts, sends, pan, fader, meters, mute, solo, record, and monitoring.",
             "steps": [
-              "Open Mixer with X.",
+              "Open the bottom panel with X and select Mixer. Rack displays the selected track’s device chain; return to Mixer to compare levels across several channels.",
               "Set input gain and order inserts from top to bottom.",
               "Use pan and fader for placement and level.",
               "Watch the meter so peaks do not continually reach the top.",
@@ -1256,12 +1150,10 @@
               "Right-click a channel for automation, presets and timeline navigation. Master exposes its own parameters.",
               "Use bypass to compare processing at matched loudness. Scrolling over a fader should not accidentally change the balance."
             ],
-            "figures": [
+            "problems": [
               {
-                "slug": "mixer",
-                "alt": "VLTone Mixer with plugins and level meters",
-                "caption": "Each strip combines plugins, sends, pan, fader, and track states.",
-                "ratio": "1440 / 1200"
+                "problem": "An effect sounds louder without sounding better.",
+                "fix": "Match the output level before comparing the effect with bypass. Then listen in the full mix and disengage Solo when it is no longer needed."
               }
             ]
           },
@@ -1311,20 +1203,6 @@
               {
                 "problem": "A plugin cannot be inserted as an instrument.",
                 "fix": "Check its type: an audio effect cannot be used as a MIDI track instrument."
-              }
-            ],
-            "figures": [
-              {
-                "slug": "plugin-picker",
-                "alt": "Plugin picker with its search field",
-                "caption": "Search filters the list while retaining keyboard focus.",
-                "ratio": "218 / 408"
-              },
-              {
-                "slug": "plugin-search",
-                "alt": "Inline plugin search in the context panel",
-                "caption": "Inline search expands directly over the selected track.",
-                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
@@ -1380,14 +1258,6 @@
                 "problem": "Playback shifts after changing phase mode.",
                 "fix": "Let the host rebuild plugin delay compensation; mode changes update the reported latency."
               }
-            ],
-            "figures": [
-              {
-                "slug": "equalizer",
-                "alt": "VLTone Equalizer editor with a vocal cleanup curve",
-                "caption": "The resizable editor combines the response graph, direct band controls, phase mode, presets, A/B, and analyzer options.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -1407,26 +1277,6 @@
               "Do not add the whole system disk to Search Paths. Select installed plugin folders for supported formats.",
               "After scanning, search by name and check status. If blacklisted, fix the cause before removing the entry and rescanning.",
               "When moving a project, install the same plugins and sound libraries. Their licenses and content are supplied separately by their developers."
-            ],
-            "figures": [
-              {
-                "slug": "plugin-manager",
-                "alt": "Plugins tab in Plugin Manager",
-                "caption": "The main list shows recognised plugins and formats.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "plugin-paths",
-                "alt": "Plugin Manager search paths",
-                "caption": "Search Paths limit the folders inspected by the scanner.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "plugin-blacklist",
-                "alt": "Plugin Manager Blacklist",
-                "caption": "Faulty plugins stay isolated until an intentional rescan.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -1455,20 +1305,6 @@
               {
                 "problem": "The curve is visible but the parameter does not move.",
                 "fix": "Check target, automation clip enable state, and the required live plugin instance."
-              }
-            ],
-            "figures": [
-              {
-                "slug": "automation-lane",
-                "alt": "Automation lane below an audio track",
-                "caption": "The lane shows a curve on the shared project timeline.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "automation-editor",
-                "alt": "Separate automation curve editor",
-                "caption": "Curve editor supports precise selection and point movement.",
-                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
@@ -1515,21 +1351,7 @@
               "On a dedicated send channel, Delay is normally fully wet; the source track’s send controls the amount.",
               "Include enough export tail so repeats do not stop at the final clip boundary."
             ],
-            "result": "Dynamics and repeats are configured with level and tail behavior checked.",
-            "figures": [
-              {
-                "slug": "compressor",
-                "alt": "Built-in Compressor with Soft and Punch modes",
-                "caption": "Threshold, ratio, attack, release and mix sit beside the response curve.",
-                "ratio": "1840 / 798"
-              },
-              {
-                "slug": "delay",
-                "alt": "Built-in Delay with sync and filters",
-                "caption": "Repeat timing, stereo mode, feedback and character in one editor.",
-                "ratio": "2200 / 998"
-              }
-            ]
+            "result": "Dynamics and repeats are configured with level and tail behavior checked."
           },
           {
             "id": "vlt-pitch",
@@ -1613,14 +1435,6 @@
             "result": "The assistant explains a task or changes the project through controlled command history.",
             "notes": [
               "Stop a long request with Stop; completed operations remain visible and undoable."
-            ],
-            "figures": [
-              {
-                "slug": "ai-chat",
-                "alt": "AI Chat panel with a completed request and actions",
-                "caption": "Transcript separates answers, actions, errors, and run state.",
-                "ratio": "1440 / 1200"
-              }
             ]
           },
           {
@@ -1639,14 +1453,6 @@
               {
                 "problem": "The clip was not inserted.",
                 "fix": "Check the Generated folder and free space; the result card can insert it again."
-              }
-            ],
-            "figures": [
-              {
-                "slug": "ai-music",
-                "alt": "AI Music mode with a completed generation",
-                "caption": "A finished result receives a card and appears on an Audio track.",
-                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
@@ -1671,14 +1477,6 @@
               {
                 "problem": "A page or video does not load.",
                 "fix": "Check connectivity and site restrictions; protected streams do not always expose a local file."
-              }
-            ],
-            "figures": [
-              {
-                "slug": "web",
-                "alt": "Integrated Web panel beside the arrangement",
-                "caption": "Web and AI are independent side workspaces.",
-                "ratio": "1440 / 1200"
               }
             ],
             "notes": [
@@ -1747,20 +1545,6 @@
                 "fix": "Check master processing, channels, mute/solo, and external monitor gain."
               }
             ],
-            "figures": [
-              {
-                "slug": "export-mix",
-                "alt": "Full-mix export dialog",
-                "caption": "Mix creates one file from the master output.",
-                "ratio": "1100 / 820"
-              },
-              {
-                "slug": "export-stems",
-                "alt": "Stem export dialog",
-                "caption": "Stems save selected tracks as separate synchronised files.",
-                "ratio": "1100 / 820"
-              }
-            ],
             "notes": []
           },
           {
@@ -1779,14 +1563,6 @@
               "Recovery complements Save but does not replace backups.",
               "Recovery does not replace Save. Use a permanent project folder and check the last save time.",
               "After recovery, listen to recently edited sections and check file references. Save the recovered version under a separate name."
-            ],
-            "figures": [
-              {
-                "slug": "recovery",
-                "alt": "Project recovery dialog after a failure",
-                "caption": "The app presents a discovered session before opening the main workspace.",
-                "ratio": "500 / 165"
-              }
             ]
           },
           {
@@ -1811,105 +1587,23 @@
               "Some language and font changes require a restart; the page tells you when.",
               "Change one group at a time and check the result immediately. Audio device settings affect sound; interface scaling affects display.",
               "Find commands by name in Keyboard Shortcuts and check their bindings. Manual shortcuts refer to default bindings.",
-              "After changing theme, check grid and selection contrast. Mixer settings help fit channel width to the display."
-            ],
-            "figures": [
-              {
-                "slug": "settings-interface",
-                "alt": "General application settings",
-                "caption": "General: startup project, refresh rate, and graphics quality.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-audio",
-                "alt": "Audio settings",
-                "caption": "Audio: device, sample rate, buffer, and channels.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-transport",
-                "alt": "Transport settings",
-                "caption": "Transport: playback, metronome, and time behaviour.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-recording",
-                "alt": "Recording settings",
-                "caption": "Recording: take mode, monitoring, and capture options.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-context",
-                "alt": "Context Panel settings",
-                "caption": "Context Panel: tool visibility and behaviour.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-browser",
-                "alt": "Browser settings",
-                "caption": "Browser: preview, position, and import behaviour.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-quick-import",
-                "alt": "Quick Import settings",
-                "caption": "Quick Import: template, audio track, BPM and key detection.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-mixer",
-                "alt": "Mixer settings",
-                "caption": "Mixer: channel width and the default-size reset.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-notebook",
-                "alt": "Notebook settings",
-                "caption": "Notebook: background, visibility, and local fonts.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-ai",
-                "alt": "AI settings",
-                "caption": "AI: managed models and custom connections.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-account",
-                "alt": "Account settings",
-                "caption": "Account: session status, access, and AI quota.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-language",
-                "alt": "Language settings",
-                "caption": "Language: built-in and imported locales.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-recovery",
-                "alt": "Recovery settings",
-                "caption": "Recovery: journal frequency and retention.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-themes",
-                "alt": "Themes settings",
-                "caption": "Themes: ready-made light and dark palettes.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-theme-editor",
-                "alt": "Theme Editor",
-                "caption": "Theme Editor: individual colours and custom font.",
-                "ratio": "1440 / 1200"
-              },
-              {
-                "slug": "settings-shortcuts",
-                "alt": "Keyboard shortcut editor",
-                "caption": "Keyboard Shortcuts: search, rebind, and reset.",
-                "ratio": "1440 / 1200"
-              }
+              "After changing theme, check grid and selection contrast. Mixer settings help fit channel width to the display.",
+              "General: startup project, refresh rate, and graphics quality.",
+              "Audio: device, sample rate, buffer, and channels.",
+              "Transport: playback, metronome, and time behaviour.",
+              "Recording: take mode, monitoring, and capture options.",
+              "Context Panel: tool visibility and behaviour.",
+              "Browser: preview, position, and import behaviour.",
+              "Quick Import: template, audio track, BPM and key detection.",
+              "Mixer: channel width and the default-size reset.",
+              "Notebook: background, visibility, and local fonts.",
+              "AI: managed models and custom connections.",
+              "Account: session status, access, and AI quota.",
+              "Language: built-in and imported locales.",
+              "Recovery: journal frequency and retention.",
+              "Themes: ready-made light and dark palettes.",
+              "Theme Editor: individual colours and custom font.",
+              "Keyboard Shortcuts: search, rebind, and reset."
             ]
           },
           {
@@ -1975,6 +1669,6 @@
         ]
       }
     ],
-    "versionNote": "Updated September 29, 2026. Screenshots and new features show build 0.3.1, currently in development. Available installers are listed on Releases."
+    "versionNote": "Updated 9 October 2026. A guide to the current VLTone interface, with step-by-step workflows, control names and troubleshooting. Available installers are listed on the Releases page."
   }
 }

@@ -168,6 +168,17 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
     timedScroll->setWidget(m_timedTextPanel);
     m_pages->addWidget(timedScroll);
     column->addWidget(m_pages, 1);
+    // Saving text must never change the editor geometry or the header width.
+    m_saveStatus = new QLabel(tr("Saved in project"), this);
+    m_saveStatus->setObjectName(QStringLiteral("NotebookSaveStatus"));
+    m_saveStatus->setAccessibleName(tr("Notebook save status"));
+    m_saveStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    m_saveStatus->setFixedHeight(26);
+    m_saveStatus->setContentsMargins(12, 0, 12, 0);
+    QFont statusFont = m_saveStatus->font();
+    statusFont.setPixelSize(11);
+    m_saveStatus->setFont(statusFont);
+    column->addWidget(m_saveStatus);
     m_positionTimer = new QTimer(this);
     m_positionTimer->setInterval(100);
     connect(m_positionTimer, &QTimer::timeout, this,
@@ -185,6 +196,8 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
                     setSaveStatus(tr("Notebook editor could not start"), true);
                     return;
                 }
+                m_view->page()->runJavaScript(QStringLiteral(
+                    "setNotebookContent(%1[0]);").arg(jsArray(m_content)));
                 if (isVisible() && m_backgroundPlaying)
                     m_view->page()->runJavaScript(
                         QStringLiteral("typeof setBackgroundMotion==='function'&&setBackgroundMotion(true);"));
@@ -236,7 +249,6 @@ NotebookWindow::NotebookWindow(daw::EngineController* controller,
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
         applyTheme();
-        renderDocument();
     });
     applyTheme();
     reloadSettings();
@@ -254,20 +266,15 @@ void NotebookWindow::buildToolbar() {
     m_toolbar = new QWidget(this);
     m_toolbar->setObjectName(QStringLiteral("NotebookToolbar"));
     auto* column = new QVBoxLayout(m_toolbar);
-    column->setContentsMargins(12, 8, 12, 8);
-    column->setSpacing(6);
+    column->setContentsMargins(10, 6, 10, 10);
+    column->setSpacing(8);
 
     auto* header = new QHBoxLayout;
     header->setSpacing(6);
-    auto* title = new QLabel(tr("NOTEBOOK"), m_toolbar);
+    auto* title = new QLabel(tr("Notebook"), m_toolbar);
     title->setObjectName(QStringLiteral("NotebookTitle"));
     header->addWidget(title);
     header->addStretch(1);
-    m_saveStatus = new QLabel(tr("Saved in project"), m_toolbar);
-    m_saveStatus->setObjectName(QStringLiteral("NotebookSaveStatus"));
-    m_saveStatus->setAccessibleName(tr("Notebook save status"));
-    header->addWidget(m_saveStatus);
-
     m_motionButton = new ui::IconButton(
         icons::Glyph::Pause, tr("Pause animated background"), m_toolbar);
     m_motionButton->setAccessibleName(tr("Pause animated background"));
@@ -312,6 +319,8 @@ void NotebookWindow::buildToolbar() {
     m_tabs->addTab(tr("Notes"));
     m_tabs->addTab(tr("Text by time"));
     m_tabs->setExpanding(true);
+    m_tabs->setDrawBase(false);
+    m_tabs->setFixedHeight(30);
     m_tabs->setAccessibleName(tr("Notebook pages"));
     column->addWidget(m_tabs);
     connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
@@ -350,7 +359,8 @@ void NotebookWindow::buildToolbar() {
     m_block->addItem(tr("Heading 1"), QStringLiteral("h1"));
     m_block->addItem(tr("Heading 2"), QStringLiteral("h2"));
     m_block->addItem(tr("Quote"), QStringLiteral("blockquote"));
-    m_block->setMinimumWidth(80);
+    m_block->setMinimumWidth(72);
+    m_block->setFixedHeight(28);
     m_block->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_block->setMinimumContentsLength(6);
     connect(m_block, &QComboBox::currentIndexChanged, this, [this](int index) {
@@ -363,7 +373,8 @@ void NotebookWindow::buildToolbar() {
     m_font->setEditable(true);
     m_font->setInsertPolicy(QComboBox::NoInsert);
     m_font->setAccessibleName(tr("Text font"));
-    m_font->setMinimumWidth(80);
+    m_font->setMinimumWidth(64);
+    m_font->setFixedHeight(28);
     m_font->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_font->setMinimumContentsLength(6);
     connect(m_font, &QComboBox::textActivated, this, [this](const QString& font) {
@@ -378,9 +389,9 @@ void NotebookWindow::buildToolbar() {
                       QStringLiteral("16"), QStringLiteral("18"),
                       QStringLiteral("24"), QStringLiteral("32"),
                       QStringLiteral("48")});
-    m_size->setCurrentText(QStringLiteral("16"));
+    m_size->setCurrentText(QStringLiteral("14"));
     m_size->setAccessibleName(tr("Text size"));
-    m_size->setFixedWidth(62);
+    m_size->setFixedSize(52, 28);
     connect(m_size, &QComboBox::textActivated, this, [this](const QString& size) {
         bool ok = false;
         const int pixels = size.toInt(&ok);
@@ -856,8 +867,7 @@ QString NotebookWindow::pageHtml() const {
 
     const QByteArray initial = m_content.toUtf8().toBase64();
     const QString transparencyOverride = ui::GlassPanel::reduceTransparency()
-        ? QStringLiteral(".paper{background:var(--surface);backdrop-filter:none}")
-        : QString();
+        ? QStringLiteral(".paper{background:var(--surface)}") : QString();
     return QStringLiteral(R"HTML(<!doctype html>
 <html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; media-src file:; font-src file: vlt-font:; style-src 'unsafe-inline'; script-src 'unsafe-inline' qrc:; object-src 'none'; connect-src 'none'">
@@ -865,19 +875,26 @@ QString NotebookWindow::pageHtml() const {
 %1
 :root{color-scheme:%2;--accent:%3;--text:%4;--muted:%5;--surface:%6;--page:%7;}
 *{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden}
-body{background:var(--page);color:var(--text);font:400 16px/1.58 "Inter",system-ui,sans-serif}
+body{background:var(--page);color:var(--text);font:400 14px/1.65 "Inter",system-ui,sans-serif}
 .background-media{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;opacity:%8;pointer-events:none}
 #backgroundStill{display:none}
-.scrim{position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.08),rgba(0,0,0,.20));pointer-events:none}
-.stage{height:100%;padding:clamp(10px,3vw,32px);overflow:auto}
-.paper{width:min(860px,100%);min-height:100%;margin:0 auto;padding:clamp(12px,4vw,48px);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);border-radius:20px;background:var(--surface);background:color-mix(in srgb,var(--surface) 84%,transparent);box-shadow:0 18px 55px rgba(0,0,0,.20);backdrop-filter:blur(18px) saturate(125%)}
-#editor{min-height:calc(100vh - 170px);outline:none;overflow-wrap:anywhere;white-space:normal}
+.scrim{position:fixed;inset:0;background:color-mix(in srgb,var(--page) 70%,transparent);pointer-events:none}
+.stage{height:100%;overflow:auto;scrollbar-gutter:stable;overflow-anchor:none;scroll-behavior:auto}
+.paper{width:100%;min-height:100%;margin:0;padding:20px 18px 40px;position:relative}
+#editor{min-height:calc(100vh - 60px);max-width:760px;margin:0 auto;outline:none;overflow-wrap:anywhere;white-space:normal;caret-color:var(--accent)}
 #editor:empty::before{content:attr(data-placeholder);color:var(--muted);pointer-events:none}
-#editor img{display:block;max-width:100%;height:auto;margin:18px auto;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.20)}
-#editor blockquote{margin:18px 0;padding:8px 18px;border-left:3px solid var(--accent);color:var(--muted)}
-#editor h1,#editor h2{line-height:1.18}#editor p{margin:.65em 0}
-@media (prefers-reduced-transparency:reduce){.paper{background:var(--surface);backdrop-filter:none}}
-@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+#editor::selection,#editor *::selection{background:color-mix(in srgb,var(--accent) 28%,transparent)}
+#editor img{display:block;max-width:100%;height:auto;margin:16px auto;border-radius:6px}
+#editor blockquote{margin:16px 0;padding:4px 14px;border-left:2px solid var(--accent);color:var(--muted)}
+#editor h1{font-size:24px;font-weight:600;letter-spacing:-.5px}
+#editor h2{font-size:19px;font-weight:600;letter-spacing:-.25px}
+#editor h1,#editor h2{line-height:1.3;margin:1em 0 .5em}
+#editor p{margin:0 0 .75em}#editor ul,#editor ol{padding-left:22px}
+#editor hr{border:0;border-top:1px solid color-mix(in srgb,var(--muted) 25%,transparent);margin:20px 0}
+::-webkit-scrollbar{width:8px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--muted) 35%,transparent);border:2px solid var(--page);border-radius:8px}
+@media(min-width:600px){.paper{padding:28px 32px 48px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 %17
 </style></head><body>
 %9<div class="scrim"></div><div class="stage"><main class="paper">
@@ -906,7 +923,7 @@ function sanitize(html){
  return t.innerHTML;
 }
 function rememberSelection(){const s=getSelection();if(s.rangeCount&&editor.contains(s.anchorNode))savedRange=s.getRangeAt(0).cloneRange()}
-function restoreSelection(){editor.focus();if(!savedRange)return;const s=getSelection();s.removeAllRanges();s.addRange(savedRange)}
+function restoreSelection(){editor.focus({preventScroll:true});if(!savedRange)return;const s=getSelection();s.removeAllRanges();s.addRange(savedRange)}
 function currentNotebookLine(){
  rememberSelection();
  if(!savedRange||!editor.contains(savedRange.startContainer))return '';
@@ -937,6 +954,30 @@ function applyCommand(command,value=''){
  rememberSelection();queueContent();
 }
 function insertNotebookImage(url,alt){restoreSelection();document.execCommand('insertHTML',false,'<img src="'+url.replaceAll('&','&amp;').replaceAll('"','&quot;')+'" alt="'+alt.replaceAll('&','&amp;').replaceAll('"','&quot;')+'">');queueContent()}
+function setNotebookContent(html){
+ const clean=sanitize(html);if(sanitize(editor.innerHTML)===clean)return;
+ clearTimeout(sendTimer);
+ const stage=document.querySelector('.stage'),top=stage.scrollTop;
+ const selection=getSelection(),focused=document.activeElement===editor;
+ let offset=0;
+ if(focused&&selection.rangeCount&&editor.contains(selection.anchorNode)){
+  const before=document.createRange();before.selectNodeContents(editor);
+  before.setEnd(selection.anchorNode,selection.anchorOffset);offset=before.toString().length;
+ }
+ editor.innerHTML=clean;savedRange=null;
+ if(focused){
+  const walker=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT);let node=walker.nextNode();
+  while(node&&offset>node.length){offset-=node.length;const next=walker.nextNode();if(!next){offset=node.length;break}node=next}
+  const range=document.createRange();
+  if(node)range.setStart(node,offset);else{range.selectNodeContents(editor);range.collapse(false)}
+  range.collapse(true);selection.removeAllRanges();selection.addRange(range);rememberSelection();
+ }
+ stage.scrollTop=top;
+}
+function setNotebookTheme(values){
+ ['--accent','--text','--muted','--surface','--page'].forEach((name,i)=>document.documentElement.style.setProperty(name,values[i]));
+ document.documentElement.style.colorScheme=values[5];
+}
 function sendContent(){clearTimeout(sendTimer);if(bridge)bridge.receiveContent(sanitize(editor.innerHTML))}
 function queueContent(){clearTimeout(sendTimer);sendTimer=setTimeout(sendContent,120)}
 function pauseGif(){
@@ -971,8 +1012,8 @@ window.addEventListener('beforeunload',sendContent);
              theme.background.lightnessF() < 0.5 ? QStringLiteral("dark")
                                                  : QStringLiteral("light"),
              theme.accent.name(), theme.textPrimary.name(),
-             theme.textSecondary.name(), theme.surfaceElevated.name(),
-             theme.background.name(), QString::number(visibility, 'f', 2), media,
+             theme.textSecondary.name(), theme.surface.name(),
+             theme.surface.name(), QString::number(visibility, 'f', 2), media,
              htmlEscaped(tr("Notebook editor")),
              htmlEscaped(tr("Start writing…")), QString::fromLatin1(initial),
              video ? QStringLiteral("true") : QStringLiteral("false"),
@@ -1002,25 +1043,44 @@ void NotebookWindow::renderDocument() {
 void NotebookWindow::applyTheme() {
     const Theme& theme = th();
     const QColor chrome = theme.toolbarBackground;
-    const QColor edge = theme.accent;
+    const QColor edge = theme.separator();
     m_toolbar->setStyleSheet(QStringLiteral(R"CSS(
 #NotebookToolbar { background: %1; border-bottom: 1px solid %2; }
-#NotebookTitle { color: %3; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; }
-QTabBar::tab { background: transparent; color: %4; border-bottom: 2px solid transparent; padding: 8px 14px; }
-QTabBar::tab:selected { color: %3; border-bottom-color: %2; }
-QTabBar::tab:focus { background: %8; }
-#NotebookSaveStatus { color: %4; font-size: 11px; }
-#NotebookSaveStatus[error="true"] { color: %5; }
-QComboBox, QToolButton { background: %6; color: %3; border: 1px solid %7; border-radius: %RADIUS%px; padding: 3px 7px; }
-QToolButton:hover { background: %8; }
-)CSS").replace("%RADIUS%", QString::number(Theme::cornerRadius))
+#NotebookTitle { color: %3; font-size: 13px; font-weight: 600; }
+QTabBar { background: %5; border: 1px solid %6; border-radius: 6px; }
+QTabBar::tab { background: transparent; color: %4; border: 0; border-radius: 4px; margin: 2px; padding: 4px 10px; }
+QTabBar::tab:selected { color: %3; background: %7; }
+QTabBar::tab:focus { border: 1px solid %4; }
+QComboBox { background: %5; color: %3; border: 1px solid %6; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
+QToolButton { background: transparent; color: %3; border: 1px solid transparent; border-radius: 4px; padding: 0; }
+QToolButton:hover { background: %7; border-color: %6; }
+QToolButton:pressed { background: %5; }
+QToolButton:focus { border-color: %4; }
+)CSS")
                                  .arg(chrome.name(), edge.name(),
                                       theme.textPrimary.name(),
                                       theme.textSecondary.name(),
-                                      Theme::mute().name(),
                                       theme.surfaceElevated.name(),
                                       theme.separator().name(),
-                                      theme.accentHighlight.name()));
+                                      mixColors(theme.surfaceElevated, theme.textPrimary, 0.12).name()));
+    if (m_saveStatus) {
+        QPalette palette = m_saveStatus->palette();
+        palette.setColor(QPalette::Window, theme.toolbarBackground);
+        m_saveStatus->setPalette(palette);
+        m_saveStatus->setAutoFillBackground(true);
+        m_saveStatus->setStyleSheet(QStringLiteral("border-top: 1px solid %1;")
+            .arg(theme.separator().name()));
+        setSaveStatus(m_saveStatus->text(), m_saveStatus->property("error").toBool());
+    }
+    if (m_view) {
+        m_view->page()->setBackgroundColor(theme.surface);
+        const QJsonArray colors{theme.accent.name(), theme.textPrimary.name(),
+            theme.textSecondary.name(), theme.surface.name(), theme.surface.name(),
+            theme.dark ? QStringLiteral("dark") : QStringLiteral("light")};
+        m_view->page()->runJavaScript(QStringLiteral(
+            "typeof setNotebookTheme==='function'&&setNotebookTheme(%1);")
+                .arg(QString::fromUtf8(QJsonDocument(colors).toJson(QJsonDocument::Compact))));
+    }
     if (m_timedTextPanel) {
         QColor panel = theme.toolbarBackground;
         panel.setAlpha(246);
@@ -1208,7 +1268,13 @@ void NotebookWindow::syncFromProject() {
     m_contentDirty = false;
     m_content = content;
     m_loadedCues = m_controller->notebookCues();
-    if (contentChanged) renderDocument();
+    if (contentChanged && m_view) {
+        // Keep the live Chromium page, caret and scroll position. Reloading the
+        // page tears down its Quick visual and can blank the workspace mid-edit.
+        m_view->page()->runJavaScript(QStringLiteral(
+            "typeof setNotebookContent==='function'&&setNotebookContent(%1[0]);")
+                .arg(jsArray(m_content)));
+    }
     if (cuesChanged) {
         reloadTimedTextTable();
         emit timedTextChanged();
@@ -1218,10 +1284,16 @@ void NotebookWindow::syncFromProject() {
 
 void NotebookWindow::setSaveStatus(const QString& text, bool error) {
     if (!m_saveStatus) return;
-    m_saveStatus->setProperty("error", error);
-    m_saveStatus->setText(text);
-    m_saveStatus->style()->unpolish(m_saveStatus);
-    m_saveStatus->style()->polish(m_saveStatus);
+    if (m_saveStatus->property("error").toBool() != error)
+        m_saveStatus->setProperty("error", error);
+    if (m_saveStatus->text() != text) m_saveStatus->setText(text);
+    m_saveStatus->setToolTip(text);
+    QPalette palette = m_saveStatus->palette();
+    const QColor ink = error ? Theme::mute() : th().textSecondary;
+    if (palette.color(QPalette::WindowText) != ink) {
+        palette.setColor(QPalette::WindowText, ink);
+        m_saveStatus->setPalette(palette);
+    }
 }
 
 void NotebookWindow::reportMediaError() {

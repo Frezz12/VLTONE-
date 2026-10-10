@@ -4,7 +4,7 @@ test("usage totals, launch history, search and pagination on desktop and mobile"
   const user = { user_id: "10000000-0000-4000-8000-000000000001", nickname: "Тестировщик", sessions: 12, total_seconds: 9000, last_started_at: "2026-09-19T10:00:00Z" };
   await page.route("**/api/v1/admin/**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { admin: { id: "owner", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
+    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "owner", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
     if (url.pathname.endsWith("/dashboard")) {
       const searched = Boolean(url.searchParams.get("usage_q"));
       const pageIndex = Number(url.searchParams.get("usage_page"));

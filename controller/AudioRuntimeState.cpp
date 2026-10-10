@@ -1,5 +1,4 @@
 #include "AudioRuntime.hpp"
-#include "ProcessPluginInstance.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SlicerInstance.hpp"
 #include "Internal/ChannelColorInstance.hpp"
@@ -12,22 +11,7 @@
 #include <unordered_set>
 
 namespace daw {
-namespace {
-std::optional<AudioPluginCheckpoint::Side> confirmedIsolatedCheckpoint(const plugins::PluginNode& node) {
-    const auto* isolated = dynamic_cast<const plugins::ProcessPluginInstance*>(node.instance());
-    if (!isolated) return std::nullopt;
-    // Delivery to the host queue is not proof of completed processing. Both
-    // recovery checkpoints and failed-slot Undo use this one confirmed source.
-    auto recovery = isolated->recovery();
-    AudioPluginCheckpoint::Side side;
-    side.hasState = recovery.hasState;
-    side.state = std::move(recovery.state);
-    auto& parameters = side.hasState ? side.pending : side.parameters;
-    parameters.reserve(recovery.parameters.size());
-    for (const auto& [id, value] : recovery.parameters) parameters.push_back({id, value});
-    return side;
-}
-} // namespace
+
 
 std::vector<AudioPluginAddress> AudioRuntime::pluginAddresses() const {
     std::vector<AudioPluginAddress> result;
@@ -48,14 +32,29 @@ std::vector<AudioPluginAddress> AudioRuntime::pluginAddresses() const {
 }
 
 AudioPluginStateSnapshot AudioRuntime::pluginStateSnapshot(const AudioPluginAddress& address,
-    bool includeState, const std::optional<std::string>& packagedSample,
-    AudioPluginSnapshotPurpose purpose) {
-    if (purpose != AudioPluginSnapshotPurpose::Exact && purpose != AudioPluginSnapshotPurpose::RecoverFailed)
-        throw std::invalid_argument("Invalid plugin snapshot purpose.");
+    bool includeState, const std::optional<std::string>& packagedSample) {
     AudioPluginStateSnapshot out;
     out.address = address;
     const engine::RealtimeEngine::RenderGate gate(engine);
     auto* node = pluginNode(address);
+    if (node && (node->faultBypassed() || safetyStopped.load(std::memory_order_acquire))) {
+        const auto saved = lastGoodPluginStates.find(node->instanceId());
+        if (saved == lastGoodPluginStates.end()) {
+            out.exists = true;
+            out.address.instance = node->instanceId();
+            if (const auto* slot = pluginSlot(address.channelId, address.slotId))
+                out.descriptor = slot->configuration.descriptor;
+            out.supportsState = true; // Missing checkpoint must never mean factory defaults.
+            return out;
+        }
+        out = saved->second;
+        if (const auto shared = sharedCheckpointBytes.find(node->instanceId()); includeState && shared != sharedCheckpointBytes.end())
+            out.state = *shared->second;
+        if (const auto edits = checkpointParameterEdits.find(node->instanceId()); edits != checkpointParameterEdits.end())
+            overlayPendingParameters(out.pending, edits->second);
+        if (!includeState) { out.state.clear(); out.stateCaptured = false; }
+        return out;
+    }
     if (!node || !node->instance()) {
         const auto* slot = pluginSlot(address.channelId, address.slotId);
         if (!slot || (address.instance && (!node || node->instanceId() != address.instance))) return out;
@@ -78,12 +77,41 @@ AudioPluginStateSnapshot AudioRuntime::pluginStateSnapshot(const AudioPluginAddr
         out.stateCaptured = includeState && !out.state.empty();
         return out;
     }
-    return snapshotPluginNode(*node, address, includeState, packagedSample, purpose);
+    AudioPluginStateSnapshot snapshot;
+    try {
+        snapshot = snapshotPluginNode(*node, address, includeState, packagedSample);
+    } catch (const std::exception&) {
+        // A failed control-thread capture must not escape a Qt timer or
+        // overwrite the last valid checkpoint. Explicit renders reject it.
+        snapshot.address = address; snapshot.address.instance = node->instanceId();
+        snapshot.descriptor = node->descriptor();
+        snapshot.exists = true; snapshot.supportsState = true;
+    }
+    // Packaged sampler paths are a document representation, not a native
+    // checkpoint. Keep the previous native snapshot for a live replacement.
+    if (includeState && !packagedSample) retainPluginSnapshot(snapshot);
+    return snapshot;
+}
+
+void AudioRuntime::retainPluginSnapshot(const AudioPluginStateSnapshot& snapshot) {
+    if (!snapshot.exists || (snapshot.supportsState && !snapshot.stateCaptured)) return;
+    lastGoodPluginStates[snapshot.address.instance] = snapshot;
+    sharedCheckpointBytes.erase(snapshot.address.instance);
+    checkpointParameterEdits.erase(snapshot.address.instance);
+}
+
+void AudioRuntime::sharePluginCheckpoint(const AudioPluginAddress& address,
+    std::shared_ptr<const std::vector<std::uint8_t>> bytes) {
+    const auto* node = pluginNode(address);
+    if (!node || !bytes) return;
+    const auto saved = lastGoodPluginStates.find(node->instanceId());
+    if (saved == lastGoodPluginStates.end() || !saved->second.stateCaptured) return;
+    sharedCheckpointBytes[node->instanceId()] = std::move(bytes);
+    std::vector<std::uint8_t>().swap(saved->second.state);
 }
 
 AudioPluginStateSnapshot AudioRuntime::snapshotPluginNode(plugins::PluginNode& prepared,
-    const AudioPluginAddress& address, bool includeState, const std::optional<std::string>& packagedSample,
-    AudioPluginSnapshotPurpose purpose) {
+    const AudioPluginAddress& address, bool includeState, const std::optional<std::string>& packagedSample) {
     AudioPluginStateSnapshot out;
     out.address = address;
     auto* node = &prepared;
@@ -92,8 +120,6 @@ AudioPluginStateSnapshot AudioRuntime::snapshotPluginNode(plugins::PluginNode& p
     out.exists = true;
     out.address.instance = node->instanceId();
     out.descriptor = instance->descriptor();
-    out.failed = instance->hasFailed();
-    out.isolated = dynamic_cast<plugins::ProcessPluginInstance*>(instance) != nullptr;
     out.supportsState = instance->supportsState();
     out.documentParametersAuthoritative =
         dynamic_cast<plugins::channel_color::ChannelColorInstance*>(instance) ||
@@ -102,21 +128,9 @@ AudioPluginStateSnapshot AudioRuntime::snapshotPluginNode(plugins::PluginNode& p
     for (const auto& parameter : parameters) {
         const double value = instance->parameterValue(parameter.index);
         if (!parameter.id.empty() && std::isfinite(value))
-            out.parameters.push_back({parameter.id, value, instance->parameterNeedsStateRestore(parameter.index)});
+            out.parameters.push_back({parameter.id, value, false});
     }
-    if (out.failed && purpose == AudioPluginSnapshotPurpose::RecoverFailed) {
-        if (auto confirmed = confirmedIsolatedCheckpoint(*node)) {
-            // parameterValue() above is the confirmed mirror for a failed
-            // isolated instance. Only this confirmed journal overlays its
-            // older opaque checkpoint; pending events may contain the fault.
-            out.pending = std::move(confirmed->pending);
-            if (includeState) {
-                out.stateCaptured = confirmed->hasState;
-                out.state = std::move(confirmed->state);
-            }
-            return out;
-        }
-    }
+
     for (const auto& event : node->pendingParameterEvents()) {
         if (event.paramIndex >= parameters.size() || !std::isfinite(event.value)) continue;
         const auto& id = parameters[event.paramIndex].id;
@@ -147,17 +161,48 @@ std::vector<AudioPluginStateSnapshot> AudioRuntime::pluginStateSnapshots(
     std::vector<AudioPluginStateSnapshot> result;
     result.reserve(requests.size());
     for (const auto& request : requests)
-        result.push_back(pluginStateSnapshot(request.address, request.includeState, request.packagedSample, request.purpose));
+        result.push_back(pluginStateSnapshot(request.address, request.includeState, request.packagedSample));
     return result;
 }
 
 audio::Result AudioRuntime::restorePluginState(const AudioPluginAddress& address,
-    const AudioPluginStateRestore& state, std::vector<InsertParameter>& parameters) {
-    const engine::RealtimeEngine::RenderGate gate(engine);
+    const AudioPluginStateRestore& state, std::vector<InsertParameter>& parameters,
+    const std::function<void()>& beforeRetire) {
     auto* node = pluginNode(address);
-    if (!node || !node->instance()) return audio::Result::fail(audio::EngineError::PluginLoadFailed,
+    if (!node || !node->instance() || node->faultBypassed()) return audio::Result::fail(audio::EngineError::PluginLoadFailed,
         "Plugin state target is unavailable or belongs to another instance: " + address.slotId);
-    return restorePluginNode(*node, state, parameters, address.slotId);
+    if (state.state.empty() && state.stateFile.empty() && !state.source) {
+        const engine::RealtimeEngine::RenderGate gate(engine);
+        return restorePluginNode(*node, state, parameters, address.slotId);
+    }
+    // loadState is allowed to mutate a processor before returning false.
+    // Import into a candidate so neither failure nor rollback touches the
+    // published native state or its editor.
+    struct Prune { AudioRuntime* owner; ~Prune() { owner->prunePluginSnapshots(); } } prune{this};
+    try {
+        auto* slot = pluginSlot(address.channelId, address.slotId);
+        auto instance = createConfiguredPlugin(slot->configuration);
+        if (!instance) return audio::Result::fail(audio::EngineError::PluginLoadFailed, "Could not create state import candidate.");
+        auto fresh = std::make_shared<plugins::PluginNode>(std::string(node->name()), std::move(instance));
+        auto restoredParameters = parameters;
+        if (const auto restored = restorePluginNode(*fresh, state, restoredParameters, address.slotId); !restored) return restored;
+        fresh->copyControlSettingsFrom(*node);
+        fresh->setPreferredChannelCount(node->preferredChannelCount());
+        fresh->setSidechainConnected(node->sidechainConnected());
+        fresh->prepare(engine.prepareInfo());
+        if (!fresh->isReady()) return audio::Result::fail(audio::EngineError::PluginLoadFailed, "Could not activate state import candidate.");
+        fresh->markPrepared(engine.prepareInfo());
+        auto snapshot = snapshotPluginNode(*fresh, {address.channelId, address.slotId, address.right, fresh->instanceId()}, false);
+        if (snapshot.ownsSample) snapshot = snapshotPluginNode(*fresh, snapshot.address, true);
+        else { snapshot.state = state.state; snapshot.stateCaptured = !state.state.empty(); }
+        retainPluginSnapshot(snapshot);
+        const auto result = replacePluginNodes(address.channelId, *slot,
+            address.right ? nullptr : fresh, address.right ? fresh : nullptr, beforeRetire);
+        if (result) parameters = std::move(restoredParameters);
+        return result;
+    } catch (const std::exception& error) {
+        return audio::Result::fail(audio::EngineError::PluginLoadFailed, error.what());
+    }
 }
 
 audio::Result AudioRuntime::restorePluginNode(plugins::PluginNode& node,
@@ -208,17 +253,14 @@ audio::Result AudioRuntime::restorePluginNode(plugins::PluginNode& node,
         for (const auto& parameter : instance->parameters()) {
             const auto value = instance->parameterValue(parameter.index);
             if (!parameter.id.empty() && std::isfinite(value))
-                parameters.push_back({parameter.id, value, instance->parameterNeedsStateRestore(parameter.index)});
+                parameters.push_back({parameter.id, value, false});
         }
     }
     return audio::Result::ok();
 }
 
-audio::Result AudioRuntime::capturePluginCheckpoints(std::vector<AudioPluginCheckpoint>& out,
-    AudioPluginCheckpointPurpose purpose) {
+audio::Result AudioRuntime::capturePluginCheckpoints(std::vector<AudioPluginCheckpoint>& out) {
     out.clear();
-    if (purpose != AudioPluginCheckpointPurpose::Exact && purpose != AudioPluginCheckpointPurpose::Recovery)
-        return audio::Result::fail(audio::EngineError::InvalidArgument, "Invalid plugin checkpoint purpose.");
     try {
         const engine::RealtimeEngine::RenderGate gate(engine);
         std::vector<AudioPluginCheckpoint> captured;
@@ -240,10 +282,8 @@ audio::Result AudioRuntime::capturePluginCheckpoints(std::vector<AudioPluginChec
                 }
                 return side;
             }
-            if (purpose == AudioPluginCheckpointPurpose::Recovery && node)
-                if (auto confirmed = confirmedIsolatedCheckpoint(*node)) return std::move(*confirmed);
             auto snapshot = pluginStateSnapshot(address);
-            if (!snapshot.exists || snapshot.failed)
+            if (!snapshot.exists)
                 throw std::runtime_error("cannot checkpoint an unavailable plugin");
             AudioPluginCheckpoint::Side side;
             side.hasState = snapshot.supportsState;
@@ -324,7 +364,7 @@ audio::Result AudioRuntime::restorePluginCheckpoints(std::span<const AudioPlugin
             const auto* instance = node ? node->instance() : nullptr;
             if (!node || slot.uid != checkpoint.uid || slot.configuration.requiredFormat != checkpoint.format ||
                 (!instance && slot.configuration.loadPolicy == AudioPluginLoadPolicy::Required) ||
-                (instance && (instance->hasFailed() || instance->descriptor().uid != checkpoint.uid ||
+                (instance && (instance->descriptor().uid != checkpoint.uid ||
                               instance->descriptor().format != checkpoint.format)) ||
                 side.state.size() > plugins::kMaxPluginStateBytes ||
                 (!side.hasState && !side.state.empty()) || !targets.insert(node.get()).second)

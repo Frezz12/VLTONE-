@@ -48,7 +48,7 @@ int main() {
     const auto& descriptor = PitchCorrectorInstance::staticDescriptor();
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(rate, block, false);
         const auto lead = controller.addTrack(daw::TrackKind::Audio, "Lead");
         const auto doubles = controller.addTrack(daw::TrackKind::Audio, "Doubles");
@@ -114,7 +114,7 @@ int main() {
         controller.stop();
         const auto package = directory / "pitch-sync.vlt";
         check(bool(controller.saveProject(package.string())), "synchronized pitch settings save");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+        daw::EngineController reopened{};
         reopened.initialize(rate, block, false);
         check(bool(reopened.openProject(package.string())) &&
                   reopened.insertParameter(doubles, target, "key") == 9 &&
@@ -123,7 +123,7 @@ int main() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         if (!check(bool(controller.initialize(rate, block, false)), "pitch controller initializes")) return 1;
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Vocal");
         const auto slot = controller.addInsert(track, descriptor);
@@ -150,7 +150,7 @@ int main() {
         controller.setInsertParameter(track, slot, "a4_hz", 442);
         check(bool(controller.saveProject(package)), "pending quality and reference tuning save");
         {
-            daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+            daw::EngineController reopened{};
             reopened.initialize(rate, block, false);
             const bool opened = bool(reopened.openProject(package));
             auto* restored = instance(reopened, track, slot);
@@ -228,7 +228,7 @@ int main() {
     }
 
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(rate, block, false);
         controller.setRecordDirectory(directory.string());
         const auto track = controller.addTrack(daw::TrackKind::Audio, "Live capture");
@@ -282,7 +282,7 @@ int main() {
         const auto sourcePath = (directory / "source.wav").string();
         audio::AudioRecorder writer; writer.initialize(rate, 2);
         writer.writeWAVFile(sourcePath, source, rate);
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(rate, block, false);
         controller.setRecordDirectory(directory.string());
         const auto track = controller.importAudioToNewTrack(sourcePath, 0);
@@ -358,7 +358,7 @@ int main() {
                        inputFile.channels == 2, "the last-syllable fixture decodes")) return 1;
 
         for (int quality : {0, 1}) {
-            daw::EngineController controller{daw::EngineController::TestRuntime{}};
+            daw::EngineController controller{};
             controller.initialize(rate, block, false);
             controller.setRecordDirectory(directory.string());
             const auto track = controller.importAudioToNewTrack(path, 0);

@@ -664,7 +664,7 @@ int main() {
 
     // ── setClipNotes: the undoable landing point ──
     {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         controller.initialize(48000.0, 512, false);
         const std::string track = controller.addTrack(daw::TrackKind::Midi, "Keys");
         const std::string clip = controller.addMidiClip(track, 0.0, 4.0);

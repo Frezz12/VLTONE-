@@ -36,7 +36,7 @@ static bool hasNote(const engine::MidiBuffer& output, int key, bool on = true) {
 }
 
 static void checkRecordingMonitoring() {
-    EngineController controller{EngineController::TestRuntime{}};
+    EngineController controller{};
     check(controller.initialize(48000, 512, false).isOk(), "monitoring initialization");
     controller.setTempo(120);
     const auto track = controller.addTrack(TrackKind::Midi, "Recording");
@@ -275,7 +275,7 @@ int main() {
             pedal = true;
     check(pedal, "pedal reset at exact clip boundary");
 
-    EngineController c{EngineController::TestRuntime{}};
+    EngineController c{};
     check(c.initialize(48000, 512, false).isOk(), "offline initialization");
     const auto track = c.addTrack(TrackKind::Midi, "Keys");
     auto prefs = c.recordingPrefs();
@@ -499,7 +499,7 @@ int main() {
           "tempo changes retain the trimmed source boundary in musical time");
 
     {
-        EngineController patternController{EngineController::TestRuntime{}};
+        EngineController patternController{};
         patternController.initialize(48000, 512, false);
         const auto pattern = patternController.addPattern("Recorded Pattern");
         const auto child = patternController.addTrack(TrackKind::Midi, "Pattern Keys");
@@ -518,13 +518,14 @@ int main() {
         patternController.liveMidiInput(child, 0x80, 60, 45, 99, at);
         patternController.stopRecording();
         const auto owner = patternController.project().findTrack(pattern)->clips.front().id;
+        const auto linked = patternController.duplicateLinkedClips({{pattern,owner}});
         const auto right = patternController.splitClip(pattern, owner, .5);
         const auto *children = patternController.project().findTrack(child);
-        check(!right.empty() && children->clips.size() == 2 &&
+        check(linked.size()==1 && !right.empty() && children->clips.size() == 3 &&
                   children->clips[0].takes.size() == 2 && children->clips[1].takes.size() == 2 &&
                   !children->clips[1].takes.back().notes.empty() &&
-                  children->clips[0].takes.back().id != children->clips[1].takes.back().id,
-              "Pattern split preserves recorded layers and their independent identities");
+                  children->clips[0].contentStorage() == children->clips[1].contentStorage(),
+              "linked Pattern split preserves recorded layers in common content windows");
         check(!midiPlaybackClips(*children, 120).empty(), "split MIDI Pattern remains playable");
     }
     take.semantics.midiOverdubMerge = true;

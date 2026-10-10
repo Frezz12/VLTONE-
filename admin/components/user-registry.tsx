@@ -7,6 +7,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { AdminShell } from "./admin-shell";
 import { CollaborationAccessSwitch } from "./collaboration-access-switch";
+import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 import { downloadCsv } from "./export-csv";
 
@@ -14,6 +15,7 @@ export function UserRegistry() {
   const params = useSearchParams();
   const urlQuery = params.get("q") ?? "";
   const { session, error } = useAdmin();
+  const canWrite = canAdmin(session?.admin, "users.write");
   const [users, setUsers] = useState<User[]>([]);
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [accessErrors, setAccessErrors] = useState<Record<string, string>>({});
@@ -68,6 +70,7 @@ export function UserRegistry() {
         <td>{user.email}</td>
         <td><span className="vlt-badge"><span className={`status-dot ${user.status !== "active" ? "off" : ""}`} />{user.status}</span></td>
         <td><CollaborationAccessSwitch
+          disabled={!canWrite}
           enabled={user.collaboration_enabled}
           pending={Boolean(pending[user.id])}
           label={`Онлайн-доступ для ${user.nickname}`}

@@ -271,11 +271,12 @@ std::vector<ClipModel> midiPlaybackClips(const TrackModel &track, double tempo) 
             continue;
         if (clip.takes.empty()) {
             result.push_back(clip);
-            if (clip.offsetSeconds > 0.0) {
+            const double contentOffset = clip.contentOffsetBeats != 0 ? clip.contentOffsetBeats / bps : clip.offsetSeconds;
+            if (contentOffset > 0.0) {
                 auto& part = result.back();
                 auto data = sliceMidiPerformance(
-                    {std::move(part.notes), std::move(part.lanes), std::move(part.slideNotes)}, clip.offsetSeconds * bps,
-                    (clip.offsetSeconds + clip.durationSeconds) * bps, false);
+                    {std::move(part.notes), std::move(part.lanes), std::move(part.slideNotes)}, contentOffset * bps,
+                    (contentOffset + clip.durationSeconds) * bps, false);
                 part.notes = std::move(data.notes);
                 part.lanes = std::move(data.lanes);
                 part.slideNotes = std::move(data.slideNotes);

@@ -169,6 +169,13 @@ bool MainWindow::checkWarpForTest() {
     QDragEnterEvent enter(dropAt, Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
     QApplication::sendEvent(m_timeline, &enter);
     QDropEvent drop(QPointF(dropAt), Qt::CopyAction, &mime, Qt::LeftButton, Qt::AltModifier);
+    QTimer::singleShot(0, qApp, [] {
+        if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+            menu->setActiveAction(menu->actions().front());
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(menu, &enter);
+        }
+    });
     QApplication::sendEvent(m_timeline, &drop);
     const auto* importedTrack = m_controller.project().findTrack(track.id);
     check(drop.isAccepted() && importedTrack && importedTrack->clips.size() == 2,

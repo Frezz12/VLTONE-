@@ -15,7 +15,7 @@ namespace plugins { struct PluginDescriptor; }
 namespace ui {
 
 /// Explicit host controls reuse the app's parameter/routing panel; ordinary
-/// editor requests continue to show only the isolated plugin window.
+/// editor requests open the native plugin editor in the app workspace.
 QAction* addPluginControlsAction(QMenu* menu, daw::EngineController* controller,
                                 const QString& channelId, const QString& slotId);
 

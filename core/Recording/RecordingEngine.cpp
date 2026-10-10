@@ -389,7 +389,12 @@ Result AudioRecorder::stopRecording() {
     }
 
     // Let the writer drain whatever is still in the ring, then join.
-    m_writerRunning.store(false, std::memory_order_release);
+    {
+        // Pair with the wait predicate so Stop cannot lose its wake-up
+        // between the writer checking the flag and going to sleep.
+        std::lock_guard<std::mutex> lock(m_writerMutex);
+        m_writerRunning.store(false, std::memory_order_release);
+    }
     m_writerSignal.notify_all();
     if (m_writerThread.joinable()) {
         m_writerThread.join();
@@ -555,7 +560,9 @@ void AudioRecorder::writerLoop() {
             // Polling avoids a potentially blocking condition-variable notify
             // from the realtime producer. Five milliseconds is well inside
             // the ring's four seconds of headroom.
-            m_writerSignal.wait_for(lock, std::chrono::milliseconds(5));
+            m_writerSignal.wait_for(lock, std::chrono::milliseconds(5), [this] {
+                return !m_writerRunning.load(std::memory_order_acquire);
+            });
         }
         drain();
     }

@@ -59,7 +59,6 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
     ++m_graphRebuildCount;
 
     AudioSessionSpec session;
-    session.hosting = {m_pluginManager.hostingMode(), m_pluginManager.pluginHostPath()};
     const auto plugins = [&](const std::string& channelId, AudioPluginChainSpec::Kind kind,
                              const std::vector<InsertModel>& slots, const std::string& clipId = {}) {
         auto chain = preparePluginChain(channelId, kind, slots, clipId, loadPolicy);
@@ -88,7 +87,7 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
         description.capturing = std::find(m_recordingTracks.begin(), m_recordingTracks.end(), track.id)
                                 != m_recordingTracks.end();
         description.input = {
-            acceptsRecording(track) && (track.monitor || track.monitorAuto || track.armed || (m_prepared && m_runtime.hasInputRoute(track.id))),
+            acceptsRecording(track) && (track.monitor || track.monitorAuto || track.armed || (m_prepared && m_runtime->hasInputRoute(track.id))),
             track.monitor && track.inputEnabled, track.inputChannel, track.inputChannelCount,
             track.monitorInputMask};
         description.volume = track.volume;
@@ -150,28 +149,44 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
 
 audio::Result EngineController::publishAudioSession(AudioSessionSpec session,
     bool reconfigurePlugins, std::span<const AudioPluginStateEdit> restores) {
+    std::vector<AudioPluginAddress> retiring;
     if (m_prepared && m_pluginRetiring) {
-        auto retiring = m_runtime.retiringPlugins(session.pluginChains);
+        retiring = m_runtime->retiringPlugins(session.pluginChains);
         for (const auto& edit : restores) if (edit.replaceExisting &&
             std::none_of(retiring.begin(), retiring.end(), [&](const auto& address) {
                 return address.channelId == edit.address.channelId && address.slotId == edit.address.slotId;
             })) retiring.push_back(edit.address);
-        for (const auto& address : retiring) m_pluginRetiring(address.channelId, address.slotId);
     }
-    const auto committed = m_runtime.applySession(std::move(session), reconfigurePlugins, restores);
+    const auto committed = m_runtime.applySession(std::move(session), reconfigurePlugins, restores, {},
+        retiring.empty() ? std::function<void()>{} : [this, &retiring] {
+            for (const auto& address : retiring) m_pluginRetiring(address.channelId, address.slotId);
+        });
     if (!committed) return committed;
+    for (const auto& track : m_project.tracks) if (track.instrument.audioEdit.initialized)
+        if (auto* sampler = samplerInstance(track.id,track.instrument.id)) {
+            auto audio = resolveEditedAudio(track.instrument.audioEdit);
+            if (audio && sampler->rawSample() != audio) {
+                const auto path = sampler->samplePath().empty() && !track.instrument.audioEdit.sources.empty()
+                    ? track.instrument.audioEdit.sources.front().filePath : sampler->samplePath();
+                sampler->adoptSample(path,std::move(audio));
+            }
+        }
+
     if (!m_liveDeviceAllowed) m_previewParameterEditsPending = true;
     refreshAutomaticMonitoring(false);
-    m_runtime.suspendRecordingClipFx(m_recordingTracks);
+    m_runtime->suspendRecordingClipFx(m_recordingTracks);
     updateTimelineDuration();
     return committed;
 }
 
 audio::Result EngineController::rebuildGraph(bool reconfigurePlugins,
     AudioPluginLoadPolicy loadPolicy, std::span<const AudioPluginStateEdit> restores) {
-    if (m_prepared && m_runtime.isRemote() && !m_runtime.metadata().connected)
-        return audio::Result::fail(audio::EngineError::NotInitialized, m_runtime.metadata().error);
-    return publishAudioSession(prepareAudioSession(loadPolicy), reconfigurePlugins, restores);
+    try {
+        m_project.resolveClipContents();
+        return publishAudioSession(prepareAudioSession(loadPolicy), reconfigurePlugins, restores);
+    } catch (const std::exception& error) {
+        return audio::Result::fail(audio::EngineError::Unknown, error.what());
+    }
 }
 
 void EngineController::appendInsertStateEdits(std::vector<AudioPluginStateEdit>& edits,

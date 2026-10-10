@@ -117,6 +117,16 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     buttons->addWidget(m_controlPanel);
     buttons->addStretch(1);
     buttons->addWidget(applyButton);
+    auto* reconnect = new QPushButton(tr("Reconnect"), this);
+    reconnect->setObjectName(QStringLiteral("ReconnectAudioDevice"));
+    reconnect->setAccessibleName(tr("Reconnect audio device"));
+    buttons->addWidget(reconnect);
+    connect(reconnect, &QPushButton::clicked, this, [this] {
+        const auto result = m_controller->recoverAudioDevice(true);
+        syncSettledConfiguration();
+        m_bufferNote->setText(result ? tr("Audio device connected.") : QString::fromStdString(result.message()));
+        m_bufferNote->show();
+    });
     layout->addLayout(buttons);
 
     QSet<QString> hostApis;
@@ -454,8 +464,7 @@ void AudioSettingsPage::apply() {
         m_bufferNote->setText(
             tr("Could not apply this configuration. The controls show the current audio settings."));
         m_bufferNote->setVisible(true);
-        QMessageBox::warning(this, tr("Audio Settings"),
-                             QString::fromStdString(result.message()));
+        m_controller->reportAudioOperationFailure("Audio configuration", result);
         return;
     }
 

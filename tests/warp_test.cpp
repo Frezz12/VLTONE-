@@ -122,7 +122,7 @@ int main() {
     audio::AudioBuffer buffer(2, 96000);
     for (int ch = 0; ch < 2; ++ch) std::copy_n(hits->channel(ch), 96000, buffer.getChannel(ch));
     audio::AudioRecorder recorder; recorder.initialize(48000, 2); recorder.writeWAVFile(file, buffer, 48000);
-    EngineController controller{EngineController::TestRuntime{}};
+    EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return 1;
     {
         controller.setTempo(120);
@@ -316,7 +316,7 @@ int main() {
     check(controller.warpPreviewActive() && std::abs(livePeak() - 30000) < 500,
           "mixdown restores the pending After audition on return");
     controller.cancelWarpPreview();
-    EngineController rack{EngineController::TestRuntime{}}; rack.initialize(48000, 256, false);
+    EngineController rack{}; rack.initialize(48000, 256, false);
     const auto rackTrack = rack.addTrack(TrackKind::Audio, "Offline rack");
     rack.addInsert(rackTrack, plugins::equalizer::EqualizerInstance::staticDescriptor());
     controller.setRecordDirectory(dir.string());

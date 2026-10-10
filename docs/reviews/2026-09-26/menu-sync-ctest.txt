@@ -1,0 +1,9 @@
+Test project /Users/nikolay/Documents/code/VLTONE/VLTONE-/build
+    Start 95: command_menu_en_ui_test
+1/2 Test #95: command_menu_en_ui_test ..........   Passed    6.72 sec
+    Start 96: command_menu_ru_ui_test
+2/2 Test #96: command_menu_ru_ui_test ..........   Passed    4.12 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =  10.86 sec

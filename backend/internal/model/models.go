@@ -37,14 +37,17 @@ type User struct {
 }
 
 type AdminUser struct {
-	ID           uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Email        string    `gorm:"not null" json:"email"`
-	EmailKey     string    `gorm:"uniqueIndex;not null" json:"-"`
-	Nickname     string    `gorm:"not null" json:"nickname"`
-	PasswordHash string    `gorm:"not null" json:"-"`
-	Status       string    `gorm:"not null;default:active" json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	UserID       *uuid.UUID `gorm:"type:uuid;uniqueIndex" json:"user_id"`
+	IsOwner      bool       `json:"is_owner"`
+	Permissions  []string   `gorm:"serializer:json;type:jsonb" json:"permissions"`
+	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	Email        string     `gorm:"not null" json:"email"`
+	EmailKey     string     `gorm:"uniqueIndex;not null" json:"-"`
+	Nickname     string     `gorm:"not null" json:"nickname"`
+	PasswordHash string     `gorm:"not null" json:"-"`
+	Status       string     `gorm:"not null;default:active" json:"status"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type Plan struct {

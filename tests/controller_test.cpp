@@ -152,7 +152,7 @@ int main() {
     writeTone(tonePath, 48000, 24000); // 0.5 s
 
     {
-        daw::EngineController readouts{daw::EngineController::TestRuntime{}};
+        daw::EngineController readouts{};
         check(!readouts.initialize(48000, 0, false) &&
               !readouts.initialize(std::numeric_limits<double>::quiet_NaN(), 128, false),
               "runtime rejects invalid preparation instead of reporting success");
@@ -188,7 +188,7 @@ int main() {
               "sample snapshot survives project replacement without retaining the DSP");
     }
 
-    daw::EngineController ctrl{daw::EngineController::TestRuntime{}};
+    daw::EngineController ctrl{};
     check(ctrl.initialize(48000, 512, /*openDevice=*/false).isOk(),
           "controller initialises offline");
     ctrl.play();
@@ -207,7 +207,7 @@ int main() {
     ctrl.stop();
 
     {
-        daw::EngineController themed{daw::EngineController::TestRuntime{}};
+        daw::EngineController themed{};
         themed.initialize(48000, 512, /*openDevice=*/false);
         themed.setDefaultTrackColor(0xD12A3Bu);
         const std::string audio = themed.addTrack(daw::TrackKind::Audio);
@@ -243,7 +243,7 @@ int main() {
     // track and clip disappear together and return together. Audio must never
     // be attached to a lane whose model cannot represent an audio clip.
     {
-        daw::EngineController imported{daw::EngineController::TestRuntime{}};
+        daw::EngineController imported{};
         imported.initialize(48000, 512, /*openDevice=*/false);
         imported.setDefaultTrackColor(0xD12A3Bu);
         const std::size_t before = imported.undoDepth();
@@ -328,7 +328,7 @@ int main() {
     check(fs::is_directory(fs::path(pkg) / "State"),
           "VLT package includes the plugin State folder");
 
-    daw::EngineController ctrl2{daw::EngineController::TestRuntime{}};
+    daw::EngineController ctrl2{};
     ctrl2.initialize(48000, 512, false);
     daw::EngineController::PreparedProject prepared;
     audio::Result preparedResult = audio::Result::ok();
@@ -355,7 +355,7 @@ int main() {
     // sources remain ordinary instrument tracks, which is what gives each one
     // an independent mixer channel and processing chain.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Beat");
         const auto* container = p.project().findTrack(pattern);
@@ -454,7 +454,7 @@ int main() {
 
         const std::string patternPkg = (dir / "pattern.vlt").string();
         check(p.saveProject(patternPkg).isOk(), "a Pattern project saves");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+        daw::EngineController reopened{};
         reopened.initialize(48000, 512, false);
         check(reopened.openProject(patternPkg).isOk(), "a Pattern project reopens");
         const auto* restored = reopened.project().findTrack(pattern);
@@ -481,7 +481,7 @@ int main() {
         const fs::path movedPackage = dir / "pattern-portable-copy.vlt";
         fs::copy(patternPkg, movedPackage,
                  fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-        daw::EngineController moved{daw::EngineController::TestRuntime{}};
+        daw::EngineController moved{};
         moved.initialize(48000, 512, false);
         check(moved.openProject(movedPackage.string()).isOk(),
               "a copied VLT package opens from its new location");
@@ -499,7 +499,7 @@ int main() {
     // Pattern sources are one contiguous track block. Adding an ordinary lane
     // later must not turn it into the insertion point for new Pattern sources.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const auto sampler = p.pluginManager().find(
             daw::plugins::Format::Internal, "daw.sampler");
@@ -534,7 +534,7 @@ int main() {
     // Extending one Pattern container changes the gate seen by all of its MIDI
     // children, but it must not fall back to publishing every MIDI track.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Extend History");
         const std::string first =
@@ -583,7 +583,7 @@ int main() {
     // visible Pattern instance and keeps that boundary in the same history
     // action as the child edit.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Growing Pattern");
         const std::string child =
@@ -642,7 +642,7 @@ int main() {
 
     // Removing a Pattern removes its private source subtree as one object.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Remove History");
         const std::string child =
@@ -681,7 +681,7 @@ int main() {
     // A newly added source follows the edited arrangement window of its
     // Pattern instance instead of reverting to the global one-bar default.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Long Pattern");
         const auto* patternTrack = p.project().findTrack(pattern);
@@ -701,7 +701,7 @@ int main() {
     }
 
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Phrase");
         const std::string source =
@@ -780,7 +780,7 @@ int main() {
 
     // Glue reverses a Pattern split without orphaning either half's children.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string pattern = p.addPattern("Glue Pattern");
         const std::string source =
@@ -812,7 +812,7 @@ int main() {
     // it would replace the note vector, republish its schedule, and roll back a
     // later live note property on every undo/redo endpoint below.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
 
         const std::string denseTrack =
@@ -1108,7 +1108,7 @@ int main() {
                   bounded.cached("second") != nullptr,
               "waveform cache evicts the least-recent envelope over budget");
 
-        daw::EngineController fresh{daw::EngineController::TestRuntime{}};
+        daw::EngineController fresh{};
         fresh.initialize(48000, 512, /*openDevice=*/false);
         const std::string freshTrack =
             fresh.addTrack(daw::TrackKind::Audio, "Waveform reset");
@@ -1131,7 +1131,7 @@ int main() {
     // clips → fader → meter → bus, with sends tapped off the meter. If it does
     // not, playback silently falls back to "everything straight to master".
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string src = r.addTrack(daw::TrackKind::Audio, "Source");
         const std::string bus = r.addTrack(daw::TrackKind::Bus, "Reverb Bus");
@@ -1214,7 +1214,7 @@ int main() {
     // main-output destinations; Sends receive parallel send taps and keep the
     // normal return-channel processing (inserts, pan, fader and output).
     {
-        daw::EngineController routing{daw::EngineController::TestRuntime{}};
+        daw::EngineController routing{};
         routing.initialize(48000, 512, /*openDevice=*/false);
         const std::string source =
             routing.addTrack(daw::TrackKind::Audio, "Send Source");
@@ -1249,7 +1249,7 @@ int main() {
     // End to end: a clip on a track, rendered offline by the graph engine and
     // read back from disk. This is the check that the app actually makes sound.
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Tone");
         check(!r.importAudio(tonePath, track, 0.0).empty(), "clip imported");
@@ -1302,7 +1302,7 @@ int main() {
     // The engine gates monitoring behind one global switch; the controller has
     // to keep it in step with the per-track buttons.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         const std::string a = m.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = m.addTrack(daw::TrackKind::Audio, "B");
@@ -1320,7 +1320,7 @@ int main() {
 
     // ── Folders and track order ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string a = f.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = f.addTrack(daw::TrackKind::Audio, "B");
@@ -1392,7 +1392,7 @@ int main() {
     // A reorder carries the whole selection, including non-adjacent tracks,
     // and restores both their gaps and their hierarchy in one undo.
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, false);
         const auto a = f.addTrack(daw::TrackKind::Audio, "A");
         const auto b = f.addTrack(daw::TrackKind::Audio, "B");
@@ -1465,7 +1465,7 @@ int main() {
         const std::string lrPath = (dir / "left.wav").string();
         writeLeftOnlyTone(lrPath, 48000, 24000);
 
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "LR");
         check(!r.importAudio(lrPath, track, 0.0).empty(),
@@ -1508,7 +1508,7 @@ int main() {
 
         const std::string monoPkg = (dir / "mono.vlt").string();
         check(r.saveProject(monoPkg).isOk(), "project with mono flag saves");
-        daw::EngineController r2{daw::EngineController::TestRuntime{}};
+        daw::EngineController r2{};
         r2.initialize(48000, 512, false);
         check(r2.openProject(monoPkg).isOk(), "project with mono flag reopens");
         check(r2.project().findTrack(track)->mono, "mono flag round-trips");
@@ -1516,7 +1516,7 @@ int main() {
 
     // ── Split a clip ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Cut");
         const std::string clip = r.importAudio(tonePath, track, 0.0);
@@ -1575,20 +1575,20 @@ int main() {
         check(glueResult && joined &&
                   r.project().findTrack(track)->clips.size() == 1 &&
                   fs::is_regular_file(joined->filePath),
-              "audio glue renders both sources into one ordinary clip");
+              "audio glue joins both sources into one ordinary clip");
         r.undo();
         check(findClip(r, track, clip) && findClip(r, track, right),
               "undoing audio glue restores both source clips");
         r.redo();
         check(findClip(r, track, glued) != nullptr,
-              "redoing audio glue restores the same rendered clip");
+              "redoing audio glue restores the same joined clip");
     }
 
     // ── Clip mute / name / duplicate, and track colour reaching its clips ──
     // The four discrete clip edits the context panel drives. Each has to change
     // the document and come back cleanly through undo.
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Props");
         const std::string clip = r.importAudio(tonePath, track, 0.0);  // 0.5 s
@@ -1645,7 +1645,7 @@ int main() {
         r.setClipMuted(track, clip, true);
         const std::string pkg = (dir / "clipprops.vlt").string();
         check(r.saveProject(pkg).isOk(), "project with clip props saves");
-        daw::EngineController r2{daw::EngineController::TestRuntime{}};
+        daw::EngineController r2{};
         r2.initialize(48000, 512, false);
         check(r2.openProject(pkg).isOk(), "project with clip props reopens");
         bool sawMuted = false;
@@ -1659,7 +1659,7 @@ int main() {
     // region out (split at both edges), then deletes it or moves it. The outer
     // fragments must survive with their original geometry.
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "RegDel");
         const std::string clip = r.importAudio(tonePath, track, 0.0);  // 0.5 s
@@ -1682,7 +1682,7 @@ int main() {
               "outer fragments still span the full clip");
     }
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "RegMove");
         const std::string clip = r.importAudio(tonePath, track, 0.0);
@@ -1710,7 +1710,7 @@ int main() {
 
     // ── Trim a clip (non-destructive edge resize) ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Trim");
         const std::string clip = r.importAudio(tonePath, track, 0.0);  // 0.5 s
@@ -1739,7 +1739,7 @@ int main() {
     // A trim gesture keeps only scalar geometry plus musical analysis in its
     // history delta; undo must not restore unrelated mixer state.
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track =
             r.addTrack(daw::TrackKind::Audio, "Trim History");
@@ -1778,7 +1778,7 @@ int main() {
 
     // ── Clip fades ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Fade");
         const std::string clip = r.importAudio(tonePath, track, 0.0);  // 0.5 s
@@ -1857,7 +1857,7 @@ int main() {
         const std::string monoTone = (dir / "one-channel.wav").string();
         writeMonoTone(monoTone, 48000, 24000);
 
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = m.addTrack(daw::TrackKind::Audio, "Mono");
         m.importAudio(monoTone, track, 0.0);
@@ -1892,7 +1892,7 @@ int main() {
     // whose right channel was input 2 — silence. Nothing downstream could undo
     // that, and the track's mono fold was the only thing hiding it.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "capture-width").string());
         const std::string track = m.addTrack(daw::TrackKind::Audio, "Mic");
@@ -1954,7 +1954,7 @@ int main() {
 
     // ── The cycle region ──
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.initialize(48000, 512, /*openDevice=*/false);
         check(!c.isLoopEnabled(), "a new project is not cycling");
         check(c.loopEndSeconds() <= c.loopStartSeconds(),
@@ -1998,7 +1998,7 @@ int main() {
 
     // ── A cycle survives a save and reload ──
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.initialize(48000, 512, /*openDevice=*/false);
         c.addTrack(daw::TrackKind::Audio, "Any");
         c.setLoopRangeSeconds(2.0, 10.0);
@@ -2006,7 +2006,7 @@ int main() {
         const std::string pkg = (dir / "cycle.vlt").string();
         check(c.saveProject(pkg).isOk(), "a project with a cycle saves");
 
-        daw::EngineController back{daw::EngineController::TestRuntime{}};
+        daw::EngineController back{};
         back.initialize(48000, 512, /*openDevice=*/false);
         check(back.openProject(pkg).isOk(), "and reopens");
         check(std::fabs(back.loopStartSeconds() - 2.0) < 1e-6 &&
@@ -2017,7 +2017,7 @@ int main() {
 
     // ── A cycle is musical: it keeps its bars across a tempo change ──
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.initialize(48000, 512, /*openDevice=*/false);
         c.setTempo(120.0);
         // Bars 1 to 3 at 120 BPM in 4/4: two bars of two seconds each.
@@ -2030,7 +2030,7 @@ int main() {
 
     // ── Automation clips: the model and the curve ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = a.addTrack(daw::TrackKind::Audio, "Lead");
         a.importAudio(tonePath, track, 0.0);   // gives the project a length
@@ -2120,7 +2120,7 @@ int main() {
     // Master automation has a timeline owner, but drives the existing master
     // fader and insert chain rather than adding a second audio bus.
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, false);
         a.setTempo(120);
         const auto source = a.addTrack(daw::TrackKind::Audio, "Master source");
@@ -2192,7 +2192,7 @@ int main() {
               "master pan automation reaches the stereo master fader");
         const auto projectPath = (dir / "master-automation.vlproj").string();
         check(a.saveProject(projectPath).isOk(), "master automation project saves");
-        daw::EngineController loaded{daw::EngineController::TestRuntime{}};
+        daw::EngineController loaded{};
         loaded.initialize(48000, 512, false);
         check(loaded.openProject(projectPath).isOk() &&
               loaded.ensureAutomation(pan) == std::pair{panLane, panClip} &&
@@ -2239,7 +2239,7 @@ int main() {
 
     // ── Automation trim is recomputed from the gesture origin ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         a.setTempo(120.0);
         const std::string track =
@@ -2346,7 +2346,7 @@ int main() {
 
     // ── Splitting a curve leaves both halves sounding the same ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         a.setTempo(120.0);                       // one beat = 0.5 s
         const std::string track = a.addTrack(daw::TrackKind::Audio, "Lead");
@@ -2404,7 +2404,7 @@ int main() {
 
     // ── A curve survives save, reload and a tempo change ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         a.setTempo(120.0);
         const std::string track = a.addTrack(daw::TrackKind::Audio, "Lead");
@@ -2423,7 +2423,7 @@ int main() {
         const std::string pkg = (dir / "automation.vlt").string();
         check(a.saveProject(pkg).isOk(), "a project with a curve saves");
 
-        daw::EngineController back{daw::EngineController::TestRuntime{}};
+        daw::EngineController back{};
         back.initialize(48000, 512, /*openDevice=*/false);
         check(back.openProject(pkg).isOk(), "and reopens");
         const daw::ClipModel* reloaded = findClip(back, lane, clip);
@@ -2456,7 +2456,7 @@ int main() {
 
     // ── Re-pointing a copy leaves its shape alone ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         const std::string one = a.addTrack(daw::TrackKind::Audio, "One");
         const std::string two = a.addTrack(daw::TrackKind::Audio, "Two");
@@ -2495,7 +2495,7 @@ int main() {
 
     // ── A volume curve is heard ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         a.setTempo(120.0);
         const std::string track = a.addTrack(daw::TrackKind::Audio, "Lead");
@@ -2544,7 +2544,7 @@ int main() {
 
     // ── A pan curve is heard and is available to the channel-strip UI ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         a.setTempo(120.0);
         const std::string track = a.addTrack(daw::TrackKind::Audio, "Pan");
@@ -2610,7 +2610,7 @@ int main() {
     // A summing folder is a bus with tracks in it, and filing a track inside
     // one is what routes it — nobody wires up a group by hand.
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string plain = f.addFolder(/*summing=*/false);
         const std::string group = f.addFolder(/*summing=*/true);
@@ -2655,7 +2655,7 @@ int main() {
 
     // ── Summing can be turned on and off after the fact ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string folder = f.addFolder(/*summing=*/false);
         const std::string child = f.addTrack(daw::TrackKind::Audio, "Child");
@@ -2677,7 +2677,7 @@ int main() {
 
     // ── A summing folder is heard: its fader is the group's fader ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string group = f.addFolder(/*summing=*/true, "Drums");
         const std::string kick = f.addTrack(daw::TrackKind::Audio, "Kick");
@@ -2703,7 +2703,7 @@ int main() {
 
     // ── Soloing a folder solos what is in it ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string folder = f.addFolder(/*summing=*/false, "Drawer");
         const std::string inside = f.addTrack(daw::TrackKind::Audio, "Inside");
@@ -2764,7 +2764,7 @@ int main() {
 
     // ── A folder's colour is the group's colour ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string folder = f.addFolder(/*summing=*/false);
         const std::string inner = f.addFolder(/*summing=*/true);
@@ -2791,7 +2791,7 @@ int main() {
 
     // ── Folders survive a save and a reload ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string plain = f.addFolder(/*summing=*/false, "Drawer");
         const std::string group = f.addFolder(/*summing=*/true, "Group");
@@ -2800,7 +2800,7 @@ int main() {
         const std::string pkg = (dir / "folders.vlt").string();
         check(f.saveProject(pkg).isOk(), "project with folders saves");
 
-        daw::EngineController g{daw::EngineController::TestRuntime{}};
+        daw::EngineController g{};
         g.initialize(48000, 512, /*openDevice=*/false);
         check(g.openProject(pkg).isOk(), "and reloads");
         const auto* reloadedPlain = g.project().findTrack(plain);
@@ -2818,7 +2818,7 @@ int main() {
 
     // ── Packing a selection into a folder ──
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string a = f.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = f.addTrack(daw::TrackKind::Audio, "B");
@@ -2847,7 +2847,7 @@ int main() {
     // pack must move each selected folder as one subtree instead of extracting
     // its selected descendants and flattening the hierarchy into the new group.
     {
-        daw::EngineController f{daw::EngineController::TestRuntime{}};
+        daw::EngineController f{};
         f.initialize(48000, 512, /*openDevice=*/false);
         const std::string outer = f.addFolder(/*summing=*/true, "Outer");
         const std::string inner = f.addFolder(/*summing=*/true, "Inner");
@@ -2937,7 +2937,7 @@ int main() {
 
     // ── Move a clip to another track ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string a = r.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = r.addTrack(daw::TrackKind::Audio, "B");
@@ -2959,7 +2959,7 @@ int main() {
 
     // ── Fades survive save / reload ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Persist");
         const std::string clip = r.importAudio(tonePath, track, 0.0);
@@ -2972,7 +2972,7 @@ int main() {
         const std::string pkg = (dir / "fades.vlt").string();
         check(r.saveProject(pkg).isOk(), "save project with fades");
 
-        daw::EngineController r2{daw::EngineController::TestRuntime{}};
+        daw::EngineController r2{};
         r2.initialize(48000, 512, /*openDevice=*/false);
         check(r2.openProject(pkg).isOk(), "reopen project with fades");
         const daw::TrackModel& tr = r2.project().tracks.front();
@@ -2988,7 +2988,7 @@ int main() {
 
     // ── Per-instance Sample / Clip Editor state (project format v4) ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string track = r.addTrack(daw::TrackKind::Audio, "Clip Edit");
         const std::string original = r.importAudio(tonePath, track, 0.0);
@@ -3040,7 +3040,7 @@ int main() {
 
         const std::string pkg = (dir / "clip-editor-v4.vlt").string();
         check(r.saveProject(pkg).isOk(), "save project with per-clip editor state");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+        daw::EngineController reopened{};
         reopened.initialize(48000, 512, false);
         check(reopened.openProject(pkg).isOk(),
               "reopen project with per-clip editor state");
@@ -3081,7 +3081,7 @@ int main() {
         // GUI polling is cache-only, and an in-flight effect must never make
         // the arrangement alternate between processed and source envelopes.
         {
-            daw::EngineController async{daw::EngineController::TestRuntime{}};
+            daw::EngineController async{};
             async.initialize(48000, 512, false);
             const auto at = async.addTrack(daw::TrackKind::Audio, "Async sample");
             const auto ac = async.importAudio(tonePath, at, 0.0);
@@ -3161,7 +3161,7 @@ int main() {
         // control is pulled toward the grid: near a line it lands exactly on
         // it, and between lines it stays where the pointer put it.
         {
-            daw::EngineController g{daw::EngineController::TestRuntime{}};
+            daw::EngineController g{};
             g.initialize(48000, 512, /*openDevice=*/false);
             const std::string gt = g.addTrack(daw::TrackKind::Audio, "Grid");
             const std::string gc = g.importAudio(tonePath, gt, 0.0);
@@ -3188,7 +3188,7 @@ int main() {
         // The re-render is deferred to the next control-thread turn, so an
         // export has to force it — otherwise the file would be one edit behind.
         {
-            daw::EngineController d{daw::EngineController::TestRuntime{}};
+            daw::EngineController d{};
             d.initialize(48000, 512, /*openDevice=*/false);
             const std::string dt = d.addTrack(daw::TrackKind::Audio, "Deferred");
             const std::string dc = d.importAudio(tonePath, dt, 0.0);
@@ -3205,7 +3205,7 @@ int main() {
 
     // ── Duplicate track ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string src = r.addTrack(daw::TrackKind::Audio, "Src");
         r.importAudio(tonePath, src, 0.5);
@@ -3243,7 +3243,7 @@ int main() {
 
     // ── Duplicate a complete folder hierarchy ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string folder = r.addFolder(true, "Band");
         const std::string audio = r.addTrack(daw::TrackKind::Audio, "Guitar");
@@ -3320,7 +3320,7 @@ int main() {
 
     // ── Track height ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string t = r.addTrack(daw::TrackKind::Audio, "Tall");
         r.setTrackHeight(t, 200.0);
@@ -3333,7 +3333,7 @@ int main() {
 
     // ── Metronome renders clicks ──
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string t = r.addTrack(daw::TrackKind::Audio, "Click");
         // A clip only to give the timeline a length to render.
@@ -3394,7 +3394,7 @@ int main() {
     // refuses what will not decode, and — the one that costs memory if it is
     // wrong — an audition is never retained.
     {
-        daw::EngineController r{daw::EngineController::TestRuntime{}};
+        daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string t = r.addTrack(daw::TrackKind::Audio, "Audio");
         r.importAudio(tonePath, t, 0.0);
@@ -3432,7 +3432,7 @@ int main() {
     // continues from wherever the playhead stopped, Restart returns to the
     // position where the current run started.
     {
-        daw::EngineController t{daw::EngineController::TestRuntime{}};
+        daw::EngineController t{};
         t.initialize(48000, 512, /*openDevice=*/false);
         using Mode = daw::EngineController::PlaybackMode;
         check(t.playbackMode() == Mode::Resume, "playback defaults to resume");
@@ -3497,7 +3497,7 @@ int main() {
 
     // ── Piano-roll publication stays outside the live mouse-move path ──
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, /*openDevice=*/false);
         const std::string unrelatedTrackId =
             p.addTrack(daw::TrackKind::Midi, "Unrelated Publish Test");
@@ -3750,7 +3750,7 @@ int main() {
 
     // ── Dense Piano-roll property gestures stay O(touched notes) ──
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, /*openDevice=*/false);
         const std::string trackId =
             p.addTrack(daw::TrackKind::Midi, "Dense Note Edit");
@@ -3867,7 +3867,7 @@ int main() {
 
     // ── MIDI clip history republishes only the affected lane ──
     {
-        daw::EngineController h{daw::EngineController::TestRuntime{}};
+        daw::EngineController h{};
         h.initialize(48000, 512, /*openDevice=*/false);
         const std::string otherTrack =
             h.addTrack(daw::TrackKind::Midi, "Clip History Other");
@@ -3987,7 +3987,7 @@ int main() {
 
     // ── Controller-lane publication follows what realtime can consume ──
     {
-        daw::EngineController a{daw::EngineController::TestRuntime{}};
+        daw::EngineController a{};
         a.initialize(48000, 512, /*openDevice=*/false);
         const std::string trackId =
             a.addTrack(daw::TrackKind::Instrument, "Lane Publish Test");
@@ -4144,7 +4144,7 @@ int main() {
     // Audio drag publication has its own control cadence and flushes the
     // exact endpoint, including a round trip that produces no undo entry.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const auto track = p.addTrack(daw::TrackKind::Audio, "Audio gesture");
         const auto clip = p.importAudio(tonePath, track, 0.0);
@@ -4179,7 +4179,7 @@ int main() {
 
     // ── Arrangement position gestures coalesce realtime MIDI publication ──
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, /*openDevice=*/false);
         const std::string trackA =
             p.addTrack(daw::TrackKind::Midi, "Position A");
@@ -4291,7 +4291,7 @@ int main() {
 
     // ── Position history is a small placement delta, not a project snapshot ──
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, /*openDevice=*/false);
         const std::string first =
             p.addTrack(daw::TrackKind::Midi, "Dense Position A");
@@ -4455,7 +4455,7 @@ int main() {
 
     // Mixed clip kinds share one edge gesture and one history endpoint.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, false);
         const std::string audio =
             p.addTrack(daw::TrackKind::Audio, "Group Trim Audio");
@@ -4499,7 +4499,7 @@ int main() {
     // lazy origin set must include those children so one scalar delta restores
     // the complete musical object without snapshotting their MIDI payloads.
     {
-        daw::EngineController p{daw::EngineController::TestRuntime{}};
+        daw::EngineController p{};
         p.initialize(48000, 512, /*openDevice=*/false);
         const std::string pattern = p.addPattern("Position Pattern");
         const std::string child =
@@ -4572,7 +4572,7 @@ int main() {
     // MIDI clip is, which lanes accept it, the note edit ops and their clamps,
     // and which of them the undo stack records.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
 
         const std::string midiTrack = m.addTrack(daw::TrackKind::Midi, "Keys");
@@ -4745,7 +4745,7 @@ int main() {
 
     // ── Instrument slot (document-only placeholder) ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         const std::string midiTrack = m.addTrack(daw::TrackKind::Midi, "Keys");
         const std::string audioTrack = m.addTrack(daw::TrackKind::Audio, "Aud");
@@ -4781,7 +4781,7 @@ int main() {
 
     // ── MIDI serialization round-trip ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         const std::string trackId = m.addTrack(daw::TrackKind::Midi, "Keys");
         m.setTrackInstrument(trackId, "Sampler");
@@ -4822,7 +4822,7 @@ int main() {
 
     // ── Notebook belongs to one project ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setNotebookHtml("<p>Project A</p>");
         m.setNotebookCues({{2.0, "A cue"}});
@@ -4979,7 +4979,7 @@ int main() {
         check(daw::ProjectSerializer::save(proj, layeredPkg).isOk(),
               "a project with takes saves");
 
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         check(m.openProject(layeredPkg).isOk(), "a project with takes loads");
         const daw::ClipModel* loaded = findClip(m, "tr1", "cl1");
@@ -5119,7 +5119,7 @@ int main() {
         writeTone(first, 48000, 48000);
         writeLeftOnlyTone(second, 48000, 48000);
 
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.newProject();
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
         const std::string cl = m.importAudio(first, tr, 0.0);
@@ -5152,7 +5152,7 @@ int main() {
     // Folder recording resolves an existing lane before capture, without
     // touching clips or creating tracks. Direct leaf recording still overwrites.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         const auto folder = m.addTrack(daw::TrackKind::Folder, "Takes");
         m.setFolderSumming(folder, true);
@@ -5258,7 +5258,7 @@ int main() {
     // room before the punch point, and a take at bar 1 has none — so the count
     // is a countdown in beats and the take starts where the playhead already is.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "countin").string());
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5288,7 +5288,7 @@ int main() {
     // A count-in works at the very top of the song, which is where the old
     // rewind-based one silently did nothing at all.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "countin2").string());
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5312,7 +5312,7 @@ int main() {
     // The count-in opens the monitor before the take, not with it: a player
     // counted in has to hear themselves to play on the first beat.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "countin3").string());
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5341,7 +5341,7 @@ int main() {
     // Automatic monitoring can be switched off entirely, and then a recording
     // touches nothing: only a monitor the user opened themselves is heard.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "countin4").string());
         const std::string quiet = m.addTrack(daw::TrackKind::Audio, "Quiet");
@@ -5374,7 +5374,7 @@ int main() {
     // else is already monitoring the same input, so the performer never hears
     // the source twice. The worked example from the spec, verbatim.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "captures").string());
         const std::string vocal = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5469,7 +5469,7 @@ int main() {
     // must never turn into a one-track capture because one target was invalid.
     // The older local API deliberately keeps its permissive subset behaviour.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "record-exact").string());
         const std::string audio = m.addTrack(daw::TrackKind::Audio, "Audio");
@@ -5529,7 +5529,7 @@ int main() {
     // Capture finalization is the cloud seam: it closes a real WAV and returns
     // frozen landing metadata, but cannot touch clips or legacy undo history.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "record-finalize-only").string());
         const std::string track = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5610,7 +5610,7 @@ int main() {
     // The existing local Stop remains a one-step landing wrapper, and it uses
     // the mode captured at Start rather than a preference changed mid-take.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "record-local-wrapper").string());
         const std::string track = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5643,7 +5643,7 @@ int main() {
     // shared container. A settings edit while audio is in flight is only the
     // default for the next recording.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "record-frozen-crossfade").string());
         const std::string track = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -5668,7 +5668,7 @@ int main() {
     // Three inputs decide what a recording does: the global mode, the track's
     // override, and the held invert key. This is the order they apply in.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         const std::string a = m.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = m.addTrack(daw::TrackKind::Audio, "B");
@@ -5703,7 +5703,7 @@ int main() {
     // across its network waits, so its steps record normally and are folded
     // afterwards.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string t = m.addTrack(daw::TrackKind::Instrument, "Piano");
         const std::size_t mark = m.undoDepth();
@@ -5804,7 +5804,7 @@ int main() {
     // The public controller wrapper carries the same guarantee for real UI
     // commands, including a MIDI clip creation that has its own internal undo.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string track =
             m.addTrack(daw::TrackKind::Instrument, "Capacity");
@@ -5845,7 +5845,7 @@ int main() {
 
     // ── Continuous gestures record endpoints, not mouse-move samples ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string a = m.addTrack(daw::TrackKind::Audio, "A");
         const std::string b = m.addTrack(daw::TrackKind::Audio, "B");
@@ -5942,7 +5942,7 @@ int main() {
     // from under the whole project — while leaving audio the length it actually
     // is, since nothing is being time-stretched.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setTempo(120.0);                          // one beat = 0.5 s
 
@@ -5989,7 +5989,7 @@ int main() {
 
     // Stretched audio retains musical geometry and the exact source region.
     for (int mode = 1; mode <= 4; ++mode) {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.initialize(48000, 512, false);
         c.setTempo(120);
         const auto track = c.addTrack(daw::TrackKind::Audio, "Tempo follow");
@@ -6018,7 +6018,7 @@ int main() {
         c.setTempo(24); // 7.5x exceeds the manual Time knob's 4x limit.
         const auto package = (dir / ("tempo-stretch-" + std::to_string(mode) + ".vlt")).string();
         check(c.saveProject(package).isOk(), "save a tempo-following clip");
-        daw::EngineController reopened{daw::EngineController::TestRuntime{}};
+        daw::EngineController reopened{};
         reopened.initialize(48000, 512, false);
         check(reopened.openProject(package).isOk() &&
               std::abs(findClip(reopened, track, id)->sampleEdit.stretchTime - 7.5) < 1e-9 &&
@@ -6027,7 +6027,7 @@ int main() {
     }
 
     {
-        daw::EngineController c{daw::EngineController::TestRuntime{}};
+        daw::EngineController c{};
         c.initialize(48000, 512, false);
         c.setTempo(120);
         const auto track = c.addTrack(daw::TrackKind::Audio, "Stretch comp");
@@ -6060,7 +6060,7 @@ int main() {
     // the description it draws from is built by the same code that lands the
     // capture: the pass split, the punch target, the take colour and number.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "preview").string());
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -6085,7 +6085,7 @@ int main() {
     // is the *next take of that clip*, so it is drawn in that take's colour and
     // under its name rather than as a new clip in the track's colour.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "preview-layers").string());
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -6116,7 +6116,7 @@ int main() {
     // has actually made, each landing where that pass began — the same split
     // that lands the takes, so the arrangement draws one body per pass.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000, 512, /*openDevice=*/false);
         m.setRecordDirectory((dir / "preview-loop").string());
         const std::string tr = m.addTrack(daw::TrackKind::Audio, "Vocal");
@@ -6148,7 +6148,7 @@ int main() {
     // Track kinds have stable, distinct defaults, while automation lanes are
     // visual children and continue following their owner after recolouring.
     {
-        daw::EngineController colours{daw::EngineController::TestRuntime{}};
+        daw::EngineController colours{};
         colours.initialize(48000, 512, /*openDevice=*/false);
         const std::vector<daw::TrackKind> kinds = {
             daw::TrackKind::Audio,      daw::TrackKind::Instrument,
@@ -6205,7 +6205,7 @@ int main() {
 
     // Minimized lanes persist their own restore size, including through undo.
     {
-        daw::EngineController compact{daw::EngineController::TestRuntime{}};
+        daw::EngineController compact{};
         compact.initialize(48000, 512, false);
         const auto id = compact.addTrack(daw::TrackKind::Audio, "Compact lane");
         compact.setTrackHeight(id, 137);

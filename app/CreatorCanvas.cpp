@@ -4,6 +4,7 @@
 #include "Internal/MiniNodeRegistry.hpp"
 #include "Creator/CodeUtilities.hpp"
 #include "Theme.hpp"
+#include "ScrollMotion.hpp"
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDoubleSpinBox>
@@ -17,6 +18,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
 #include <QPainter>
 #include <QPainterPathStroker>
 #include <QScrollBar>
@@ -678,19 +680,55 @@ void CreatorCanvas::mouseReleaseEvent(QMouseEvent *event) {
   if (m_beforeMove != nodePositions())
     emit nodesMoved();
 }
+void CreatorCanvas::zoomAt(double factor, QPointF position,
+                           std::optional<QPointF> sceneAnchor) {
+  if (!std::isfinite(factor) || factor <= 0) return;
+  ScrollMotion::cancel(this);
+  const double old = transform().m11();
+  const double zoom = std::clamp(old * factor, .25, 2.5);
+  if (qFuzzyCompare(old, zoom)) return;
+  const auto anchor = sceneAnchor.value_or(viewportTransform().inverted().map(position));
+  scale(zoom / old, zoom / old);
+  const auto inverse = viewportTransform().inverted();
+  const QPointF center(viewport()->width() / 2.0, viewport()->height() / 2.0);
+  centerOn(inverse.map(center) + anchor - inverse.map(position));
+  emit zoomChanged(zoom);
+}
+
+bool CreatorCanvas::viewportEvent(QEvent *event) {
+  if (event->type() == QEvent::NativeGesture) {
+    auto *gesture = static_cast<QNativeGestureEvent *>(event);
+    switch (gesture->gestureType()) {
+    case Qt::BeginNativeGesture:
+      ScrollMotion::cancel(this);
+      m_pinchAnchor = viewportTransform().inverted().map(gesture->position());
+      break;
+    case Qt::ZoomNativeGesture:
+      // Native pinch reports fractional changes, separately from wheel input.
+      // Keep the original scene point for the whole gesture so integer
+      // scrollbar rounding cannot accumulate into drift over many samples.
+      zoomAt(1.0 + gesture->value(), gesture->position(), m_pinchAnchor);
+      break;
+    case Qt::EndNativeGesture:
+      m_pinchAnchor.reset();
+      break;
+    default:
+      return QGraphicsView::viewportEvent(event);
+    }
+    event->accept();
+    return true;
+  }
+  return QGraphicsView::viewportEvent(event);
+}
+
 void CreatorCanvas::wheelEvent(QWheelEvent *event) {
   if (!(event->modifiers() & Qt::ControlModifier)) {
     QGraphicsView::wheelEvent(event);
     return;
   }
-  const auto anchor = mapToScene(event->position().toPoint());
-  const double old = transform().m11(),
-               zoom = std::clamp(
-                   old * std::pow(1.0015, event->angleDelta().y()), .25, 2.5);
-  scale(zoom / old, zoom / old);
-  const auto after = mapToScene(event->position().toPoint());
-  centerOn(viewportState().center + anchor - after);
-  emit zoomChanged(zoom);
+  const double distance = event->pixelDelta().isNull()
+      ? event->angleDelta().y() : event->pixelDelta().y();
+  zoomAt(std::pow(1.0015, distance), event->position());
   event->accept();
 }
 void CreatorCanvas::keyPressEvent(QKeyEvent *event) {

@@ -40,6 +40,7 @@ engine::NodeId AudioRuntime::connectSlots(engine::AudioGraph& graph,
             graph.connect(slot.rightSelectorId, slot.rightNodeId);
             graph.connect(slot.nodeId, mergeId);
             graph.connect(slot.rightNodeId, mergeId);
+            graph.connect(previous, mergeId);
             previous = mergeId;
             continue;
         }
@@ -566,7 +567,7 @@ audio::Result AudioRuntime::commitGraph(bool reconfigurePlugins) {
     if (result) {
         publishedGraph = std::move(candidate);
         hasPublishedGraph = true;
-        refreshIsolatedPlugins();
+        refreshMasterSafetyMute();
     }
     if (result && reconfigurePlugins)
         for (auto& [id, channel] : channels) applyPluginAutomation(channel);

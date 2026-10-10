@@ -80,10 +80,7 @@ public:
     void setHostKeyHandler(std::function<bool(QKeyEvent*, bool)> handler) {
         m_hostKeyHandler = std::move(handler);
     }
-    void setAutomationShortcutEnabledProvider(std::function<bool()> provider) {
-        m_automationShortcutEnabled = std::move(provider);
-    }
-    void pollHostShortcuts();
+
 
     /// Let go of the plugin's view *now*, because the plugin itself is about to
     /// be destroyed — a Replace, a Remove, an undo, a project being closed.
@@ -100,7 +97,6 @@ public:
     void pollForTest();
     static bool checkIdleForTest(daw::EngineController& controller,
                                 const std::string& fixturePath);
-    static bool checkIsolationForTest(const std::string& fixturePath);
     QStringList parameterDockOrderForTest() const;
     QString parameterDockActiveForTest() const { return m_dockActive; }
     /// Exercise the same screen-bound clamp as a real native editor without
@@ -143,15 +139,12 @@ private:
     friend class PluginEditorNativeKeyboard;
     bool routeHostKey(QKeyEvent* event, bool textEntry);
     std::function<bool(QKeyEvent*, bool)> m_hostKeyHandler;
-    std::function<bool()> m_automationShortcutEnabled;
     std::unique_ptr<PluginEditorNativeKeyboard> m_nativeKeyboard;
     std::optional<daw::PluginEditorSnapshot> editorSnapshot() const;
     /// Build the fallback panel of sliders for a plugin with no GUI.
     void buildGenericEditor();
     void refreshGenericEditor();
     void pollEditorState();
-    void refreshRemoteStatus();
-    void buildRemoteStatusPanel();
     void syncPollTimer();
     void buildWrapper();
     void refreshWrapper();
@@ -212,10 +205,6 @@ private:
     QToolButton* m_rightChannel = nullptr;
     QComboBox* m_sidechain = nullptr;
     QWidget* m_generic = nullptr;        // fallback panel, when there is no GUI
-    QLabel* m_remoteStatus = nullptr;
-    QPushButton* m_remoteOpen = nullptr;
-    QPushButton* m_remoteRestart = nullptr;
-    bool m_reopenRemoteAfterRestart = false;
     QWidget* m_loading = nullptr;        // visible until the native attach runs
     /// The row the editor content lives in: the plugin's view (or the fallback
     /// panel) and, beside it, our own parameter dock.

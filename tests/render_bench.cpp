@@ -27,7 +27,7 @@ static int renderProject(int argc, char** argv) {
     const auto package = fs::is_regular_file(inputPath) ? inputPath.parent_path().string() : inputPath.string();
     auto loaded = daw::ProjectSerializer::load(project, package);
     require(bool(loaded), loaded.message());
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     require(bool(controller.initialize(project.sampleRate, 256, false)), "initialize project");
     controller.pluginManager().load();
     const auto opened = controller.openProject(package);
@@ -145,7 +145,7 @@ int main(int argc, char** argv) try {
     require(!descriptors.empty(), "fixture");
     std::vector<float> reference;
     for (unsigned block : {128u, 512u, 1024u}) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         require(bool(controller.initialize(48000, block, false)), "initialize");
         for (int i = 0; i < tracks; ++i) {
             const auto track = controller.addTrack(daw::TrackKind::Audio, "Track");

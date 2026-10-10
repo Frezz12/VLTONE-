@@ -70,7 +70,6 @@ struct CompiledGraph {
         std::uint32_t successorCount = 0;
         std::uint32_t dependencies = 0;  // in-degree
         std::uint32_t inlineSuccessor = kInvalidNode;
-        std::uint32_t deferredIndex = kInvalidNode;
         bool inlineTask = false;
         FrameCount inputLatency = 0;     // arrival time of the aligned inputs
         FrameCount latency = 0;          // cumulative, from the sources
@@ -85,7 +84,6 @@ struct CompiledGraph {
     std::vector<std::uint32_t> order;      // topological, for serial/offline
     std::vector<std::uint32_t> roots;      // nodes with no dependencies
     std::vector<std::uint32_t> pendingTemplate;
-    std::vector<std::uint32_t> deferredNodes;
     /// Largest dependency level: a conservative, compile-time lower bound on
     /// how many nodes can be ready together. Used to avoid treating every
     /// graph below a fixed node count as serial work.
@@ -116,8 +114,6 @@ struct CompiledGraph {
     // `mutable` because the snapshot is published const — these belong to
     // whichever thread is currently rendering it, and only one may be.
     mutable std::vector<PendingCounter> pending;
-    mutable std::vector<PendingCounter> deferredPending;
-    mutable std::vector<std::uint64_t> deferredStarted;
     mutable std::vector<AudioBlock> inputScratch;  // resolved per-node inputs
     /// One MIDI buffer per node that can produce MIDI, not per graph node.
     /// Audio-only built-ins opt out explicitly; capable nodes retain storage even

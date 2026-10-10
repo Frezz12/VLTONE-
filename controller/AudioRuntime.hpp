@@ -94,12 +94,10 @@ public:
         std::span<const AudioPluginStateEdit> restores = {},
         std::span<const AudioPluginCheckpoint> checkpoints = {},
         AudioSessionPublication* publication = nullptr,
-        const std::function<void(const AudioSessionPublication&)>& preparePublication = {},
-        const std::function<void()>& preparationProgress = {});
+        const std::function<void()>& afterCommitBeforeRetire = {});
     std::vector<AudioPluginAddress> retiringPlugins(std::span<const AudioPluginChainSpec> wanted) const;
     bool requiresPluginPreparation(const AudioPluginAddress& address, const AudioPluginSpec& spec) const;
-    bool reconcilePluginChain(const AudioPluginChainSpec& chain,
-                              const plugins::HostingConfiguration& hosting);
+    bool reconcilePluginChain(const AudioPluginChainSpec& chain);
     bool applyContent(const std::string& channelId, AudioContentSpec content);
     bool sendLiveMidi(const std::string& channelId, const engine::MidiEvent& event);
     /// Internal runtime ownership: the process protocol exposes numeric IDs.
@@ -157,11 +155,11 @@ public:
     bool hasPlugin(const AudioPluginAddress& address, std::string_view uid = {}) const;
     std::vector<AudioPluginAddress> pluginAddresses() const;
     AudioPluginStateSnapshot pluginStateSnapshot(const AudioPluginAddress& address,
-        bool includeState = true, const std::optional<std::string>& packagedSample = std::nullopt,
-        AudioPluginSnapshotPurpose purpose = AudioPluginSnapshotPurpose::Exact);
+        bool includeState = true, const std::optional<std::string>& packagedSample = std::nullopt);
     std::vector<AudioPluginStateSnapshot> pluginStateSnapshots(std::span<const AudioPluginStateRequest> requests);
     audio::Result restorePluginState(const AudioPluginAddress& address,
-        const AudioPluginStateRestore& state, std::vector<InsertParameter>& parameters);
+        const AudioPluginStateRestore& state, std::vector<InsertParameter>& parameters,
+        const std::function<void()>& beforeRetire = {});
     std::uint64_t pluginInstanceId(const AudioPluginAddress& address) const;
     std::vector<plugins::ParameterInfo> pluginParameters(const AudioPluginAddress& address) const;
     std::optional<plugins::ParameterInfo> pluginParameterInfo(const AudioPluginAddress& address,
@@ -173,6 +171,8 @@ public:
     bool setPluginSlide(const AudioPluginAddress& address, int mode, double range, double reserve);
     bool setPluginAutomationOverride(const AudioPluginAddress& address, const std::string& parameterId);
     double pluginParameter(const AudioPluginAddress& address, const std::string& parameterId) const;
+    /// Control-thread state capture includes host edits waiting for the next block.
+    double pluginParameterIncludingPending(const AudioPluginAddress& address, const std::string& parameterId);
     bool setPluginParameter(const AudioPluginAddress& address, const std::string& parameterId, double value);
     void readPluginParameters(const AudioPluginAddress& address, std::span<PluginParameterReadout> values) const;
     std::string pluginParameterText(const AudioPluginAddress& address, const std::string& parameterId,
@@ -199,9 +199,7 @@ public:
     std::optional<PluginEditorSize> pluginEditorSize(const AudioPluginAddress& address) const;
     std::optional<PluginEditorSize> resizePluginEditor(const AudioPluginAddress& address, PluginEditorSize requested);
     bool pumpPluginEditor(const AudioPluginAddress& address);
-    std::uint32_t pollPluginEditorShortcuts(const AudioPluginAddress& address, bool enabled);
-    audio::Result capturePluginCheckpoints(std::vector<AudioPluginCheckpoint>& out,
-        AudioPluginCheckpointPurpose purpose = AudioPluginCheckpointPurpose::Exact);
+    audio::Result capturePluginCheckpoints(std::vector<AudioPluginCheckpoint>& out);
     audio::Result restorePluginCheckpoints(std::span<const AudioPluginCheckpoint> checkpoints);
     std::vector<InsertParameter> pluginParameterValues(const AudioPluginAddress& address) const;
     bool loadInstrumentSample(const AudioPluginAddress& address, const std::string& path,
@@ -222,9 +220,15 @@ public:
     void interruptCapture(AudioCaptureId id);
     bool feedCaptureForTest(AudioCaptureId id, const audio::AudioBuffer& input, audio::BufferSize frames);
     AudioPluginRuntimeStatus pluginRuntimeStatus(const std::string& channelId, const std::string& slotId) const;
-    bool restartPlugin(const std::string& channelId, const std::string& slotId);
-    bool pumpIsolatedPlugins();
     AudioPluginServiceResult servicePlugins(bool externallyActive = false);
+    std::vector<AudioPluginRuntimeStatus> pluginFaults() const;
+    audio::Result recoverPlugin(const AudioPluginAddress& address,
+        const std::function<void()>& beforeRetire = {});
+    bool hasPluginFault(const AudioPluginAddress& address) const;
+    void sharePluginCheckpoint(const AudioPluginAddress& address,
+        std::shared_ptr<const std::vector<std::uint8_t>> bytes);
+    bool audioSafetyStopped() const noexcept { return safetyStopped; }
+    void stopForFailedRollback();
     bool advancePluginEdits();
     engine::PrepareInfo preparation() const;
     bool configureChannelColor(const AudioPluginAddress&, std::uint64_t seed,
@@ -237,7 +241,7 @@ public:
 
 private:
     friend class EngineController;
-    friend class AudioRuntimeEndpoint;
+    friend class AudioRuntimeOwner;
     class DeviceCallback;
     /// The node objects behind one channel. They outlive graph rebuilds, so a
     /// re-route keeps loaded clips, meter values and (later) plugin state
@@ -249,7 +253,6 @@ private:
         std::string slotId;
         std::string uid;
         AudioPluginSpec configuration;
-        plugins::HostingConfiguration hosting;
         std::shared_ptr<plugins::PluginNode> node;
         std::shared_ptr<plugins::PluginNode> rightNode;
         std::shared_ptr<engine::ChannelSelectNode> leftSelector;
@@ -314,18 +317,13 @@ private:
         TrackNodes ids;
     };
 
-    struct PluginRecovery {
-        std::string channelId, slotId;
-        std::shared_ptr<plugins::PluginNode> originalLeft, originalRight;
-        engine::PrepareInfo prepare;
-        using Nodes = std::pair<std::shared_ptr<plugins::PluginNode>, std::shared_ptr<plugins::PluginNode>>;
-        std::future<Nodes> result;
-    };
     static void clearGraphIds(std::span<InsertSlot> slots);
     static std::unique_ptr<plugins::PluginInstance> createConfiguredPlugin(
-        const AudioPluginSpec& spec, const plugins::HostingConfiguration& hosting);
+        const AudioPluginSpec& spec);
     audio::Result replacePluginNodes(const std::string& channelId, InsertSlot& slot,
-        std::shared_ptr<plugins::PluginNode> left, std::shared_ptr<plugins::PluginNode> right);
+        std::shared_ptr<plugins::PluginNode> left, std::shared_ptr<plugins::PluginNode> right,
+        const std::function<void()>& beforeRetire = {});
+    void bindPluginSafety(const std::string& channelId, InsertSlot& slot);
     bool pluginAudioActivity() const;
     static bool pluginMatches(const InsertSlot& live, const AudioPluginSpec& wanted);
     static bool needsPluginReplacement(const InsertSlot* existing, const AudioPluginSpec& spec, bool right);
@@ -341,8 +339,7 @@ private:
         std::string_view slotId);
     static AudioPluginStateSnapshot snapshotPluginNode(plugins::PluginNode& node,
         const AudioPluginAddress& address, bool includeState,
-        const std::optional<std::string>& packagedSample = {},
-        AudioPluginSnapshotPurpose purpose = AudioPluginSnapshotPurpose::Exact);
+        const std::optional<std::string>& packagedSample = {});
     static void restoreCheckpointNode(plugins::PluginNode& node,
         const AudioPluginCheckpoint::Side& side, const AudioPluginStateEdit* projectState = nullptr);
     static bool matchesCheckpointProjectState(const AudioPluginCheckpoint::Side& side,
@@ -362,12 +359,10 @@ private:
     std::unique_ptr<DeviceCallback> callback;
     /// Keyed by track UUID, plus "master" for the master bus.
     std::unordered_map<std::string, TrackChannel> channels;
-    void refreshIsolatedPlugins();
     struct StagedPluginPreparation;
     std::shared_ptr<StagedPluginPreparation> stageSessionPlugins(const AudioSessionSpec& session,
         std::span<const AudioPluginStateEdit> restores, std::span<const AudioPluginCheckpoint> checkpoints,
-        AudioSessionPublication* publication = nullptr,
-        const std::function<void()>& preparationProgress = {});
+        AudioSessionPublication* publication = nullptr);
     bool stagedSessionPluginsCurrent(const std::shared_ptr<StagedPluginPreparation>& staged) const;
     StagedPluginPreparation* stagedPluginPreparation = nullptr;
     struct SessionTransaction;
@@ -377,12 +372,23 @@ private:
     class AuditionNode;
     void configureAudioWorkers(const rt::AudioWorkerConfig& config);
     void inheritAudioWorkers(AudioRuntime& secondary) const;
+    audio::Result takeDeviceFrom(AudioRuntime& previous);
     std::shared_ptr<AudioRuntime> auditionRuntime;
     bool auditionDriven = false;
     mutable std::shared_ptr<MiniModuleCompiler> miniCompiler;
     std::uint64_t pluginMainThreadGeneration = plugins::PluginMainThreadWork::generation();
     std::uint32_t pluginCompatibilitySweepTicks = 0;
     bool pendingPitchQualityChanges = false;
+    // The runtime checkpoint is also the source for the document recovery
+    // cache: a failed native object is never consulted by Save or recovery.
+    std::unordered_map<std::uint64_t, AudioPluginStateSnapshot> lastGoodPluginStates;
+    std::unordered_map<std::uint64_t, std::shared_ptr<const std::vector<std::uint8_t>>> sharedCheckpointBytes;
+    std::unordered_map<std::uint64_t, std::vector<InsertParameter>> checkpointParameterEdits;
+    std::atomic<bool> safetyStopped{false};
+    void retainPluginSnapshot(const AudioPluginStateSnapshot& snapshot);
+    void prunePluginSnapshots();
+    std::unordered_map<std::uint64_t, std::shared_ptr<plugins::PluginNode>> retiringEditorNodes;
+    void refreshMasterSafetyMute();
     std::uint64_t lastLiveMidiNs = 0, countInUntilNs = 0;
     audio::AudioRecorder* captureRecorder(AudioCaptureId id) const;
     struct RecordingCapture {
@@ -393,9 +399,6 @@ private:
     AudioCaptureId nextCaptureId = 0;
     engine::AudioGraph publishedGraph;
     bool hasPublishedGraph = false;
-    std::vector<PluginRecovery> pluginRecoveries;
-    std::vector<std::weak_ptr<plugins::PluginNode>> isolatedNodes;
-    std::unordered_set<const plugins::PluginNode*> reportedPluginFailures;
     double sampleRate = 48000.0;
     uint32_t bufferSize = 512;
     bool deviceOpen = false;

@@ -9,6 +9,8 @@ namespace daw {
 void AudioRuntime::transportCommand(const AudioTransportCommand& command) {
     auto& transport = engine.transport();
     using Action = AudioTransportCommand::Action;
+    if (safetyStopped.load(std::memory_order_acquire) &&
+        (command.action == Action::Play || command.action == Action::StartPlayback || command.action == Action::Record)) return;
     switch (command.action) {
     case Action::Play: transport.play(); break;
     case Action::StartPlayback:

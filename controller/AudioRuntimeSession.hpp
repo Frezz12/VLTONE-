@@ -4,8 +4,7 @@
 #include <utility>
 
 namespace daw {
-/// The endpoint owns the snapshot. A document operation keeps only its numeric
-/// lease; the same scope works with either a local runtime or an IPC endpoint.
+/// The runtime owns the snapshot; a document operation holds its numeric lease.
 template<class Runtime> class ScopedAudioTransaction {
 public:
     explicit ScopedAudioTransaction(Runtime& runtime, bool enabled = true)

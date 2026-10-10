@@ -22,6 +22,7 @@ inline constexpr int kCompactLaneHeight = 24;
 inline constexpr int kMaxLaneHeight = 320;
 inline constexpr int kRulerHeight = 34;
 inline constexpr int kRulerRowHeight = 20;
+inline constexpr int kArrangementRowHeight = 28;
 /// Width of the slim timeline rails and the view controls above them.
 inline constexpr int kTimelineScrollExtent = 18;
 /// The cycle strip: the band at the top of a ruler where the loop region is

@@ -70,6 +70,8 @@ int main(int argc, char** argv) {
     QStringList presetIds;
     for (const Theme& theme : themes.presets()) presetIds.push_back(theme.id);
     check(presetIds == QStringList({QStringLiteral("dark"),
+                                    QStringLiteral("monochrome"),
+                                    QStringLiteral("dark-blue"),
                                     QStringLiteral("studio-gray"),
                                     QStringLiteral("light"),
                                     QStringLiteral("solarized-light"),
@@ -88,7 +90,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 469; ++i) writer.write(channels, 1024);
     writer.close();
 
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     check(bool(controller.initialize(48000, 64, false)), "controller prepares");
     {
         daw::EngineController::BounceRequest selection;

@@ -25,6 +25,7 @@
 
 class QLabel;
 namespace ui { class CreatorWindow; }
+namespace ui { class NotificationCenter; }
 class QDialog;
 class QMenu;
 class QProgressBar;
@@ -292,6 +293,7 @@ public:
     /// teardown path for a note that outlives the window is exercised too.
     bool checkTypingKeyboard();
     bool checkRecordingContextForTest();
+    bool checkRecordingStopForTest();
     bool checkFolderRecordingForTest();
     /// Headless check for hardware-style MIDI parsing, source overlap and the
     /// Piano Roll's live-key state; no physical device is required.
@@ -348,6 +350,7 @@ public:
                       const QString& midiFile);
     bool checkAudioAnalysisDialogForTest();
     bool checkStartupTemplateForTest();
+    bool checkProjectPreviewForTest();
 
     /// Headless check only: run a whole assistant turn against a scripted
     /// stand-in for a provider — no key, no network — and report whether the
@@ -419,7 +422,7 @@ public:
     bool checkProjectScrollForTest(const QString& path);
     bool checkWorkspaceMotionForTest();
     bool checkPluginWindowPolicyForTest();
-    bool checkRemoteEditorForTest(const std::string& fixturePath);
+    bool checkEmbeddedEditorForTest(const std::string& fixturePath);
     bool checkPluginKeyboardForTest();
     bool checkPluginSidechainForTest();
     bool checkInspectorNormalizeForTest();
@@ -728,8 +731,6 @@ private:
     /// Close editor windows whose slot no longer exists in the document.
     void closeOrphanedPluginEditors();
     void showPluginEditorPanel(const QString& channelId, const QString& insertId);
-    void serviceRemotePluginEditors();
-    void closeRemotePluginEditor(const QString& key);
     /// The controller's warning that a slot's plugin is about to be destroyed.
     void retirePluginEditor(const QString& channelId, const QString& insertId);
     /// Show the piano roll for a MIDI clip, creating the window on first use.
@@ -739,6 +740,7 @@ private:
     void setWarpVisible(bool visible);
     /// Show the compact editor for a Pattern container.
     void openPattern(const QString& patternId);
+    void openPatternClip(const QString& patternId, const QString& clipId);
     /// Enter in the browser applies the audio file to the most recently
     /// selected Pattern layer or MIDI channel.
     void loadBrowserSample(const QString& path);
@@ -872,7 +874,10 @@ private:
     bool maybeSaveChanges();
     /// Reset to the ready-to-record shell state used by a clean launch and
     /// File > New Project: one selected audio track with the mixer visible.
-    void initializeBlankProject();
+    bool initializeBlankProject();
+    void serviceAudioHealth();
+    void showAudioFailure(const daw::AudioFailureNotice& notice, bool reveal = false);
+    void retryAudioFailure(const daw::AudioFailureNotice& notice);
     QString chooseProjectTemplate();
     bool createProjectFromTemplatePath(const QString& packageDir);
     bool loadProjectTemplatePath(const QString& packageDir, bool startup);
@@ -1049,15 +1054,6 @@ private:
     /// Open editors, keyed by "<channelId>/<insertId>". Not a single instance:
     /// several plugins are routinely open side by side.
     QHash<QString, PluginEditorWindow*> m_pluginEditors;
-    struct RemotePluginEditor {
-        QString channelId;
-        QString insertId;
-        daw::PluginIdentity identity;
-        bool seenOpen = false;
-        bool shortcutsEnabled = false;
-    };
-    QHash<QString, RemotePluginEditor> m_remotePluginEditors;
-    QString m_liveRemoteInputEditor;
     QPointer<PluginEditorWindow> m_liveInputEditor;
     QHash<QString, SampleEditorWindow*> m_sampleEditors;
     QHash<QString, class AutomationEditorWindow*> m_automationEditors;
@@ -1100,6 +1096,10 @@ private:
     /// down before the engine it snapshots.
     daw::recovery::RecoveryJournal m_journal;
     QTimer* m_journalTimer = nullptr;
+    QTimer* m_audioHealthTimer = nullptr;
+    ui::NotificationCenter* m_audioNotifications = nullptr;
+    QElapsedTimer m_audioDeviceHealthClock;
+    std::uint64_t m_audioNotificationProject = 0;
     /// The write end of the watchdog's parent-death pipe. Held open for the
     /// life of the process and deliberately never written to: its closing —
     /// which happens however this process dies — is the signal.

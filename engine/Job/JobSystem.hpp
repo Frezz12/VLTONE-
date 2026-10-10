@@ -92,11 +92,8 @@ private:
 /// processor installs this; keeping it a plain function pointer + context keeps
 /// the realtime path free of std::function's indirection and allocation.
 struct JobSink {
-    // False transfers completion to poll; the job still owes exactly one
-    // completion, and may not release its dependents until its result arrives.
-    bool (*execute)(void* context, std::uint32_t item, unsigned workerIndex) = nullptr;
+    void (*execute)(void* context, std::uint32_t item, unsigned workerIndex) = nullptr;
     void* context = nullptr;
-    std::uint32_t (*poll)(void* context) = nullptr; // worker 0 only; completed jobs
 };
 
 /// Fixed thread pool that runs one dependency-driven pass at a time.

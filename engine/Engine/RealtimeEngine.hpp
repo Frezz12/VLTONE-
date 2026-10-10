@@ -73,6 +73,10 @@ public:
 
     explicit RealtimeEngine(unsigned threadCount = 0);
     ~RealtimeEngine();
+    // Host-owned latch; written by failed master processors, read after the
+    // complete graph so downstream tails cannot bypass the safety mute.
+    std::atomic<bool>& outputSafetyMute() noexcept { return *m_outputSafetyMute; }
+    std::shared_ptr<std::atomic<bool>> outputSafetyLatch() const { return m_outputSafetyMute; }
 
     /// Control thread. Sizes buffers and re-prepares every node, so it parks
     /// the renderer for the duration. Offline mode is for an isolated engine;
@@ -250,6 +254,7 @@ private:
     std::uint64_t m_outputGraphGeneration = 0;
     bool m_outputValid = false, m_outputPlaying = false, m_outputGated = false;
     std::atomic<BlockResult> m_lastBlockResult{BlockResult::Complete};
+    std::shared_ptr<std::atomic<bool>> m_outputSafetyMute = std::make_shared<std::atomic<bool>>(false);
 
     // RenderGate handshake. Both sides are seq_cst on purpose: the control
     // thread stores `gateRequested` then loads `rendering`, the audio thread

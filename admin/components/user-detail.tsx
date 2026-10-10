@@ -8,6 +8,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AdminShell } from "./admin-shell";
 import { TelemetryHistory } from "./telemetry-history";
 import { CollaborationAccessSwitch } from "./collaboration-access-switch";
+import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 
 type Detail = { user: User; devices: Device[]; quota: Quota; subscription: { plan: { display_name: string } }; counts: { launches: number; crashes: number; bugs: number } };
@@ -15,6 +16,7 @@ type LedgerEntry = { id: string; kind: string; delta: number; balance_after: num
 
 export function UserDetail({ id }: { id: string }) {
   const { session } = useAdmin();
+  const canWrite = canAdmin(session?.admin, "users.write");
   const router = useRouter();
   const [detail, setDetail] = useState<Detail>();
   const [diagnosticsRevision, setDiagnosticsRevision] = useState(0);
@@ -102,11 +104,12 @@ export function UserDetail({ id }: { id: string }) {
     {error && <div className="vlt-error" style={{ marginBottom: 16 }}>{error}</div>}
     <div className="detail-grid"><div className="vlt-stack">
       <section className="vlt-card vlt-card-pad vlt-stack">
-        <div className="vlt-row vlt-between"><h2 className="vlt-section-title">Аккаунт</h2><button className={`vlt-button ${detail.user.status === "active" ? "vlt-button-danger" : ""}`} onClick={() => void action(detail.user.status === "active" ? "/suspend" : "/activate")}><Ban size={15} />{detail.user.status === "active" ? "Приостановить" : "Активировать"}</button></div>
+        <div className="vlt-row vlt-between"><h2 className="vlt-section-title">Аккаунт</h2><button disabled={!canWrite} className={`vlt-button ${detail.user.status === "active" ? "vlt-button-danger" : ""}`} onClick={() => void action(detail.user.status === "active" ? "/suspend" : "/activate")}><Ban size={15} />{detail.user.status === "active" ? "Приостановить" : "Активировать"}</button></div>
         <dl className="definition-list"><dt>ID</dt><dd className="vlt-code">{detail.user.id}</dd><dt>Статус</dt><dd>{detail.user.status}</dd><dt>Согласие</dt><dd>{detail.user.consent_version}</dd><dt>Запусков</dt><dd>{detail.counts.launches}</dd><dt>Крашей</dt><dd>{detail.counts.crashes}</dd><dt>Багов</dt><dd>{detail.counts.bugs}</dd></dl>
         <div className="collaboration-access-setting">
           <div><h3 className="vlt-section-title">Онлайн-доступ</h3><p className="vlt-muted">Выключение отключит активные онлайн-сессии пользователя. Вход в аккаунт и работа с локальными проектами останутся доступны.</p></div>
           <CollaborationAccessSwitch
+            disabled={!canWrite}
             enabled={detail.user.collaboration_enabled}
             pending={accessPending}
             label={`Онлайн-доступ для ${detail.user.nickname}`}
@@ -116,11 +119,11 @@ export function UserDetail({ id }: { id: string }) {
           />
         </div>
       </section>
-      <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">Устройства</h2><button className="vlt-button vlt-button-secondary" onClick={() => void action("/sessions/revoke")}><Unplug size={15} />Отозвать все сессии</button></div>{detail.devices.map((device) => <div className="device-row" key={device.id}><div><strong>{device.display_name}</strong><div className="vlt-muted">{device.platform} · {device.os_version} · {device.app_version}</div></div>{!device.revoked_at && <button className="vlt-button vlt-button-danger" onClick={() => void action(`/devices/${device.id}/revoke`)}>Отозвать</button>}</div>)}</section>
-      <section className="vlt-card vlt-card-pad vlt-stack"><div className="telemetry-toolbar"><h2 className="vlt-section-title">История состояния программы</h2><button className="vlt-button vlt-button-danger" onClick={() => void deleteDiagnostics()}><DatabaseZap size={15} />Удалить диагностику</button></div><TelemetryHistory key={`${id}-${diagnosticsRevision}`} userID={id} /></section>
+      <section className="vlt-card vlt-card-pad vlt-stack"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">Устройства</h2><button disabled={!canWrite} className="vlt-button vlt-button-secondary" onClick={() => void action("/sessions/revoke")}><Unplug size={15} />Отозвать все сессии</button></div>{detail.devices.map((device) => <div className="device-row" key={device.id}><div><strong>{device.display_name}</strong><div className="vlt-muted">{device.platform} · {device.os_version} · {device.app_version}</div></div>{!device.revoked_at && <button disabled={!canWrite} className="vlt-button vlt-button-danger" onClick={() => void action(`/devices/${device.id}/revoke`)}>Отозвать</button>}</div>)}</section>
+      <section className="vlt-card vlt-card-pad vlt-stack"><div className="telemetry-toolbar"><h2 className="vlt-section-title">История состояния программы</h2><button disabled={!canWrite} className="vlt-button vlt-button-danger" onClick={() => void deleteDiagnostics()}><DatabaseZap size={15} />Удалить диагностику</button></div><TelemetryHistory key={`${id}-${diagnosticsRevision}`} userID={id} /></section>
     </div><aside className="vlt-stack">
-      <section className="vlt-card vlt-card-pad vlt-stack"><h2 className="vlt-section-title">AI-квота UTC</h2><div className="vlt-stat-value">{new Intl.NumberFormat("ru").format(detail.quota.remaining_tokens)}</div><div className="vlt-muted">из {new Intl.NumberFormat("ru").format(total)} осталось</div><div className="vlt-progress"><span style={{ width: `${total > 0 ? Math.min(100, detail.quota.used_tokens / total * 100) : 0}%` }} /></div><form className="vlt-row" onSubmit={addTokens}><input className="vlt-input" name="amount" type="number" min="1" placeholder="Добавить токены" required /><button className="vlt-button" aria-label="Добавить токены"><KeyRound size={15} /></button></form><form className="vlt-stack" onSubmit={reset}><input className="vlt-input" name="password" type="password" placeholder="Пароль администратора" required /><button className="vlt-button vlt-button-secondary"><RotateCcw size={15} />Сбросить расход</button></form><div><h3 className="vlt-section-title">Последние операции</h3>{ledger.map((entry) => <div className="ledger-row" key={entry.id}><span>{entry.kind}</span><span className="vlt-code">{entry.delta > 0 ? "+" : ""}{new Intl.NumberFormat("ru").format(entry.delta)}</span></div>)}</div></section>
-      <section className="vlt-card vlt-card-pad vlt-stack danger-zone"><h2 className="vlt-section-title">Полное удаление</h2><p className="vlt-muted">Аккаунт, сессии, квоты, диагностика и файлы будут удалены. В аудите останется обезличенная запись.</p><form className="vlt-stack" onSubmit={remove}><input className="vlt-input" name="confirmation" placeholder={`Введите ${detail.user.nickname}`} required /><input className="vlt-input" name="password" type="password" placeholder="Пароль администратора" required /><button className="vlt-button vlt-button-danger"><Trash2 size={15} />Удалить навсегда</button></form></section>
+      <section className="vlt-card vlt-card-pad vlt-stack"><h2 className="vlt-section-title">AI-квота UTC</h2><div className="vlt-stat-value">{new Intl.NumberFormat("ru").format(detail.quota.remaining_tokens)}</div><div className="vlt-muted">из {new Intl.NumberFormat("ru").format(total)} осталось</div><div className="vlt-progress"><span style={{ width: `${total > 0 ? Math.min(100, detail.quota.used_tokens / total * 100) : 0}%` }} /></div><form className="vlt-row" onSubmit={addTokens}><input disabled={!canWrite} className="vlt-input" name="amount" type="number" min="1" placeholder="Добавить токены" required /><button disabled={!canWrite} className="vlt-button" aria-label="Добавить токены"><KeyRound size={15} /></button></form><form className="vlt-stack" onSubmit={reset}><input disabled={!canWrite} className="vlt-input" name="password" type="password" placeholder="Пароль администратора" required /><button disabled={!canWrite} className="vlt-button vlt-button-secondary"><RotateCcw size={15} />Сбросить расход</button></form><div><h3 className="vlt-section-title">Последние операции</h3>{ledger.map((entry) => <div className="ledger-row" key={entry.id}><span>{entry.kind}</span><span className="vlt-code">{entry.delta > 0 ? "+" : ""}{new Intl.NumberFormat("ru").format(entry.delta)}</span></div>)}</div></section>
+      <section className="vlt-card vlt-card-pad vlt-stack danger-zone"><h2 className="vlt-section-title">Полное удаление</h2><p className="vlt-muted">Аккаунт, сессии, квоты, диагностика и файлы будут удалены. В аудите останется обезличенная запись.</p><form className="vlt-stack" onSubmit={remove}><input disabled={!canWrite} className="vlt-input" name="confirmation" placeholder={`Введите ${detail.user.nickname}`} required /><input disabled={!canWrite} className="vlt-input" name="password" type="password" placeholder="Пароль администратора" required /><button disabled={!canWrite} className="vlt-button vlt-button-danger"><Trash2 size={15} />Удалить навсегда</button></form></section>
     </aside></div>
   </AdminShell>;
 }

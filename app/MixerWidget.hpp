@@ -11,6 +11,8 @@
 #include <vector>
 
 namespace daw { class EngineController; }
+class RackWidget;
+class QStackedWidget;
 class QHBoxLayout;
 class QLabel;
 class QScrollArea;
@@ -37,6 +39,10 @@ public:
     double faderGainForTest(const QString& trackId) const;
     void setSelectedTrack(const QString& trackId);
     int channelWidth() const { return m_channelWidth; }
+    bool rackMode() const { return m_rackMode; }
+    void setRackMode(bool enabled);
+    bool rackCommand(const QString& command);
+    RackWidget* rack() const { return m_rack; }
 
     /// Presence encode/decode, mirroring TimelineWidget's pair. A pointer is
     /// described by the strip it is over and how far down that strip it sits,
@@ -74,6 +80,7 @@ signals:
     void automateSendRequested(const QString& trackId, const QString& sendId);
     void automatePluginRequested(const QString& trackId, const QString& slotId, const QString& parameterId);
     void settingsRequested();
+    void rackModeChanged(bool enabled);
 
 private:
     void contextMenuEvent(QContextMenuEvent*) override;
@@ -101,6 +108,11 @@ private:
     QRect stripRectFor(const ChannelStrip* strip) const;
 
     daw::EngineController* m_controller = nullptr;
+    RackWidget* m_rack = nullptr;
+    QStackedWidget* m_views = nullptr;
+    QToolButton* m_viewToggle = nullptr;
+    QLabel* m_headerTitle = nullptr;
+    bool m_rackMode = false;
     QLabel* m_headerGlyph = nullptr;
     QLabel* m_headerCount = nullptr;
     QWidget* m_headerAccent = nullptr;

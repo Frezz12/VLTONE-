@@ -11,12 +11,8 @@ for (const [locale, chapter, title] of [
     await page.goto(`/manual#${chapter}`);
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeInViewport();
     await expect(page.locator(`#${chapter} .manual-section ol li`)).not.toHaveCount(0);
-    const images = page.locator(`#${chapter} img`);
-    for (const img of await images.all()) {
-      await img.scrollIntoViewIfNeeded();
-      await expect.poll(() => img.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(100);
-    }
-    await expect(page.locator(".manual-version")).toContainText("0.3.1");
+    await expect(page.locator(".manual-content img")).toHaveCount(0);
+    await expect(page.locator(".manual-version")).toContainText("2026");
   });
 }
 
@@ -51,19 +47,24 @@ test("manual navigation, search, deep links, and locale switch", async ({ page }
   await expect(search).toHaveValue("");
 });
 
-test("manual screenshot opens in a native dialog and closes with Escape", async ({ page }) => {
-  await page.context().addCookies([{ name: "vlt-locale", value: "en", url: "http://127.0.0.1:3100" }]);
-  await page.goto("/manual");
-  await expect(page.getByRole("tablist", { name: "Manual categories" })).toBeVisible();
-  await expect(page.getByAltText("VLTone startup window scanning plugins")).toBeVisible();
-  await expect(page.getByText("The startup window reports the current loading stage and plugin scan progress.", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /Enlarge: VLTone startup/ }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByAltText("VLTone startup window scanning plugins")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(dialog).not.toBeVisible();
-});
+for (const locale of ["ru", "en"]) {
+  test(`manual is text only and documents numeric editing in ${locale}`, async ({ page }) => {
+    await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
+    const images: string[] = [];
+    page.on("request", request => { if (request.url().includes("/manual/") && /\.png/.test(request.url())) images.push(request.url()); });
+    await page.goto("/manual#numeric-fields");
+    await expect(page.locator("#numeric-fields")).toBeInViewport();
+    await expect(page.locator("#numeric-fields")).toContainText("Shift");
+    await expect(page.locator("#numeric-fields")).toContainText("Enter");
+    await page.getByRole("searchbox").fill(" ");
+    for (const tab of await page.getByRole("tab").all()) {
+      await tab.click();
+      await expect(page.locator(".manual-content img, .manual-gallery, .manual-lightbox")).toHaveCount(0);
+      await expect(page.locator(".manual-chapter").first()).toBeVisible();
+    }
+    expect(images).toEqual([]);
+  });
+}
 
 test("manual sidebar opens a chapter from another category", async ({ page }) => {
   await page.context().addCookies([{ name: "vlt-locale", value: "en", url: "http://127.0.0.1:3100" }]);

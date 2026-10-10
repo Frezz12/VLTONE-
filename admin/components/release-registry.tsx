@@ -6,6 +6,7 @@ import { api } from "@vlt/api-client";
 import { CheckCircle2, Circle, FileArchive, ImagePlus, PackageOpen, Plus, Rocket, Save, Trash2, Upload, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AdminShell } from "./admin-shell";
+import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 import { ReleaseHighlightEditor, type ReleaseHighlight } from "./release-highlight-editor";
 
@@ -74,6 +75,7 @@ function uploadWithProgress(url: string, method: "PUT" | "POST", body: FormData,
 
 export function ReleaseRegistry() {
   const { session, error } = useAdmin();
+  const canWrite = canAdmin(session?.admin, "releases.write");
   const [releases, setReleases] = useState<Release[]>();
   const [draft, setDraft] = useState<Release>(emptyRelease);
   const [savedContent, setSavedContent] = useState(() => JSON.stringify(releaseContent(emptyRelease())));
@@ -258,9 +260,9 @@ export function ReleaseRegistry() {
   ];
 
   return <AdminShell>
-    <div className="admin-page-head"><div><h1 className="vlt-title">Релизы</h1><p className="vlt-subtitle">От черновика до страницы обновлений: тексты, цветные блоки и файлы приложения.</p></div><button className="vlt-button" onClick={startNew} disabled={locked}><Plus size={16} aria-hidden />Новый релиз</button></div>
+    <div className="admin-page-head"><div><h1 className="vlt-title">Релизы</h1><p className="vlt-subtitle">От черновика до страницы обновлений: тексты, цветные блоки и файлы приложения.</p></div><button className="vlt-button" onClick={startNew} disabled={!canWrite || locked}><Plus size={16} aria-hidden />Новый релиз</button></div>
     {error && <div className="vlt-error">{error}</div>}
-    {recovery && <div className="release-recovery" role="status"><div><Undo2 size={20} aria-hidden /><span><strong>Есть несохранённый текст{recovery.content.version ? ` версии ${recovery.content.version}` : ""}</strong><small>Восстановите его после перезагрузки или продолжите с данными сервера.</small></span></div><div className="vlt-row"><button className="vlt-button" onClick={restoreRecovery} disabled={!releases || locked}>Восстановить</button><button className="vlt-button vlt-button-secondary" onClick={clearRecovery}>Удалить копию</button></div></div>}
+    {recovery && <div className="release-recovery" role="status"><div><Undo2 size={20} aria-hidden /><span><strong>Есть несохранённый текст{recovery.content.version ? ` версии ${recovery.content.version}` : ""}</strong><small>Восстановите его после перезагрузки или продолжите с данными сервера.</small></span></div><div className="vlt-row"><button className="vlt-button" onClick={restoreRecovery} disabled={!canWrite || !releases || locked}>Восстановить</button><button className="vlt-button vlt-button-secondary" onClick={clearRecovery}>Удалить копию</button></div></div>}
     {Object.keys(fieldErrors).length > 0 && <div className="vlt-error release-error-summary" ref={errorSummary} tabIndex={-1} role="alert"><strong>Исправьте поля перед продолжением:</strong><ul>{Object.entries(fieldErrors).map(([name, message]) => <li key={name}><a href={`#release-${name}`}>{message}</a></li>)}</ul></div>}
     <div className="release-registry-grid">
       <section className="vlt-card vlt-card-pad release-version-panel" aria-label="Список релизов"><h2 className="vlt-section-title">Версии</h2><div className="release-list">
@@ -269,7 +271,7 @@ export function ReleaseRegistry() {
         {releases?.map((item) => <button key={item.id} disabled={locked} className={`release-list-item ${item.id === draft.id ? "selected" : ""}`} onClick={() => choose(item)} aria-pressed={item.id === draft.id}><PackageOpen size={18} aria-hidden /><span><strong>{item.version || "Без номера"}</strong><small>{new Date(item.updated_at).toLocaleDateString("ru-RU")} · {item.artifacts.length} файл.</small></span><span className={`vlt-badge ${item.status === "published" ? "vlt-badge-accent" : ""}`}>{item.status === "published" ? "выпущен" : "черновик"}</span></button>)}
       </div><div className="release-readiness"><h3>Готовность к публикации</h3><p>{readiness.filter(item => item.done).length} из {readiness.length} условий выполнено</p>{readiness.map(item => <a href={item.href} key={item.href} data-ready={!!item.done}>{item.done ? <CheckCircle2 size={17} aria-hidden /> : <Circle size={17} aria-hidden />}<span>{item.label}</span><span className="sr-only">{item.done ? "выполнено" : "не выполнено"}</span></a>)}</div></section>
 
-      <fieldset className="release-editor" disabled={locked} aria-label="Редактор релиза">
+      <fieldset className="release-editor" disabled={!canWrite || locked} aria-label="Редактор релиза">
 <div className="release-composer-toolbar">        <nav className="release-section-nav" aria-label="Разделы редактора"><a href="#release-description">Описание</a><a href="#release-highlights">Главные обновления</a><a href="#release-artifacts">Установщики</a><a href="#release-screenshots">Скриншоты</a><span>{dirty ? "Есть изменения" : draft.id ? "Сохранено" : "Новый черновик"}</span></nav>          <div className="vlt-row release-actions"><button className="vlt-button" onClick={() => void save()} disabled={busy}><Save size={16} aria-hidden />{busy ? "Сохранение…" : draft.status === "published" ? "Сохранить изменения" : "Сохранить черновик"}</button><button className="vlt-button vlt-button-secondary" onClick={() => void publish()} disabled={busy || draft.status === "published"}><Rocket size={16} aria-hidden />Опубликовать</button>{draft.id && draft.status === "draft" && <button className="vlt-button vlt-button-danger" onClick={() => void removeDraft()} disabled={busy}><Trash2 size={16} aria-hidden />Удалить черновик</button>}</div></div>
         <section className="vlt-card vlt-card-pad" id="release-description"><div className="vlt-row vlt-between"><h2 className="vlt-section-title">{draft.id ? `Версия ${draft.version || "без номера"}` : "Новый черновик"}</h2>{draft.status === "published" ? <span className="vlt-badge vlt-badge-accent">Опубликован</span> : !draft.id && <button className="vlt-button vlt-button-secondary" type="button" onClick={useCurrentReleaseTemplate} disabled={locked}><PackageOpen size={16} aria-hidden />Заполнить шаблон</button>}</div>
           <div className="release-form">

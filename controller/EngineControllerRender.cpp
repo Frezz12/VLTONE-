@@ -48,7 +48,7 @@ audio::Result validateRenderSpec(const rendering::Spec& spec) {
 
 EngineController::InsertSlot* EngineController::liveInsertSlot(
     const std::string& channelId, const std::string& insertId) {
-    return m_runtime.nativeForWorkerOrTest().pluginSlot(channelId, insertId);
+    return m_runtime.get().pluginSlot(channelId, insertId);
 }
 
 void EngineController::applyStoredParameters(
@@ -68,6 +68,11 @@ audio::Result EngineController::captureRenderSession(
     const rendering::Spec& spec, RenderSessionSpec& out) {
     out = {};
     if (auto valid = validateRenderSpec(spec); !valid) return valid;
+    if (m_runtime->audioSafetyStopped())
+        return audio::Result::fail(audio::EngineError::AudioThreadError, "Save and reopen the project before rendering.");
+    if (!m_runtime->pluginFaults().empty())
+        return audio::Result::fail(audio::EngineError::PluginLoadFailed,
+            "Restore or remove failed plugins before rendering. No bypassed render was created.");
     try {
         auto data = std::make_shared<RenderSessionSpec::Data>();
         data->spec = spec;
@@ -121,7 +126,7 @@ audio::Result EngineController::captureRenderSession(
                 if (slot.channelMode == PluginChannelMode::DualMono) requests.push_back({{channelId, slot.id, true}});
             });
             std::unordered_map<std::string, AudioPluginStateSnapshot> captured;
-            for (auto& state : m_runtime.pluginStateSnapshots(requests)) {
+            for (auto& state : m_runtime->pluginStateSnapshots(requests)) {
                 if (state.sample && !state.samplePath.empty())
                     data->sourceSamples[state.samplePath] = state.sample;
                 captured.emplace(state.address.slotId + (state.address.right ? "-right" : ""), std::move(state));
@@ -132,8 +137,6 @@ audio::Result EngineController::captureRenderSession(
                                             std::vector<InsertParameter>& fallback) {
                 if (!capturedState.exists)
                     throw std::runtime_error("cannot capture unavailable render plugin: " + key);
-                if (capturedState.failed)
-                    throw std::runtime_error("restart failed plugin before rendering: " + capturedState.descriptor.name);
                 stateFile.clear();
                 fallback.clear();
                 // Export needs a fresh opaque snapshot. Recovery deliberately
@@ -262,7 +265,7 @@ audio::Result EngineController::renderSessionInWorker(
     try {
         if (!preparing()) { out.cancelled = true; return audio::Result::ok(); }
         EngineController scratch(WorkerRuntime{});
-        scratch.m_runtime.nativeForWorkerOrTest().renderingPass = true;
+        scratch.m_runtime.get().renderingPass = true;
         const double rate = spec.sampleRate > 0.0 ? spec.sampleRate : data->sampleRate;
         if (!std::isfinite(rate) || rate < 1000 || rate > 768000)
             return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render sample rate");
@@ -303,10 +306,10 @@ audio::Result EngineController::renderSessionInWorker(
             scratch.m_sharedClipSampleCache = data->sharedClipSamples;
         }
         scratch.m_sampleLoadContinue = preparing;
-        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = scratch.m_project.tempo});
-        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::TimeSignature, .numerator = scratch.m_project.timeSigNumerator, .denominator = scratch.m_project.timeSigDenominator});
-        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::LoopRange, .position = scratch.toSamples(scratch.m_project.loopStartSeconds), .end = scratch.toSamples(scratch.m_project.loopEndSeconds)});
-        scratch.m_runtime.transportCommand({.action = AudioTransportCommand::Action::LoopEnabled, .enabled = scratch.m_project.loopEnabled});
+        scratch.m_runtime->transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = scratch.m_project.tempo});
+        scratch.m_runtime->transportCommand({.action = AudioTransportCommand::Action::TimeSignature, .numerator = scratch.m_project.timeSigNumerator, .denominator = scratch.m_project.timeSigDenominator});
+        scratch.m_runtime->transportCommand({.action = AudioTransportCommand::Action::LoopRange, .position = scratch.toSamples(scratch.m_project.loopStartSeconds), .end = scratch.toSamples(scratch.m_project.loopEndSeconds)});
+        scratch.m_runtime->transportCommand({.action = AudioTransportCommand::Action::LoopEnabled, .enabled = scratch.m_project.loopEnabled});
         if (const auto built = scratch.rebuildGraph(); !built) return built;
 
         std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
@@ -370,7 +373,7 @@ audio::Result EngineController::renderSessionInWorker(
             if (attempt == 7)
                 return audio::Result::fail(audio::EngineError::Unknown,
                     "audio processor keeps changing configuration after 8 export attempts: " +
-                    scratch.m_runtime.nativeForWorkerOrTest().engine.offlineError());
+                    scratch.m_runtime.get().engine.offlineError());
         }
         return audio::Result::fail(audio::EngineError::Unknown, "export preparation failed");
     } catch (const std::exception& error) {
@@ -584,7 +587,7 @@ audio::Result EngineController::renderProjectPass(
     // bypass/solo/tap configuration is discarded with it, so restoration never
     // rebuilds or overwrites the live session on an error path.
     UndoStack::Suspend quiet(m_undo);
-    m_runtime.nativeForWorkerOrTest().renderingPass = true;
+    m_runtime.get().renderingPass = true;
 
     // ── Sample rate ──
     if (std::abs(targetRate - m_sampleRate) > 0.01) {
@@ -592,14 +595,14 @@ audio::Result EngineController::renderProjectPass(
     }
 
     // ── Taps ──
-    m_runtime.nativeForWorkerOrTest().renderTapsPreFader = spec.stemsPreFader;
-    m_runtime.nativeForWorkerOrTest().renderTapsAtSource = spec.stemsAtSource;
+    m_runtime.get().renderTapsPreFader = spec.stemsPreFader;
+    m_runtime.get().renderTapsAtSource = spec.stemsAtSource;
     std::vector<std::string> stems;
-    m_runtime.nativeForWorkerOrTest().renderTaps.clear();
+    m_runtime.get().renderTaps.clear();
     for (const std::string& channelId : spec.stemChannelIds) {
-        if (!m_runtime.nativeForWorkerOrTest().channels.contains(channelId)) continue;   // deleted since
-        if (m_runtime.nativeForWorkerOrTest().renderTaps.contains(channelId)) continue;  // named twice
-        m_runtime.nativeForWorkerOrTest().renderTaps[channelId] =
+        if (!m_runtime.get().channels.contains(channelId)) continue;   // deleted since
+        if (m_runtime.get().renderTaps.contains(channelId)) continue;  // named twice
+        m_runtime.get().renderTaps[channelId] =
             std::make_shared<engine::TapNode>(channelId + " Tap");
         stems.push_back(channelId);
     }
@@ -621,11 +624,11 @@ audio::Result EngineController::renderProjectPass(
 
     // Prepare in the final processing mode before reading any latency. The
     // isolated controller never opens a device; all later compiles stay offline.
-    if (const auto ready = m_runtime.nativeForWorkerOrTest().engine.prepare(m_sampleRate, m_bufferSize, 2, true); !ready)
+    if (const auto ready = m_runtime.get().engine.prepare(m_sampleRate, m_bufferSize, 2, true); !ready)
         return audio::Result::fail(audio::EngineError::Unknown,
-            m_runtime.nativeForWorkerOrTest().engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
-                                           : m_runtime.nativeForWorkerOrTest().engine.offlineError());
-    const auto graph = m_runtime.nativeForWorkerOrTest().engine.compiledGraph();
+            m_runtime.get().engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
+                                           : m_runtime.get().engine.offlineError());
+    const auto graph = m_runtime.get().engine.compiledGraph();
     const auto requireSlot = [&](const std::string& channelId, const InsertModel& model, bool frozen = false) {
         if (frozen || !model.isLoaded() || model.bypassed || model.mix == 0.f) return;
         validateRenderModule(model);
@@ -669,7 +672,7 @@ audio::Result EngineController::renderProjectPass(
     // latency and truncates the end by the same amount.
     engine::FrameCount captureLatency = graph->totalLatency;
     std::unordered_map<engine::TapNode*, engine::FrameCount> tapLatencies;
-    for (const auto& [channelId, tap] : m_runtime.nativeForWorkerOrTest().renderTaps) {
+    for (const auto& [channelId, tap] : m_runtime.get().renderTaps) {
         const auto entry = std::find_if(graph->nodes.begin(), graph->nodes.end(),
             [&](const auto& node) { return node.node == tap.get(); });
         if (entry == graph->nodes.end())
@@ -737,7 +740,7 @@ audio::Result EngineController::renderProjectPass(
             track ? track->name
                   : (channelId == kMasterChannelId ? "Master" : channelId);
         openSink(base + " - " + rendering::sanitizeFileName(label),
-                 m_runtime.nativeForWorkerOrTest().renderTaps[channelId].get());
+                 m_runtime.get().renderTaps[channelId].get());
     }
 
     // Anything half-written is worse than nothing: it looks like a finished
@@ -787,7 +790,7 @@ audio::Result EngineController::renderProjectPass(
     };
 
     auto lastProgress = std::chrono::steady_clock::time_point{};
-    auto renderStatus = m_runtime.nativeForWorkerOrTest().engine.renderOffline(
+    auto renderStatus = m_runtime.get().engine.renderOffline(
         renderStart, renderEnd, m_bufferSize,
         [&](const engine::AudioBlock& block, engine::FrameCount frames) {
             if (extraMasterDelay) masterCaptureDelay.process(block, block, frames);
@@ -871,7 +874,7 @@ audio::Result EngineController::renderProjectPass(
         },
         engine::OfflineOptions{.sourcesEndSample = rangeEnd, .pipeline = spec.pipeline,
                                .forcePipeline = spec.forcePipeline});
-    out.usedPipeline = m_runtime.nativeForWorkerOrTest().engine.lastOfflineUsedPipeline();
+    out.usedPipeline = m_runtime.get().engine.lastOfflineUsedPipeline();
 
     if (!renderStatus || !ioStatus || cancelled) {
         discard();
@@ -884,8 +887,8 @@ audio::Result EngineController::renderProjectPass(
             renderStatus.error() == engine::EngineError::RenderRestartRequired;
         return audio::Result::fail(
             audio::EngineError::Unknown,
-            m_runtime.nativeForWorkerOrTest().engine.offlineError().empty() ? std::string(engine::describe(renderStatus.error()))
-                                           : m_runtime.nativeForWorkerOrTest().engine.offlineError());
+            m_runtime.get().engine.offlineError().empty() ? std::string(engine::describe(renderStatus.error()))
+                                           : m_runtime.get().engine.offlineError());
     }
 
     for (Sink& sink : sinks) {
@@ -904,8 +907,7 @@ audio::Result EngineController::applyRenderSampleRate(double rate, uint32_t fram
     if (!frames) frames = m_bufferSize;
     if (std::abs(rate - m_sampleRate) < 0.01 && frames == m_bufferSize)
         return audio::Result::ok();
-    if (const auto saved = m_runtime.captureRecoveryCheckpoint(); !saved) return saved;
-    const auto previous = m_runtime.transportSnapshot();
+    const auto previous = m_runtime->transportSnapshot();
     const auto oldRate = m_sampleRate;
     const auto oldFrames = m_bufferSize;
     // Converted clip data and its timeline positions must change together.

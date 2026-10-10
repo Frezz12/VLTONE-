@@ -76,7 +76,7 @@ OfflineRenderDialog::OfflineRenderDialog(
     std::vector<daw::EngineController::ClipAddress> clips,
     QWidget* parent)
     : QDialog(parent), m_controller(controller), m_clips(std::move(clips)),
-      m_scratch(daw::EngineController::SecondaryRuntime{}, controller) {
+      m_scratch() {
     setWindowTitle(tr("Offline Render"));
     setModal(true);
     setObjectName(QStringLiteral("OfflineRenderDialog"));
@@ -697,7 +697,7 @@ bool OfflineRenderDialog::checkForTest(const QString& screenshotPath) {
     QTemporaryDir dir;
     if (!dir.isValid()) return false;
     qputenv("DAW_PRESET_ROOT", dir.filePath(QStringLiteral("presets")).toUtf8());
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     controller.setRecordDirectory(dir.path().toStdString());
     const auto file = (dir.path() + QStringLiteral("/Vocal.wav")).toStdString();

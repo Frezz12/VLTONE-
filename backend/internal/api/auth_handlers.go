@@ -292,6 +292,9 @@ func (s *Server) passwordResetConfirm(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Model(&reset).Update("used_at", now).Error; err != nil {
 			return err
 		}
+		if err := tx.Model(&model.AdminSession{}).Where("admin_user_id IN (SELECT id FROM admin_users WHERE user_id = ?) AND revoked_at IS NULL", reset.UserID).Update("revoked_at", now).Error; err != nil {
+			return err
+		}
 		tx.Model(&model.WebSession{}).Where("user_id = ? AND revoked_at IS NULL", reset.UserID).Update("revoked_at", now)
 		tx.Model(&model.DesktopSession{}).Where("user_id = ? AND revoked_at IS NULL", reset.UserID).Update("revoked_at", now)
 		return nil

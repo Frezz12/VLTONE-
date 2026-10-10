@@ -8,6 +8,14 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QDesktopServices>
+#include <QJsonArray>
+#include <QPainterPath>
+#include <QSaveFile>
+#include <QShortcut>
+#include <QMouseEvent>
+#include <QKeyEvent>
+#include <QStyledItemDelegate>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
@@ -38,12 +46,15 @@
 #include <QTemporaryDir>
 #include <QVideoWidget>
 #include <QVBoxLayout>
+#include <cstdio>
 
 namespace ui {
 namespace {
 
 constexpr auto kRecentProjectsSetting = "projects/recent";
-constexpr int kCoverSize = 210;
+constexpr QSize kCoverSize(288, 162);
+constexpr QSize kProjectCardSize(224, 184);
+constexpr int kProjectImageRole = Qt::UserRole + 1;
 constexpr QSize kTemplatePreviewSize(420, 244);
 
 QString normalizedName(QString name) {
@@ -118,8 +129,35 @@ QPixmap coverPixmap(const QString& path, const QSize& size) {
     return scaled.copy(x, y, size.width(), size.height());
 }
 
+class ProjectCoverLabel final : public QLabel {
+public:
+    using QLabel::QLabel;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        const QRectF bounds = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainterPath shape;
+        shape.addRoundedRect(bounds, Theme::cornerRadius, Theme::cornerRadius);
+        painter.setClipPath(shape);
+        painter.fillRect(rect(), th().well());
+        const QPixmap image = pixmap();
+        if (!image.isNull()) {
+            const QSizeF size = image.deviceIndependentSize();
+            const QRectF destination(bounds.center() - QPointF(size.width()/2, size.height()/2), size);
+            painter.drawPixmap(destination, image, image.rect());
+        }
+        painter.setClipping(false);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(th().separator());
+        painter.drawPath(shape);
+    }
+};
+
 void showCover(QLabel* label, const QString& path, const QSize& size) {
-    const QPixmap artwork = coverPixmap(path, size);
+    QPixmap artwork = coverPixmap(path, size * label->devicePixelRatioF());
+    artwork.setDevicePixelRatio(label->devicePixelRatioF());
     if (!artwork.isNull()) {
         label->setPixmap(artwork);
         label->setText(QString());
@@ -306,17 +344,125 @@ QString mediaDescription(const projecttemplates::ArtworkInfo& artwork) {
     return QStringLiteral("%1  ·  %2").arg(artwork.displayName, type);
 }
 
+class ProjectCardDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
+        return kProjectCardSize;
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        const auto& t = th();
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool hovered = option.state & QStyle::State_MouseOver;
+        const QRectF card = QRectF(option.rect).adjusted(3, 3, -3, -3);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        QLinearGradient material(card.topLeft(), card.bottomLeft());
+        material.setColorAt(0, hovered ? t.controlTop() : t.panelTop());
+        material.setColorAt(1, t.panelBottom());
+        painter->setBrush(material);
+        painter->setPen(QPen(selected ? t.accent : t.separator(), selected ? 2 : 1));
+        painter->drawRoundedRect(card, Theme::cornerRadius, Theme::cornerRadius);
+
+        const QRectF imageRect = card.adjusted(9, 9, -9, 0);
+        const QRectF preview(imageRect.topLeft(), QSizeF(imageRect.width(), 112));
+        QPainterPath clip;
+        clip.addRoundedRect(preview, 4, 4);
+        painter->setClipPath(clip);
+        painter->fillRect(preview, t.well());
+        const QPixmap artwork = index.data(kProjectImageRole).value<QPixmap>();
+        if (!artwork.isNull()) {
+            // Fit the whole arrangement, rather than cropping its first/last tracks.
+            const QSizeF size = artwork.size().scaled(preview.size().toSize(), Qt::KeepAspectRatio);
+            painter->setRenderHint(QPainter::SmoothPixmapTransform);
+            painter->drawPixmap(QRectF(preview.center() - QPointF(size.width()/2, size.height()/2), size),
+                                artwork, artwork.rect());
+        } else {
+            icons::paint(*painter, icons::Glyph::Layers,
+                         QRectF(preview.center() - QPointF(20, 20), QSizeF(40, 40)),
+                         t.textSecondary);
+        }
+        painter->setClipping(false);
+        painter->setPen(t.edgeLight(t.panelTop()));
+        painter->drawLine(card.topLeft() + QPointF(9, 1), card.topRight() + QPointF(-9, 1));
+
+        QFont nameFont = option.font;
+        nameFont.setWeight(QFont::DemiBold);
+        painter->setFont(nameFont);
+        painter->setPen(t.textPrimary);
+        const QRectF nameRect(card.left() + 12, preview.bottom() + 11,
+                              card.width() - (selected ? 42 : 24), 28);
+        painter->drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft,
+            QFontMetrics(nameFont).elidedText(index.data().toString(), Qt::ElideRight, int(nameRect.width())));
+        if (selected) {
+            icons::paint(*painter, icons::Glyph::Check,
+                         QRectF(card.right() - 28, nameRect.center().y() - 8, 16, 16), t.accent);
+        }
+        if (option.state & QStyle::State_HasFocus) {
+            QPen focus(t.textPrimary, 1, Qt::DotLine);
+            painter->setPen(focus);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(card.adjusted(4, 4, -4, -4), 5, 5);
+        }
+        painter->restore();
+    }
+};
+
+QString projectDialogStyle() {
+    const auto& t = th();
+    return QString(R"(
+#ProjectSaveDialog, #ProjectOpenDialog { background: %BG%; color: %TEXT%; }
+#ProjectDialogTitle { color: %TEXT%; font-size: 20px; font-weight: 600; }
+#ProjectDialogSecondary, #ProjectSelection { color: %SECONDARY%; }
+#ProjectCover, #ProjectLibrary {
+    background: %WELL%; border: 1px solid %EDGE%; border-radius: %RADIUS%px;
+}
+#ProjectCover { padding: 0; }
+#ProjectSaveDialog QLineEdit {
+    min-height: 32px; color: %TEXT%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %WELLTOP%,stop:1 %WELL%);
+    border: 1px solid %EDGE%; border-radius: %RADIUS%px; padding: 0 9px;
+}
+#ProjectSaveDialog QLineEdit:focus { border-color: %ACCENT%; }
+#ProjectDestination { color: %SECONDARY%; padding: 4px 0; }
+#ProjectError { color: %ERROR%; }
+#ProjectSaveDialog QPushButton, #ProjectOpenDialog QPushButton {
+    min-height: 32px; padding: 0 12px; color: %TEXT%;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %BOTTOM%);
+    border: 1px solid %EDGE%; border-top-color: %LIGHT%; border-radius: %RADIUS%px;
+}
+#ProjectSaveDialog QPushButton:hover, #ProjectOpenDialog QPushButton:hover { border-color: %SECONDARY%; }
+#ProjectSaveDialog QPushButton:pressed, #ProjectOpenDialog QPushButton:pressed { background: %WELL%; }
+#ProjectSaveDialog QPushButton:focus, #ProjectOpenDialog QPushButton:focus { border-color: %ACCENT%; }
+#ProjectSaveDialog QPushButton:disabled, #ProjectOpenDialog QPushButton:disabled { color: %SECONDARY%; background: %WELL%; border-color: %EDGE%; }
+#ProjectPrimaryButton:enabled { background: %ACCENT%; color: %ACCENTTEXT%; border-color: %ACCENT%; }
+#ProjectEmptyState { color: %SECONDARY%; padding: 24px; }
+)").replace("%BG%", t.background.name())
+        .replace("%TEXT%", t.textPrimary.name()).replace("%SECONDARY%", t.textSecondary.name())
+        .replace("%WELL%", t.well().name()).replace("%WELLTOP%", t.wellTop().name())
+        .replace("%EDGE%", t.separator().name()).replace("%RADIUS%", QString::number(Theme::cornerRadius))
+        .replace("%TOP%", t.controlTop().name()).replace("%BOTTOM%", t.controlBottom().name())
+        .replace("%LIGHT%", t.edgeLight(t.controlTop()).name()).replace("%ACCENT%", t.accent.name())
+        .replace("%ACCENTTEXT%", t.accentText().name()).replace("%ERROR%", Theme::record().name());
+}
+
 struct ProjectSummary {
     QString path;
     QString name;
     QString author;
     QString coverPath;
     QDateTime modified;
+    int tracks = 0;
+    double tempo = 0;
 };
 
 ProjectSummary readSummary(const QString& path) {
     ProjectSummary summary;
-    summary.path = normalizedPath(path);
+    summary.path = normalizedPath(QFileInfo(path).isFile()
+        ? QFileInfo(path).absolutePath() : path);
     summary.name = QFileInfo(summary.path).completeBaseName();
 
     const QString manifest = QString::fromStdString(
@@ -330,6 +476,8 @@ ProjectSummary readSummary(const QString& path) {
     const QJsonObject root = document.object();
     summary.name = root.value(QStringLiteral("name")).toString(summary.name);
     summary.author = root.value(QStringLiteral("author")).toString();
+    summary.tracks = root.value(QStringLiteral("tracks")).toArray().size();
+    summary.tempo = root.value(QStringLiteral("tempo")).toDouble();
     const QString cover = root.value(QStringLiteral("cover")).toString();
     if (!cover.isEmpty()) {
         summary.coverPath = QDir::isAbsolutePath(cover)
@@ -339,6 +487,8 @@ ProjectSummary readSummary(const QString& path) {
                            summary.path.toStdString())))
                   .filePath(cover);
     }
+    if (summary.coverPath.isEmpty())
+        summary.coverPath = projectPreviewPath(summary.path);
     return summary;
 }
 
@@ -362,8 +512,8 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
     setWindowTitle(tr("Save Project"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(true);
-    resize(730, 500);
-    setMinimumSize(660, 460);
+    resize(800, 470);
+    setMinimumSize(760, 460);
 
     auto* title = new QLabel(tr("Save your project"), this);
     title->setObjectName(QStringLiteral("ProjectDialogTitle"));
@@ -373,21 +523,22 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
     title->setFont(titleFont);
 
     auto* subtitle = new QLabel(
-        tr("Set the project details and choose where its portable VLTONE project folder will be saved."),
+        tr("Choose a name, cover and save location."),
         this);
     subtitle->setObjectName(QStringLiteral("ProjectDialogSecondary"));
     subtitle->setWordWrap(true);
 
-    m_cover = new QLabel(this);
+    m_cover = new ProjectCoverLabel(this);
     m_cover->setObjectName(QStringLiteral("ProjectCover"));
-    m_cover->setFixedSize(kCoverSize, kCoverSize);
+    m_cover->setFixedSize(kCoverSize);
     m_cover->setAlignment(Qt::AlignCenter);
 
     auto* chooseCover = new QPushButton(tr("Choose Image…"), this);
     chooseCover->setAccessibleName(tr("Choose project cover image"));
-    m_removeCover = new QPushButton(tr("Remove"), this);
-    m_removeCover->setAccessibleName(tr("Remove project cover image"));
-    auto* coverButtons = new QHBoxLayout;
+    m_removeCover = new QPushButton(tr("Use Timeline"), this);
+    m_removeCover->setObjectName(QStringLiteral("ProjectUseTimelineButton"));
+    m_removeCover->setAccessibleName(tr("Use a timeline snapshot as the project preview"));
+    auto* coverButtons = new QVBoxLayout;
     coverButtons->setContentsMargins(0, 0, 0, 0);
     coverButtons->setSpacing(8);
     coverButtons->addWidget(chooseCover);
@@ -396,6 +547,11 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
     auto* coverColumn = new QVBoxLayout;
     coverColumn->setSpacing(10);
     coverColumn->addWidget(m_cover);
+    m_previewHint = new QLabel(this);
+    m_previewHint->setObjectName(QStringLiteral("ProjectDialogSecondary"));
+    m_previewHint->setWordWrap(true);
+    m_previewHint->setFixedWidth(kCoverSize.width());
+    coverColumn->addWidget(m_previewHint);
     coverColumn->addLayout(coverButtons);
     coverColumn->addStretch(1);
 
@@ -436,7 +592,8 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
     auto* form = new QFormLayout;
     form->setContentsMargins(0, 0, 0, 0);
     form->setHorizontalSpacing(14);
-    form->setVerticalSpacing(14);
+    form->setVerticalSpacing(8);
+    form->setRowWrapPolicy(QFormLayout::WrapAllRows);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     form->addRow(tr("Project name"), m_name);
     form->addRow(tr("Author"), m_author);
@@ -471,10 +628,12 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
 
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Cancel | QDialogButtonBox::Save, this);
+    buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
     m_save = buttons->button(QDialogButtonBox::Save);
     m_save->setObjectName(QStringLiteral("ProjectPrimaryButton"));
     m_save->setText(tr("Save Project"));
     m_save->setDefault(true);
+    m_save->setProperty("accentAction", true);
 
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(28, 24, 28, 24);
@@ -527,9 +686,24 @@ void ProjectSaveDialog::chooseCover() {
     if (!path.isEmpty()) setCoverPath(path);
 }
 
+void ProjectSaveDialog::setTimelinePreview(const QImage& image) {
+    m_timelinePreview = image;
+    setCoverPath(m_coverPath);
+}
+
 void ProjectSaveDialog::setCoverPath(const QString& path) {
     m_coverPath = path.isEmpty() ? QString() : normalizedPath(path);
     showCover(m_cover, m_coverPath, m_cover->size());
+    if (m_coverPath.isEmpty() && !m_timelinePreview.isNull()) {
+        QPixmap preview = QPixmap::fromImage(m_timelinePreview).scaled(
+            m_cover->size() * m_cover->devicePixelRatioF(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        preview.setDevicePixelRatio(m_cover->devicePixelRatioF());
+        m_cover->setPixmap(preview);
+        m_cover->setAccessibleName(tr("Timeline snapshot"));
+    }
+    m_previewHint->setText(m_coverPath.isEmpty()
+        ? tr("Timeline snapshot. Updated each time you save.")
+        : tr("Custom cover. Your image is kept when you save."));
     m_removeCover->setEnabled(!m_coverPath.isEmpty());
 }
 
@@ -543,31 +717,8 @@ void ProjectSaveDialog::updateState() {
 }
 
 void ProjectSaveDialog::applyTheme() {
-    const Theme& t = th();
-    setStyleSheet(QString(R"(
-#ProjectSaveDialog, #ProjectOpenDialog { background: %1; color: %2; }
-#ProjectDialogTitle { color: %2; }
-#ProjectDialogSecondary, #ProjectCardSecondary { color: %3; }
-#ProjectCover, #ProjectCardCover {
-    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
-}
-#ProjectSaveDialog QLineEdit {
-    min-height: 30px; color: %2; background: %4;
-    border: 1px solid %5; border-radius: %RADIUS%px; padding: 0 9px;
-}
-#ProjectDestination {
-    color: %3; background: %4; border: 1px solid %5;
-    border-radius: %RADIUS%px; padding: 9px;
-}
-#ProjectError { color: %6; }
-#ProjectPrimaryButton {
-    min-height: 32px; padding: 0 18px;
-}
-)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
-             t.well().name(), t.separator().name(),
-             Theme::record().name()));
-    showCover(m_cover, m_coverPath, m_cover->size());
+    setStyleSheet(projectDialogStyle());
+    setCoverPath(m_coverPath);
 }
 
 bool ProjectSaveDialog::checkForTest() const {
@@ -575,7 +726,7 @@ bool ProjectSaveDialog::checkForTest() const {
            m_error && m_save && !m_name->accessibleName().isEmpty() &&
            !m_author->accessibleName().isEmpty() &&
            !m_location->accessibleName().isEmpty() && m_save->isEnabled() &&
-           m_cover->size() == QSize(kCoverSize, kCoverSize);
+           m_cover->size() == kCoverSize;
 }
 
 ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
@@ -585,133 +736,148 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     setWindowTitle(tr("Open Project"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(true);
-    resize(780, 570);
-    setMinimumSize(620, 420);
+    resize(800, 580);
+    setMinimumSize(760, 440);
 
     auto* title = new QLabel(tr("Your projects"), this);
     title->setObjectName(QStringLiteral("ProjectDialogTitle"));
-    QFont titleFont = title->font();
-    titleFont.setPixelSize(22);
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-
-    auto* subtitle = new QLabel(
-        tr("Recently opened and saved projects are kept here for quick access."),
-        this);
+    auto* subtitle = new QLabel(tr("Select a project, or double-click to open it."), this);
     subtitle->setObjectName(QStringLiteral("ProjectDialogSecondary"));
     subtitle->setWordWrap(true);
 
-    auto* scroll = new QScrollArea(this);
-    scroll->setObjectName(QStringLiteral("ProjectLibraryScroll"));
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    m_projectList = new QWidget(scroll);
+    m_projectList = new QListWidget(this);
     m_projectList->setObjectName(QStringLiteral("ProjectLibrary"));
-    auto* projects = new QVBoxLayout(m_projectList);
-    projects->setContentsMargins(0, 0, 0, 0);
-    projects->setSpacing(10);
+    m_projectList->setAccessibleName(tr("Recent projects"));
+    m_projectList->setViewMode(QListView::IconMode);
+    m_projectList->setMovement(QListView::Static);
+    m_projectList->setResizeMode(QListView::Adjust);
+    m_projectList->setWrapping(true);
+    m_projectList->setSpacing(8);
+    m_projectList->setUniformItemSizes(true);
+    m_projectList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_projectList->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_projectList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_projectList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_projectList->setMouseTracking(true);
+    m_projectList->setItemDelegate(new ProjectCardDelegate(m_projectList));
 
+    for (const auto& path : projectPaths) {
+        const auto summary = readSummary(path);
+        auto* item = new QListWidgetItem(summary.name, m_projectList);
+        item->setData(Qt::UserRole, summary.path);
+        // Decode once at card size, never while hovering or painting.
+        QImageReader reader(summary.coverPath);
+        reader.setAutoTransform(true);
+        if (reader.size().isValid())
+            reader.setScaledSize(reader.size().scaled(QSize(640, 360), Qt::KeepAspectRatio));
+        item->setData(kProjectImageRole, QPixmap::fromImage(reader.read()));
+        QStringList details;
+        details << (summary.author.isEmpty() ? tr("Author not specified") : tr("By %1").arg(summary.author));
+        if (summary.tempo > 0)
+            details << tr("%1 tracks · %2 BPM").arg(summary.tracks).arg(QLocale().toString(summary.tempo, 'f', 0));
+        if (summary.modified.isValid())
+            details << tr("Modified %1").arg(QLocale().toString(summary.modified, QLocale::ShortFormat));
+        details << QDir::toNativeSeparators(summary.path);
+        item->setData(Qt::AccessibleTextRole, summary.name);
+        item->setData(Qt::AccessibleDescriptionRole, details.join(QStringLiteral("\n")));
+        QStringList escaped;
+        for (const auto& detail : details) escaped << detail.toHtmlEscaped();
+        item->setToolTip(QStringLiteral("<b>%1</b><br><br>%2")
+            .arg(summary.name.toHtmlEscaped(), escaped.join(QStringLiteral("<br>"))));
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    }
     if (projectPaths.isEmpty()) {
-        auto* empty = new QLabel(
-            tr("No recent projects yet. Open one from disk and it will appear here."),
-            m_projectList);
+        auto* empty = new QLabel(tr("No recent projects yet. Open one from disk and it will appear here."), m_projectList);
         empty->setObjectName(QStringLiteral("ProjectEmptyState"));
         empty->setAlignment(Qt::AlignCenter);
         empty->setWordWrap(true);
-        empty->setMinimumHeight(180);
-        projects->addWidget(empty);
-    } else {
-        for (const QString& path : projectPaths) {
-            const ProjectSummary summary = readSummary(path);
-            auto* card = new QFrame(m_projectList);
-            card->setObjectName(QStringLiteral("ProjectCard"));
-            card->setToolTip(QDir::toNativeSeparators(summary.path));
-
-            auto* cover = new QLabel(card);
-            cover->setObjectName(QStringLiteral("ProjectCardCover"));
-            cover->setFixedSize(92, 92);
-            cover->setAlignment(Qt::AlignCenter);
-            showCover(cover, summary.coverPath, cover->size());
-
-            auto* name = new QLabel(summary.name, card);
-            name->setObjectName(QStringLiteral("ProjectCardName"));
-            QFont nameFont = name->font();
-            nameFont.setPixelSize(16);
-            nameFont.setBold(true);
-            name->setFont(nameFont);
-
-            const QString author = summary.author.isEmpty()
-                ? tr("Author not specified")
-                : tr("By %1").arg(summary.author);
-            auto* authorLabel = new QLabel(author, card);
-            authorLabel->setObjectName(QStringLiteral("ProjectCardSecondary"));
-
-            QString modified;
-            if (summary.modified.isValid()) {
-                modified = tr("Modified %1").arg(
-                    QLocale().toString(summary.modified, QLocale::ShortFormat));
-            }
-            auto* details = new QLabel(modified, card);
-            details->setObjectName(QStringLiteral("ProjectCardSecondary"));
-
-            auto* pathLabel = new QLabel(
-                QDir::toNativeSeparators(summary.path), card);
-            pathLabel->setObjectName(QStringLiteral("ProjectCardPath"));
-            pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            pathLabel->setWordWrap(true);
-
-            auto* text = new QVBoxLayout;
-            text->setSpacing(3);
-            text->addWidget(name);
-            text->addWidget(authorLabel);
-            if (!modified.isEmpty()) text->addWidget(details);
-            text->addStretch(1);
-            text->addWidget(pathLabel);
-
-            auto* open = new QPushButton(tr("Open"), card);
-            open->setObjectName(QStringLiteral("ProjectPrimaryButton"));
-            open->setProperty("accentAction", true);
-            open->setAccessibleName(tr("Open project %1").arg(summary.name));
-            connect(open, &QPushButton::clicked, this, [this, path] {
-                m_selectedPath = path;
-                accept();
-            });
-
-            auto* row = new QHBoxLayout(card);
-            row->setContentsMargins(12, 12, 12, 12);
-            row->setSpacing(14);
-            row->addWidget(cover);
-            row->addLayout(text, 1);
-            row->addWidget(open, 0, Qt::AlignVCenter);
-            projects->addWidget(card);
-        }
+        empty->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto* emptyLayout = new QVBoxLayout(m_projectList);
+        emptyLayout->addWidget(empty);
     }
-    projects->addStretch(1);
-    scroll->setWidget(m_projectList);
 
+    m_selection = new QLabel(tr("No project selected"), this);
+    m_selection->setObjectName(QStringLiteral("ProjectSelection"));
+    m_selection->setTextFormat(Qt::PlainText);
+    m_selection->setMinimumWidth(0);
+    m_selection->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_browse = new QPushButton(tr("Browse on Disk…"), this);
+    m_browse->setObjectName(QStringLiteral("ProjectBrowseButton"));
     m_browse->setAccessibleName(tr("Browse for another project"));
+    m_location = new QPushButton(tr("Open Location"), this);
+    m_location->setObjectName(QStringLiteral("ProjectLocationButton"));
+    m_location->setAccessibleName(tr("Open the selected project's folder"));
+    m_open = new QPushButton(tr("Open Project"), this);
+    m_open->setObjectName(QStringLiteral("ProjectPrimaryButton"));
+    m_open->setDefault(true);
+    m_open->setProperty("accentAction", true);
     auto* cancel = new QPushButton(tr("Cancel"), this);
+    for (auto* button : {m_browse, m_location, cancel}) button->setAutoDefault(false);
+
+    connect(m_projectList, &QListWidget::itemSelectionChanged, this, &ProjectOpenDialog::updateSelection);
+    connect(m_projectList, &QListWidget::itemDoubleClicked, this, [this] { openSelected(); });
+    for (const auto key : {Qt::Key_Return, Qt::Key_Enter}) {
+        auto* shortcut = new QShortcut(QKeySequence(key), m_projectList);
+        shortcut->setContext(Qt::WidgetShortcut);
+        connect(shortcut, &QShortcut::activated, this, &ProjectOpenDialog::openSelected);
+    }
+    connect(m_open, &QPushButton::clicked, this, &ProjectOpenDialog::openSelected);
+    connect(m_location, &QPushButton::clicked, this, &ProjectOpenDialog::openLocation);
     connect(m_browse, &QPushButton::clicked, this, &ProjectOpenDialog::browse);
     connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
 
     auto* buttons = new QHBoxLayout;
+    buttons->setSpacing(8);
     buttons->addWidget(m_browse);
+    buttons->addWidget(m_location);
     buttons->addStretch(1);
     buttons->addWidget(cancel);
-
+    buttons->addWidget(m_open);
     auto* column = new QVBoxLayout(this);
-    column->setContentsMargins(26, 22, 26, 22);
+    column->setContentsMargins(24, 22, 24, 20);
     column->setSpacing(10);
     column->addWidget(title);
     column->addWidget(subtitle);
-    column->addSpacing(8);
-    column->addWidget(scroll, 1);
+    column->addSpacing(6);
+    column->addWidget(m_projectList, 1);
+    column->addWidget(m_selection);
     column->addLayout(buttons);
 
-    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-            &ProjectOpenDialog::applyTheme);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, &ProjectOpenDialog::applyTheme);
+    updateSelection();
     applyTheme();
+    m_projectList->setFocus(Qt::OtherFocusReason);
+}
+
+void ProjectOpenDialog::updateSelection() {
+    const auto selected = m_projectList->selectedItems();
+    const auto* item = selected.isEmpty() ? nullptr : selected.front();
+    m_open->setEnabled(item != nullptr);
+    m_location->setEnabled(item != nullptr);
+    m_selection->setText(item ? item->text() : tr("No project selected"));
+    m_selection->setToolTip(item ? item->toolTip() : QString());
+}
+
+void ProjectOpenDialog::openSelected() {
+    const auto selected = m_projectList->selectedItems();
+    if (selected.isEmpty()) return;
+    const QString path = selected.front()->data(Qt::UserRole).toString();
+    const QString manifest = QString::fromStdString(daw::ProjectSerializer::manifestPath(path.toStdString()));
+    if (!QFileInfo::exists(manifest)) {
+        QMessageBox::warning(this, tr("Project unavailable"), tr("This project has moved or is no longer available. Open it from disk to locate it again."));
+        return;
+    }
+    m_selectedPath = path;
+    accept();
+}
+
+void ProjectOpenDialog::openLocation() {
+    const auto selected = m_projectList->selectedItems();
+    if (selected.isEmpty()) return;
+    const QString path = selected.front()->data(Qt::UserRole).toString();
+    // Open the parent directory: legacy .vlt packages can otherwise launch the app.
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath())))
+        QMessageBox::warning(this, tr("Project unavailable"), tr("The project location could not be opened."));
 }
 
 void ProjectOpenDialog::browse() {
@@ -725,41 +891,17 @@ void ProjectOpenDialog::browse() {
 }
 
 void ProjectOpenDialog::applyTheme() {
-    const Theme& t = th();
-    setStyleSheet(QString(R"(
-#ProjectOpenDialog, #ProjectLibrary, #ProjectLibraryScroll,
-#ProjectLibraryScroll > QWidget > QWidget { background: %1; color: %2; }
-#ProjectDialogTitle, #ProjectCardName { color: %2; }
-#ProjectDialogSecondary, #ProjectCardSecondary, #ProjectCardPath { color: %3; }
-#ProjectCard {
-    background: %4; border: 1px solid %5; border-radius: %RADIUS%px;
-}
-#ProjectCardCover {
-    background: %6; border: 1px solid %5; border-radius: %RADIUS%px;
-}
-#ProjectEmptyState {
-    color: %3; background: %4; border: 1px dashed %5;
-    border-radius: %RADIUS%px; padding: 24px;
-}
-#ProjectPrimaryButton {
-    min-height: 32px; padding: 0 18px;
-}
-)").replace("%RADIUS%", QString::number(Theme::cornerRadius))
-        .arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(),
-             t.surface.name(), t.separator().name(), t.well().name()));
+    setStyleSheet(projectDialogStyle());
+    m_browse->setIcon(icons::icon(icons::Glyph::Folder, th().textPrimary));
+    m_location->setIcon(icons::icon(icons::Glyph::Export, th().textPrimary));
+    m_projectList->viewport()->update();
 }
 
 bool ProjectOpenDialog::checkForTest() const {
-    const bool hasCard = m_projectList &&
-                         m_projectList->findChild<QPushButton*>(
-                             QStringLiteral("ProjectPrimaryButton"));
-    const bool hasEmptyState = m_projectList &&
-                               m_projectList->findChild<QLabel*>(
-                                   QStringLiteral("ProjectEmptyState"));
-    return m_browse && m_projectList &&
+    return m_browse && m_projectList && m_open && m_location && m_selection &&
            !m_browse->accessibleName().isEmpty() &&
-           m_projectList->layout() && m_projectList->layout()->count() >= 2 &&
-           (hasCard || hasEmptyState);
+           m_projectList->viewMode() == QListView::IconMode &&
+           m_projectList->selectionMode() == QAbstractItemView::SingleSelection;
 }
 
 ProjectTemplateSaveDialog::ProjectTemplateSaveDialog(
@@ -1228,6 +1370,25 @@ bool ProjectTemplateOpenDialog::checkForTest() const {
            !m_delete->accessibleName().isEmpty();
 }
 
+QString projectPreviewPath(const QString& packagePath) {
+    return QDir(QFileInfo(packagePath).isFile()
+        ? QFileInfo(packagePath).absolutePath() : packagePath)
+        .filePath(QStringLiteral(".vlt-preview.png"));
+}
+
+bool saveProjectPreview(const QString& packagePath, const QImage& image) {
+    if (image.isNull()) return false;
+    QSaveFile file(projectPreviewPath(packagePath));
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    QImage thumbnail = image.scaled(QSize(960, 540), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    thumbnail.setDevicePixelRatio(1.0);
+    return thumbnail.save(&file, "PNG") && file.commit();
+}
+
+QString projectDisplayName(const QString& packagePath) {
+    return readSummary(packagePath).name;
+}
+
 QStringList recentProjectPaths() {
     QSettings settings;
     const QStringList stored = settings.value(
@@ -1306,13 +1467,129 @@ bool checkProjectDialogsForTest(QWidget* parent) {
         screenshotSaved = templateOpen.grab().save(screenshot);
         templateOpen.hide();
     }
+    bool cardsOk = true;
+    const auto check = [&](bool passed, const char* what) {
+        std::fprintf(stderr, "%s project dialogs: %s\n", passed ? "PASS" : "FAIL", what);
+        cardsOk &= passed;
+    };
+    QStringList fixtures;
+    const QStringList names{QStringLiteral("Evening Session"), QStringLiteral("Northern Lights"),
+        QStringLiteral("Ритм города"), QStringLiteral("Piano Sketch"),
+        QStringLiteral("A very long project name that should be elided on the card"), QStringLiteral("Live Take")};
+    for (int i = 0; i < names.size(); ++i) {
+        const QString folder = QDir(temporary.path()).filePath(names[i]);
+        QDir().mkpath(folder);
+        QJsonObject manifest{{"name", names[i]}, {"author", "Studio"}, {"tempo", 120 + i * 4},
+                             {"tracks", QJsonArray{QJsonObject{}, QJsonObject{}, QJsonObject{}}}};
+        QFile output(QString::fromStdString(daw::ProjectSerializer::manifestPath(folder.toStdString())));
+        check(output.open(QIODevice::WriteOnly) && output.write(QJsonDocument(manifest).toJson()) > 0,
+              "project fixture written");
+        output.close();
+        // Visual reviews use an actual captured timeline, supplied by the
+        // harness. A flat pixel fixture is sufficient for persistence-only runs.
+        QImage preview(qEnvironmentVariable("VLT_PROJECT_TEST_TIMELINE"));
+        if (preview.isNull()) {
+            preview = QImage(960, 540, QImage::Format_RGB32);
+            preview.fill(th().background);
+        }
+        check(saveProjectPreview(folder, preview), "timeline preview saved");
+        check(QImage(projectPreviewPath(folder)).size() == preview.size().scaled(QSize(960, 540), Qt::KeepAspectRatio), "preview reopens at bounded resolution");
+        check(!saveProjectPreview(folder, QImage()) && !QImage(projectPreviewPath(folder)).isNull(),
+              "empty capture preserves the last preview");
+        fixtures << folder;
+    }
+    ProjectOpenDialog cards(fixtures, parent);
+    cards.show();
+    QApplication::processEvents();
+    auto* grid = cards.findChild<QListWidget*>(QStringLiteral("ProjectLibrary"));
+    auto* openButton = cards.findChild<QPushButton*>(QStringLiteral("ProjectPrimaryButton"));
+    auto* locationButton = cards.findChild<QPushButton*>(QStringLiteral("ProjectLocationButton"));
+    check(grid && grid->count() == names.size() && !openButton->isEnabled() && !locationButton->isEnabled(),
+          "card grid starts with actions disabled until selection");
+    const auto click = [&](QEvent::Type type, const QPoint& point) {
+        QMouseEvent event(type, QPointF(point), QPointF(grid->viewport()->mapToGlobal(point)),
+                          Qt::LeftButton, type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(grid->viewport(), &event);
+    };
+    const QPoint first = grid->visualItemRect(grid->item(0)).center();
+    click(QEvent::MouseButtonPress, first);
+    click(QEvent::MouseButtonRelease, first);
+    check(cards.isVisible() && cards.selectedPath().isEmpty() && grid->item(0)->isSelected() &&
+          openButton->isEnabled() && locationButton->isEnabled(), "single click only selects and enables actions");
+    check(grid->item(0)->toolTip().contains("Studio") && grid->item(0)->toolTip().contains("120") &&
+          !grid->item(0)->data(kProjectImageRole).value<QPixmap>().isNull(), "card has preview and delayed detail tooltip");
+    check(grid->visualItemRect(grid->item(0)).top() == grid->visualItemRect(grid->item(1)).top(),
+          "projects share a grid row rather than a vertical list");
+    const QString projectScreenshot = qEnvironmentVariable("VLT_PROJECT_DIALOG_SCREENSHOT");
+    if (!projectScreenshot.isEmpty()) check(cards.grab().save(projectScreenshot), "project grid screenshot saved");
+    click(QEvent::MouseButtonDblClick, first);
+    click(QEvent::MouseButtonRelease, first);
+    check(cards.result() == QDialog::Accepted && cards.selectedPath() == fixtures.front(),
+          "double click opens exactly the selected project");
+    ProjectOpenDialog viaButton(fixtures, parent);
+    viaButton.findChild<QListWidget*>()->setCurrentRow(1);
+    viaButton.findChild<QPushButton*>(QStringLiteral("ProjectPrimaryButton"))->click();
+    check(viaButton.result() == QDialog::Accepted && viaButton.selectedPath() == fixtures[1],
+          "Open Project uses the selected card");
+    ProjectOpenDialog viaKeyboard(fixtures, parent);
+    viaKeyboard.show();
+    auto* keyboardGrid = viaKeyboard.findChild<QListWidget*>();
+    keyboardGrid->setCurrentRow(2);
+    keyboardGrid->setFocus();
+    viaKeyboard.activateWindow();
+    QApplication::processEvents();
+    QKeyEvent returnKey(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(keyboardGrid, &returnKey);
+    check(viaKeyboard.result() == QDialog::Accepted && viaKeyboard.selectedPath() == fixtures[2],
+          "Enter opens the focused project");
+    ProjectOpenDialog empty({}, parent);
+    check(!empty.findChild<QPushButton*>(QStringLiteral("ProjectPrimaryButton"))->isEnabled() &&
+          empty.findChild<QPushButton*>(QStringLiteral("ProjectBrowseButton"))->isEnabled(),
+          "empty library still allows browsing disk");
+    save.setTimelinePreview(QImage(projectPreviewPath(fixtures.front())));
+    check(save.options().coverPath.isEmpty() && !save.findChild<QLabel*>(QStringLiteral("ProjectCover"))->pixmap().isNull(),
+          "save dialog previews timeline without treating it as a custom cover");
+    QImage updated(1920, 1080, QImage::Format_RGB32);
+    updated.fill(Qt::darkGreen);
+    check(saveProjectPreview(fixtures.front(), updated) &&
+          QImage(projectPreviewPath(fixtures.front())).pixelColor(20, 20) == QColor(Qt::darkGreen),
+          "a later save replaces the previous thumbnail");
+    const QString customFolder = fixtures.back();
+    QDir().mkpath(QDir(customFolder).filePath(QStringLiteral("Content")));
+    const QString customCover = QDir(customFolder).filePath(QStringLiteral("Content/cover.png"));
+    check(image.save(customCover), "custom project cover saved");
+    QFile customManifest(QString::fromStdString(daw::ProjectSerializer::manifestPath(customFolder.toStdString())));
+    check(customManifest.open(QIODevice::WriteOnly) && customManifest.write(QJsonDocument(QJsonObject{
+        {"name", "Custom"}, {"cover", "cover.png"}}).toJson()) > 0, "custom cover manifest written");
+    customManifest.close();
+    check(readSummary(customFolder).coverPath == customCover, "saved custom cover takes priority over automatic preview");
+    ProjectSaveDialog custom(QStringLiteral("Custom cover"), {}, artwork, temporary.path(), parent);
+    custom.setTimelinePreview(QImage(projectPreviewPath(fixtures.front())));
+    check(custom.options().coverPath == artwork, "automatic preview never replaces a chosen image");
+    custom.findChild<QPushButton*>(QStringLiteral("ProjectUseTimelineButton"))->click();
+    check(custom.options().coverPath.isEmpty() &&
+          !custom.findChild<QLabel*>(QStringLiteral("ProjectCover"))->pixmap().isNull(),
+          "Use Timeline clears only the custom cover and restores the snapshot");
+    auto* nameField = save.findChild<QLineEdit*>(QStringLiteral("ProjectName"));
+    nameField->setText(QStringLiteral("bad/name"));
+    check(!save.findChild<QPushButton*>(QStringLiteral("ProjectPrimaryButton"))->isEnabled(),
+          "redesigned save form still rejects invalid file names");
+    nameField->setText(QStringLiteral("Demo Project"));
+    const QString projectSaveScreenshot = qEnvironmentVariable("VLT_PROJECT_SAVE_DIALOG_SCREENSHOT");
+    if (!projectSaveScreenshot.isEmpty()) {
+        save.show();
+        QApplication::processEvents();
+        check(save.grab().save(projectSaveScreenshot), "project save screenshot saved");
+        save.hide();
+    }
     const QString expectedProjectFolder =
 #ifdef Q_OS_MACOS
         QStringLiteral("Demo Project");
 #else
         QStringLiteral("Demo Project.vlt");
 #endif
-    return save.checkForTest() && open.checkForTest() &&
+    return cardsOk && save.checkForTest() && open.checkForTest() &&
            templateSave.checkForTest() && templateOpen.checkForTest() &&
            artworkSaved && QFileInfo(stored.path).isFile() &&
            stored.displayName == QFileInfo(testMedia).fileName() &&

@@ -34,6 +34,8 @@ namespace daw::plugins {
 /// delay and buys a click-free toggle.
 class PluginNode final : public engine::Node, public PluginListener {
 public:
+    enum class Fault : std::uint8_t { None, ProcessError, NonFiniteOutput, ActivationFailed };
+    struct FaultGroup { std::atomic<unsigned> sides{0}; };
     PluginNode(std::string name, std::unique_ptr<PluginInstance> instance);
     ~PluginNode() override;
 
@@ -42,21 +44,17 @@ public:
     engine::MidiNodeRole midiRole() const noexcept override {
         // VST2 has no reliable output-port declaration; preserve its ability
         // to originate events. The other formats report their event buses.
-        if (m_wantsMidi || (m_instance &&
-            (m_instance->descriptor().producesMidi || m_instance->descriptor().format == Format::Vst ||
-             m_instance->descriptor().format == Format::Unknown)))
-            return engine::MidiNodeRole::InputOutput;
-        return engine::MidiNodeRole::Passthrough;
+        return m_midiRole;
     }
     engine::OfflineNodePolicy offlineNodePolicy() const noexcept override {
-        return m_instance && m_instance->supportsOfflinePipelining()
+        return m_offlinePipelining
             ? engine::OfflineNodePolicy::Ordered : engine::OfflineNodePolicy::Barrier;
     }
     engine::FrameCount latencySamples() const noexcept override {
         return m_latency.load(std::memory_order_relaxed);
     }
     engine::FrameCount tailSamples() const noexcept override {
-        return m_instance ? m_instance->tailSamples() : 0;
+        return faultBypassed() ? 0 : (m_instance ? m_instance->tailSamples() : 0);
     }
 
     void prepare(const engine::PrepareInfo& info) override;
@@ -70,13 +68,8 @@ public:
     void suspend() override;
     void resume() override;
     void process(const engine::ProcessContext& context) override;
-    bool hasDeferredProcess() const noexcept override {
-        return m_instance && m_instance->hasDeferredProcess();
-    }
-    bool beginProcess(const engine::ProcessContext& context) override;
-    bool finishProcess(bool expired) noexcept override;
-    engine::Status serviceOffline() override;
     engine::Status offlineStatus() const noexcept override;
+    engine::Status serviceOffline() override;
     engine::Status processStatus() const noexcept override {
         return m_processFailed.load(std::memory_order_relaxed)
             ? engine::Status(engine::fail(engine::EngineError::ProcessingFailed)) : engine::Status{};
@@ -93,6 +86,21 @@ public:
     PluginInstance* instance() noexcept { return m_instance.get(); }
     const PluginInstance* instance() const noexcept { return m_instance.get(); }
     std::uint64_t instanceId() const noexcept { return m_instanceId; }
+    Fault fault() const noexcept { return m_fault.load(std::memory_order_acquire); }
+    static std::uint64_t faultGeneration() noexcept { return s_faultGeneration.load(std::memory_order_acquire); }
+    bool faultBypassed() const noexcept { return m_faultGroup->sides.load(std::memory_order_acquire) != 0; }
+    bool takeOverloadNotice() noexcept { return m_overloadNotice.exchange(false); }
+    const PluginDescriptor& descriptor() const noexcept { return m_descriptor; }
+    const std::shared_ptr<FaultGroup>& faultGroup() const noexcept { return m_faultGroup; }
+    // Only with rendering parked. A dual-mono slot shares one fallback latch.
+    void setFaultGroup(std::shared_ptr<FaultGroup> group, unsigned side,
+                       std::shared_ptr<std::atomic<bool>> masterMute = {}) {
+        m_faultGroup = std::move(group); m_faultSide = side; m_masterMute = std::move(masterMute);
+        if (fault() != Fault::None) {
+            m_faultGroup->sides.fetch_or(1u << side);
+            if (m_masterMute) m_masterMute->store(true);
+        }
+    }
 
     void setBypassed(bool bypassed) noexcept {
         m_bypassed.store(bypassed, std::memory_order_relaxed);
@@ -131,7 +139,12 @@ public:
     /// when the ring is full, which means the control thread is producing
     /// faster than the audio thread consumes and the change is dropped rather
     /// than blocking the caller.
-    bool pushEvent(const PluginEvent& event) noexcept { return m_inbound.push(event); }
+    bool pushEvent(const PluginEvent& event) noexcept {
+        if (faultBypassed()) return false;
+        if (m_inbound.push(event)) return true;
+        m_inboundOverload.store(true, std::memory_order_release);
+        return false;
+    }
 
     /// A restored state supersedes parameter events queued for the previous
     /// state. Control thread only, with graph processing parked by RenderGate.
@@ -232,17 +245,19 @@ public:
     void onStateChanged() noexcept override;
 
 private:
-    void finishAudio(PluginProcessDisposition disposition) noexcept;
-    void failProcess(const engine::ProcessContext& context, bool bypassed) noexcept;
-    void forwardMidi(const engine::ProcessContext& context) noexcept;
-    void rememberTransport(const engine::ProcessContext& context) noexcept;
-    struct DeferredBlock {
-        engine::ProcessContext context;
-        PluginProcessContext plugin;
+    struct BlockState {
+        const engine::ProcessContext& context;
+        std::uint16_t outputChannels = 0;
         float targetWet = 1;
         bool bypassed = false, needsDry = false, canSleep = false, tailStimulus = false;
-    } m_block;
-    bool m_processing = false;
+        std::size_t firstPluginMidi = 0;
+    };
+    void finishAudio(const BlockState& block, PluginProcessDisposition disposition) noexcept;
+    void latchFault(Fault reason) noexcept;
+    void noteOverload() noexcept;
+    void renderFaultFallback(const engine::ProcessContext& context, bool dryReady) noexcept;
+    void forwardMidi(const engine::ProcessContext& context) noexcept;
+    void rememberTransport(const engine::ProcessContext& context) noexcept;
     using AutomationOverrides = std::vector<std::pair<std::uint32_t, std::uint64_t>>;
     engine::RealtimeSnapshot<AutomationOverrides> m_automationOverrides;
     std::atomic<std::uint64_t> m_overrideEpoch{0};
@@ -279,7 +294,18 @@ private:
     std::atomic<bool> m_slideOverloaded{false},m_slideClipped{false};
     const std::uint64_t m_instanceId;
     std::string m_name;
+    PluginDescriptor m_descriptor;
+    engine::MidiNodeRole m_midiRole = engine::MidiNodeRole::Passthrough;
+    bool m_offlinePipelining = false;
     std::unique_ptr<PluginInstance> m_instance;
+    std::shared_ptr<FaultGroup> m_faultGroup = std::make_shared<FaultGroup>();
+    std::shared_ptr<std::atomic<bool>> m_masterMute;
+    unsigned m_faultSide = 0;
+    std::atomic<Fault> m_fault{Fault::None};
+    inline static std::atomic<std::uint64_t> s_faultGeneration{1};
+    std::atomic<bool> m_overloadNotice{false};
+    std::atomic<bool> m_inboundOverload{false};
+    bool m_eventResyncPending = false;
     Sink m_sink;
     bool m_isSource = false;
     bool m_wantsMidi = false;

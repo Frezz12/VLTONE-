@@ -32,8 +32,12 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var admin model.AdminUser
-	err := s.DB.Where("email_key = ?", auth.NormalizeEmail(input.Email)).First(&admin).Error
-	if err != nil || !auth.VerifyPassword(admin.PasswordHash, input.Password) {
+	// Linked accounts always use the website's current identity and password.
+	err := s.DB.Where("user_id = (SELECT id FROM users WHERE email_key = ?)", auth.NormalizeEmail(input.Email)).First(&admin).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		err = s.DB.Where("email_key = ? AND user_id IS NULL AND is_owner = true", auth.NormalizeEmail(input.Email)).First(&admin).Error
+	}
+	if err != nil || !s.resolveAdminIdentity(&admin) || !auth.VerifyPassword(admin.PasswordHash, input.Password) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_credentials", "Email or password is incorrect.", nil)
 		return
 	}
@@ -47,7 +51,35 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		ID: uuid.New(), AdminUserID: admin.ID, TokenHash: auth.HashToken(raw), CSRFToken: csrf,
 		LastSeenAt: now, ExpiresAt: now.Add(8 * time.Hour), CreatedAt: now,
 	}
-	if err := s.DB.Create(&session).Error; err != nil {
+	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+		// Serialize login with account revocation, password reset and team grants.
+		// Lock in the same user -> administrator order as grant updates.
+		var user model.User
+		if admin.UserID != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&user, "id = ? AND status = ?", admin.UserID, model.UserActive).Error; err != nil {
+				return err
+			}
+			if user.PasswordHash != admin.PasswordHash {
+				return errors.New("credentials changed")
+			}
+		}
+		var current model.AdminUser
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&current, "id = ? AND status = ?", admin.ID, model.UserActive).Error; err != nil {
+			return err
+		}
+		if admin.UserID == nil {
+			if !current.IsOwner || current.UserID != nil || current.PasswordHash != admin.PasswordHash {
+				return errors.New("access changed")
+			}
+		} else {
+			if current.UserID == nil || *current.UserID != *admin.UserID {
+				return errors.New("access changed")
+			}
+			current.Email, current.Nickname, current.PasswordHash = user.Email, user.Nickname, user.PasswordHash
+		}
+		admin = current
+		return tx.Create(&session).Error
+	}); err != nil {
 		writeError(w, r, http.StatusInternalServerError, "session_failed", "Administrator sign in failed.", nil)
 		return
 	}
@@ -321,6 +353,9 @@ func (s *Server) adminSetUserStatus(w http.ResponseWriter, r *http.Request, stat
 			return gorm.ErrRecordNotFound
 		}
 		if status == model.UserSuspended {
+			if err := tx.Model(&model.AdminSession{}).Where("admin_user_id IN (SELECT id FROM admin_users WHERE user_id = ?) AND revoked_at IS NULL", id).Update("revoked_at", now).Error; err != nil {
+				return err
+			}
 			if err := tx.Model(&model.WebSession{}).
 				Where("user_id = ? AND revoked_at IS NULL", id).
 				Update("revoked_at", now).Error; err != nil {
@@ -506,6 +541,9 @@ func (s *Server) adminRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			First(&user, "id = ?", id).Error; err != nil {
 			return err
 		}
+		if err := tx.Model(&model.AdminSession{}).Where("admin_user_id IN (SELECT id FROM admin_users WHERE user_id = ?) AND revoked_at IS NULL", id).Update("revoked_at", now).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&model.WebSession{}).
 			Where("user_id = ? AND revoked_at IS NULL", id).
 			Update("revoked_at", now).Error; err != nil {
@@ -586,6 +624,16 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if err := s.audit(tx, r, "user.delete", "user", id, map[string]any{"scope": "full"}); err != nil {
+			return err
+		}
+		// Preserve task/audit references while removing the deleted account's identity.
+		if err := tx.Model(&model.AdminSession{}).Where("admin_user_id IN (SELECT id FROM admin_users WHERE user_id = ?) AND revoked_at IS NULL", id).Update("revoked_at", time.Now().UTC()).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.AdminUser{}).Where("user_id = ?", id).Updates(map[string]any{
+			"email": "", "email_key": "deleted:" + id.String(), "nickname": "Удалённый участник",
+			"status": model.UserSuspended, "permissions": datatypes.JSON([]byte("[]")), "password_hash": "",
+		}).Error; err != nil {
 			return err
 		}
 		result := tx.Delete(&model.User{}, "id = ?", id)

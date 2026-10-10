@@ -5,7 +5,7 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
   let release: Record<string, unknown> | undefined;
   await page.route("**/api/v1/admin/**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { admin: { id: "a", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-30T00:00:00Z" } });
+    if (url.pathname.endsWith("/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "a", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-30T00:00:00Z" } });
     if (url.pathname.endsWith("/releases") && route.request().method() === "GET") return route.fulfill({ json: { releases: release ? [release] : [] } });
     if (url.pathname.endsWith("/releases") && route.request().method() === "POST") {
       const input = route.request().postDataJSON();

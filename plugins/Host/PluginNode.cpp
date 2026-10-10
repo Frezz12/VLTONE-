@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <limits>
 #include <cmath>
-#include <thread>
 
 namespace daw::plugins {
 
@@ -24,10 +23,14 @@ PluginNode::PluginNode(std::string name, std::unique_ptr<PluginInstance> instanc
     if (m_instance) {
         m_instance->setListener(this);
         const PluginDescriptor& descriptor = m_instance->descriptor();
+        m_descriptor = descriptor;
+        m_offlinePipelining = m_instance->supportsOfflinePipelining();
         // An instrument produces sound with no audio input, which is exactly
         // what the graph means by a source.
         m_isSource = descriptor.isInstrument || descriptor.mainInputChannels == 0;
         m_wantsMidi = descriptor.wantsMidi || descriptor.isInstrument;
+        if (m_wantsMidi || descriptor.producesMidi || descriptor.format == Format::Vst || descriptor.format == Format::Unknown)
+            m_midiRole = engine::MidiNodeRole::InputOutput;
         m_pluginInputChannels = descriptor.mainInputChannels;
         m_pluginOutputChannels = descriptor.mainOutputChannels;
         m_latency.store(m_instance->latencySamples(), std::memory_order_relaxed);
@@ -42,8 +45,7 @@ PluginNode::~PluginNode() {
 }
 
 std::vector<PluginEvent> PluginNode::pendingParameterEvents() {
-    if (m_instance && m_instance->hasFailed()) return {};
-    auto events = m_instance ? m_instance->pendingParameterEvents()
+    auto events = m_instance && !faultBypassed() ? m_instance->pendingParameterEvents()
                              : std::vector<PluginEvent>{};
     auto hostEvents = pendingHostEvents();
     events.insert(events.end(), hostEvents.begin(), hostEvents.end());
@@ -66,6 +68,8 @@ std::vector<PluginEvent> PluginNode::pendingHostEvents() {
 }
 
 void PluginNode::prepare(const engine::PrepareInfo& info) {
+    const bool wasPrepared = m_blockEvents.capacity() != 0;
+    const auto previousLatency = m_dryDelaySamples;
     m_processFailed.store(false, std::memory_order_relaxed);
     if (!info.offline) m_hasLastOfflineConfiguration = false;
     // These requests are satisfied by this activation. New requests arriving
@@ -80,7 +84,7 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_lastProcessDisposition = PluginProcessDisposition::Continue;
     m_sleepTransportValid = false;
 
-    if (m_instance) {
+    if (m_instance && !faultBypassed()) {
         if (m_instance->isActive()) {
             m_instance->stopProcessing();
             m_instance->deactivate();
@@ -117,6 +121,11 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_curveCursor.assign(2048, 0);
 
     if (!m_instance) return;
+    if (faultBypassed()) {
+        m_dryDelayStorage.assign(std::size_t(info.channels) * m_dryDelaySamples, 0.f);
+        m_dryDelayPosition = 0;
+        return;
+    }
     m_ready.store(false, std::memory_order_release);
 
     // Reconfiguring a plugin is exactly what RealtimeEngine::RenderGate exists
@@ -145,9 +154,20 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
         m_dryDelayPosition = 0;
         m_dryDelayStorage.clear();
     }
+    if (wasPrepared && !info.offline && !m_ready.load(std::memory_order_acquire)) {
+        m_latency.store(previousLatency, std::memory_order_relaxed);
+        m_dryDelaySamples = previousLatency;
+        m_dryDelayStorage.assign(std::size_t(info.channels) * previousLatency, 0.f);
+        m_dryDelayPosition = 0;
+        latchFault(Fault::ActivationFailed);
+        return;
+    }
     // Activation may replace a parameter table or event-bus layout.
     const auto& descriptor = m_instance->descriptor();
+    m_descriptor = descriptor;
     m_wantsMidi = descriptor.wantsMidi || descriptor.isInstrument;
+    m_midiRole = m_wantsMidi || descriptor.producesMidi || descriptor.format == Format::Vst || descriptor.format == Format::Unknown
+        ? engine::MidiNodeRole::InputOutput : engine::MidiNodeRole::Passthrough;
     const auto eventCapacity = pluginBlockEventCapacity(
         descriptor, processInfo, m_instance->parameters().size());
     m_blockEvents.reserve(eventCapacity);
@@ -160,7 +180,7 @@ void PluginNode::reset() {
     m_processFailed.store(false, std::memory_order_relaxed);
     // A bypassed insert may have declined activation. CLAP reset requires an
     // active instance even though that slot contributes only the dry signal.
-    if (m_instance && m_instance->isActive()) m_instance->resetForTransport();
+    if (m_instance && !faultBypassed() && m_instance->isActive()) m_instance->resetForTransport();
     m_heldMidiOutput.fill(0);
     m_heldMidiOutputCount = 0;
     const bool bypassed = m_bypassed.load(std::memory_order_relaxed);
@@ -178,6 +198,7 @@ void PluginNode::reset() {
 }
 
 engine::Status PluginNode::offlineStatus() const noexcept {
+    if (faultBypassed()) return engine::fail(engine::EngineError::ProcessingFailed);
     if (isBypassed() || m_mix.load(std::memory_order_relaxed) == 0.f) return {};
     if (!m_instance || !isReady()) return engine::fail(engine::EngineError::ProcessorUnavailable);
     if (m_processFailed.load(std::memory_order_relaxed))
@@ -186,6 +207,7 @@ engine::Status PluginNode::offlineStatus() const noexcept {
 }
 
 engine::Status PluginNode::serviceOffline() {
+    if (faultBypassed()) return engine::fail(engine::EngineError::ProcessingFailed);
     if (!m_instance || isBypassed() || m_mix.load(std::memory_order_relaxed) == 0.f) return {};
     beginMainThreadPump();
     m_instance->pumpMainThread();
@@ -227,7 +249,7 @@ void PluginNode::suspend() {
 }
 
 void PluginNode::resume() {
-    if (m_instance) {
+    if (m_instance && !faultBypassed()) {
         m_instance->startProcessing();
         m_pluginSleeping = false;
         m_tailFramesRemaining = 0;
@@ -287,9 +309,7 @@ void PluginNode::Sink::push(const PluginEvent& event) noexcept {
         } else {
             return;
         }
-        if (m_owner.m_currentMidiOutput->push(midi)) {
-            m_owner.rememberMidiOutput(midi);
-        }
+        if (!m_owner.m_currentMidiOutput->push(midi)) m_owner.noteOverload();
         return;
     }
     // Dropping is correct when the control thread has not drained in a while:
@@ -369,17 +389,6 @@ void PluginNode::onStateChanged() noexcept {
     requestMainThreadPump();
 }
 
-void PluginNode::process(const engine::ProcessContext& context) {
-    // Direct/offline callers retain a bounded compatibility path. The graph
-    // uses begin/finish and executes independent nodes while DSP is pending.
-    auto timed = context;
-    if (!timed.deadlineNanos && m_instance && m_instance->hasDeferredProcess())
-        timed.deadlineNanos = rt::nowNanos() + (context.offline ? 10'000'000'000ull
-            : std::uint64_t(double(context.frames) * 800'000'000.0 / std::max(context.sampleRate, 1.0)));
-    if (beginProcess(timed)) return;
-    while (!finishProcess(rt::nowNanos() >= timed.deadlineNanos)) std::this_thread::yield();
-}
-
 void PluginNode::forwardMidi(const engine::ProcessContext& context) noexcept {
     if (!context.midiOutput) return;
     // Returning to the dry route changes note identity. Release transformed
@@ -393,7 +402,7 @@ void PluginNode::forwardMidi(const engine::ProcessContext& context) noexcept {
     }
 }
 
-bool PluginNode::beginProcess(const engine::ProcessContext& context) {
+void PluginNode::process(const engine::ProcessContext& context) {
     if (!context.offline) m_processFailed.store(false, std::memory_order_relaxed);
     const engine::ChannelCount outChannels = context.output.numChannels();
     const engine::FrameCount frames = context.frames;
@@ -427,14 +436,14 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
         }
     };
 
-    if (!m_instance || !m_ready.load(std::memory_order_acquire) ||
+    if (!m_instance || (!m_ready.load(std::memory_order_acquire) && !faultBypassed()) ||
         frames > m_maxBlockSize) {
         passThrough();
         // A missing/unprepared audio insert is still a transparent part of the
         // MIDI route. Otherwise opening a project while a plugin is unavailable
         // can leave the downstream instrument silent or holding notes.
         forwardMidi(context);
-        return true;
+        return;
     }
 
     // ── Sum the main input bus ──
@@ -525,7 +534,8 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
     }
 
     const bool hostEventPending = !m_inbound.empty();
-    const bool pluginWakeRequested = m_instance->takeProcessWakeRequest();
+    const bool failed = faultBypassed();
+    const bool pluginWakeRequested = !failed && m_instance->takeProcessWakeRequest();
 
     // ── Keep the dry signal when a crossfade is in flight ──
     const bool bypassed = m_bypassed.load(std::memory_order_relaxed);
@@ -533,7 +543,7 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
     // audible until enough fresh input has passed through it, then crossfade.
     const bool warming = !bypassed && m_bypassWarmupRemaining != 0;
     const float targetWet = bypassed || warming ? 0.0f : m_mix.load(std::memory_order_relaxed);
-    const bool needsDry = (m_wet != 1.0f) || (targetWet != 1.0f);
+    const bool needsDry = failed || (m_wet != 1.0f) || (targetWet != 1.0f);
     if (!bypassed) m_bypassProcessorReset = false;
     if (needsDry || m_dryDelaySamples > 0) {
         for (engine::ChannelCount ch = 0; ch < outChannels; ++ch) {
@@ -570,6 +580,11 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
         }
     }
 
+    if (failed) {
+        renderFaultFallback(context, true);
+        return;
+    }
+
     // Once the wet-to-dry crossfade has completed, the plugin cannot
     // contribute to either audio or MIDI. Keep feeding the host-owned dry
     // latency line, but stop calling third-party DSP until bypass is released.
@@ -603,18 +618,10 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
         }
         forwardMidi(context);
         rememberTransport(context);
-        return true;
+        return;
     }
 
-    if (m_instance->hasDeferredProcess() && context.deadlineNanos &&
-        rt::nowNanos() >= context.deadlineNanos) {
-        // A preceding node may have consumed the shared deadline. Do not
-        // submit this healthy child only to expire it immediately. Host edits
-        // remain queued for the next block, and this slot retains its process.
-        if (m_instance->supportsRealtimeReset()) m_instance->reset();
-        failProcess(context, bypassed);
-        return true;
-    }
+
 
     // Exact, contract-grade silence information. This is deliberately not a
     // threshold: denormals, NaNs and every non-zero sample are real input and
@@ -710,16 +717,15 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
         if (!mustWake) {
             renderSleepingOutput(false);
             rememberTransport(context);
-            return true;
+            return;
         }
         if (!m_instance->wakeProcessing()) {
-            m_processFailed.store(true, std::memory_order_relaxed);
+            latchFault(Fault::ActivationFailed);
             // A failed format transition cannot be repaired in the callback.
             // Define audio and preserve MIDI rather than invoking process while
             // the format says the instance is stopped.
-            renderSleepingOutput(true);
-            rememberTransport(context);
-            return true;
+            renderFaultFallback(context, needsDry || m_dryDelaySamples > 0);
+            return;
         }
         m_pluginSleeping = false;
         m_tailFramesRemaining = 0;
@@ -764,12 +770,23 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
     // at the same frame must land before it.
     m_blockEvents.clear();
 
+    if (m_eventResyncPending) {
+        m_eventResyncPending = false;
+        if (m_instance->supportsRealtimeReset()) m_instance->reset();
+        else if (m_wantsMidi) for (std::int16_t channel = 0; channel < 16; ++channel) {
+            PluginEvent release;
+            release.kind = PluginEvent::Kind::MidiController;
+            release.paramIndex = 123; release.channel = channel;
+            m_blockEvents.push_back(release);
+        }
+    }
+
     PluginEvent event;
     while (m_inbound.pop(event)) {
         if (event.frameOffset >= frames) event.frameOffset = frames > 0 ? frames - 1 : 0;
         if (m_blockEvents.size() < m_blockEvents.capacity()) {
             m_blockEvents.push_back(event);
-        }
+        } else noteOverload();
     }
     // ── MIDI notes ──
     //
@@ -787,6 +804,7 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
 
         const bool isRelease = incoming.kind == PluginEvent::Kind::NoteOff ||
                                incoming.kind == PluginEvent::Kind::NoteChoke;
+        noteOverload();
         if (!isRelease) return false;
 
         auto sameVoice = [&](const PluginEvent& queued) noexcept {
@@ -965,7 +983,7 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
                 if (frame && value == previous) continue;
                 previous = value;
                 if (m_blockEvents.size() == m_blockEvents.capacity()) {
-                    m_processFailed.store(true, std::memory_order_relaxed);
+                    noteOverload();
                     break; // report overload; never export a silently truncated curve
                 }
                 PluginEvent event;
@@ -1011,7 +1029,6 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
     processContext.transport = context.transport;
     processContext.sampleTime = context.timelinePosition;
     processContext.steadyTime = steadyTime;
-    processContext.deadlineNanos = context.deadlineNanos;
     processContext.playing = context.playing;
     processContext.offline = context.offline;
 
@@ -1023,32 +1040,26 @@ bool PluginNode::beginProcess(const engine::ProcessContext& context) {
     // tail but no longer owns the MIDI path: forwarding both its transformed
     // events and the transparent dry stream would duplicate notes downstream.
     m_currentMidiOutput = bypassed ? nullptr : context.midiOutput;
-    m_block = {context, processContext, targetWet, bypassed, needsDry,
+    const BlockState block{context, processContext.outputChannels, targetWet, bypassed, needsDry,
         !anyNonZeroInput && !automationActive,
         anyNonZeroInput || hasMainMidiInput || hostEventPending || automationActive ||
-        transportChanged || pluginWakeRequested || mixTransition};
+        transportChanged || pluginWakeRequested || mixTransition,
+        context.midiOutput ? context.midiOutput->size() : 0};
+    // Overflow is exceptional. Keep the normal callback read-only on this
+    // control-thread flag instead of taking cache-line ownership every block.
+    if (m_inboundOverload.load(std::memory_order_acquire) &&
+        m_inboundOverload.exchange(false, std::memory_order_acquire)) noteOverload();
+    if (m_processFailed.load(std::memory_order_relaxed)) {
+        m_currentMidiOutput = nullptr;
+        renderFaultFallback(context, needsDry || m_dryDelaySamples > 0);
+        return;
+    }
     const auto* previousProcessingPlugin=processingPlugin;
     processingPlugin=this;
-    PluginProcessDisposition disposition = PluginProcessDisposition::Error;
-    const bool complete = m_instance->beginProcess(processContext, disposition);
+    const auto disposition = m_instance->process(processContext);
     processingPlugin=previousProcessingPlugin;
     m_currentMidiOutput = nullptr;
-    m_processing = !complete;
-    if (complete) finishAudio(disposition);
-    return complete;
-}
-
-bool PluginNode::finishProcess(bool expired) noexcept {
-    if (!m_processing) return true;
-    m_currentMidiOutput = m_block.bypassed ? nullptr : m_block.context.midiOutput;
-    const auto* previous = processingPlugin;
-    processingPlugin = this;
-    PluginProcessDisposition disposition = PluginProcessDisposition::Error;
-    const bool complete = m_instance->finishProcess(m_block.plugin, disposition, expired);
-    processingPlugin = previous;
-    m_currentMidiOutput = nullptr;
-    if (complete) { m_processing = false; finishAudio(disposition); }
-    return complete;
+    finishAudio(block, disposition);
 }
 
 void PluginNode::rememberTransport(const engine::ProcessContext& context) noexcept {
@@ -1060,25 +1071,51 @@ void PluginNode::rememberTransport(const engine::ProcessContext& context) noexce
     m_sleepTransportValid = true;
 }
 
-void PluginNode::failProcess(const engine::ProcessContext& context, bool bypassed) noexcept {
+void PluginNode::latchFault(Fault reason) noexcept {
+    if (m_fault.exchange(reason, std::memory_order_acq_rel) == Fault::None) {
+        m_faultGroup->sides.fetch_or(1u << m_faultSide, std::memory_order_release);
+        if (m_masterMute) m_masterMute->store(true, std::memory_order_release);
+        s_faultGeneration.fetch_add(1, std::memory_order_release);
+        PluginMainThreadWork::request();
+    }
+}
+
+void PluginNode::noteOverload() noexcept {
+    m_eventResyncPending = true;
     m_processFailed.store(true, std::memory_order_relaxed);
-    for (engine::ChannelCount ch = 0; ch < context.output.numChannels(); ++ch)
-        dsp::clear(context.output.channel(ch).first(context.frames));
+    if (!m_overloadNotice.exchange(true, std::memory_order_acq_rel)) PluginMainThreadWork::request();
+}
+
+void PluginNode::renderFaultFallback(const engine::ProcessContext& context, bool dryReady) noexcept {
+    // The dry ring was maintained before the foreign call, including at 100% wet.
+    // Never crossfade a foreign NaN or partially written output into this signal.
+    for (engine::ChannelCount ch = 0; ch < context.output.numChannels(); ++ch) {
+        const auto out = context.output.channel(ch).first(context.frames);
+        if (m_isSource || (m_masterMute && m_masterMute->load(std::memory_order_acquire)) || !m_pluginInputChannels)
+            dsp::clear(out);
+        else {
+            const auto sourceChannel = std::min<unsigned>(ch, m_pluginInputChannels - 1);
+            const float* source = dryReady ? m_dryStorage.data() + std::size_t(ch) * m_maxBlockSize
+                : m_inputStorage.data() + std::size_t(sourceChannel) * m_maxBlockSize;
+            dsp::copyScaled(out, {source, context.frames}, 1.f);
+            for (auto& sample : out) if (!std::isfinite(sample)) sample = 0.f;
+        }
+    }
     // Discard foreign output, release transformed voices and preserve trusted
     // dry MIDI. Dropping an audio effect's note-off would strand a later synth.
     if (context.midiOutput) context.midiOutput->clear();
-    if (!m_wantsMidi || bypassed) forwardMidi(context);
+    if (!m_isSource) forwardMidi(context);
     else releaseHeldMidi(context.midiOutput);
     rememberTransport(context);
 }
 
-void PluginNode::finishAudio(PluginProcessDisposition disposition) noexcept {
-    const auto& context = m_block.context;
+void PluginNode::finishAudio(const BlockState& block, PluginProcessDisposition disposition) noexcept {
+    const auto& context = block.context;
     const auto frames = context.frames;
     const auto outChannels = context.output.numChannels();
-    const auto outCount = m_block.plugin.outputChannels;
-    const bool bypassed = m_block.bypassed, needsDry = m_block.needsDry;
-    const float targetWet = m_block.targetWet;
+    const auto outCount = block.outputChannels;
+    const bool bypassed = block.bypassed, needsDry = block.needsDry;
+    const float targetWet = block.targetWet;
     m_bypassWarmupRemaining -= std::min(m_bypassWarmupRemaining, frames);
     bool finiteOutput = true;
     for (engine::ChannelCount ch = 0; ch < outCount; ++ch) {
@@ -1087,10 +1124,23 @@ void PluginNode::finishAudio(PluginProcessDisposition disposition) noexcept {
         finiteOutput &= std::all_of(samples.begin(), samples.end(), [](float x) { return std::isfinite(x); });
     }
     if (disposition == PluginProcessDisposition::Error || !finiteOutput) {
-        failProcess(context, bypassed);
+        latchFault(finiteOutput ? Fault::ProcessError : Fault::NonFiniteOutput);
+        m_processFailed.store(true, std::memory_order_relaxed);
+        renderFaultFallback(context, needsDry || m_dryDelaySamples > 0);
         return;
     }
     if (bypassed) m_bypassProcessorReset = false;
+    if (m_processFailed.load(std::memory_order_relaxed) || faultBypassed()) {
+        renderFaultFallback(context, needsDry || m_dryDelaySamples > 0);
+        return;
+    }
+    // Output MIDI is committed only after DSP succeeds. A vendor can emit a
+    // note-off and then fail; discarding that block must still release the
+    // previously audible note through the trusted fallback path.
+    if (context.midiOutput) {
+        const auto events = context.midiOutput->events();
+        for (std::size_t i = block.firstPluginMidi; i < events.size(); ++i) rememberMidiOutput(events[i]);
+    }
 
     // A plugin with fewer output channels than the arena leaves the rest
     // holding another node's audio. Fill them from what it did write.
@@ -1127,13 +1177,13 @@ void PluginNode::finishAudio(PluginProcessDisposition disposition) noexcept {
     bool enterSleep = false;
     if (disposition == PluginProcessDisposition::Sleep) {
         m_tailFramesRemaining = 0;
-        enterSleep = m_block.canSleep;
+        enterSleep = block.canSleep;
     } else if (disposition == PluginProcessDisposition::Tail) {
         const std::uint64_t tail = m_instance->tailSamples();
         if (tail >= std::uint64_t(std::numeric_limits<std::int32_t>::max())) {
             m_tailFramesRemaining = tail;
         } else {
-            const bool tailStimulus = m_block.tailStimulus;
+            const bool tailStimulus = block.tailStimulus;
             if (tailStimulus ||
                 m_lastProcessDisposition != PluginProcessDisposition::Tail) {
                 m_tailFramesRemaining = tail;

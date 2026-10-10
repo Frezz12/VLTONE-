@@ -1,6 +1,6 @@
 #pragma once
 
-#include "HostedPluginFactory.hpp"
+#include "Host/PluginTypes.hpp"
 #include "model/Document.hpp"
 
 // This framework-independent spec is also included by Qt editor translation

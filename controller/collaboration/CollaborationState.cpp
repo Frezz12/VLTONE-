@@ -85,6 +85,7 @@ std::string deterministicMigrationId(std::string_view domain,
 void ensureStableCollaborationIds(ProjectModel& project) {
     std::unordered_set<std::string> pointIds;
     std::unordered_set<std::string> compIds;
+    std::unordered_set<const ClipContent*> contents;
 
     for (std::size_t ti = 0; ti < project.tracks.size(); ++ti) {
         TrackModel& track = project.tracks[ti];
@@ -92,6 +93,7 @@ void ensureStableCollaborationIds(ProjectModel& project) {
             track.id.empty() ? "track-index:" + std::to_string(ti) : track.id;
         for (std::size_t ci = 0; ci < track.clips.size(); ++ci) {
             ClipModel& clip = track.clips[ci];
+            if (!contents.insert(clip.contentStorage().get()).second) continue;
             const std::string clipKey = trackKey + "|" +
                 (clip.id.empty() ? "clip-index:" + std::to_string(ci) : clip.id);
 

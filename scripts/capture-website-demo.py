@@ -64,12 +64,15 @@ def main() -> None:
             })
             output = captures / f"{view}-{locale}.png"
             output.unlink(missing_ok=True)
-            result = subprocess.run([str(executable), "--screenshot", str(output), "--theme", "dark-blue", "--language", locale, str(project)],
+            result = subprocess.run([str(executable), "--screenshot", str(output), "--theme", "dark", "--language", locale, str(project)],
                                     cwd=executable.parent, env=environment, capture_output=True, text=True, timeout=60)
             (captures / f"{view}-{locale}.log").write_text(result.stdout + result.stderr, encoding="utf-8")
             if result.returncode or not output.is_file():
                 raise RuntimeError(f"Capture failed for {view}/{locale}: {result.stderr[-2000:]}")
             with Image.open(output) as screenshot:
+                if view == "instrumental" and not any(color == (174, 212, 119) and count > 100
+                                                       for count, color in screenshot.convert("RGB").getcolors(screenshot.width * screenshot.height) or []):
+                    raise RuntimeError("The capture executable has the old theme; rebuild with the current Dark lime palette.")
                 expected = tuple(int(dimension) * 2 for dimension in environment["DAW_SHOT_SIZE"].split("x"))
                 if view != "recovery" and screenshot.size != expected:
                     raise RuntimeError(f"Unexpected capture size for {view}: {screenshot.size}")

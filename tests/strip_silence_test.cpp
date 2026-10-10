@@ -78,7 +78,7 @@ int main() {
     }
     audio::AudioRecorder writer; writer.initialize(48000, 2);
     check(writer.writeWAVFile(wav, audio, 48000).isOk(), "writes antiphase stereo fixture");
-    EngineController controller{EngineController::TestRuntime{}};
+    EngineController controller{};
     check(controller.initialize(48000, 256, false).isOk(), "initializes controller");
     controller.setRecordDirectory(dir.string());
     controller.setTempo(120);
@@ -217,7 +217,7 @@ int main() {
     // Exercise actual recording callbacks and writer finalization, including
     // a loop's second pass and the single Undo for recording plus cleanup.
     for (bool layered : {false, true}) {
-        EngineController recorder{EngineController::TestRuntime{}};
+        EngineController recorder{};
         recorder.initialize(48000, 256, false); recorder.setRecordDirectory(dir.string());
         const auto target = recorder.addTrack(TrackKind::Audio, "Recording");
         auto prefs = recorder.recordingPrefs();
@@ -260,7 +260,7 @@ int main() {
     // Multi-track cleanup is one graph publication, independent of how many
     // target tracks acquire fragments, and one undo operation for the take.
     {
-        EngineController recorder{EngineController::TestRuntime{}};
+        EngineController recorder{};
         recorder.initialize(48000, 256, false); recorder.setRecordDirectory(dir.string());
         std::vector<std::string> tracks;
         for (unsigned i = 0; i < 4; ++i) tracks.push_back(recorder.addTrack(TrackKind::Audio, "Batch"));
@@ -297,7 +297,7 @@ int main() {
 
     // Auto cleanup of a punch must not delete older material outside the take.
     {
-        EngineController recorder{EngineController::TestRuntime{}};
+        EngineController recorder{};
         recorder.initialize(48000, 256, false); recorder.setRecordDirectory(dir.string());
         const auto target = recorder.importAudioToNewTrack(wav, 0, "Punch");
         const auto original = recorder.project().findTrack(target)->clips.front().id;

@@ -101,7 +101,8 @@ public:
     explicit SilentOnStoppedInstance(bool acceptsLayout = true,
                                      bool wantsMidi = false,
                                      bool returnsSleep = false,
-                                     bool transposeMidi = false)
+                                     bool transposeMidi = false,
+                                     bool instrument = false)
         : m_acceptsLayout(acceptsLayout), m_returnsSleep(returnsSleep),
           m_transposeMidi(transposeMidi) {
         m_descriptor.format = Format::Clap;
@@ -109,6 +110,7 @@ public:
         m_descriptor.mainInputChannels = 2;
         m_descriptor.mainOutputChannels = 2;
         m_descriptor.wantsMidi = wantsMidi;
+        m_descriptor.isInstrument = instrument;
         m_parameter.id = "value";
         m_parameter.name = "Value";
     }
@@ -185,9 +187,10 @@ public:
     PluginProcessDisposition process(
         const PluginProcessContext& context) noexcept override {
         processCalls.fetch_add(1, std::memory_order_relaxed);
-        if (failureMode) {
+        if (failureMode && failureMode != 4) {
             for (unsigned ch=0;ch<context.outputChannels;++ch)
-                std::fill_n(context.outputs[ch],context.frames, failureMode==2 ? std::numeric_limits<float>::quiet_NaN() : 0.f);
+                std::fill_n(context.outputs[ch],context.frames, failureMode==2 ? std::numeric_limits<float>::quiet_NaN()
+                    : failureMode == 3 ? std::numeric_limits<float>::infinity() : 0.f);
             return failureMode==1 ? PluginProcessDisposition::Error : PluginProcessDisposition::Continue;
         }
         int heldKey60 = 0;
@@ -218,6 +221,7 @@ public:
             }
         }
         heldKey60AfterBlock.store(heldKey60, std::memory_order_relaxed);
+        if (failureMode == 4) return PluginProcessDisposition::Error;
         if (!m_processing) {
             return PluginProcessDisposition::Continue;
         }
@@ -763,7 +767,7 @@ int main() {
               "parking transport cannot repeat a plugin's previous audio block");
     }
 
-    // ── Releases survive a saturated plugin event block ──
+    // ── An overloaded host block takes the safe MIDI/audio route ──
     // 2047 host events fit in the inbound SPSC ring. One note-on then fills the
     // prepared 2048-event block vector; the matching off must evict lower-value
     // traffic and remain after its on at the same frame.
@@ -802,17 +806,20 @@ int main() {
         node->process(context);
 
         check(queued == 2047, "the plugin host-event ring reaches its fixed limit");
-        check(observer->noteOnsSeen.load(std::memory_order_relaxed) == 1 &&
-                  observer->noteOffsSeen.load(std::memory_order_relaxed) == 1,
-              "a saturated plugin event block still delivers the matching release");
-        check(observer->heldKey60AfterBlock.load(std::memory_order_relaxed) == 0,
-              "same-frame overflow keeps note-on before its rescued note-off");
+        check(observer->processCalls == 0 && midiOutput.size() == 2 && midiOutput.events().back().isNoteOff(),
+              "a saturated host block skips DSP and preserves dry MIDI releases");
+        check(!node->faultBypassed() && node->takeOverloadNotice() && !node->processStatus(),
+              "host overload is reported separately from a plugin fault");
+        midiInput.clear(); midiOutput.clear(); node->process(context);
+        check(observer->processCalls == 1 && node->processStatus(),
+              "the next healthy host block resumes without recreating the plugin");
     }
 
     // ── Bypassing a MIDI transformer releases transformed voices ──
-    {
+    for (int fault : {0, 1, 4}) {
         auto instance =
             std::make_unique<SilentOnStoppedInstance>(true, true, false, true);
+        auto* observer = instance.get();
         auto node = std::make_shared<PluginNode>("transpose", std::move(instance));
         node->prepare(makeInfo());
 
@@ -840,7 +847,8 @@ int main() {
                   midiOutput.events().front().data1 == 72,
               "a MIDI-owning plugin emits its transformed note");
 
-        node->setBypassed(true);
+        if (fault) observer->failureMode = fault;
+        else node->setBypassed(true);
         midiInput.clear();
         midiInput.push(engine::MidiEvent::noteOff(0, 0, 60));
         midiOutput.clear();
@@ -1435,11 +1443,12 @@ int main() {
               std::abs(observer->seenParameterValue.load() - (frames-1.)/frames) < 1e-9,
               "continuous plugin automation delivers intermediate sample values");
     }
-    {
+    for (int mode : {1, 2, 3}) for (int kind : {0, 1, 2}) {
         engine::RealtimeEngine engine(2);
-        auto instance = std::make_unique<SilentOnStoppedInstance>();
+        auto instance = std::make_unique<SilentOnStoppedInstance>(true, false, false, false, kind == 1);
         auto* observer = instance.get();
         auto node = std::make_shared<PluginNode>("failure probe", std::move(instance));
+        if (kind == 2) node->setFaultGroup(node->faultGroup(), 0, engine.outputSafetyLatch());
         const auto source = engine.graph().addNode(std::make_unique<engine::SourceNode>("healthy",
             [](void*,const engine::AudioBlock& out,engine::FrameCount frames,engine::SamplePos) {
                 for(unsigned ch=0;ch<out.numChannels();++ch) std::fill_n(out.data(ch),frames,.25f);
@@ -1451,19 +1460,24 @@ int main() {
         check(bool(engine.prepare(48000,128,2)), "prepare failure diagnostics graph");
         engine.transport().play();
         OutputBuffer output(2,128);
-        for(int mode : {1,2}) {
-            observer->failureMode = mode;
-            engine.renderBlock(output.block(),nullptr,0,128);
-            check(engine.failedBlocks() == unsigned(mode) &&
-                  engine.lastRenderError() == int(engine::EngineError::ProcessingFailed) &&
-                  std::all_of(output.storage.begin(),output.storage.end(),[](float x){return x == .25f;}),
-                  mode == 1 ? "DSP error is counted without silencing healthy tracks"
-                            : "NaN is contained before downstream DSP and counted");
-        }
-        observer->failureMode=0;
         engine.renderBlock(output.block(),nullptr,0,128);
-        check(engine.lastBlockResult() == engine::RealtimeEngine::BlockResult::Complete,
-              "a recovered live processor is not permanently marked failed");
+        observer->failureMode = mode;
+        engine.renderBlock(output.block(),nullptr,0,128);
+        const float expected = kind == 2 ? 0.f : kind == 1 ? .25f : .5f;
+        check(engine.failedBlocks() == 1 &&
+              engine.lastRenderError() == int(engine::EngineError::ProcessingFailed) &&
+              std::all_of(output.storage.begin(),output.storage.end(),[expected](float x){return x == expected;}),
+              "error, NaN or Inf uses effect bypass, instrument silence or complete master mute");
+        const auto calls = observer->processCalls.load();
+        observer->failureMode = 0;
+        node->reset(); node->setBypassed(true);
+        node->prepare({48000,128,2}); node->setBypassed(false);
+        engine.transport().seek(0);
+        engine.renderBlock(output.block(),nullptr,0,128);
+        check(node->faultBypassed() && observer->processCalls == calls,
+              "stop, seek, bypass and preparation cannot release the failure latch");
+        check(!node->offlineStatus(), "offline processing rejects a latched failure");
+
     }
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");

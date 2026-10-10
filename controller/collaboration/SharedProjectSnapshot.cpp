@@ -2,6 +2,7 @@
 #include "collaboration/MidiContentJson.hpp"
 
 #include "ProjectSerializer.hpp"
+#include "serialization/LegacyClipContent.hpp"
 #include "cloud/CloudDocumentProjection.hpp"
 #include "collaboration/ProjectCommand.hpp"
 
@@ -90,6 +91,18 @@ audio::Result projectJson(const ProjectModel& project, json& output) {
     if (!encoded) return encoded;
     try {
         output = json::parse(bytes);
+        // Rack presentation belongs to local format 18. Keep the existing
+        // shared document shape and version; no protocol migration is needed.
+        output["version"] = 17;
+        const auto stripRack = [](auto&& self, json& value) -> void {
+            if (value.is_object()) {
+                value.erase("rackGroups"); value.erase("masterRackGroups");
+                value.erase("rackParameters");
+                for (auto& entry : value.items()) self(self, entry.value());
+            } else if (value.is_array()) for (auto& entry : value) self(self, entry);
+        };
+        stripRack(stripRack, output);
+        serialization::expandLegacyClipContent(output);
     } catch (const std::exception& error) {
         return invalid(std::string("cannot parse encoded project: ") +
                        error.what());

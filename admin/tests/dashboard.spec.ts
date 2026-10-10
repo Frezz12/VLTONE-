@@ -3,8 +3,8 @@ import { expect, test } from "@playwright/test";
 test("administrator signs in and sees operational totals", async ({ page }) => {
   await page.route("**/api/v1/admin/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/auth/login")) return route.fulfill({ json: { ok: true } });
-    if (path.endsWith("/me")) return route.fulfill({ json: { admin: { id: "1", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
+    if (path.endsWith("/auth/login")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "1", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2099-01-01T00:00:00Z" } });
+    if (path.endsWith("/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "1", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
     if (path.endsWith("/dashboard")) return route.fulfill({ json: { users: 42, active_sessions: 7, crashes_24h: 1, open_bugs: 3, ai_tokens_month: 1_250_000, generated_at: "2026-08-23T12:00:00Z", activity: [{ bucket: "2026-08-23T11:00:00Z", sessions: 4, crashes: 1 }], ai_daily: [{ bucket: "2026-08-23T00:00:00Z", tokens: 1_250_000 }], online_users: [{ user_id: "00000000-0000-4000-8000-000000000101", nickname: "Тестировщик", last_seen_at: "2026-08-23T11:59:00Z", sessions: 2 }] } });
     return route.fulfill({ status: 204 });
   });
@@ -38,7 +38,7 @@ test("administrator searches a user and performs protected account actions", asy
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
-    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
+    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
     if (path.endsWith(`/users/${id}/telemetry`)) return route.fulfill({ json: { sessions: [], samples: [] } });
     if (path.endsWith(`/users/${id}/ledger`)) return route.fulfill({ json: { entries: [] } });
     if (path.endsWith(`/users/${id}`) && request.method() === "GET") return route.fulfill({ json: { user: { ...user, collaboration_enabled: collaborationEnabled }, devices: [], quota, subscription: { plan: { display_name: "Demo" } }, counts: { launches: 1, crashes: 0, bugs: 0 } } });
@@ -112,7 +112,7 @@ test("administrator downloads readable crash logs", async ({ page }) => {
   const crashID = "00000000-0000-4000-8000-000000000301";
   await page.route("**/api/v1/admin/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
+    if (path.endsWith("/admin/me")) return route.fulfill({ json: { admin: { is_owner: true, permissions: [], id: "owner", email: "owner@example.com", nickname: "Owner" }, csrf_token: "csrf", expires_at: "2026-08-23T20:00:00Z" } });
     if (path.endsWith(`/crashes/${crashID}/artifact`)) return route.fulfill({ body: "[crash marker]\nexception=access_violation\n", headers: { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": `attachment; filename="vlt-crash-${crashID}.log"` } });
     if (path.endsWith("/admin/crashes")) return route.fulfill({ json: { crashes: [{ id: crashID, user_id: "user", device_id: "device", build_id: "build-1", app_version: "0.0.1", platform: "windows", reason: "access_violation", artifact_bytes: 4096, occurred_at: "2026-08-23T12:00:00Z" }] } });
     return route.fulfill({ status: 204 });

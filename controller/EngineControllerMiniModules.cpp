@@ -23,8 +23,8 @@ std::shared_ptr<MiniModuleUpdate> EngineController::planMiniModuleUpdate(
   auto result = std::make_shared<MiniModuleUpdate>();
   result->definition = definition;
   result->projectId = m_project.miniModuleProjectId;
-  result->info = m_runtime.preparation();
-  result->compiler = m_runtime.miniModuleCompiler();
+  result->info = m_runtime->preparation();
+  result->compiler = m_runtime->miniModuleCompiler();
   const auto collect = [&](const std::string &channel, const auto &modules,
                            unsigned channels) {
     for (const auto &slot : modules)
@@ -64,7 +64,7 @@ std::shared_ptr<MiniModuleUpdate> EngineController::planMiniModuleUpdate(
 }
 bool EngineController::miniModuleUpdateCurrent(
     const MiniModuleUpdate &update) const {
-  if (m_project.miniModuleProjectId != update.projectId || m_runtime.preparation() != update.info)
+  if (m_project.miniModuleProjectId != update.projectId || m_runtime->preparation() != update.info)
     return false;
   const auto current = planMiniModuleUpdate(update.definition);
   if (current->targets.size() != update.targets.size())
@@ -83,13 +83,13 @@ bool EngineController::miniModuleUpdateCurrent(
 }
 void EngineController::fadeMiniModuleUpdate(const MiniModuleUpdate &update) {
   if (cloudProjectBound() || !sharedEditingAllowed()) return;
-  m_runtime.fadeMiniModulePreparation(update.preparationId, false);
+  m_runtime->fadeMiniModulePreparation(update.preparationId, false);
 }
 void EngineController::cancelMiniModuleUpdateFade(const MiniModuleUpdate &update) {
-  m_runtime.fadeMiniModulePreparation(update.preparationId, true);
+  m_runtime->fadeMiniModulePreparation(update.preparationId, true);
 }
 bool EngineController::miniModuleUpdateFaded(const MiniModuleUpdate &update) const {
-  return !isPlaying() || m_runtime.miniModulePreparationFaded(update.preparationId);
+  return !isPlaying() || m_runtime->miniModulePreparationFaded(update.preparationId);
 }
 bool EngineController::applyMiniModuleUpdate(
     const std::shared_ptr<MiniModuleUpdate> &update, std::string &error) {
@@ -146,7 +146,7 @@ bool EngineController::applyMiniModuleUpdate(
   }
   if (update->targets.empty())
     return true;
-  if (!audioChannels.empty() && !m_runtime.stageMiniModulePreparation(update->preparationId)) {
+  if (!audioChannels.empty() && !m_runtime->stageMiniModulePreparation(update->preparationId)) {
     error = "Prepared mini-module generation is no longer available";
     return false;
   }
@@ -160,7 +160,7 @@ bool EngineController::applyMiniModuleUpdate(
     return rebuildGraph();
   };
   const auto published = apply(after);
-  m_runtime.clearMiniModulePreparation();
+  m_runtime->clearMiniModulePreparation();
   if (!published) {
     (void)apply(before);
     error = published.message();

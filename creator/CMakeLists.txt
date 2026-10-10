@@ -77,7 +77,9 @@ FetchContent_Declare(creator_binaryen
   URL_HASH SHA256=48a6cda58c9a727014e3d7581190a7c345095998dbc93d77be01efa1a74f51b5
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(creator_binaryen)
+include("${CMAKE_CURRENT_SOURCE_DIR}/PatchBinaryen.cmake")
 set_property(TARGET binaryen PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+set_property(TARGET binaryen PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE FALSE)
 target_include_directories(binaryen SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 if(MSVC)
   set_property(TARGET binaryen PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)
@@ -93,6 +95,10 @@ target_link_libraries(daw_creator_model PUBLIC daw_json OpenSSL::Crypto)
 add_library(daw_creator_compiler_model STATIC ${CREATOR_MODEL_SOURCES})
 target_include_directories(daw_creator_compiler_model PUBLIC ../plugins)
 target_link_libraries(daw_creator_compiler_model PUBLIC daw_json OpenSSL::Crypto)
+# ThinLTO bitcode from a newer host clang reaches ld64.lld, which then runs its
+# own (LLVM 20) code generation and rejects stack probes it does not know.
+set_property(TARGET daw_creator_compiler_model PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+set_property(TARGET daw_creator_compiler_model PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE FALSE)
 if(MSVC)
   set_property(TARGET daw_creator_model daw_creator_wamr PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
   set_property(TARGET daw_creator_compiler_model PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)
@@ -102,15 +108,34 @@ add_executable(daw_creator_compiler CompilerMain.cpp FunctionAnalysis.cpp CodeGe
 target_include_directories(daw_creator_compiler SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS} "${creator_binaryen_SOURCE_DIR}/src")
 target_link_libraries(daw_creator_compiler PRIVATE daw_creator_compiler_model clangTooling clangFrontend clangAST clangLex clangBasic clangCodeGen LLVMWebAssemblyCodeGen LLVMWebAssemblyAsmParser binaryen)
 set_property(TARGET daw_creator_compiler PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+set_property(TARGET daw_creator_compiler PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE FALSE)
+if(NOT LLVM_ENABLE_RTTI AND NOT MSVC)
+  # Classes deriving from Clang/LLVM interfaces must match the SDK's RTTI mode.
+  target_compile_options(daw_creator_compiler PRIVATE -fno-rtti)
+endif()
+if(APPLE AND EXISTS "${CREATOR_LLVM_ROOT}/bin/ld64.lld")
+  # Official LLVM SDKs can contain ThinLTO that Xcode's older ld cannot read.
+  target_link_options(daw_creator_compiler PRIVATE
+    "-fuse-ld=${CREATOR_LLVM_ROOT}/bin/ld64.lld")
+endif()
 if(MSVC)
   target_compile_options(daw_creator_compiler PRIVATE /bigobj /EHsc)
 endif()
 set(CREATOR_TOOLS_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/CreatorTools")
+# On Apple, RelocateTools.cmake stages libcrypto itself with a rewritten
+# install name. A raw copy would keep Homebrew's absolute install ID, which the
+# packaging dependency scan rejects.
+set(_creator_crypto_commands)
 if(WIN32)
   find_file(CREATOR_CRYPTO_RUNTIME NAMES libcrypto-3-x64.dll
     HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin" REQUIRED)
-else()
-  set(CREATOR_CRYPTO_RUNTIME "$<TARGET_FILE:OpenSSL::Crypto>")
+  list(APPEND _creator_crypto_commands
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CREATOR_CRYPTO_RUNTIME}"
+      "${CREATOR_TOOLS_DIRECTORY}")
+elseif(NOT APPLE)
+  list(APPEND _creator_crypto_commands
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:OpenSSL::Crypto>"
+      "${CREATOR_TOOLS_DIRECTORY}")
 endif()
 set(_creator_runtime_commands)
 if(MSVC)
@@ -127,13 +152,15 @@ add_custom_target(creator_tools
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CREATOR_LLVM_ROOT}/bin/clang${CMAKE_EXECUTABLE_SUFFIX}" "${CREATOR_TOOLS_DIRECTORY}/clang${CMAKE_EXECUTABLE_SUFFIX}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CREATOR_LLVM_ROOT}/bin/wasm-ld${CMAKE_EXECUTABLE_SUFFIX}" "${CREATOR_TOOLS_DIRECTORY}/wasm-ld${CMAKE_EXECUTABLE_SUFFIX}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CREATOR_WAMRC}" "${CREATOR_TOOLS_DIRECTORY}/wamrc${CMAKE_EXECUTABLE_SUFFIX}"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CREATOR_CRYPTO_RUNTIME}" "${CREATOR_TOOLS_DIRECTORY}"
+  ${_creator_crypto_commands}
   ${_creator_runtime_commands}
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/sdk" "${CREATOR_TOOLS_DIRECTORY}/sdk"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/examples" "${CREATOR_TOOLS_DIRECTORY}/examples"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/README.md" "${CREATOR_TOOLS_DIRECTORY}/README.md"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CREATOR_LLVM_ROOT}/lib/clang/20" "${CREATOR_TOOLS_DIRECTORY}/lib/clang/20"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CREATOR_SYSROOT}" "${CREATOR_TOOLS_DIRECTORY}/sysroot"
+  COMMAND ${CMAKE_COMMAND} "-DSYSROOT=${CREATOR_TOOLS_DIRECTORY}/sysroot"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/PruneSysroot.cmake"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/licenses" "${CREATOR_TOOLS_DIRECTORY}/licenses"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${creator_wamr_SOURCE_DIR}/LICENSE" "${CREATOR_TOOLS_DIRECTORY}/licenses/WAMR.txt"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${creator_binaryen_SOURCE_DIR}/LICENSE" "${CREATOR_TOOLS_DIRECTORY}/licenses/Binaryen.txt"

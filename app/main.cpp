@@ -1,3 +1,4 @@
+#include "NumericFieldInteraction.hpp"
 #include "ScrollMotion.hpp"
 #include "MediaWorker.hpp"
 #include "plugins/PluginManager.hpp"
@@ -46,6 +47,7 @@
 #include "PresenceInputRouter.hpp"
 #include "PresenceStore.hpp"
 #include "MixerWidget.hpp"
+#include "RackWidget.hpp"
 #include "TrackListWidget.hpp"
 #include "TimelineWidget.hpp"
 #include "RecordingLeaseCoordinator.hpp"
@@ -305,20 +307,7 @@ private:
 };
 
 namespace {
-class AudioApplication final : public QApplication {
-public:
-    using QApplication::QApplication;
-    bool notify(QObject* receiver, QEvent* event) override {
-        try { return QApplication::notify(receiver, event); }
-        catch (const daw::AudioEndpointError& error) {
-            // A compound edit may lose the process between its first command
-            // and rollback. Unwind the edit, keep Qt alive, and let the regular
-            // engine-health timer finalize captures and recover the session.
-            qWarning("Audio operation interrupted: %s", error.what());
-            return false;
-        }
-    }
-};
+using AudioApplication = QApplication;
 std::atomic<bool> g_selftestQtFailure{false};
 QtMessageHandler g_previousMessageHandler = nullptr;
 
@@ -591,6 +580,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    ui::installNumericFieldInteraction(app);
+
     ProjectOpenFilter projectOpenFilter;
     app.installEventFilter(&projectOpenFilter);
     // Keep the native settings domain and QStandardPaths roots stable across
@@ -692,21 +683,17 @@ int main(int argc, char** argv) {
     if (mixerScrollCheck) return ui::checkMixerPerformance() ? 0 : 63;
     if (workspaceMotionCheck) return ui::checkWorkspaceMotionPerformance() ? 0 : 65;
     if (pluginInteractionCheck) return ui::checkPluginInteractions() ? 0 : 64;
-    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_REMOTE_EDITOR_ONLY")) {
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_EMBEDDED_ONLY")) {
         ThemeManager::instance().apply();
         MainWindow window(false);
-        return window.checkRemoteEditorForTest(
-            qEnvironmentVariable("DAW_TEST_FAULT_CLAP_PATH").toStdString())
+        return window.checkEmbeddedEditorForTest(
+            qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())
             && !g_selftestQtFailure.load(std::memory_order_relaxed) ? 0 : 12;
     }
-    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_ISOLATION_ONLY")) {
-        ThemeManager::instance().apply();
-        return PluginEditorWindow::checkIsolationForTest(
-            qEnvironmentVariable("DAW_TEST_FAULT_CLAP_PATH").toStdString())
-            && !g_selftestQtFailure.load(std::memory_order_relaxed) ? 0 : 12;
-    }
+
+
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PLUGIN_IDLE_ONLY")) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         if (!controller.initialize(48000, 256, false)) return 12;
         return PluginEditorWindow::checkIdleForTest(
             controller, qEnvironmentVariable("DAW_TEST_VST_SHELL_PATH").toStdString())
@@ -726,6 +713,13 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PROJECT_DIALOGS_ONLY")) {
+        if (!ui::checkProjectDialogsForTest()) return 40;
+        MainWindow window(/*openDevice=*/false);
+        return window.checkProjectPreviewForTest() ? 0 : 40;
+    }
+    if (pianoWorkflowCheck && qEnvironmentVariableIsSet("DAW_SEQUENCE_CHECK_ONLY"))
+        return TimelineWidget::checkMidiSequenceForTest(qEnvironmentVariable("DAW_SEQUENCE_CHECK_DIR")) ? 0 : 85;
     if (pianoWorkflowCheck) return PianoRollWindow::checkWorkflowsForTest(qEnvironmentVariable("DAW_PIANO_WORKFLOW_DIR")) ? 0 : 81;
     if (slideCheck) return PianoRollWindow::checkSlidesForTest(qEnvironmentVariable("DAW_SLIDE_CHECK_DIR")) ? 0 : 78;
     if (midiAuditionCheck) return PianoRollView::checkAuditionForTest() ? 0 : 79;
@@ -741,6 +735,10 @@ int main(int argc, char** argv) {
         window.resize(1100, 720);
         window.show();
         return window.checkFolderRecordingForTest() ? 0 : 97;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_RECORD_STOP_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        return window.checkRecordingStopForTest() ? 0 : 98;
     }
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_RECORD_CONTEXT_ONLY")) {
         MainWindow window(/*openDevice=*/false);
@@ -768,8 +766,16 @@ int main(int argc, char** argv) {
         QApplication::processEvents();
         return window.checkTimelineClipGesturesForTest() ? 0 : 17;
     }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_RACK_ONLY")) {
+        QString error;
+        if (!RackWidget::checkForTest(&error, qEnvironmentVariable("DAW_RACK_SCREENSHOT"))) {
+            std::fprintf(stderr, "Rack check failed: %s\n", error.toUtf8().constData());
+            return 78;
+        }
+        return 0;
+    }
     if (trackCreationCheck) {
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         if (!controller.initialize(48000, 256, false)) return 66;
         return CreateTracksDialog::checkForTest(controller,
             screenshotPath ? QString::fromLocal8Bit(screenshotPath) : QString()) ? 0 : 66;
@@ -1851,6 +1857,32 @@ int main(int argc, char** argv) {
             }
             if (target == &window && qEnvironmentVariableIntValue("DAW_SHOT_WORKSPACE") == 1)
                 target = window.centralWidget();
+            // Optional website recording: render the real audio engine between
+            // frames without opening an audio device or recording the desktop.
+            const QString framesPath = qEnvironmentVariable("DAW_SHOT_FRAMES");
+            if (!framesPath.isEmpty()) {
+                const int fps = std::clamp(qEnvironmentVariableIntValue("DAW_SHOT_FPS"), 1, 60);
+                const int count = std::clamp(qEnvironmentVariableIntValue("DAW_SHOT_FRAME_COUNT"), 1, 3600);
+                if (!QDir().mkpath(framesPath)) { QApplication::exit(2); return; }
+                auto* engine = window.collaborationEngineController();
+                engine->play();
+                auto* timer = new QTimer(&window);
+                timer->setTimerType(Qt::PreciseTimer);
+                QObject::connect(timer, &QTimer::timeout, &window,
+                    [target, engine, timer, framesPath, fps, count, frame = 0]() mutable {
+                        const auto path = QDir(framesPath).filePath(QStringLiteral("frame-%1.png").arg(frame, 5, 10, QLatin1Char('0')));
+                        if (!target->grab().save(path)) { timer->stop(); QApplication::exit(2); return; }
+                        if (++frame >= count) { timer->stop(); engine->stop(); QApplication::quit(); return; }
+                        const int samples = qRound(frame * engine->sampleRate() / fps)
+                                          - qRound((frame - 1) * engine->sampleRate() / fps);
+                        audio::AudioBuffer input(2, 256), output(2, 256);
+                        input.clear();
+                        for (int left = samples; left > 0; left -= 256)
+                            engine->processDeviceBlockForTest(input, output, std::min(left, 256));
+                    });
+                timer->start(qRound(1000.0 / fps));
+                return;
+            }
             // Exercise the real demo audio so console reviews include live
             // stereo bars and the audio-side maximum, without an audio device.
             if (qEnvironmentVariableIsSet("DAW_SHOT_METERS")) {

@@ -51,6 +51,7 @@ func main() {
 		log.Fatal(err)
 	}
 	admin := model.AdminUser{
+		IsOwner: true, Permissions: []string{},
 		ID: uuid.New(), Email: strings.TrimSpace(*email), EmailKey: auth.NormalizeEmail(*email),
 		Nickname: strings.TrimSpace(*nickname), PasswordHash: hash, Status: model.UserActive,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),

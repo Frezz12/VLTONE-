@@ -185,6 +185,8 @@ void RealtimeEngine::restoreSessionGraph(std::shared_ptr<const CompiledGraph> gr
 
 void RealtimeEngine::updateMasterMeters(const AudioBlock& output,
                                         FrameCount frames) noexcept {
+    if (m_outputSafetyMute->load(std::memory_order_acquire))
+        for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) dsp::clear(output.channel(ch).first(frames));
     const float left = output.numChannels() > 0
         ? dsp::peak(output.channel(0).first(frames)) : 0.0f;
     const float right = output.numChannels() > 1
@@ -257,6 +259,8 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
         }
         if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
         m_outputTransition.process(output, frames);
+        if (m_outputSafetyMute->load(std::memory_order_acquire))
+            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) dsp::clear(output.channel(ch).first(frames));
         m_outputGated = true;
         return;
     }
@@ -270,6 +274,8 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
         }
         if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
         m_outputTransition.process(output, frames);
+        if (m_outputSafetyMute->load(std::memory_order_acquire))
+            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) dsp::clear(output.channel(ch).first(frames));
         m_outputGated = true;
         return;
     }

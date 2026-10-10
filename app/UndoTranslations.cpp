@@ -7,6 +7,32 @@ namespace ui {
 namespace {
 
 [[maybe_unused]] const char* const kUndoCommandNames[] = {
+    QT_TRANSLATE_NOOP("UndoCommands", "Group Plugins"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Ungroup Plugins"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Rename Plugin Group"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Configure Rack Parameters"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Paste Rack Devices"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Move Rack Devices"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Delete Rack Devices"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Bypass Rack Devices"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Enable Rack Devices"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Change Rack Parameter"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Change Plugin Mix"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Edit Slicer Boundaries"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Set Send Destination"),
+
+    QT_TRANSLATE_NOOP("UndoCommands", "Create Linked Copies"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Link Clip Content"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Make Clips Independent"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Split Linked Clip"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Split Pattern Part"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Remove Pattern Part"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Remove Pattern Source"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Duplicate Pattern Source"),
+
+    QT_TRANSLATE_NOOP("UndoCommands", "Create Editable Comp Version"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Slip Sample Content"),
+
     QT_TRANSLATE_NOOP("UndoCommands", "Edit Slide Notes"),
     QT_TRANSLATE_NOOP("UndoCommands", "Set Slide Delivery"),
     QT_TRANSLATE_NOOP("UndoCommands", "Extend Slide Base Notes"),
@@ -84,6 +110,7 @@ namespace {
     QT_TRANSLATE_NOOP("UndoCommands", "Delete Unused Takes"),
     QT_TRANSLATE_NOOP("UndoCommands", "Edit Notes"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Note Velocity"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Resize Sequence"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Note Pan"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Note Length"),
     QT_TRANSLATE_NOOP("UndoCommands", "Delete Notes"),

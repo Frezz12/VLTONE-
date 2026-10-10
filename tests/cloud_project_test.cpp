@@ -265,7 +265,7 @@ int main() {
         fs::create_directories(root, error);
         writeTone(source);
 
-        daw::EngineController controller{daw::EngineController::TestRuntime{}};
+        daw::EngineController controller{};
         check(controller.initialize(48000, 512, false).isOk(),
               "cloud capture fixture initializes without an audio device");
         const std::string audioTrack =
@@ -441,7 +441,7 @@ int main() {
                       }),
               "staging failures leave no partial generation behind");
 
-        daw::EngineController incompatible{daw::EngineController::TestRuntime{}};
+        daw::EngineController incompatible{};
         (void)incompatible.initialize(48000, 512, false);
         daw::ProjectModel incompatibleProject;
         daw::TrackModel incompatibleTrack;
@@ -454,8 +454,9 @@ int main() {
         external.format = daw::PluginFormat::Vst3;
         incompatibleTrack.inserts.push_back(external);
         incompatibleProject.tracks.push_back(std::move(incompatibleTrack));
-        (void)incompatible.materializeCollaborationProject(
-            std::move(incompatibleProject), true);
+        check(incompatible.restoreRecoveryProject(
+            std::move(incompatibleProject), stagingParent.string()).isOk(),
+            "local preflight fixture retains unavailable external plugin");
         auto blocked =
             incompatible.captureCloudPublicationV1(stagingParent.string());
         check(!blocked.readyForHashing() &&

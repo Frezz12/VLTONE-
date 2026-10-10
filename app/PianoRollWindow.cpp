@@ -780,7 +780,7 @@ void PianoRollView::setScrollY(double y) {
 }
 
 bool PianoRollView::checkAuditionForTest() {
-    daw::EngineController controller{daw::EngineController::TestRuntime{}};
+    daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Midi, "Audition");
     const auto other = controller.addTrack(daw::TrackKind::Midi, "Other instrument");
@@ -8547,6 +8547,8 @@ void PianoRollWindow::updateTitle() {
                      ? tr("  ·  no instrument")
                      : QString("  ·  %1").arg(
                            QString::fromStdString(track->instrument.name));
+        const auto links = m_controller->linkedClips({track->id, c.id}).size();
+        if (links > 1) label += tr(" · Linked: %1").arg(links);
         setWindowTitle(tr("Piano Roll — %1").arg(label));
         return;
     }

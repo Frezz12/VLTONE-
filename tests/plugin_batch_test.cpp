@@ -48,7 +48,7 @@ int main() {
     }
     audio::AudioRecorder recorder; recorder.initialize(48000, 2);
     recorder.writeWAVFile(wav, tone, 48000);
-    Controller c{Controller::TestRuntime{}};
+    Controller c{};
     check(c.initialize(48000, 256, false).isOk(), "headless audio initializes");
     const auto lead = c.addTrack(daw::TrackKind::Audio, "Lead");
     const auto doubleTrack = c.addTrack(daw::TrackKind::Audio, "Double");
@@ -118,7 +118,7 @@ int main() {
     c.redo();
     const auto saved = (dir / "Batch.vlt").string();
     check(c.saveProject(saved).isOk(), "configured track and clip effects save to project");
-    Controller reopened{Controller::TestRuntime{}}; reopened.initialize(48000, 256, false);
+    Controller reopened{}; reopened.initialize(48000, 256, false);
     check(reopened.openProject(saved).isOk() && reopened.clipFx(lead, leadClip)->size() == 1 &&
         std::abs(gain(reopened, lead, ids[0][0]) + 6.020599913) < .01, "project reload preserves Clip FX settings");
     const auto beforeFailure = document(c);
@@ -175,7 +175,7 @@ int main() {
     check(!c.captureInsertChain(unavailable.id, {missing.id}, rejected) && rejected.empty(),
           "strict capture rejects an unloaded plugin");
     {
-        Controller dual{Controller::TestRuntime{}};
+        Controller dual{};
         dual.initialize(48000, 256, false);
         const auto source = dual.addTrack(daw::TrackKind::Audio, "Independent sides");
         const auto slot = dual.addInsert(source, eq);

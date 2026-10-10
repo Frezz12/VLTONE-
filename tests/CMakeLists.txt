@@ -1,84 +1,18 @@
-# A real CLAP plugin, built here and loaded by the host tests. Defined first so
-# DAW_TEST_CLAP_PATH is available to the targets below.
+# Native fixture formats used by scanner, editor and render tests.
 if(DAW_ENABLE_CLAP)
     add_subdirectory(fixtures/test_clap)
-    add_executable(plugin_process_test plugin_process_test.cpp)
-    target_link_libraries(plugin_process_test PRIVATE daw_pluginprocess)
-    target_compile_definitions(plugin_process_test PRIVATE
-        DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>"
-        DAW_FAULT_CLAP_PATH="$<TARGET_FILE:daw_test_fault_clap>"
-        DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
-    add_dependencies(plugin_process_test daw_plugin_host daw_test_fault_clap daw_test_clap)
-    add_test(NAME plugin_process_test COMMAND plugin_process_test)
-    set_tests_properties(plugin_process_test PROPERTIES TIMEOUT 45)
-    if(WIN32 AND DAW_BUILD_APP)
-        add_test(NAME plugin_automation_keyboard_test COMMAND plugin_process_test --automation-keyboard)
-        set_tests_properties(plugin_automation_keyboard_test PROPERTIES TIMEOUT 15
-            ENVIRONMENT "QT_QPA_PLATFORM=windows")
-    endif()
-    add_executable(plugin_recovery_test plugin_recovery_test.cpp)
-    target_link_libraries(plugin_recovery_test PRIVATE daw_controller)
-    target_compile_definitions(plugin_recovery_test PRIVATE
-        DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>"
-        DAW_FAULT_CLAP_PATH="$<TARGET_FILE:daw_test_fault_clap>")
-    if(DAW_BUILD_APP)
-        target_compile_definitions(plugin_recovery_test PRIVATE DAW_TEST_HOST_GUI=1)
-    endif()
-    add_dependencies(plugin_recovery_test daw_plugin_host daw_test_fault_clap)
-    add_test(NAME plugin_recovery_test COMMAND plugin_recovery_test)
-    set_tests_properties(plugin_recovery_test PROPERTIES TIMEOUT 90)
-    add_executable(audio_runtime_plugin_recovery_test audio_runtime_plugin_recovery_test.cpp)
-    target_link_libraries(audio_runtime_plugin_recovery_test PRIVATE daw_audio_runtime)
-    target_compile_definitions(audio_runtime_plugin_recovery_test PRIVATE
-        DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>"
-        DAW_FAULT_CLAP_PATH="$<TARGET_FILE:daw_test_fault_clap>")
-    add_dependencies(audio_runtime_plugin_recovery_test daw_plugin_host daw_test_fault_clap)
-    add_test(NAME audio_runtime_plugin_recovery_test COMMAND audio_runtime_plugin_recovery_test)
-    set_tests_properties(audio_runtime_plugin_recovery_test PROPERTIES TIMEOUT 45)
 endif()
 if(DAW_ENABLE_VST3)
     add_subdirectory(fixtures/test_vst3)
 endif()
-  if(DAW_ENABLE_VST)
-      add_subdirectory(fixtures/test_vst)
-  endif()
-
-  if(TARGET plugin_recovery_test)
-      if(DAW_ENABLE_VST3)
-          target_compile_definitions(plugin_recovery_test PRIVATE DAW_TEST_VST3_PATH="${DAW_TEST_VST3_PATH}")
-          add_dependencies(plugin_recovery_test daw_test_vst3)
-      endif()
-      if(DAW_ENABLE_VST)
-          target_compile_definitions(plugin_recovery_test PRIVATE DAW_TEST_VST_SHELL_PATH="${DAW_TEST_VST_SHELL_PATH}")
-          add_dependencies(plugin_recovery_test daw_test_vst_shell)
-      endif()
-  endif()
-
-  add_executable(plugin_isolation_graph_test plugin_isolation_graph_test.cpp)
-target_link_libraries(plugin_isolation_graph_test PRIVATE daw_controller)
-target_compile_definitions(plugin_isolation_graph_test PRIVATE DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>")
-if(DAW_ENABLE_CLAP)
-    target_compile_definitions(plugin_isolation_graph_test PRIVATE
-        DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}" DAW_FAULT_CLAP_PATH="$<TARGET_FILE:daw_test_fault_clap>")
-    add_dependencies(plugin_isolation_graph_test daw_test_clap daw_test_fault_clap)
-endif()
-if(DAW_ENABLE_VST3)
-    target_compile_definitions(plugin_isolation_graph_test PRIVATE DAW_TEST_VST3_PATH="${DAW_TEST_VST3_PATH}")
-    add_dependencies(plugin_isolation_graph_test daw_test_vst3)
-endif()
 if(DAW_ENABLE_VST)
-    target_compile_definitions(plugin_isolation_graph_test PRIVATE
-        DAW_TEST_VST_SHELL_PATH="${DAW_TEST_VST_SHELL_PATH}" DAW_TEST_VST1_PATH="${DAW_TEST_VST1_PATH}")
-    add_dependencies(plugin_isolation_graph_test daw_test_vst_shell daw_test_vst1)
+    add_subdirectory(fixtures/test_vst)
 endif()
-add_test(NAME plugin_isolation_graph_test COMMAND plugin_isolation_graph_test)
-set_tests_properties(plugin_isolation_graph_test PROPERTIES TIMEOUT 90)
 
 # Native presets and queued edits must survive the controller's render clone
 # for every enabled format, including Apple's system Audio Unit on macOS.
 add_executable(plugin_render_state_test plugin_render_state_test.cpp)
 target_link_libraries(plugin_render_state_test PRIVATE daw_controller)
-target_compile_definitions(plugin_render_state_test PRIVATE DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>")
 if(DAW_ENABLE_CLAP)
     target_compile_definitions(plugin_render_state_test PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
     add_dependencies(plugin_render_state_test daw_test_clap)
@@ -168,7 +102,6 @@ endif()
 # Manual hardware smoke — NOT a ctest, since it opens a real audio device.
 add_executable(device_smoke device_smoke.cpp)
 target_link_libraries(device_smoke PRIVATE daw_controller)
-add_dependencies(device_smoke daw_audio)
 
 # Phase-2: headless controller round-trip (model, export, save/reload).
 add_executable(mp3_import_test mp3_import_test.cpp)
@@ -188,6 +121,15 @@ if(APPLE OR WIN32)
 endif()
 
 add_executable(controller_test controller_test.cpp)
+add_executable(arrangement_labels_test arrangement_labels_test.cpp)
+target_link_libraries(arrangement_labels_test PRIVATE daw_controller)
+add_test(NAME arrangement_labels_test COMMAND arrangement_labels_test)
+set_tests_properties(arrangement_labels_test PROPERTIES TIMEOUT 30)
+
+add_executable(glue_test glue_test.cpp)
+target_link_libraries(glue_test PRIVATE daw_controller)
+add_test(NAME glue_test COMMAND glue_test)
+set_tests_properties(glue_test PROPERTIES TIMEOUT 60)
 add_executable(plugin_readout_test plugin_readout_test.cpp)
 target_link_libraries(plugin_readout_test PRIVATE daw_controller)
 add_test(NAME plugin_readout_test COMMAND plugin_readout_test)
@@ -196,6 +138,10 @@ add_executable(clip_library_test clip_library_test.cpp)
 target_link_libraries(clip_library_test PRIVATE daw_controller)
 add_test(NAME clip_library_test COMMAND clip_library_test)
 set_tests_properties(clip_library_test PROPERTIES TIMEOUT 60)
+add_executable(rack_test rack_test.cpp)
+target_link_libraries(rack_test PRIVATE daw_controller)
+add_test(NAME rack_test COMMAND rack_test)
+set_tests_properties(rack_test PROPERTIES TIMEOUT 120)
 add_executable(plugin_batch_test plugin_batch_test.cpp)
 target_link_libraries(plugin_batch_test PRIVATE daw_controller)
 add_test(NAME plugin_batch_test COMMAND plugin_batch_test)
@@ -322,6 +268,10 @@ set_tests_properties(project_template_test PROPERTIES
 # its state chunk, and one pass through a real project. No fixture plugin is
 # involved — the sampler is part of this build.
 add_executable(sampler_test sampler_test.cpp)
+add_executable(sampler_duplicate_test sampler_duplicate_test.cpp)
+target_link_libraries(sampler_duplicate_test PRIVATE daw_controller)
+add_test(NAME sampler_duplicate_test COMMAND sampler_duplicate_test)
+set_tests_properties(sampler_duplicate_test PROPERTIES TIMEOUT 60)
 target_link_libraries(sampler_test PRIVATE daw_controller)
 
 add_test(NAME sampler_test COMMAND sampler_test)
@@ -624,14 +574,14 @@ if(DAW_ENABLE_CLAP)
     add_executable(render_integrity_test render_integrity_test.cpp)
     target_link_libraries(render_integrity_test PRIVATE daw_controller)
     target_compile_definitions(render_integrity_test PRIVATE
-        DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>"
+
         DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}"
         DAW_TEST_RENDER_CLAP_PATH="$<TARGET_FILE:daw_test_render_clap>")
     add_dependencies(render_integrity_test daw_test_clap daw_test_render_clap)
     add_test(NAME render_integrity_test COMMAND render_integrity_test)
-    add_test(NAME render_isolation_integrity_test COMMAND render_integrity_test --isolated)
+
     set_tests_properties(render_integrity_test PROPERTIES TIMEOUT 60)
-    set_tests_properties(render_isolation_integrity_test PROPERTIES TIMEOUT 180)
+
 
     add_executable(track_creation_test track_creation_test.cpp)
     target_link_libraries(track_creation_test PRIVATE daw_controller)
@@ -766,9 +716,9 @@ target_link_libraries(audio_realtime_test PRIVATE daw_engine daw_core)
 add_test(NAME audio_realtime_test COMMAND audio_realtime_test)
 set_tests_properties(audio_realtime_test PROPERTIES TIMEOUT 60)
 
-# The runtime must assemble, publish and render without daw_controller.
+# Worker PCM transfer is independent of the controller and plugin host.
 add_executable(process_audio_resources_test process_audio_resources_test.cpp)
-target_link_libraries(process_audio_resources_test PRIVATE daw_audio_runtime)
+target_link_libraries(process_audio_resources_test PRIVATE daw_process)
 add_test(NAME process_audio_resources_test COMMAND process_audio_resources_test)
 set_tests_properties(process_audio_resources_test PROPERTIES TIMEOUT 60)
 
@@ -805,68 +755,64 @@ target_link_libraries(audio_runtime_audition_test PRIVATE daw_audio_runtime)
 add_test(NAME audio_runtime_audition_test COMMAND audio_runtime_audition_test)
 set_tests_properties(audio_runtime_audition_test PROPERTIES TIMEOUT 45)
 
-add_executable(audio_session_codec_test audio_session_codec_test.cpp)
-target_link_libraries(audio_session_codec_test PRIVATE daw_audio_runtime)
-add_test(NAME audio_session_codec_test COMMAND audio_session_codec_test)
-set_tests_properties(audio_session_codec_test PROPERTIES TIMEOUT 60)
-add_executable(audio_runtime_core_fields_test audio_runtime_core_fields_test.cpp)
+add_executable(worker_value_codec_test worker_value_codec_test.cpp)
+target_link_libraries(worker_value_codec_test PRIVATE daw_process)
+add_test(NAME worker_value_codec_test COMMAND worker_value_codec_test)
+set_tests_properties(worker_value_codec_test PROPERTIES TIMEOUT 30)
 add_executable(audio_runtime_missing_plugin_test audio_runtime_missing_plugin_test.cpp)
 target_link_libraries(audio_runtime_missing_plugin_test PRIVATE daw_audio_runtime)
 add_test(NAME audio_runtime_missing_plugin_test COMMAND audio_runtime_missing_plugin_test)
 set_tests_properties(audio_runtime_missing_plugin_test PROPERTIES TIMEOUT 45)
-target_link_libraries(audio_runtime_core_fields_test PRIVATE daw_audio_runtime)
-add_test(NAME audio_runtime_core_fields_test COMMAND audio_runtime_core_fields_test)
-set_tests_properties(audio_runtime_core_fields_test PROPERTIES TIMEOUT 30)
-add_executable(audio_runtime_plugin_codec_test audio_runtime_plugin_codec_test.cpp)
-target_link_libraries(audio_runtime_plugin_codec_test PRIVATE daw_audio_runtime)
-add_test(NAME audio_runtime_plugin_codec_test COMMAND audio_runtime_plugin_codec_test)
-set_tests_properties(audio_runtime_plugin_codec_test PROPERTIES TIMEOUT 30)
-add_executable(audio_runtime_rpc_test audio_runtime_rpc_test.cpp)
-target_link_libraries(audio_runtime_rpc_test PRIVATE daw_audioprocess)
-add_dependencies(audio_runtime_rpc_test daw_audio)
-add_test(NAME audio_runtime_rpc_test COMMAND audio_runtime_rpc_test $<TARGET_FILE:daw_audio>)
-set_tests_properties(audio_runtime_rpc_test PROPERTIES TIMEOUT 60)
-add_executable(audio_runtime_endpoint_test audio_runtime_endpoint_test.cpp)
-target_link_libraries(audio_runtime_endpoint_test PRIVATE daw_audioendpoint)
-add_dependencies(audio_runtime_endpoint_test daw_audio)
-add_test(NAME audio_runtime_endpoint_test COMMAND audio_runtime_endpoint_test $<TARGET_FILE:daw_audio>)
-set_tests_properties(audio_runtime_endpoint_test PROPERTIES TIMEOUT 60)
-add_executable(engine_controller_process_test engine_controller_process_test.cpp)
-target_link_libraries(engine_controller_process_test PRIVATE daw_controller)
-add_dependencies(engine_controller_process_test daw_audio daw_worker)
-add_test(NAME engine_controller_process_test COMMAND engine_controller_process_test)
-set_tests_properties(engine_controller_process_test PROPERTIES TIMEOUT 90)
-add_executable(audio_input_clock_test audio_input_clock_test.cpp)
-target_link_libraries(audio_input_clock_test PRIVATE daw_audioprocess)
-add_dependencies(audio_input_clock_test daw_audio)
-add_test(NAME audio_input_clock_test COMMAND audio_input_clock_test $<TARGET_FILE:daw_audio>)
-set_tests_properties(audio_input_clock_test PROPERTIES TIMEOUT 60)
-add_executable(audio_runtime_readout_batch_test audio_runtime_readout_batch_test.cpp)
-target_link_libraries(audio_runtime_readout_batch_test PRIVATE daw_audioprocess)
-add_dependencies(audio_runtime_readout_batch_test daw_audio)
-add_test(NAME audio_runtime_readout_batch_test COMMAND audio_runtime_readout_batch_test $<TARGET_FILE:daw_audio>)
-set_tests_properties(audio_runtime_readout_batch_test PROPERTIES TIMEOUT 60)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+if(DAW_ENABLE_CLAP)
+    add_executable(engine_controller_embedded_test engine_controller_embedded_test.cpp)
+    add_executable(audio_failure_recovery_test audio_failure_recovery_test.cpp)
+    target_link_libraries(audio_failure_recovery_test PRIVATE daw_controller ${CMAKE_DL_LIBS})
+    target_compile_definitions(audio_failure_recovery_test PRIVATE DAW_TEST_RECOVERY_CLAP_PATH="$<TARGET_FILE:daw_test_recovery_clap>")
+    add_dependencies(audio_failure_recovery_test daw_test_recovery_clap)
+    add_test(NAME audio_failure_recovery_test COMMAND audio_failure_recovery_test)
+    set_tests_properties(audio_failure_recovery_test PROPERTIES TIMEOUT 60)
+    target_link_libraries(engine_controller_embedded_test PRIVATE daw_controller)
+    target_compile_definitions(engine_controller_embedded_test PRIVATE DAW_TEST_CLAP_PATH="${DAW_TEST_CLAP_PATH}")
+    add_dependencies(engine_controller_embedded_test daw_test_clap)
+    add_test(NAME engine_controller_embedded_test COMMAND engine_controller_embedded_test)
+    set_tests_properties(engine_controller_embedded_test PROPERTIES TIMEOUT 60)
+endif()
+
+
+
+
+
+
+
+
+
+
 add_executable(audio_runtime_session_test audio_runtime_session_test.cpp)
 target_link_libraries(audio_runtime_session_test PRIVATE daw_audio_runtime)
-if(DAW_ENABLE_CLAP)
-    target_compile_definitions(audio_runtime_session_test PRIVATE
-        DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>"
-        DAW_FAULT_CLAP_PATH="$<TARGET_FILE:daw_test_fault_clap>")
-    add_dependencies(audio_runtime_session_test daw_plugin_host daw_test_fault_clap)
-endif()
+
 add_test(NAME audio_runtime_session_test COMMAND audio_runtime_session_test)
 set_tests_properties(audio_runtime_session_test PROPERTIES TIMEOUT 60)
-add_executable(audio_runtime_process_test audio_runtime_process_test.cpp)
-target_link_libraries(audio_runtime_process_test PRIVATE daw_audioprocess)
-if(DAW_ENABLE_CLAP)
-    target_compile_definitions(audio_runtime_process_test PRIVATE
-        DAW_PLUGIN_HOST_PATH="$<TARGET_FILE:daw_plugin_host>"
-        DAW_FAULT_CLAP_PATH="$<TARGET_FILE:daw_test_fault_clap>")
-    add_dependencies(audio_runtime_process_test daw_plugin_host daw_test_fault_clap)
-endif()
-add_dependencies(audio_runtime_process_test daw_audio)
-add_test(NAME audio_runtime_process_test COMMAND audio_runtime_process_test $<TARGET_FILE:daw_audio>)
-set_tests_properties(audio_runtime_process_test PROPERTIES TIMEOUT 60)
+
+
+
+
+
+
 
 add_executable(track_freeze_test track_freeze_test.cpp)
 target_link_libraries(track_freeze_test PRIVATE daw_controller)
@@ -934,18 +880,7 @@ if(DAW_BUILD_APP)
   add_test(NAME creator_subgraph_test COMMAND creator_subgraph_test)
 endif()
 
-# The isolated host uses Qt even when the test executable itself does not.
-# Resolve its DLLs in a clean Windows build before application deployment.
-if(WIN32 AND TARGET Qt6::Core)
-    foreach(host_test IN ITEMS plugin_process_test plugin_automation_keyboard_test
-            plugin_recovery_test plugin_isolation_graph_test plugin_render_state_test
-            render_isolation_integrity_test)
-        if(TEST ${host_test})
-            set_property(TEST ${host_test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
-                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-            if(NOT host_test STREQUAL "plugin_automation_keyboard_test")
-                set_property(TEST ${host_test} APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-            endif()
-        endif()
-    endforeach()
-endif()
+add_executable(audio_edit_test audio_edit_test.cpp)
+target_link_libraries(audio_edit_test PRIVATE daw_controller)
+add_test(NAME audio_edit_test COMMAND audio_edit_test)
+set_tests_properties(audio_edit_test PROPERTIES TIMEOUT 90)

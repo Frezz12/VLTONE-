@@ -154,7 +154,7 @@ int main() {
                     schemaBytes, specs.size());
     }
 
-    daw::EngineController c{daw::EngineController::TestRuntime{}};
+    daw::EngineController c{};
     c.initialize(48000.0, 512, /*openDevice=*/false);
     c.setTempo(120.0);
 
@@ -731,7 +731,7 @@ int main() {
               "a noise burst is not called a note, and reads as a fast attack");
 
         // And through the tools, against a real rendered project.
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string tonePath = (dir / "measure.wav").string();
         writeTone(tonePath, 48000, 24000);
@@ -878,7 +878,7 @@ int main() {
 
     // ── Context-aware composition candidates ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string target =
             m.addTrack(daw::TrackKind::Instrument, "Lead");
@@ -928,7 +928,7 @@ int main() {
 
     // ── The agent loop ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         ai::AiSession session(m);
 
@@ -988,7 +988,7 @@ int main() {
 
     // ── User edits during a model wait are never absorbed by AI undo ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         ai::AiSession session(m);
         session.begin("add an audio track");
@@ -1040,7 +1040,7 @@ int main() {
     // of JSON, and the call itself arrived as prose rather than through the
     // tool channel. Refusing either threw away a part the model had written.
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string track =
             call(m, "add_track", json{{"kind", "instrument"}, {"name", "Keys"}})
@@ -1120,7 +1120,7 @@ int main() {
 
     // ── Refusing to destroy work, and taking a request back ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         const std::string keep = m.addTrack(daw::TrackKind::Audio, "Vocals");
 
@@ -1154,7 +1154,7 @@ int main() {
     {
         // Reverting a request the user has already worked past — the case
         // plain undo cannot serve, because the entry is no longer on top.
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         ai::AiSession session(m);
 
@@ -1193,7 +1193,7 @@ int main() {
 
     // ── Transport errors and the cap ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         ai::AiSession session(m);
 
@@ -1219,7 +1219,7 @@ int main() {
 
     // ── What the wire carries, and what it costs ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         ai::AiSession session(m);
         session.setHistoryLimit(2);
@@ -1258,7 +1258,7 @@ int main() {
 
     // ── Stopping, and what a stopped run leaves behind ──
     {
-        daw::EngineController m{daw::EngineController::TestRuntime{}};
+        daw::EngineController m{};
         m.initialize(48000.0, 512, /*openDevice=*/false);
         ai::AiSession session(m);
 
@@ -1282,7 +1282,7 @@ int main() {
 
     // ── The wire: both providers' shapes, and streaming ──
     {
-        daw::EngineController harmonyController{daw::EngineController::TestRuntime{}};
+        daw::EngineController harmonyController{};
         ai::ToolContext context;
         context.compositionCandidates = std::make_shared<ai::CompositionCandidateStore>();
         const json progression = json::array({{{"startBeats", 0}, {"lengthBeats", 1.5}, {"root", 0}, {"pitchClasses", {0, 4, 7, 11, 2}}},
@@ -1493,7 +1493,7 @@ int main() {
         rateLimited.feed("data: {\"error\":{\"code\":429,\"message\":\"busy\"}}\n\n");
         check(rateLimited.errorStatus() == 429 && !rateLimited.hasOutput(), "in-stream rate limits can be retried before output");
         check(!parseReply(Provider::OpenAi, json{{"choices", 4}}).error.empty(), "malformed JSON responses do not throw");
-        daw::EngineController partialController{daw::EngineController::TestRuntime{}};
+        daw::EngineController partialController{};
         ai::AiSession partialSession(partialController);
         partialSession.begin("/compose make chords");
         partialSession.applyReply({"Half a response", {{"no", "set_tempo", {{"bpm", 177}}}}, "interrupted"});

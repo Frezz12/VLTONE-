@@ -90,6 +90,7 @@ void scrollInspector(QWidget* source, QWheelEvent* event) {
 class ClipParameterSpinBox final : public QDoubleSpinBox {
 public:
     explicit ClipParameterSpinBox(QWidget* parent) : QDoubleSpinBox(parent) {
+        setProperty("vlt.customNumericScrub", true);
         setButtonSymbols(QAbstractSpinBox::NoButtons);
         setKeyboardTracking(false);
         setAlignment(Qt::AlignRight);
@@ -760,8 +761,8 @@ void InspectorWidget::rebuild() {
     // A folder that does not sum has no channel — no fader, no inserts, no
     // routing. Showing an empty console for it would offer controls that
     // govern nothing.
-    const bool master = selected && selected->kind == daw::TrackKind::Master;
-    const bool valid = selected && (daw::carriesAudio(*selected) || master);
+    const bool master = m_trackId == daw::EngineController::kMasterChannelId || (selected && selected->kind == daw::TrackKind::Master);
+    const bool valid = master || (selected && daw::carriesAudio(*selected));
     if (valid) {
         m_strip = new ChannelStrip(m_controller, m_trackId, master,
                                    m_content);
