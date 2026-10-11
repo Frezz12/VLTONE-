@@ -981,6 +981,7 @@ void TrackListWidget::rebuild() {
     refreshGlobalChips();
     applyHighlight();
     layoutRows();
+    syncTrackValues();
 }
 
 void TrackListWidget::refreshMeters() {
@@ -1223,12 +1224,15 @@ void TrackListWidget::syncVisibleRows() {
         if (live.container) {
             live.container->setFixedHeight(live.height);
             live.container->setGeometry(0, live.top, m_rowsHost->width(), live.height);
-            applyRowAdaptivity(live);
+            const QSize adaptedSize(m_rowsHost->width(), live.height);
+            if (live.container->property("adaptedSize").toSize() != adaptedSize) {
+                applyRowAdaptivity(live);
+                live.container->setProperty("adaptedSize", adaptedSize);
+            }
             live.container->show();
         }
     }
-    if (created) { applyRecordChips(); applyHighlight(); }
-    syncTrackValues();
+    if (created) { applyRecordChips(); applyHighlight(); syncTrackValues(); }
 }
 
 void TrackListWidget::resizeEvent(QResizeEvent* ev) {

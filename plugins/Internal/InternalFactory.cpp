@@ -4,6 +4,7 @@
 #include "Internal/ChannelColorInstance.hpp"
 #include "Internal/MiniModuleInstance.hpp"
 #include "Internal/DelayInstance.hpp"
+#include "Internal/UtilityInstance.hpp"
 
 #include "Internal/GravityInstance.hpp"
 #include "Internal/GraphitInstance.hpp"
@@ -71,6 +72,9 @@ std::vector<PluginDescriptor> InternalFactory::inspect(const std::string& path) 
 }
 
 std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& descriptor) {
+    for (const auto kind : {utility::Kind::Gain, utility::Kind::Stereo, utility::Kind::Reverse})
+        if (descriptor.uid == utility::descriptorFor(kind).uid)
+            return std::make_unique<utility::UtilityInstance>(kind);
     if (descriptor.uid == channel_color::ChannelColorInstance::uid()) return std::make_unique<channel_color::ChannelColorInstance>();
     if (descriptor.uid == cla2a::Cla2aInstance::uid()) return std::make_unique<cla2a::Cla2aInstance>();
     if (descriptor.uid == delay::DelayInstance::uid()) return std::make_unique<delay::DelayInstance>();
@@ -106,7 +110,10 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
 }
 
 std::vector<PluginDescriptor> builtinPlugins() {
-    return {sampler::SamplerInstance::staticDescriptor(),
+    return {utility::descriptorFor(utility::Kind::Gain),
+            utility::descriptorFor(utility::Kind::Stereo),
+            utility::descriptorFor(utility::Kind::Reverse),
+            sampler::SamplerInstance::staticDescriptor(),
             slicer::SlicerInstance::staticDescriptor(),
             delay::DelayInstance::staticDescriptor(),
             compressor::CompressorInstance::staticDescriptor(),

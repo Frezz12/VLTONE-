@@ -647,13 +647,36 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   connect(m_compilePoll, &QTimer::timeout, this, &CreatorWindow::pollCode);
   auto *recovery = new QTimer(this);
   recovery->setInterval(5000);
-  connect(recovery, &QTimer::timeout, this, [this] {
-    if (!m_started || m_undo->isClean())
+  struct RecoverySerialization {
+    std::future<std::string> text;
+    quint64 revision = 0, savedRevision = ~quint64(0);
+  };
+  auto recoveryState = std::make_shared<RecoverySerialization>();
+  connect(recovery, &QTimer::timeout, this, [this, recovery, recoveryState] {
+    if (recoveryState->text.valid()) {
+      if (recoveryState->text.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+      recovery->setInterval(5000);
+      const auto text = recoveryState->text.get();
+      // Never recreate recovery for a saved, discarded or replaced document.
+      if (text.empty() || text.size() > 32 * 1024 * 1024 || !m_started ||
+          m_undo->isClean() || recoveryState->revision != m_revision) return;
+      QDir().mkpath(QFileInfo(recoveryPath()).absolutePath());
+      QSaveFile file(recoveryPath());
+      if (file.open(QIODevice::WriteOnly) &&
+          file.write(text.data(), qint64(text.size())) == qint64(text.size()) && file.commit())
+        recoveryState->savedRevision = recoveryState->revision;
       return;
+    }
+    if (!m_started || m_undo->isClean() || recoveryState->savedRevision == m_revision) return;
     m_project.viewports[m_project.layoutKey()] = m_canvas->viewportState();
-    QDir().mkpath(QFileInfo(recoveryPath()).absolutePath());
-    QString error;
-    m_project.save(recoveryPath(), error);
+    recoveryState->revision = m_revision;
+    // Only the value snapshot crosses threads; scene/widgets and the atomic
+    // commit remain on the UI thread, after checking the current revision.
+    recoveryState->text = std::async(std::launch::async, [project = m_project] {
+      try { return project.toJson().dump(2); }
+      catch (const std::exception&) { return std::string{}; }
+    });
+    recovery->setInterval(50);
   });
   recovery->start();
   styleCreator(this);
@@ -899,6 +922,16 @@ void CreatorWindow::edit(const QString &name,
 void CreatorWindow::apply(CreatorProject p) {
   if (m_ai) m_ai->documentChanging();
   ++m_revision;
+  const bool positionsOnly = m_project.definition == p.definition &&
+      m_project.activeMode == p.activeMode && m_project.graphPath == p.graphPath &&
+      m_project.name == p.name && m_project.viewports == p.viewports &&
+      m_project.codeNode == p.codeNode && m_project.codeCursors == p.codeCursors;
+  if (positionsOnly && m_project.positions != p.positions) {
+    m_project = std::move(p);
+    m_canvas->setPositions(m_project.positions.value(m_project.layoutKey()));
+    if (m_ai) m_ai->projectChanged();
+    return;
+  }
   auto previous = m_project.graph(), next = p.graph();
   const auto stripText = [](auto &graph) {
     const auto strip = [](auto &nodes) { for (auto &node : nodes) {

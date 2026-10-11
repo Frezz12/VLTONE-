@@ -614,6 +614,7 @@ void NotebookWindow::buildTimedTextPanel() {
 }
 
 void NotebookWindow::reloadTimedTextTable() {
+    m_cueIndexDirty = true;
     if (!m_timedTextTable) return;
     const int selectedRow = m_timedTextTable->currentRow();
     const auto* oldTime = m_timedTextTable->item(selectedRow, 0);
@@ -646,6 +647,7 @@ void NotebookWindow::reloadTimedTextTable() {
 }
 
 void NotebookWindow::saveTimedTextTable() {
+    m_cueIndexDirty = true;
     if (m_loadingTimedText || !m_timedTextTable) return;
     std::vector<daw::NotebookCueModel> cues;
     cues.reserve(m_timedTextTable->rowCount());
@@ -725,18 +727,22 @@ void NotebookWindow::updateTimedTextPosition() {
     if (!m_controller || !m_cuePosition || !m_cuePreview || m_tabs->currentIndex() != 1) return;
     const double seconds = std::max(0.0, m_controller->presentationPositionSeconds());
     m_cuePosition->setText(tr("Playhead: %1").arg(ui::notebookprefs::timedCueTimeText(seconds)));
-    // Use the visible table; no disk reads on the playback timer.
-    QString active;
-    double activeTime = -1.0;
-    for (int row = 0; row < m_timedTextTable->rowCount(); ++row) {
-        const auto* time = m_timedTextTable->item(row, 0);
-        const auto* text = m_timedTextTable->item(row, 1);
-        double cueTime = 0.0;
-        if (time && text && ui::notebookprefs::parseTimedCueTime(time->text(), cueTime) &&
-            cueTime <= seconds && cueTime >= activeTime) {
-            active = text->text(); activeTime = cueTime;
+    if (m_cueIndexDirty) {
+        m_cueIndex.clear();
+        for (int row = 0; row < m_timedTextTable->rowCount(); ++row) {
+            const auto* time = m_timedTextTable->item(row, 0);
+            const auto* text = m_timedTextTable->item(row, 1);
+            double seconds = 0;
+            if (time && text && ui::notebookprefs::parseTimedCueTime(time->text(), seconds))
+                m_cueIndex.emplace_back(seconds, text->text());
         }
+        std::stable_sort(m_cueIndex.begin(), m_cueIndex.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+        m_cueIndexDirty = false;
     }
+    const auto next = std::upper_bound(m_cueIndex.begin(), m_cueIndex.end(), seconds,
+        [](double time, const auto& cue) { return time < cue.first; });
+    const QString active = next == m_cueIndex.begin() ? QString{} : std::prev(next)->second;
     m_cuePreview->setText(active.isEmpty() ? tr("No line at this position")
                                           : tr("Current line: %1").arg(active));
 }

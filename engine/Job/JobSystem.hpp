@@ -71,6 +71,11 @@ public:
     /// Any thread. Returns false when empty or when another thief won the race.
     bool steal(std::uint32_t& out) noexcept {
         std::int64_t top = m_top.load(std::memory_order_acquire);
+        // Most probes hit an empty queue while a plugin owns the remaining
+        // work. Avoid a full fence in that case, just as pop() does. A push
+        // racing this snapshot is picked up by the next probe. Re-read bottom
+        // after the fence before actually claiming an item.
+        if (top >= m_bottom.load(std::memory_order_acquire)) return false;
         std::atomic_thread_fence(std::memory_order_seq_cst);
         const std::int64_t bottom = m_bottom.load(std::memory_order_acquire);
         if (top >= bottom) return false;
@@ -92,7 +97,9 @@ private:
 /// processor installs this; keeping it a plain function pointer + context keeps
 /// the realtime path free of std::function's indirection and allocation.
 struct JobSink {
-    void (*execute)(void* context, std::uint32_t item, unsigned workerIndex) = nullptr;
+    // A job may continue directly into newly-ready dependent jobs. Return the
+    // number completed so the pass still accounts for every scheduled task.
+    std::uint32_t (*execute)(void* context, std::uint32_t item, unsigned workerIndex) = nullptr;
     void* context = nullptr;
 };
 
@@ -184,6 +191,7 @@ private:
     void workerLoop(unsigned index);
     /// Take an item from our own deque, else steal from someone else.
     bool acquireItem(unsigned index, std::uint32_t& item) noexcept;
+    void completeItems(std::uint64_t count) noexcept;
     /// Drain items until the pass finishes; used by pool threads and worker 0.
     /// Worker 0 stays until the pass is complete — it owns the block. A pool
     /// worker that has found nothing for a while returns so it can park.
@@ -213,6 +221,10 @@ private:
     // an item of the next one, and the pass would then never finish.
     alignas(kCacheLine) std::atomic<std::uint64_t> m_completed{0};
     alignas(kCacheLine) std::atomic<std::uint64_t> m_target{0};
+    // The caller waits only after a full empty-queue sweep. Completions then
+    // wake it; the store/load handshake prevents a lost final completion.
+    alignas(kCacheLine) std::atomic<bool> m_callerWaiting{false};
+    std::atomic<bool> m_callerCanWait{false};
     // Work-availability epoch. It advances both when a pass opens and when a
     // job exposes enough mid-pass parallelism to justify waking parked helpers.
     alignas(kCacheLine) std::atomic<std::uint64_t> m_generation{0};

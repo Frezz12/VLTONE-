@@ -948,11 +948,8 @@ int main() {
                 const std::string lane = drop.importSampleToMidiTrack(wav, 3.0);
                 const auto* created = drop.project().findTrack(lane);
                 check(created && created->instrument.uid == "daw.sampler" &&
-                      created->clips.size() == 1 && created->clips.front().kind == ClipKind::Midi &&
-                      created->clips.front().startSeconds == 3.0 &&
-                      created->clips.front().notes.size() == 1 &&
-                      created->clips.front().notes.front().pitch == 60,
-                      "timeline sample drop creates a playable MIDI clip at the drop time");
+                      created->clips.empty(),
+                      "timeline sample drop creates a Sampler track with an empty arrangement");
                 check(drop.undoDepth() == depth + 1, "sample-to-MIDI drop is one undo step");
                 drop.undo();
                 check(!drop.project().findTrack(lane) && drop.project().tracks.size() == count,
@@ -960,9 +957,8 @@ int main() {
                 drop.redo();
                 const auto* restored = drop.project().findTrack(lane);
                 auto* instance = restored ? drop.samplerInstance(lane, restored->instrument.id) : nullptr;
-                check(instance && instance->samplePath() == wav && restored->clips.size() == 1 &&
-                      restored->clips.front().notes.size() == 1,
-                      "redo restores the sample, instrument and MIDI trigger");
+                check(instance && instance->samplePath() == wav && restored->clips.empty(),
+                      "redo restores the sample and instrument without a MIDI trigger");
                 const auto beforeFailure = drop.undoDepth();
                 check(drop.importSampleToMidiTrack(wav + ".missing", 0).empty() &&
                       drop.undoDepth() == beforeFailure && drop.project().tracks.size() == count + 1,

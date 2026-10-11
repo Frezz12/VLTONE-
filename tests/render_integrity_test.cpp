@@ -1,4 +1,5 @@
 #include "EngineController.hpp"
+#include "ProjectSerializer.hpp"
 #include "Clap/ClapFactory.hpp"
 #include "Host/PluginNode.hpp"
 #include "platform/AudioFileDecoder.hpp"
@@ -111,6 +112,31 @@ int main(int argc, char** argv) try {
     const auto stemSource = temp.path / "stem-tone.wav";
     writeTone(source, 1000); writeTone(stemSource, 375);
 
+    // Opening a project caches missing media as null. Export must still fail
+    // clearly, and a later retry must recover when that file is restored.
+    {
+        const auto package = temp.path / "missing.vlt";
+        daw::EngineController c{};
+        require(bool(initialize(c, 128)), "initialize missing media test");
+        track(c, source, "Missing audio");
+        require(bool(c.saveProject(package.string())), "save missing media fixture");
+        daw::ProjectModel saved;
+        require(bool(daw::ProjectSerializer::load(saved, package.string())), "read missing media fixture");
+        std::string mediaPath;
+        for (const auto& lane : saved.tracks) for (const auto& clip : lane.clips)
+            if (clip.kind == daw::ClipKind::Audio) mediaPath = clip.filePath;
+        const fs::path media = mediaPath;
+        require(media.string().find(temp.path.string()) == 0 && fs::remove(media), "remove fixture media");
+        require(bool(c.openProject(package.string())), "open project with missing audio");
+        const auto spec = specFor(temp.path / "missing-output");
+        daw::rendering::Report report;
+        const auto failed = c.renderProject(spec, {}, report);
+        require(!failed && report.files.empty() && !failed.message().empty(), "missing audio cannot export successful silence");
+        writeTone(media, 1000);
+        require(rms(render(c, spec)) > 0.1, "restored missing media is retried and audible");
+        std::cout << "PASS missing audio fails export and recovers after restoration\n";
+    }
+
     // A render request owns its generation, including pending plugin edits and
     // audio resources. Destroying its editor/controller must not change it.
     {
@@ -158,9 +184,10 @@ int main(int argc, char** argv) try {
         std::cout << "PASS immutable render survives document and runtime destruction\n";
     }
 
-    // Larger blocks are automatic only for audio arrangements. A probe makes
-    // the activation size observable; MIDI and automation keep device timing.
-    for (const std::string kind : {"audio", "midi", "automation"}) {
+    // A probe makes activation size observable. Native mixer curves and
+    // inactive lanes permit larger blocks; MIDI/plugin event streams retain
+    // device timing and the corresponding plugin event budget.
+    for (const std::string kind : {"audio", "midi", "automation", "plugin-automation", "inactive-plugin-automation"}) {
         daw::EngineController c{};
         require(bool(initialize(c, 128)), "initialize block selection");
         const auto a = track(c, source, "Block probe");
@@ -169,19 +196,47 @@ int main(int argc, char** argv) try {
         if (kind == "midi") {
             const auto midi = c.addTrack(daw::TrackKind::Midi, "MIDI timing");
             require(!c.addMidiClip(midi, 0, 1).empty(), "add MIDI clip");
-        } else if (kind == "automation") {
+        } else if (kind != "audio") {
             daw::AutomationTarget target;
             target.kind = daw::AutomationTargetKind::TrackVolume;
             target.channelId = a;
+            if (kind != "automation") {
+                target.kind = daw::AutomationTargetKind::PluginParameter;
+                target.slotId = c.addInsert(a, plugin(DAW_TEST_CLAP_PATH, "com.daw.test.gain"));
+                require(!target.slotId.empty(), "add automated plugin");
+                target.parameterId = c.insertInstance(a, target.slotId)->parameters().front().id;
+            }
             const auto lane = c.addAutomationLane(a, target);
-            require(!c.addAutomationClip(lane, target, 0, 1).empty(), "add automation clip");
+            const auto clip = c.addAutomationClip(lane, target, 0, 1);
+            require(!clip.empty(), "add automation clip");
+            c.setAutomationPoints(lane, clip, {{0, 1}, {2, 1}}, kind != "inactive-plugin-automation");
         }
         auto spec = specFor(temp.path / ("block-" + kind));
         const auto automatic = render(c, spec);
-        spec.blockSize = kind == "audio" ? 1024 : 128;
+        const bool small = kind == "midi" || kind == "plugin-automation";
+        spec.blockSize = small ? 128 : 1024;
         require(difference(automatic, render(c, spec)) < 1e-6, "automatic block selection: " + kind);
-        spec.blockSize = kind == "audio" ? 128 : 1024;
+        spec.blockSize = small ? 1024 : 128;
         require(difference(automatic, render(c, spec)) > 0.01, "block probe distinguishes sizes");
+    }
+
+    // Native automation must retain corners that fall inside a large block.
+    // Compare actual exports rather than only asserting the chosen block size.
+    for (auto kind : {daw::AutomationTargetKind::TrackVolume, daw::AutomationTargetKind::TrackPan,
+                      daw::AutomationTargetKind::TrackMute}) {
+        daw::EngineController c{};
+        require(bool(initialize(c, 128)), "initialize mixer automation export");
+        const auto a = track(c, source, "Automated mixer");
+        daw::AutomationTarget target; target.kind = kind; target.channelId = a;
+        const auto lane = c.addAutomationLane(a, target);
+        const auto clip = c.addAutomationClip(lane, target, 0, 1);
+        c.setAutomationPoints(lane, clip, {{0, 0}, {150.0 / 24000, 1},
+            {179.0 / 24000, 0}, {500.0 / 24000, 1}, {2, 1}});
+        auto spec = specFor(temp.path / ("mixer-automation-" + std::to_string(int(kind))));
+        const auto automatic = render(c, spec);
+        spec.blockSize = 128;
+        require(difference(automatic, render(c, spec)) < 1e-6,
+                "large automatic blocks preserve every mixer automation sample");
     }
 
     // The shared engine API also switches back to a correct realtime graph,

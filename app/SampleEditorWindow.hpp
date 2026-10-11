@@ -27,7 +27,7 @@ public:
     /// can land its end on a bar line.
     void setSnapProvider(std::function<double()> provider);
     void refresh();
-    void showAudioEditor();
+    void showSampler();
 
 signals:
     void closing(const QString& trackId, const QString& clipId);

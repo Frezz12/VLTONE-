@@ -36,7 +36,7 @@ SampleEditorWindow::SampleEditorWindow(daw::EngineController* controller,
     layout->addWidget(panel);
 
     setMinimumSize(860, 520);
-    resize(1040, 722);
+    resize(1040, 770);
 }
 
 void SampleEditorWindow::setSnapProvider(std::function<double()> provider) {
@@ -44,7 +44,7 @@ void SampleEditorWindow::setSnapProvider(std::function<double()> provider) {
 }
 
 void SampleEditorWindow::refresh() {
-    if (m_panel) m_panel->refresh();
+    if (m_panel && isVisible()) m_panel->refresh();
 }
 
 QWidget* SampleEditorWindow::collaborationPresenceSurface() const {
@@ -56,6 +56,6 @@ void SampleEditorWindow::closeEvent(QCloseEvent* event) {
     QWidget::closeEvent(event);
 }
 
-void SampleEditorWindow::showAudioEditor() {
+void SampleEditorWindow::showSampler() {
     if(m_panel)m_panel->showDefaultPage();
 }

@@ -391,20 +391,36 @@ void CreatorAiPanel::updateState() {
 void CreatorAiPanel::render() {
   const int scroll = m_scroll->verticalScrollBar()->value();
   const bool atEnd = m_followTail;
-  while (auto *item = m_transcript->takeAt(0)) {
+  const auto &messages = m_session->messages();
+  std::vector<std::size_t> hashes;
+  for (const auto& message : messages) {
+    auto hash = std::hash<std::string>{}(message.text);
+    const auto mix = [&](std::size_t value) { hash ^= value + std::size_t(0x9e3779b9) + (hash << 6) + (hash >> 2); };
+    mix(std::size_t(message.role));
+    for (const auto& outcome : message.outcomes) {
+      mix(std::hash<std::string>{}(outcome.callId)); mix(std::hash<std::string>{}(outcome.name));
+      mix(outcome.ok); mix(std::hash<json>{}(outcome.result));
+    }
+    hashes.push_back(hash);
+  }
+  std::size_t prefix = 0;
+  while (prefix < hashes.size() && prefix < m_messageHashes.size() && hashes[prefix] == m_messageHashes[prefix]) ++prefix;
+  const int keep = prefix ? m_messageWidgetEnds[prefix - 1] : 0;
+  m_messageWidgetEnds.resize(prefix);
+  m_messageHashes = std::move(hashes);
+  while (auto *item = m_transcript->takeAt(keep)) {
     if (item->widget())
       delete item->widget();
     delete item;
   }
   m_partialLabel = nullptr;
-  const auto &messages = m_session->messages();
   if (messages.empty())
     m_transcript->addWidget(aiCardText(
         m_messages,
         tr("Describe the mini-module you want. The assistant can connect "
            "nodes, write C++, fix compiler errors and install the result."),
         "AiEmptyText"));
-  for (std::size_t i = 0; i < messages.size(); ++i) {
+  for (std::size_t i = prefix; i < messages.size(); ++i) {
     const auto &msg = messages[i];
     if (msg.role == ai::Role::Tool) {
       for (const auto &outcome : msg.outcomes) {
@@ -475,6 +491,7 @@ void CreatorAiPanel::render() {
           aiCardText(card, QString::fromStdString(msg.text), "AiMessageText"));
       m_transcript->addWidget(card);
     }
+    m_messageWidgetEnds.push_back(m_transcript->count());
   }
   if (running()) {
     m_partialLabel = aiCardText(m_messages, m_partial, "AiPartialText");

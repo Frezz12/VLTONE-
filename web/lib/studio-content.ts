@@ -10,7 +10,7 @@ export function studioContent(locale: string) {
       { name: "showcase-instrumental", label: ru ? "Аранжировка" : "Arrangement", alt: ru ? "Инструментальный проект Night Bloom: аудиодорожки с ударными и MIDI-партии баса, клавиш, арпеджио и мелодии" : "Night Bloom instrumental project: audio drum tracks and MIDI parts for bass, keys, arpeggios and melody" },
       { name: "showcase-midi", label: "Piano Roll", alt: ru ? "Партия Warm Keys из Night Bloom: четыре такта аккордов, длительность нот и сила нажатия" : "Warm Keys from Night Bloom: four bars of chords, note lengths and velocity" },
       { name: "showcase-mix", label: ru ? "Микшер" : "Mixer", alt: ru ? "Микшер с каналами инструментов, посылами на общую обработку и мастер-каналом" : "Mixer with instrument channels, sends to shared effects and a master channel" },
-      { name: "showcase-eq", label: ru ? "Эквалайзер" : "Equalizer", alt: ru ? "Параметрический эквалайзер: срез низких частот и настройка отдельных полос" : "Parametric equalizer with a low cut and individual frequency bands" },
+      { name: "showcase-rack", label: ru ? "Рэк" : "Rack", alt: ru ? "Рэк дорожки Warm Keys: сэмплер, цепочка эффектов и посылы рядом с аранжировкой" : "Warm Keys rack: sampler, effect chain and sends alongside the arrangement" },
     ],
     allFeatures: ru ? "Все возможности" : "All features",
     workflow: [
@@ -31,12 +31,12 @@ export function studioContent(locale: string) {
         alt: ru ? "Warm Keys из Night Bloom: аккордовая последовательность в Piano Roll и динамика нот" : "Warm Keys from Night Bloom: a chord progression in Piano Roll with note velocity below",
       },
       {
-        id: "mixing", shot: "showcase-eq",
-        title: ru ? "Обработка, сведение и экспорт" : "Shape, mix and export",
-        copy: ru ? "Настраивай баланс дорожек, добавляй эффекты и отправляй несколько инструментов на общую обработку. Сохрани результат одним файлом или отдельными дорожками." : "Balance tracks, add effects and route instruments to shared processing. Export the finished mix as one file or as individual stems.",
-        points: ru ? ["Эквалайзер и эффекты на каналах.", "Шины, посылы и мастер-канал.", "Автоматизация параметров во времени."] : ["Channel EQ and effects.", "Buses, sends and a master channel.", "Parameter automation over time."],
-        link: ru ? "Подробнее о сведении" : "Explore mixing",
-        alt: ru ? "Обработка Warm Keys: срез низких частот, коррекция середины и мягкое усиление верхних частот" : "Warm Keys processing: a low cut, midrange correction and a gentle high-frequency lift",
+        id: "mixing", shot: "showcase-rack",
+        title: ru ? "Весь звук — в одном рэке" : "Your sound, in one rack",
+        copy: ru ? "Открой дорожку и посмотри на всю цепочку: от инструмента до последнего эффекта. Настраивай устройства прямо в рэке, меняй их порядок и объединяй обработку в группы. Всё рядом — можно сосредоточиться на звуке." : "Open a track and see the whole chain, from the instrument to the final effect. Adjust devices right in the rack, change their order and group your processing. Everything stays together, so you can focus on the sound.",
+        points: ru ? ["Инструмент, мини-модули и эффекты в одном окне.", "Группы устройств, микс обработки и посылы.", "Переключение между рэком и микшером.", "Экспорт готового микса или отдельных дорожек."] : ["Instruments, mini-modules and effects in one view.", "Device groups, wet/dry mix and sends.", "Switch between the rack and the mixer.", "Export a finished mix or individual stems."],
+        link: ru ? "Подробнее об обработке и сведении" : "Explore processing and mixing",
+        alt: ru ? "Рэк Warm Keys: сэмплер и обработка раскрыты рядом; справа — посыл на общий эффект" : "Warm Keys rack: sampler and processing open side by side, with a send to a shared effect on the right",
       },
     ],
     extras: [

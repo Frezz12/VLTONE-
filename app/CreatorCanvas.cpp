@@ -26,6 +26,7 @@
 #include <QWheelEvent>
 #include <QPushButton>
 #include <algorithm>
+#include <unordered_map>
 #include <cmath>
 
 namespace ui {
@@ -297,7 +298,7 @@ public:
   QVariant itemChange(GraphicsItemChange change,
                       const QVariant &value) override {
     if (change == ItemPositionHasChanged && scene())
-      canvas->updateWires();
+      canvas->updateWires(QString::fromStdString(model.id));
     return QGraphicsObject::itemChange(change, value);
   }
   void mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) override {
@@ -399,13 +400,17 @@ CreatorCanvas::~CreatorCanvas() {
   // the derived view is alive, without calling an already destroyed inspector.
   scene()->blockSignals(true);
   cancelConnection();
+  m_nodeWires.clear();
   scene()->clear();
 }
 void CreatorCanvas::updateValues(const MiniModuleDefinition &graph) {
   m_graph = graph;
+  std::unordered_map<std::string, const NodeDefinition*> nodes;
+  for (const auto& node : graph.nodes) nodes.emplace(node.id, &node);
   for (auto *item : scene()->items()) if (auto *node = dynamic_cast<NodeItem *>(item)) {
-    auto model = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const auto &n) { return n.id == node->model.id; });
-    if (model == graph.nodes.end()) continue;
+    const auto found = nodes.find(node->model.id);
+    if (found == nodes.end()) continue;
+    const auto* model = found->second;
     node->model.parameters = model->parameters;
     for (auto *child : node->childItems()) if (auto *proxy = dynamic_cast<QGraphicsProxyWidget *>(child)) {
       auto *widget = proxy->widget();
@@ -426,6 +431,7 @@ void CreatorCanvas::setGraph(const MiniModuleDefinition &graph,
   const auto selected = selectedNodes();
   cancelConnection();
   QSignalBlocker blocker(scene());
+  m_nodeWires.clear();
   scene()->clear();
   m_graph = graph;
   QMap<QString, Port *> ports;
@@ -449,7 +455,10 @@ void CreatorCanvas::setGraph(const MiniModuleDefinition &graph,
     auto *b = ports.value(QString::fromStdString(e.to + "/in/" + e.toPort));
     if (a && b) {
       a->connected = b->connected = true;
-      scene()->addItem(new Wire(a, b, i));
+      auto* wire = new Wire(a, b, i);
+      scene()->addItem(wire);
+      m_nodeWires[a->node].push_back(wire);
+      if (a->node != b->node) m_nodeWires[b->node].push_back(wire);
     }
   }
 }
@@ -532,10 +541,22 @@ void CreatorCanvas::actualSize() {
   centerOn(center);
   emit zoomChanged(1);
 }
-void CreatorCanvas::updateWires() {
+void CreatorCanvas::updateWires(const QString& node) {
+  if (!node.isEmpty()) {
+    const auto found = m_nodeWires.constFind(node);
+    if (found != m_nodeWires.cend()) for (auto* wire : found.value()) static_cast<Wire*>(wire)->updatePath();
+    return;
+  }
   for (auto *item : scene()->items())
-    if (auto *wire = dynamic_cast<Wire *>(item))
+    if (auto *wire = dynamic_cast<Wire *>(item);
+        wire && (node.isEmpty() || wire->from->node == node || wire->to->node == node))
       wire->updatePath();
+}
+void CreatorCanvas::setPositions(const QMap<QString, QPointF>& positions) {
+  for (auto* item : scene()->items()) if (auto* node = dynamic_cast<NodeItem*>(item)) {
+    const auto found = positions.constFind(QString::fromStdString(node->model.id));
+    if (found != positions.cend() && node->pos() != found.value()) node->setPos(found.value());
+  }
 }
 void CreatorCanvas::drawBackground(QPainter *p, const QRectF &r) {
   const auto c = creatorColors();

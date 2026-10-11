@@ -79,38 +79,58 @@ inline void knob(QPainter &p, QRectF bounds, double fraction, bool pressed,
   const auto base = shell();
   const double side = std::min(bounds.width(), bounds.height());
   const double scale = side / 72.;
-  p.translate(bounds.center() + QPointF(0, pressed ? scale : 0));
+  // The moulded rubber stays anchored while editing. Press feedback belongs
+  // to the inlay, never to the position or depth of the control.
+  p.translate(bounds.center());
   p.scale(scale, scale);
-  // Concentric circles keep the rim round. Directional lighting changes
-  // colour, never the silhouette or the centre of the knob.
-  const QRectF shade(-30, -30, 60, 60);
   p.setPen(Qt::NoPen);
-  QRadialGradient shadow(shade.center(), 30);
-  shadow.setColorAt(.70, QColor(0, 0, 0, t.dark ? 100 : 45));
+  // A broad, feathered foot joins the dome to the panel, without a metal rim
+  // or a hard drop shadow. Both light lobes fade out before the widget edge.
+  QRadialGradient shadow(QPointF(2, 3), 32);
+  shadow.setColorAt(0, QColor(0, 0, 0, t.dark ? 115 : 48));
+  shadow.setColorAt(.60, QColor(0, 0, 0, t.dark ? 95 : 40));
+  shadow.setColorAt(.82, QColor(0, 0, 0, t.dark ? 30 : 12));
   shadow.setColorAt(1, Qt::transparent);
   p.setBrush(shadow);
-  p.drawEllipse(shade);
-  QLinearGradient rim(QPointF(-22, -22), QPointF(22, 22));
-  rim.setColorAt(0, mixColors(base, t.textPrimary, t.dark ? .22 : .12));
-  rim.setColorAt(.5, base);
-  rim.setColorAt(1, t.edgeDark(base));
-  p.setBrush(rim);
-  p.drawEllipse(QRectF(-23, -23, 46, 46));
-  QLinearGradient rubber(QPointF(-22, -22), QPointF(22, 22));
-  rubber.setColorAt(0, mixColors(base, t.textPrimary, t.dark ? .15 : .06));
-  rubber.setColorAt(.6, base);
-  rubber.setColorAt(1, t.edgeDark(base));
+  p.drawEllipse(QRectF(-30, -29, 64, 64));
+  QRadialGradient shoulder(QPointF(-3, -4), 31);
+  shoulder.setColorAt(0, QColor(255, 255, 255, t.dark ? 28 : 100));
+  shoulder.setColorAt(.65, QColor(255, 255, 255, t.dark ? 24 : 85));
+  shoulder.setColorAt(.85, QColor(255, 255, 255, t.dark ? 7 : 25));
+  shoulder.setColorAt(1, Qt::transparent);
+  p.setBrush(shoulder);
+  p.drawEllipse(QRectF(-34, -35, 62, 62));
+
+  QRadialGradient rubber(QPointF(-8, -10), 49);
+  rubber.setColorAt(0, mixColors(base, Qt::white, t.dark ? .22 : .38));
+  rubber.setColorAt(.38, mixColors(base, Qt::white, t.dark ? .09 : .15));
+  rubber.setColorAt(.64, base);
+  rubber.setColorAt(.86, mixColors(base, Qt::black, t.dark ? .23 : .14));
+  rubber.setColorAt(1, mixColors(base, Qt::black, t.dark ? .32 : .20));
   p.setBrush(rubber);
-  p.drawEllipse(QRectF(-22, -22, 44, 44));
+  p.drawEllipse(QRectF(-23.5, -23.5, 47, 47));
+
+  // A low-contrast moulded grip is useful on the larger dials and disappears
+  // at compact sizes, where it would compete with the value indicator.
+  if (side >= 60) {
+    p.setPen(QPen(QColor(0, 0, 0, t.dark ? 28 : 18), .8, Qt::SolidLine,
+                  Qt::RoundCap));
+    for (int i = -1; i <= 1; ++i)
+      p.drawLine(QPointF(i * 3., 15), QPointF(i * 3., 18));
+  }
   const double angle =
       (225 - 270 * std::clamp(fraction, 0., 1.)) * std::numbers::pi / 180.;
   const QPointF direction(std::cos(angle), -std::sin(angle));
-  p.setPen(QPen(t.textPrimary, 2.6, Qt::SolidLine, Qt::RoundCap));
-  p.drawLine(direction * 11, direction * 18);
+  p.setPen(QPen(QColor(0, 0, 0, t.dark ? 110 : 45), 4.2,
+                Qt::SolidLine, Qt::RoundCap));
+  p.drawLine(direction * 10.5, direction * 18);
+  p.setPen(QPen(pressed ? accent() : t.textPrimary, 2.5,
+                Qt::SolidLine, Qt::RoundCap));
+  p.drawLine(direction * 10.5, direction * 18);
   if (focus) {
     p.setPen(QPen(accent(), 1.5));
     p.setBrush(Qt::NoBrush);
-    p.drawEllipse(QRectF(-25, -25, 50, 50));
+    p.drawEllipse(QRectF(-32, -32, 64, 64));
   }
   p.restore();
 }

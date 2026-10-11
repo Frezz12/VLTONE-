@@ -5,12 +5,15 @@ use_when: programming a beat, a drum loop, percussion, fills or changing a groov
 tags: [drums, beat, percussion, groove, kick, snare, hats]
 ---
 THE MAP
-Drum instruments are addressed by MIDI pitch. Use the General MIDI map — every drum plugin and the built-in sampler follow it:
+Drum instruments are addressed by MIDI pitch. The General MIDI map is a useful starting point ONLY for a kit that follows GM; third-party drum instruments may use another map. The built-in single-sample sampler plays its untransposed sample at MIDI 60 (C5), not at GM pitches:
 36 kick · 37 side stick · 38 snare · 39 clap · 40 rim snare · 41 low tom · 42 closed hat · 44 pedal hat · 45 mid tom · 46 open hat · 47 high tom · 48 high tom · 49 crash · 51 ride · 54 tambourine · 56 cowbell · 57 crash 2 · 75 clave
 
-With a real drum instrument, write the whole GM kit into ONE MIDI clip on ONE track. With the built-in single-sample sampler, one track can only play one loaded file: make separate sampler tracks for kick, snare/clap and hats, play each original hit at MIDI 60, and group those tracks. Never transpose one sample across GM pitches and call it a kit.
+For a new drum pattern, prefer create_pattern and add_pattern_lane: one sampler lane for kick, snare/clap and hats, each at pitch 60, routed through the Pattern bus. search_files supplies authorized contentIds. A mapped drum-kit instrument can use one lane with separate pitches. Never transpose a single sample across GM pitches and call it a kit.
 
-For a real drum instrument, use compose_candidates with role drums to get 3–5 scored GM patterns and apply the chosen candidate. For separate single-sample sampler tracks, use those candidates only as a rhythmic plan: split kick, snare and hat events onto their own MIDI-60 clips.
+WRITE INTO THE SEQUENCER
+Use set_sequence on each returned trackId/clipId, pitch=60 for a sampler, stepBeats=0.25 for sixteenths. In one 4/4 bar, steps 1,5,9,13 are the quarter-note kicks; steps 5,13 the backbeat; steps 3,7,11,15 the offbeat hats. Indices are 1-based from source beat zero; bar two starts at step 17. Use the actual meter, not a hardcoded 16 steps per bar. Each step is {step, velocity}, with optional offsetBeats within the cell and lengthBeats for the gate. Velocity 0 means a rest. The default gate is half a step; keep gates long enough for gated samples.
+Read get_sequence before editing. mode=merge touches only named cells; mode=replace replaces only the visible selected pitch lane and preserves other pitches and source notes outside the clip window. For a trimmed clip inspect sourceOffsetBeats/firstStep/lastStep; do not overwrite hidden source material. Omit steps to change only Sequence view/pitch/grid. Both MIDI and Sequence views share one note source: never make a duplicate MIDI version.
+compose_candidates role=drums may supply rhythmic alternatives, but its GM pitches must be mapped to the actual instrument. For separate samples use the chosen rhythm as a plan and write each sampler lane through set_sequence. Do not force a variation-selection round when the user asked you to make the beat directly.
 
 THE GRID
 A bar of 4/4 is 4 beats; a sixteenth is 0.25 beats. Positions inside a bar: beat 1 = 0.0, beat 2 = 1.0, beat 3 = 2.0, beat 4 = 3.0.
@@ -35,8 +38,8 @@ LENGTH AND VARIATION
 - Crash on the downbeat of the bar where a new section starts.
 
 SOUND
-- Prefer an installed drum instrument (list_plugins, kind instrument). If none is suitable, search_files for the individual pieces, create one instrument track per piece, load_sampler once on each, and group the tracks with arrange_tracks.
-- Chain: no reverb on the kick. Compression on the whole kit, not on each drum. If the user wants room, send the snare to a reverb bus with add_send.
+- Choose a suitable installed kit or individual library samples according to the desired sound. Keep an existing kit/mapping when editing. One-shot sample patterns should use separate Pattern lanes in Sequence view.
+- Consider envelopes, tuning and useful effects as part of production. An installed third-party compressor or saturation on the drum bus can add cohesion; use individual processing when it solves a specific issue. Reverb on kick is a stylistic choice, not forbidden; use restrained sends when space is wanted and preserve low-end clarity.
 
 CHECK
 Call analyze_track on the drum channel afterwards. A beat with peaks above -3 dB before anything else is in the project will not leave room for the rest; bring the channel down rather than the notes.

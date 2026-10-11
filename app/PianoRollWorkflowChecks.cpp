@@ -21,6 +21,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QMimeData>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QQuickWindow>
@@ -115,10 +116,21 @@ bool PianoRollWindow::checkWorkflowsForTest(const QString& images) {
     check(chordFrame->width() < 580 && chordFrame->height() < 420,
           "hosted chord editor opens compactly");
     const auto* shortcut = window.findChild<QToolButton*>("PianoRollBuildChordsButton");
-    const auto* scope = window.findChild<QComboBox*>("PianoRollSlideScope");
-    check(shortcut && shortcut->parentWidget()->objectName() == "PianoRollFooter" &&
-          scope && scope->width() < 140 && window.m_clipSelector->width() <= 280,
-          "chord shortcut lives in footer and selectors stay compact");
+    const auto* scope = window.findChild<QToolButton*>("PianoRollSlideScope");
+    check(shortcut && shortcut->parentWidget() == window.m_toolbar &&
+          scope && scope->width() == 28 && scope->menu() &&
+          scope->menu()->actions().size() == 2 && window.m_clipSelector->width() <= 280,
+          "chord shortcut lives with the tools and slide scope is compact");
+    if (scope && scope->menu() && scope->menu()->actions().size() == 2) {
+        scope->menu()->actions()[1]->trigger();
+        check(window.m_view->m_slideChord && scope->menu()->actions()[1]->isChecked(),
+              "compact slide scope selects the chord target");
+        scope->menu()->actions()[0]->trigger();
+        check(!window.m_view->m_slideChord && scope->menu()->actions()[0]->isChecked(),
+              "compact slide scope returns to the single-note target");
+    }
+    check(window.m_viewMenu->actions().contains(window.m_noteStyleMenu->menuAction()),
+          "note appearance remains reachable through Settings and View");
     QStyleOptionComboBox comboStyle;
     comboStyle.initFrom(window.m_clipSelector);
     const auto textArea = window.m_clipSelector->style()->subControlRect(

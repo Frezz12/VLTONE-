@@ -25,6 +25,7 @@ void SelectionModel::setTracks(const QStringList& trackIds) {
     if (trackIds == m_tracks && (trackIds.isEmpty() || m_clips.isEmpty())) return;
     m_tracks = trackIds;
     if (!m_tracks.isEmpty()) m_clips.clear();
+    ++m_revision;
     emit changed();
 }
 
@@ -32,6 +33,7 @@ void SelectionModel::setClips(const QVector<ClipSel>& clips) {
     if (clips == m_clips && (clips.isEmpty() || m_tracks.isEmpty())) return;
     m_clips = clips;
     if (!m_clips.isEmpty()) m_tracks.clear();
+    ++m_revision;
     emit changed();
 }
 
@@ -39,6 +41,7 @@ void SelectionModel::clear() {
     if (isEmpty()) return;
     m_tracks.clear();
     m_clips.clear();
+    ++m_revision;
     emit changed();
 }
 

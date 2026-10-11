@@ -2,6 +2,9 @@
 #include "NumericFieldInteraction.hpp"
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QDateTimeEdit>
+#include <QDial>
+#include <QSlider>
 #include <cstdio>
 
 inline bool numericFieldChecks(QApplication& app) {
@@ -92,5 +95,54 @@ inline bool numericFieldChecks(QApplication& app) {
     mouse(integer, QEvent::MouseMove, 280);
     mouse(integer, QEvent::MouseButtonRelease, 280);
     ok &= require(integer->value() == 52, "integer fields use their native step");
+    QComboBox choice(contents);
+    choice.addItems({"A", "B", "C"});
+    choice.setCurrentIndex(1);
+    QComboBox editable(contents);
+    editable.addItems({"A", "B", "C"});
+    editable.setEditable(true);
+    editable.setCurrentIndex(1);
+    QSlider slider(Qt::Horizontal, contents);
+    slider.setRange(0, 100); slider.setValue(50);
+    QDial dial(contents);
+    dial.setRange(0, 100); dial.setValue(50);
+    QDateTimeEdit date(QDateTime(QDate(2026, 10, 11), QTime(12, 0)), contents);
+    const auto initialDate = date.dateTime();
+    int edits = 0;
+    QObject::connect(&choice, &QComboBox::currentIndexChanged, [&] { ++edits; });
+    QObject::connect(&editable, &QComboBox::currentIndexChanged, [&] { ++edits; });
+    QObject::connect(&slider, &QSlider::valueChanged, [&] { ++edits; });
+    QObject::connect(&dial, &QDial::valueChanged, [&] { ++edits; });
+    QObject::connect(&date, &QDateTimeEdit::dateTimeChanged, [&] { ++edits; });
+    const QList<QWidget*> controls{&choice, &editable, editable.lineEdit(), &slider, &dial,
+                                 &date, date.findChild<QLineEdit*>()};
+    for (auto* control : controls) {
+        control->show();
+        for (const auto modifiers : {Qt::NoModifier, Qt::ShiftModifier, Qt::ControlModifier}) {
+            for (const bool pixels : {false, true}) {
+                for (const int direction : {-1, 1}) {
+                    control->setFocus();
+                    QWheelEvent event(QPointF(10, 10), control->mapToGlobal(QPoint(10, 10)),
+                        pixels ? QPoint(0, direction * 30) : QPoint{},
+                        pixels ? QPoint{} : QPoint(0, direction * 120),
+                        Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+                    QApplication::sendEvent(control, &event);
+                }
+            }
+        }
+        scroll.verticalScrollBar()->setValue(0);
+        wheel(control);
+        ok &= require(scroll.verticalScrollBar()->value() > 0,
+                      "wheel over a choice or slider scrolls its surrounding panel");
+    }
+    ok &= require(edits == 0 && choice.currentIndex() == 1 && editable.currentIndex() == 1 &&
+                  slider.value() == 50 && dial.value() == 50 && date.dateTime() == initialDate,
+                  "focused choices, sliders, dials and date editors never change from wheel input");
+    QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QApplication::sendEvent(&slider, &right);
+    ok &= require(slider.value() > 50, "keyboard editing remains available");
+    scroll.verticalScrollBar()->setValue(0);
+    wheel(scroll.verticalScrollBar());
+    ok &= require(scroll.verticalScrollBar()->value() > 0, "scrollbars retain wheel navigation");
     return ok;
 }

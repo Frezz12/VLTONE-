@@ -2457,6 +2457,21 @@ void routingPluginAssetReducerAndWire() {
               "modulation effects and their parameters pass the shared built-in allowlist");
     }
 
+    for (const char* uid : {"daw.gain", "daw.stereo-utility", "daw.reverse"}) {
+        const std::string key(uid);
+        auto insert = builtinInsert(key, key);
+        auto add = command(key + "-utility-add", AddPluginInsert{trackChain, insert, graphit.id});
+        add.meta.schemaVersion = 5;
+        check(ProjectReducer::apply(state, add).code == ApplyCode::InvalidCommand,
+              "utility inserts reject pre-v6 commands");
+        add.meta.schemaVersion = 6;
+        check(ProjectReducer::apply(state, add).changed(), "utility insert accepted by v6 reducer");
+        auto change = command(key + "-utility-edit", SetPluginParameter{trackChain, insert.id,
+            key == "daw.gain" ? "gain" : key == "daw.reverse" ? "mix" : "width", 0.5, false});
+        change.meta.schemaVersion = 6;
+        check(ProjectReducer::apply(state, change).changed(), "utility parameter accepted by v6 reducer");
+    }
+
     InsertModel sampler = builtinInsert("sampler", "daw.sampler");
     const PluginAssetBinding sample = sampler.assetBindings.front();
     sampler.assetBindings.clear();

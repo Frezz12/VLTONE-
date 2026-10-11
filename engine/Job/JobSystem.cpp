@@ -55,9 +55,9 @@ void markAsAudioWorker() noexcept {
 /// before parking. Long enough to cover the gap while another worker finishes
 /// the node it is blocked on, short enough that a worker never burns a core for
 /// a meaningful slice of the block period.
-constexpr auto kIdleGiveUp = std::chrono::microseconds(60);
+constexpr auto kIdleGiveUp = std::chrono::microseconds(10);
 /// Spins between clock reads — `steady_clock::now()` is cheap but not free.
-constexpr unsigned kSpinsPerClockCheck = 256;
+constexpr unsigned kSpinsPerClockCheck = 32;
 } // namespace
 
 JobSystem::JobSystem(unsigned threadCount) {
@@ -120,6 +120,11 @@ bool JobSystem::acquireItem(unsigned index, std::uint32_t& item) noexcept {
     return false;
 }
 
+void JobSystem::completeItems(std::uint64_t count) noexcept {
+    m_completed.fetch_add(count, std::memory_order_seq_cst);
+    if (m_callerWaiting.load(std::memory_order_seq_cst)) m_completed.notify_one();
+}
+
 void JobSystem::runUntilPassComplete(unsigned index) noexcept {
     const rt::ScopedNoDenormals noDenormals;
     const bool profile = profiling();
@@ -148,6 +153,8 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
 
     unsigned idleSpins = 0;
     auto idleSince = std::chrono::steady_clock::time_point{};
+    std::uint32_t item = 0;
+    bool acquired = false;
 
     // The target is re-read every turn, so a worker that is still here when the
     // next pass opens simply keeps working instead of dropping out and back in.
@@ -155,15 +162,14 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
            m_target.load(std::memory_order_acquire)) {
 
         if (index >= m_passWorkerCount.load(std::memory_order_relaxed)) break;
-        std::uint32_t item = 0;
-        if (acquireItem(index, item)) {
+        if (acquired || acquireItem(index, item)) {
+            acquired = false;
             if (waitingSince) { waited += rt::nowNanos() - waitingSince; waitingSince = 0; }
             idleSpins = 0;
             idleSince = {};
-            m_sink.execute(m_sink.context, item, index);
-            ++local;
-            if (local >= kFlushEvery) {
-                m_completed.fetch_add(local, std::memory_order_release);
+            local += m_sink.execute(m_sink.context, item, index);
+            if (local >= kFlushEvery || m_callerWaiting.load(std::memory_order_relaxed)) {
+                completeItems(local);
                 local = 0;
             }
             continue;
@@ -172,7 +178,7 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
         if (profile && !waitingSince) waitingSince = rt::nowNanos();
         // progress, then wait.
         if (local > 0) {
-            m_completed.fetch_add(local, std::memory_order_release);
+            completeItems(local);
             local = 0;
         }
         // Nothing to run yet: the remaining nodes are still blocked on
@@ -188,15 +194,30 @@ void JobSystem::runUntilPassComplete(unsigned index) noexcept {
                 idleSince = now;
             } else if (now - idleSince >= kIdleGiveUp) {
                 if (!mustFinish) return;
-                // The audio thread has to stay, so stop hot-spinning and let
-                // the scheduler run whoever still owes us a node.
-                std::this_thread::yield();
-                idleSince = now;
+                if (!m_callerCanWait.load(std::memory_order_relaxed)) {
+                    std::this_thread::yield();
+                    idleSince = now;
+                    continue;
+                }
+                // A random probe can miss ready work. Before the caller waits,
+                // sweep every queue: only then must the remaining work be owned
+                // by a helper, whose next completion will wake us. Announce the
+                // wait before reading completed (the mirror of completeItems).
+                m_callerWaiting.store(true, std::memory_order_seq_cst);
+                const auto completed = m_completed.load(std::memory_order_seq_cst);
+                acquired = m_workers[0].deque.pop(item);
+                const auto active = m_passWorkerCount.load(std::memory_order_relaxed);
+                for (unsigned victim = 1; !acquired && victim < active; ++victim)
+                    acquired = m_workers[victim].deque.steal(item);
+                if (!acquired && completed < m_target.load(std::memory_order_acquire))
+                    m_completed.wait(completed, std::memory_order_acquire);
+                m_callerWaiting.store(false, std::memory_order_seq_cst);
+                idleSince = {};
             }
         }
         pause();
     }
-    if (local > 0) m_completed.fetch_add(local, std::memory_order_release);
+    if (local > 0) completeItems(local);
 }
 
 void JobSystem::park(unsigned index, std::uint64_t lastGeneration) noexcept {
@@ -260,6 +281,11 @@ void JobSystem::configureAudioWorkers(const rt::AudioWorkerConfig& config) {
         std::lock_guard lock(m_configurationMutex);
         m_configuration = config;
     }
+    // Kernel wake-up latency is too costly at short device periods. Keep the
+    // caller responsive there; longer periods can avoid burning an entire core
+    // while a serial plugin chain finishes. Offline throughput keeps spinning.
+    m_callerCanWait.store(config.active && config.sampleRate > 0 &&
+        double(config.blockFrames) / config.sampleRate >= .005, std::memory_order_relaxed);
     m_activeWorkerCount.store(config.maxParallelThreads
         ? std::clamp(config.maxParallelThreads, 1u, m_workerCount) : m_workerCount,
         std::memory_order_relaxed);

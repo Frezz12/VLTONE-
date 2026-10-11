@@ -14,6 +14,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -46,6 +47,188 @@ const std::array<QColor, 5> moduleColors{QColor("#9779e7"), QColor("#d45a9b"),
                                          QColor("#3cbb97"), QColor("#e3a448"),
                                          QColor("#d45a9b")};
 
+using Effect = NativePluginView::Kind;
+QColor effectAccent(Effect effect) {
+  if (effect == Effect::Delay)
+    return QColor(th().dark ? "#72cfca" : "#187f80");
+  if (effect == Effect::Pitch)
+    return QColor(th().dark ? "#b8a0ef" : "#7753b2");
+  return QColor(th().dark ? "#e7b76f" : "#996323");
+}
+
+// Each processor has its own material and scale. The body is anchored during
+// editing; only the pointer and value indication respond to the gesture.
+void effectDial(QPainter &p, QRectF bounds, double value, Effect effect,
+                bool enabled, bool focused) {
+  p.save();
+  p.setRenderHint(QPainter::Antialiasing);
+  p.setOpacity(enabled ? 1. : .4);
+  p.translate(bounds.center());
+  const double scale = std::min(bounds.width(), bounds.height()) / 100.;
+  p.scale(scale, scale);
+  const auto accent = effectAccent(effect);
+  const double fraction = std::clamp(value, 0., 1.);
+  const auto point = [](double f, double radius) {
+    const double angle = (225. - f * 270.) * pi / 180.;
+    return QPointF(std::cos(angle) * radius, -std::sin(angle) * radius);
+  };
+  const QRectF track(-46, -46, 92, 92);
+  if (effect == Effect::Compressor) {
+    for (int i = 0; i <= 24; ++i) {
+      p.setPen(QPen(i / 24. <= fraction ? accent : th().textSecondary,
+                    i % 4 == 0 ? 1.7 : .8, Qt::SolidLine, Qt::RoundCap));
+      p.drawLine(point(i / 24., i % 4 == 0 ? 43 : 45), point(i / 24., 48));
+    }
+  } else {
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(mixColors(th().separator(), accent, .15), 2.6,
+                  Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(track, 225 * 16, -270 * 16);
+    p.setPen(QPen(accent, effect == Effect::Pitch ? 3. : 2.6,
+                  Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(track, 225 * 16, int(-fraction * 270 * 16));
+    if (effect == Effect::Delay) {
+      for (int i = 0; i <= 12; ++i) {
+        p.setPen(QPen(th().textSecondary, .8));
+        p.drawLine(point(i / 12., 49), point(i / 12., 50));
+      }
+    }
+  }
+
+  p.setPen(Qt::NoPen);
+  for (int i = 4; i > 0; --i) {
+    p.setBrush(QColor(0, 0, 0, th().dark ? 13 : 7));
+    p.drawEllipse(QPointF(0, 1.5), 39 + i * .65, 39 + i * .65);
+  }
+  QLinearGradient rim(0, -40, 0, 40);
+  const QColor housing = effect == Effect::Pitch
+      ? mixColors(th().textPrimary, pluginStyle::shell(), th().dark ? .30 : .82)
+      : mixColors(pluginStyle::shell(), th().textPrimary, .13);
+  rim.setColorAt(0, th().edgeLight(housing));
+  rim.setColorAt(.52, housing);
+  rim.setColorAt(1, th().edgeDark(housing));
+  p.setBrush(rim);
+  p.drawEllipse(QPointF(), 40, 40);
+
+  if (effect == Effect::Delay) {
+    // Knurled echo encoder with a broad, matte centre.
+    for (int i = 0; i < 40; ++i) {
+      const double a = i * 2 * pi / 40.;
+      const QPointF direction(std::cos(a), std::sin(a));
+      p.setPen(QPen(mixColors(housing, th().well(), .55), .9));
+      p.drawLine(direction * 36.5, direction * 39.2);
+    }
+  }
+  const double capRadius = effect == Effect::Delay ? 35.5 : 37.5;
+  const QColor cap = effect == Effect::Pitch ? housing
+      : effect == Effect::Compressor
+          ? mixColors(pluginStyle::shell(), QColor("#777b7c"), .19)
+          : mixColors(pluginStyle::shell(), accent, .07);
+  QLinearGradient surface(-18, -38, 15, 38);
+  surface.setColorAt(0, th().edgeLight(cap));
+  surface.setColorAt(.35, cap);
+  surface.setColorAt(1, th().edgeDark(cap));
+  p.setBrush(surface);
+  p.setPen(QPen(mixColors(cap, th().textPrimary, .22), .75));
+  p.drawEllipse(QPointF(), capRadius, capRadius);
+  if (effect == Effect::Compressor) {
+    p.setPen(QPen(mixColors(cap, th().well(), .4), .65));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(), 32, 32);
+  }
+  const QColor pointer = effect == Effect::Pitch
+      ? mixColors(QColor("#302740"), accent, .15) : accent;
+  p.setPen(QPen(pointer, effect == Effect::Compressor ? 3.5 : 3.,
+                Qt::SolidLine, Qt::RoundCap));
+  p.drawLine(point(fraction, effect == Effect::Pitch ? 21 : 23),
+             point(fraction, capRadius - 4));
+  if (focused) {
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(accent, 1.5, Qt::DotLine));
+    p.drawEllipse(QPointF(), 49, 49);
+  }
+  p.restore();
+}
+
+void effectPlate(QPainter &p, QRectF r, Effect effect, bool inset = false) {
+  p.save();
+  p.setRenderHint(QPainter::Antialiasing);
+  const auto accent = effectAccent(effect);
+  const auto base = mixColors(pluginStyle::shell(), accent, inset ? .025 : .045);
+  QPainterPath shape;
+  shape.addRoundedRect(r, inset ? 10 : 14, inset ? 10 : 14);
+  QLinearGradient surface(r.topLeft(), r.bottomLeft());
+  surface.setColorAt(0, inset ? mixColors(base, th().well(), .22)
+                              : th().edgeLight(base));
+  surface.setColorAt(1, base);
+  p.fillPath(shape, surface);
+  p.setClipPath(shape, Qt::IntersectClip);
+  if (!inset) {
+    auto ink = accent;
+    ink.setAlpha(th().dark ? 17 : 14);
+    p.setPen(QPen(ink, 1));
+    if (effect == Effect::Delay) {
+      // Echo contours belong to the plate, without a decorative animation loop.
+      for (int i = 0; i < 8; ++i)
+        p.drawEllipse(QPointF(r.right() * .52, r.center().y()),
+                      r.width() * .12 + i * 33, r.height() * .24 + i * 22);
+    } else if (effect == Effect::Pitch) {
+      for (int i = 0; i < 5; ++i)
+        p.drawLine(QPointF(r.left() + 22, r.bottom() - 25 - i * 6),
+                   QPointF(r.right() - 22, r.bottom() - 25 - i * 6));
+    } else {
+      for (double x = r.left() + 12; x < r.right(); x += 4)
+        p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));
+    }
+  }
+  p.setBrush(Qt::NoBrush);
+  p.setPen(QPen(mixColors(base, th().textSecondary, inset ? .18 : .25), 1));
+  p.drawPath(shape);
+  p.restore();
+}
+
+// Coloured rubber faceplates: the tint fades into the same material as the
+// controls. Texture is fixed, so editing never starts a decorative repaint loop.
+void faceplate(QPainter &p, QRectF r, const QColor &tint) {
+  p.save();
+  p.setRenderHint(QPainter::Antialiasing);
+  QPainterPath outline;
+  outline.addRoundedRect(r, 15, 15);
+  p.setClipPath(outline, Qt::IntersectClip);
+  const auto base = pluginStyle::shell();
+  QLinearGradient material(r.topLeft(), r.bottomRight());
+  material.setColorAt(0, mixColors(base, th().edgeLight(base), .45));
+  material.setColorAt(.55, base);
+  material.setColorAt(1, mixColors(base, th().edgeDark(base), .40));
+  p.fillPath(outline, material);
+
+  QRadialGradient colour(QPointF(r.left() + r.width() * .65, r.top()),
+                         std::max(r.width() * .85, r.height() * .65));
+  auto glow = tint;
+  glow.setAlpha(th().dark ? 42 : 30);
+  colour.setColorAt(0, glow);
+  glow.setAlpha(0);
+  colour.setColorAt(1, glow);
+  p.fillPath(outline, colour);
+
+  static const QImage grain = [] {
+    QImage image(64, 64, QImage::Format_ARGB32_Premultiplied);
+    for (int y = 0; y < image.height(); ++y)
+      for (int x = 0; x < image.width(); ++x) {
+        unsigned noise = unsigned(x + y * 64) * 1664525u + 1013904223u;
+        noise = (noise ^ (noise >> 13)) * 1274126177u;
+        const int ink = (noise >> 16) & 1u ? 255 : 0;
+        image.setPixelColor(x, y, QColor(ink, ink, ink, 3 + ((noise >> 24) & 3u)));
+      }
+    return image;
+  }();
+  p.fillPath(outline, QBrush(grain));
+  p.setPen(QPen(mixColors(base, th().edgeLight(base), .7), 1));
+  p.setBrush(Qt::NoBrush);
+  p.drawPath(outline);
+  p.restore();
+}
+
 QLabel *label(const QString &text, QWidget *parent, int size = 11) {
   auto *l = new QLabel(text, parent);
   auto f = l->font();
@@ -67,7 +250,8 @@ QLabel *label(const QString &text, QWidget *parent, int size = 11) {
 
 class Button : public QAbstractButton {
 public:
-  Button(const QString &text, QWidget *parent) : QAbstractButton(parent) {
+  Button(const QString &text, QWidget *parent, Effect appearance = Effect::Modulation)
+      : QAbstractButton(parent), m_appearance(appearance) {
     setText(text);
     setAccessibleName(text);
     setFocusPolicy(Qt::StrongFocus);
@@ -82,16 +266,17 @@ protected:
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    const QColor ink = m_appearance == Effect::Modulation
+                           ? pluginStyle::accent() : effectAccent(m_appearance);
     if (property("pianoKey").toBool()) {
       const bool black = text().contains('#');
       QLinearGradient key(0, 0, width(), height());
-      const QColor base =
-          black ? th().well()
-                : mixColors(th().textPrimary, pluginStyle::shell(), .15);
-      key.setColorAt(0, th().edgeLight(base));
-      key.setColorAt(.7, base);
-      key.setColorAt(1, th().edgeDark(base));
-      p.setPen(QPen(hasFocus() ? pluginStyle::accent() : th().separator(),
+      // Piano colours carry note meaning and stay ivory/charcoal in both
+      // themes. Inverting them with the theme makes accidentals look natural.
+      key.setColorAt(0, QColor(black ? "#39373f" : "#f0eff2"));
+      key.setColorAt(.7, QColor(black ? "#25242b" : "#e1e0e5"));
+      key.setColorAt(1, QColor(black ? "#17161c" : "#cfced4"));
+      p.setPen(QPen(hasFocus() ? ink : QColor(black ? "#17161c" : "#b8b7bd"),
                     hasFocus() ? 2 : 1));
       p.setBrush(key);
       p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -2), 4, 4);
@@ -102,12 +287,12 @@ protected:
       }
       if (property("targetNote").toBool())
         p.fillRect(QRect(5, height() - 6, width() - 10, 3),
-                   pluginStyle::accent());
+                   ink);
       auto f = font();
       f.setStrikeOut(!isChecked());
       f.setPixelSize(10);
       p.setFont(f);
-      p.setPen(black ? th().textPrimary : th().background);
+      p.setPen(QColor(black ? "#eeedf2" : "#37343f"));
       p.drawText(rect().adjusted(0, 0, 0, -9),
                  Qt::AlignHCenter | Qt::AlignBottom, text());
       return;
@@ -117,12 +302,14 @@ protected:
                          isDown() || isChecked(), 8);
     if (hasFocus() || isChecked()) {
       p.setBrush(Qt::NoBrush);
-      p.setPen(QPen(pluginStyle::accent(), hasFocus() ? 2 : 1));
+      p.setPen(QPen(ink, hasFocus() ? 2 : 1));
       p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -4), 8, 8);
     }
-    p.setPen(isChecked() ? pluginStyle::accent() : th().textPrimary);
+    p.setPen(isChecked() ? ink : th().textPrimary);
     p.drawText(rect().adjusted(5, 0, -5, 0), Qt::AlignCenter, text());
   }
+private:
+  Effect m_appearance;
 };
 
 class ReorderButton final : public Button {
@@ -195,7 +382,7 @@ protected:
   }
 };
 
-// Slicer face, with the DAW's accessible parameter gestures.
+// The DAW's accessible parameter gestures with editor-specific faces.
 class Dial final : public ui::Knob {
 public:
   Dial(const QString &name, int diameter, QWidget *parent)
@@ -203,6 +390,7 @@ public:
     setBare(diameter);
   }
   bool logarithmic = false;
+  Effect appearance = Effect::Modulation;
 
 protected:
   void paintEvent(QPaintEvent *) override {
@@ -212,7 +400,10 @@ protected:
                                std::log(maximumValue() / minimumValue())
                          : (value() - minimumValue()) /
                                std::max(1e-9, maximumValue() - minimumValue());
-    pluginStyle::knob(p, rect(), n, isEditing(), isEnabled(), hasFocus());
+    if (appearance == Effect::Modulation)
+      pluginStyle::knob(p, rect(), n, isEditing(), isEnabled(), hasFocus());
+    else
+      effectDial(p, rect(), n, appearance, isEnabled(), hasFocus());
   }
 };
 
@@ -223,7 +414,6 @@ public:
   }
   std::function<void(QPainter &, QRectF)> paint;
   std::function<void(QMouseEvent *)> press, move, release;
-  std::function<void(QWheelEvent *)> wheel;
 
 protected:
   void paintEvent(QPaintEvent *) override {
@@ -245,10 +435,7 @@ protected:
       release(e);
   }
   void wheelEvent(QWheelEvent *e) override {
-    if (wheel)
-      wheel(e);
-    else
-      e->ignore();
+    e->ignore();
   }
 };
 
@@ -338,14 +525,14 @@ protected:
         const bool routed = v(4) < .5 || i == 0 || (i % 2 == lane);
         const double envelope = std::pow(feedback, i);
         const double h = std::max(2., a.height() * .20 * envelope);
-        auto colour = pluginStyle::accent();
+        auto colour = effectAccent(Effect::Delay);
         colour.setAlphaF(routed ? .25 + .6 * envelope : .10);
         p.setPen(QPen(colour, i ? 3 : 2, Qt::SolidLine, Qt::RoundCap));
         p.drawLine(QPointF(x, y - h), QPointF(x, y + h));
         if (m_running && routed) {
           const double distance = std::abs(m_phase - i);
           const double pulse = std::max(0., 1. - distance * 2.5);
-          auto glow = pluginStyle::accent();
+          auto glow = effectAccent(Effect::Delay);
           const double level =
               std::max(m_state["input"].toDouble(), m_state["wet"].toDouble());
           glow.setAlphaF(pulse * std::clamp(level * 3., 0., 1.) *
@@ -358,12 +545,12 @@ protected:
     }
     const auto handle = [&](QPointF point, bool selected) {
       p.setPen(QPen(selected && hasFocus() ? th().textPrimary
-                                           : pluginStyle::accent(),
+                                           : effectAccent(Effect::Delay),
                     1.5));
       p.setBrush(pluginStyle::shell());
       p.drawEllipse(point, 5, 5);
       p.setPen(Qt::NoPen);
-      p.setBrush(pluginStyle::accent());
+      p.setBrush(effectAccent(Effect::Delay));
       p.drawEllipse(point, 2, 2);
     };
     handle(QPointF(a.left() + timeFraction() * a.width(), 27), m_selected == 1);
@@ -486,10 +673,10 @@ private:
   bool m_running = false;
 };
 
-QWidget *section(QWidget *parent, QLayout *layout) {
+QWidget *section(QWidget *parent, QLayout *layout, Effect effect) {
   auto *card = new Drawing(parent);
-  card->paint = [](QPainter &p, QRectF r) {
-    pluginStyle::surface(p, r.adjusted(1, 1, -1, -3));
+  card->paint = [effect](QPainter &p, QRectF r) {
+    effectPlate(p, r.adjusted(1, 1, -1, -3), effect, true);
   };
   layout->setContentsMargins(10, 10, 10, 10);
   card->setLayout(layout);
@@ -519,6 +706,15 @@ NativePluginView::NativePluginView(Kind kind, QWidget *parent)
   controlFont.setPixelSize(11);
   setFont(controlFont);
   pluginStyle::bind(this);
+  if (kind != Kind::Modulation) {
+    const auto tintControls = [this] {
+      auto colours = palette();
+      colours.setColor(QPalette::Highlight, effectAccent(m_kind));
+      setPalette(colours);
+    };
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, tintControls);
+    tintControls();
+  }
   auto *style = QStyleFactory::create("Fusion");
   style->setParent(this);
   setStyle(style);
@@ -555,6 +751,9 @@ void NativePluginView::change(int index, double v, bool finished) {
     return;
   values[index] = v;
   m_state["values"] = values;
+  // The panel may echo these same values, so invalidate local edits here.
+  for (auto *display : m_displays)
+    display->update();
   emit edit(index, v, finished);
 }
 void NativePluginView::context(QWidget *w, int index) {
@@ -621,6 +820,7 @@ QWidget *NativePluginView::knob(int index, int diameter, const QColor &face) {
   l->setAlignment(Qt::AlignVCenter);
   Q_UNUSED(face);
   auto *dial = new Dial(p["name"].toString(), diameter, group);
+  dial->appearance = m_kind;
   dial->setObjectName(p["id"].toString());
   dial->setAccessibleName(p["name"].toString());
   dial->setRange(p["min"].toDouble(), p["max"].toDouble());
@@ -679,7 +879,7 @@ QComboBox *NativePluginView::choice(int index, const QStringList &labels) {
   return box;
 }
 QAbstractButton *NativePluginView::toggle(int index, const QString &text) {
-  auto *b = new Button(text, this);
+  auto *b = new Button(text, this, m_kind);
   b->setCheckable(true);
   b->setObjectName(m_parameters[index].toMap()["id"].toString());
   connect(b, &QAbstractButton::clicked, this,
@@ -694,7 +894,7 @@ QWidget *NativePluginView::segments(int index, const QStringList &texts) {
   l->setContentsMargins(0, 0, 0, 0);
   l->setSpacing(3);
   for (int i = 0; i < texts.size(); ++i) {
-    auto *b = new Button(texts[i], w);
+    auto *b = new Button(texts[i], w, m_kind);
     b->setCheckable(true);
     b->setObjectName(m_parameters[index].toMap()["id"].toString() +
                      QString::number(i));
@@ -715,7 +915,7 @@ void NativePluginView::buildDelay() {
   auto *logo = new Drawing(this);
   logo->setFixedSize(42, 42);
   logo->paint = [](QPainter &p, QRectF r) {
-    p.setPen(QPen(pluginStyle::accent(), 2, Qt::SolidLine, Qt::RoundCap));
+    p.setPen(QPen(effectAccent(Effect::Delay), 2, Qt::SolidLine, Qt::RoundCap));
     for (int i = 0; i < 5; ++i) {
       const double h = 22 * std::pow(.7, i);
       double x = r.left() + 8 + i * 6;
@@ -745,7 +945,7 @@ void NativePluginView::buildDelay() {
   root->addLayout(body, 1);
   auto *tapCol = new QVBoxLayout;
   tapCol->addStretch();
-  m_tap = new Button("TAP", this);
+  m_tap = new Button("TAP", this, m_kind);
   m_tap->setObjectName("tap");
   m_tap->setAccessibleName(tr("Tap tempo"));
   m_tap->setFixedSize(68, 28);
@@ -785,7 +985,7 @@ void NativePluginView::buildDelay() {
   mods->addWidget(knob(13, 60, QColor("#cdd783")));
   time->addLayout(mods);
   time->addStretch();
-  body->addWidget(section(this, time), 2);
+  body->addWidget(section(this, time, m_kind), 2);
   auto *center = new QVBoxLayout;
   center->addWidget(segments(4, {"STEREO", "PING PONG"}), 0, Qt::AlignHCenter);
   auto *readouts = new QHBoxLayout;
@@ -814,14 +1014,14 @@ void NativePluginView::buildDelay() {
   filters->addWidget(knob(11, 60, QColor("#99d6c4")));
   feedback->addLayout(filters);
   feedback->addStretch();
-  body->addWidget(section(this, feedback), 2);
+  body->addWidget(section(this, feedback, m_kind), 2);
   auto *levels = new QVBoxLayout;
   levels->addStretch();
   levels->addWidget(knob(6, 76, QColor("#99d6c4")));
   levels->addStretch();
   levels->addWidget(knob(7, 68, QColor("#f19c9f")));
   levels->addStretch();
-  body->addWidget(section(this, levels));
+  body->addWidget(section(this, levels, m_kind));
   m_status = label("STEREO ECHO PROCESSOR                         READY", this);
   root->addWidget(m_status);
 }
@@ -831,11 +1031,14 @@ void NativePluginView::buildCompressor() {
   root->setContentsMargins(20, 20, 20, 16);
   root->setSpacing(22);
   auto *transfer = new QVBoxLayout;
+  auto *title = label("COMPRESSOR", this, 16);
+  title->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  transfer->addWidget(title);
   transfer->addWidget(segments(7, {"SOFT", "PUNCH"}));
   auto *graph = new Drawing(this);
   graph->setObjectName("transfer-curve");
   graph->setAccessibleName(tr("Compression curve; drag threshold or ratio"));
-  graph->setMinimumSize(195, 210);
+  graph->setMinimumSize(195, 196);
   m_displays.append(graph);
   graph->paint = [this](QPainter &p, QRectF r) {
     auto plot = r.adjusted(22, 12, -12, -30);
@@ -863,14 +1066,14 @@ void NativePluginView::buildCompressor() {
     }
     p.save();
     p.setClipRect(plot);
-    p.setPen(QPen(pluginStyle::accent(), 3));
+    p.setPen(QPen(effectAccent(Effect::Compressor), 3));
     p.drawPath(path);
     p.setBrush(th().textPrimary);
     p.drawEllipse(xy(std::clamp(m_state["input"].toDouble(), -60., 0.),
                      m_state["marker"].toDouble()),
                   4, 4);
     p.restore();
-    p.setPen(QPen(pluginStyle::accent(), 2));
+    p.setPen(QPen(effectAccent(Effect::Compressor), 2));
     p.setBrush(th().surfaceElevated);
     p.drawEllipse(xy(value(1), value(1)), 6, 6);
     p.drawEllipse(xy(0, -daw::plugins::compressor::reductionDb(
@@ -910,18 +1113,18 @@ void NativePluginView::buildCompressor() {
     *dragIndex = -1;
   };
   transfer->addWidget(graph, 1);
+  transfer->addWidget(toggle(8, "AUTO GAIN"));
   root->addLayout(transfer, 3);
   auto *controls = new QVBoxLayout;
   controls->addStretch();
   auto *primary = new QHBoxLayout;
   for (int i : {0, 1, 2})
-    primary->addWidget(knob(i, 86));
-  primary->addWidget(toggle(8, "AUTO GAIN"));
+    primary->addWidget(knob(i, 106));
   controls->addLayout(primary);
   controls->addSpacing(16);
   auto *secondary = new QHBoxLayout;
   for (int i : {3, 4, 5, 6})
-    secondary->addWidget(knob(i, 68));
+    secondary->addWidget(knob(i, 74));
   controls->addLayout(secondary);
   controls->addStretch();
   root->addLayout(controls, 6);
@@ -944,9 +1147,9 @@ void NativePluginView::buildCompressor() {
       p.setPen(palette().text().color());
       p.drawText(QRectF(x, 8, r.width() / 3, 22), Qt::AlignCenter, names[col]);
       for (int i = 0; i < 25; ++i) {
-        const auto color = col == 0 ? pluginStyle::accent()
+        const auto color = col == 0 ? effectAccent(Effect::Compressor)
                            : i > 21 ? QColor("#e77366")
-                                    : pluginStyle::accent();
+                                    : effectAccent(Effect::Compressor);
         p.fillRect(QRectF(x + 6,
                           r.height() - 44 - (i + 1) * (r.height() - 80) / 25,
                           r.width() / 3 - 12, (r.height() - 80) / 25 - 3),
@@ -982,7 +1185,7 @@ void NativePluginView::presetHeader(QBoxLayout *root, const QString &title) {
       emit loadPreset(data.mid(5));
   });
   if (m_kind == Kind::Pitch) {
-    auto *send = new Button(tr("Send to all"), this);
+    auto *send = new Button(tr("Send to all"), this, m_kind);
     send->setObjectName("send-to-all");
     connect(send, &QAbstractButton::clicked, this,
             &NativePluginView::sendToAll);
@@ -991,13 +1194,13 @@ void NativePluginView::presetHeader(QBoxLayout *root, const QString &title) {
   auto *library = new Button(m_kind == Kind::Pitch ? tr("Settings")
                              : single              ? QStringLiteral("…")
                                                    : tr("Presets"),
-                             this);
+                             this, m_kind);
   library->setAccessibleName(tr("Preset library"));
   library->setObjectName("settings");
   connect(library, &QAbstractButton::clicked, this,
           &NativePluginView::presetDialog);
   row->addWidget(library);
-  m_active = new Button(tr("On"), this);
+  m_active = new Button(tr("On"), this, m_kind);
   m_active->setObjectName("active");
   m_active->setCheckable(true);
   m_active->setAccessibleName(tr("Enable plugin"));
@@ -1009,7 +1212,7 @@ void NativePluginView::presetHeader(QBoxLayout *root, const QString &title) {
 void NativePluginView::buildPitch() {
   auto *root = new QVBoxLayout(this);
   root->setContentsMargins(20, 14, 20, 9);
-  root->setSpacing(12);
+  root->setSpacing(8);
   presetHeader(root, "VLT  PITCH");
   auto *row = new QHBoxLayout;
   row->addWidget(choice(
@@ -1027,14 +1230,13 @@ void NativePluginView::buildPitch() {
   auto *controls = new QHBoxLayout;
   controls->setSpacing(10);
   auto *correction = new QVBoxLayout;
-  correction->addWidget(label("CORRECTION", this));
   auto *correctionKnobs = new QHBoxLayout;
   correctionKnobs->setSpacing(0);
-  correctionKnobs->addWidget(knob(0, 100));
-  correctionKnobs->addWidget(knob(1, 76));
-  correctionKnobs->addWidget(knob(2, 76));
+  correctionKnobs->addWidget(knob(0, 104));
+  correctionKnobs->addWidget(knob(1, 80));
+  correctionKnobs->addWidget(knob(2, 80));
   correction->addLayout(correctionKnobs, 1);
-  controls->addWidget(section(this, correction), 3);
+  controls->addWidget(section(this, correction, m_kind), 3);
   auto *readout = new QVBoxLayout;
   readout->addStretch();
   readout->addWidget(label("PITCH TRACKING", this));
@@ -1043,7 +1245,7 @@ void NativePluginView::buildPitch() {
   readout->addWidget(m_timing);
   readout->addWidget(toggle(7, "FORMANTS"));
   readout->addStretch();
-  controls->addWidget(section(this, readout), 2);
+  controls->addWidget(section(this, readout, m_kind), 2);
   root->addLayout(controls, 1);
   auto *piano = new Drawing(this);
   piano->setObjectName("piano");
@@ -1052,7 +1254,7 @@ void NativePluginView::buildPitch() {
   const QStringList names{"C",  "C#", "D",  "D#", "E",  "F",
                           "F#", "G",  "G#", "A",  "A#", "B"};
   for (int i = 0; i < 12; ++i) {
-    auto *key = new Button(names[i], piano);
+    auto *key = new Button(names[i], piano, m_kind);
     key->setObjectName("note-" + QString::number(i));
     key->setProperty("pianoKey", true);
     key->setAccessibleName(tr("Allow note %1").arg(names[i]));
@@ -1122,7 +1324,7 @@ void NativePluginView::presetDialog() {
        {tr("Save"), tr("Replace"), tr("Rename"), tr("Delete")}) {
     if (text == tr("Rename") && !renamePreset)
       continue;
-    auto *b = new Button(text, m_settings);
+    auto *b = new Button(text, m_settings, m_kind);
     buttons->addWidget(b);
     connect(b, &QAbstractButton::clicked, this, [this, text, name, message] {
       QString error;
@@ -1161,8 +1363,8 @@ void NativePluginView::buildModulation() {
     auto *card = new Drawing(this);
     card->setObjectName("module-" + QString::number(module));
     card->setProperty("module", module);
-    card->paint = [](QPainter &p, QRectF r) {
-      pluginStyle::surface(p, r.adjusted(1, 1, -1, -3));
+    card->paint = [module](QPainter &p, QRectF r) {
+      faceplate(p, r.adjusted(1, 1, -1, -3), moduleColors[module]);
     };
     auto *col = new QVBoxLayout(card);
     col->setContentsMargins(7, 10, 7, 10);
@@ -1214,14 +1416,43 @@ void NativePluginView::buildModulation() {
       head->addWidget(label("STEREO", card));
     col->addLayout(head);
     auto *art = new Drawing(card);
+    art->setObjectName("module-art-" + QString::number(module));
     art->setMinimumHeight(85);
     art->setMaximumHeight(155);
-    art->paint = [module](QPainter &p, QRectF r) {
+    m_displays.append(art);
+    const int base = rack ? int(Rack::offsets[module]) + 1 : 0,
+              count = rack ? (module == 1 ? 3 : 4) : m_parameters.size();
+    art->paint = [this, module, base](QPainter &p, QRectF r) {
+      const auto normalized = [this](int index) {
+        const auto parameter = m_parameters[index].toMap();
+        const double low = parameter["min"].toDouble();
+        return std::clamp((value(index) - low) /
+                              std::max(1.e-9, parameter["max"].toDouble() - low),
+                          0., 1.);
+      };
+      const double amount = normalized(base), depth = normalized(base + 2);
       p.translate(r.center() - QPointF(80, 66) *
                                    std::min(r.width() / 160, r.height() / 132));
       p.scale(std::min(r.width() / 160, r.height() / 132),
               std::min(r.width() / 160, r.height() / 132));
-      QColor tint = mixColors(pluginStyle::accent(), moduleColors[module], .18);
+      QColor tint = mixColors(pluginStyle::accent(), moduleColors[module], .7);
+      // Parameter-linked contours make the empty space informative. They only
+      // change on a snapshot, with no free-running animation or input latency.
+      p.setBrush(Qt::NoBrush);
+      auto contour = tint;
+      contour.setAlpha(th().dark ? 48 : 65);
+      p.setPen(QPen(contour, .8));
+      for (int lane = -1; lane <= 1; ++lane) {
+        QPainterPath wave;
+        for (int x = 0; x <= 160; x += 2) {
+          const double y = 67 + lane * (12 + 12 * amount) +
+              std::sin(x / 160. * pi * (2 + amount * 2) + lane * depth) *
+                  (5 + depth * 15);
+          if (x == 0) wave.moveTo(x, y);
+          else wave.lineTo(x, y);
+        }
+        p.drawPath(wave);
+      }
       QLinearGradient g(0, 25, 0, 108);
       auto transparent = tint;
       transparent.setAlpha(20);
@@ -1230,8 +1461,9 @@ void NativePluginView::buildModulation() {
       p.setBrush(g);
       p.setPen(QPen(tint.lighter(145), 1));
       if (module == 1 || module == 4) {
-        for (int x : {30, 78}) {
-          int y = x == 30 ? 48 : 36;
+        for (int voice = 0; voice < 2; ++voice) {
+          const double x = 54 + (voice == 0 ? -1 : 1) * (12 + amount * 24);
+          const double y = voice == 0 ? 48 : 36;
           p.drawRoundedRect(QRectF(x, y, 52, 52), 12, 8);
           p.drawEllipse(QRectF(x, y - 9, 52, 18));
           p.drawArc(QRectF(x, y + 30, 52, 18), 180 * 16, 180 * 16);
@@ -1245,13 +1477,18 @@ void NativePluginView::buildModulation() {
         p.drawLine(QPointF(80, 60), QPointF(80, 106));
         if (module == 3) {
           p.setBrush(Qt::NoBrush);
-          p.drawEllipse(QRectF(53, 61, 54, 22));
-          p.drawEllipse(QRectF(69, 45, 22, 54));
+          p.save();
+          p.translate(80, 72);
+          p.rotate(amount * 90);
+          p.drawEllipse(QRectF(-27, -11, 54, 22));
+          p.drawEllipse(QRectF(-11, -27, 22, 54));
+          p.restore();
         } else
           for (int j = 0; j < 3; ++j) {
             QPainterPath wave;
             wave.moveTo(41, 70 + j * 7);
-            wave.cubicTo(60, 51 + j * 7, 85, 93 + j * 7, 119, 65 + j * 7);
+            wave.cubicTo(60, 65 - depth * 28 + j * 7,
+                         85, 72 + depth * 28 + j * 7, 119, 65 + j * 7);
             p.drawPath(wave);
           }
       }
@@ -1259,8 +1496,6 @@ void NativePluginView::buildModulation() {
     col->addWidget(art, 1);
     col->addWidget(label(moduleNames[module].toUpper(), card, 20));
     col->addWidget(label(moduleCaptions[module], card, 10));
-    const int base = rack ? int(Rack::offsets[module]) + 1 : 0,
-              count = rack ? (module == 1 ? 3 : 4) : m_parameters.size();
     auto *controls = new QHBoxLayout;
     controls->setSpacing(2);
     controls->addWidget(knob(base + 1, rack ? 34 : 42));
@@ -1386,12 +1621,6 @@ void NativePluginView::buildEq(QBoxLayout *root) {
   graph->release = [this, dragging](QMouseEvent *) {
     *dragging = false;
     emit finish(-1);
-  };
-  graph->wheel = [this](QWheelEvent *e) {
-    const int index = rackEq(m_eqBand->currentIndex(), 3);
-    change(index,
-           std::clamp(value(index) + e->angleDelta().y() / 120. * .1, .1, 30.));
-    e->accept();
   };
   col->addWidget(graph);
   auto *row = new QHBoxLayout;
@@ -1624,5 +1853,8 @@ void NativePluginView::setSnapshot(const QVariantMap &state) {
 void NativePluginView::paintEvent(QPaintEvent *) {
   QPainter p(this);
   p.fillRect(rect(), th().background);
-  pluginStyle::surface(p, QRectF(rect()).adjusted(1, 1, -1, -3));
+  if (m_kind == Kind::Modulation)
+    faceplate(p, QRectF(rect()).adjusted(1, 1, -1, -3), pluginStyle::accent());
+  else
+    effectPlate(p, QRectF(rect()).adjusted(1, 1, -1, -3), m_kind);
 }

@@ -68,6 +68,8 @@ public:
     /// Largest content rectangle the workspace can expose after subtracting
     /// this frame's title bar and one-pixel contour.
     QSize maximumContentSize() const;
+    /// Move within the workspace, retaining the background beneath native editors.
+    void moveWithinWorkspace(const QPoint& position);
     static bool checkPlacementForTest();
 
 signals:

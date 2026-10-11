@@ -16,7 +16,11 @@ python3 scripts/capture-website-video.py
 The showcase capture rejects an executable with the old Dark palette. Review the
 PNG originals in `artifacts` before publishing. Sampler needs time to finish its
 asynchronous editor initialization. Generic captures run first; the richer
-Night Bloom project then replaces the arrangement, MIDI, mixer and EQ views.
+Night Bloom project then replaces the arrangement, MIDI, mixer, EQ and rack views.
+The homepage uses `showcase-rack` for its fourth gallery view and processing
+section. Capture it alone with `capture-website-demo.py --only rack`; it enables
+the rack through isolated capture preferences. Review both locale PNGs before
+copying the generated WebP files to `web/public/images/studio`.
 
 The hero is a real Qt widget recording of four bars of the generated project at
 108 BPM: 240 frames at 27 fps, 1440 × 900, H.264 MP4 with fast start and no audio

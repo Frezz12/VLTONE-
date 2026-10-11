@@ -208,6 +208,8 @@ private:
     Context m_context = Context::None;
     QString m_contextKey;        // identity of the object, to spot a same-kind swap
     QWidget* m_content = nullptr;
+    mutable int m_measuredSpace = -1, m_measuredWidth = 0;
+    mutable QFont m_measuredFont;
     QWidget* m_outgoing = nullptr;
     // The running swap. Started with DeleteWhenStopped, so stopping it destroys
     // it — a QPointer rather than a raw one, or interrupting a swap would leave

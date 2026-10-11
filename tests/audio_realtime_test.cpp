@@ -309,13 +309,11 @@ int main() {
                 if (!compiled) { correct = false; continue; }
                 GraphProcessor processor(1); processor.setGraph(*compiled);
                 player->preparePlayback(0);
-                Output realtime(frames), offline(frames);
+                Output realtime(frames), offline(frames), expectedBlock(frames);
+                dsp::DeClick expectedEdges;
+                std::vector<float> renderedLeft, renderedRight;
                 for (SamplePos position = 0; position < 100; position += frames) {
-                    // This checks raw clip arithmetic, before live discontinuity
-                    // protection. Prepared realtime page reads are tested below.
-                    correct &= bool(processor.process(realtime.block(), frames, position, true, true));
-                    correct &= bool(processor.processSerial(offline.block(), frames, position, true, true));
-                    correct &= realtime.l == offline.l && realtime.r == offline.r;
+                    correct &= bool(processor.process(realtime.block(), frames, position, true, false));
                     for (unsigned ch = 0; ch < 2; ++ch) for (unsigned i = 0; i < frames; ++i) {
                         const auto relative = position + i - clip.startSample;
                         float expected = 0;
@@ -326,8 +324,32 @@ int main() {
                                 double(relative) / 7, double(64 - relative) / 11), 0., 1.)) : 1.f;
                             expected = sample->channel(sourceCh)[4092 + relative] * gain * fade;
                         }
-                        correct &= std::abs(realtime.block().data(ch)[i] - expected) < 1e-7f;
+                        expectedBlock.block().data(ch)[i] = expected;
                     }
+                    // Clip-edge protection now also applies offline. Check the
+                    // scalar PCM reference through the same independently tested
+                    // edge filter, preserving its history across callbacks.
+                    FrameCount offset = 0;
+                    for (const auto edge : {clip.startSample, clip.startSample + clip.lengthSamples}) {
+                        if (edge < position || edge >= position + frames) continue;
+                        const auto at = FrameCount(edge - position);
+                        expectedEdges.process(expectedBlock.block(), at - offset, offset);
+                        expectedEdges.begin(48000);
+                        offset = at;
+                    }
+                    expectedEdges.process(expectedBlock.block(), frames - offset, offset);
+                    for (unsigned ch = 0; ch < 2; ++ch) for (unsigned i = 0; i < frames; ++i)
+                        correct &= std::abs(realtime.block().data(ch)[i] - expectedBlock.block().data(ch)[i]) < 1e-7f;
+                    renderedLeft.insert(renderedLeft.end(), realtime.l.begin(), realtime.l.end());
+                    renderedRight.insert(renderedRight.end(), realtime.r.begin(), realtime.r.end());
+                }
+                // Start both render modes with the same DSP history instead of
+                // seeking the same stateful player backwards twice per block.
+                player->reset();
+                for (SamplePos position = 0; position < 100; position += frames) {
+                    correct &= bool(processor.processSerial(offline.block(), frames, position, true, true));
+                    correct &= std::equal(offline.l.begin(), offline.l.end(), renderedLeft.begin() + position);
+                    correct &= std::equal(offline.r.begin(), offline.r.end(), renderedRight.begin() + position);
                 }
             }
         check(correct, "ordinary bounded clips preserve page crossings, trim ends, fades, pan and mono at 8/16/32/256 frames");
@@ -343,11 +365,12 @@ int main() {
         player.setClips(clips);
         Output output(256); ProcessContext c; c.output = output.block(); c.frames = 256; c.playing = true; c.offline = true;
         c.timelinePosition = 99999 * 512; player.process(c);
-        check(output.l.front() == .001f, "seek through 100k past clips finds only intersecting material");
+        check(output.l.back() == .001f, "seek through 100k past clips finds only intersecting material after the edge fade");
         c.timelinePosition = 60000000; player.process(c);
         float expected = 0; for (int i = 0; i < 3000; ++i) expected += .001f;
-        check(output.l.front() == expected, "3000 overlapping clips preserve exact mixing order without overflow fallback");
-        c.timelinePosition = 256; player.process(c); check(dsp::isSilent(output.l), "interval index honours exclusive clip ends on backwards seek");
+        check(output.l.back() == expected, "3000 overlapping clips preserve exact mixing order without overflow fallback");
+        player.reset();
+        c.timelinePosition = 256; player.process(c); check(dsp::isSilent(output.l), "interval index honours exclusive clip ends on a fresh seek");
     }
     {
         auto sample = std::make_shared<SampleBuffer>(2, 262144, 48000);
@@ -364,6 +387,7 @@ int main() {
         player->preparePlayback(200000);
         Output realtime(256), offline(256);
         processor.process(realtime.block(), 256, 200000, true, false);
+        player->reset();
         processor.processSerial(offline.block(), 256, 200000, true, true);
         check(sample->fileBacked() && realtime.l == offline.l && realtime.r == offline.r,
             "mapped PCM seek is sample-identical in prepared realtime and direct offline paths");

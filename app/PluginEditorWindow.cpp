@@ -6,6 +6,9 @@
 #include "CompressorPanel.hpp"
 #include "Cla2aPanel.hpp"
 #include "DelayPanel.hpp"
+#include "UtilityPanel.hpp"
+#include "RackParameterBinding.hpp"
+#include "Internal/UtilityInstance.hpp"
 #include "GraphitPanel.hpp"
 #include "PitchCorrectorPanel.hpp"
 #include "ModulationPanel.hpp"
@@ -56,6 +59,8 @@
 #include <QFormLayout>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QScopedValueRollback>
 #include <QSlider>
 #include <QToolButton>
 #include <QTimer>
@@ -755,6 +760,9 @@ void PluginEditorWindow::clearEditorContent() {
     m_layout->setSizeConstraint(QLayout::SetDefaultConstraint);
     m_genericControls.clear();
     m_genericValues.clear();
+    m_genericParameters.clear();
+    m_genericScroll = nullptr;
+    m_genericRows = nullptr;
     m_dockControls.clear();
     m_dockValues.clear();
     m_dockCells.clear();
@@ -820,6 +828,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         plugin && plugin->format == daw::plugins::Format::Internal;
     const std::string descriptorUid =
         plugin ? plugin->uid : std::string{};
+    setProperty("vlt.contentSizedEditor", trustedInternal && descriptorUid == "daw.gain");
     if (std::getenv("DAW_PLUGIN_DIAGNOSTICS")) {
         std::fprintf(stderr,
                      "editor for '%s' (%s): instance %s, hasEditor %s\n",
@@ -863,7 +872,20 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (trustedInternal && descriptorUid == "daw.equalizer") {
+    if (trustedInternal && daw::plugins::utility::isUtilityUid(descriptorUid)) {
+        auto* binding = new RackParameterBinding(m_controller, m_channelId, m_insertId, this);
+        auto* panel = new UtilityPanel(binding, QString::fromStdString(descriptorUid), this);
+        binding->setParent(panel);
+        m_generic = panel;
+        connect(binding, &RackParameterBinding::edited, this, &PluginEditorWindow::projectEdited);
+        connect(binding, &RackParameterBinding::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QString::fromStdString(descriptorUid).mid(4));
+        setMinimumSize(panel->minimumSizeHint() + QSize(24, 64));
+        m_fallbackContentSize = panel->sizeHint() + QSize(24, 64);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.equalizer") {
         auto* equalizerPanel =
             new EqualizerPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = equalizerPanel;
@@ -992,7 +1014,7 @@ void PluginEditorWindow::rebuildEditorContent() {
         m_contentRow->insertWidget(0, m_generic, 1);
         emit builtInPanelReady(samplerPanel, QStringLiteral("sampler"));
         setMinimumSize(860, 558);
-        m_fallbackContentSize = QSize(1040, 760);
+        m_fallbackContentSize = QSize(1040, 808);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.slicer") {
         auto* slicerPanel = new SlicerPanel(m_controller, m_channelId, m_insertId, this);
@@ -1270,6 +1292,35 @@ bool PluginEditorWindow::routeHostKey(QKeyEvent* event, bool textEntry) {
 
 bool PluginEditorWindow::eventFilter(QObject* watched, QEvent* event) {
     if (m_closing || !isVisible()) return false;
+    if (m_genericScroll && watched == m_genericScroll->viewport() && event->type() == QEvent::Resize) {
+        syncGenericRows();
+        return false;
+    }
+    if (m_genericScroll && event->type() == QEvent::KeyPress) {
+        bool valid = false;
+        const int index = watched->property("genericRow").toInt(&valid);
+        auto* key = static_cast<QKeyEvent*>(event);
+        const bool backward = key->key() == Qt::Key_Backtab || key->modifiers().testFlag(Qt::ShiftModifier);
+        if (valid && m_genericControls.contains(index) &&
+            (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) &&
+            !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+            const auto& control = m_genericControls[index];
+            const bool crossRow = backward ? watched == control.slider :
+                watched == control.automate || !control.automate->isEnabled();
+            const int next = index + (backward ? -1 : 1);
+            if (crossRow && next >= 0 && next < int(m_genericParameters.size())) {
+                m_genericScroll->ensureVisible(0, next * m_genericRowHeight, 0, m_genericRowHeight);
+                syncGenericRows();
+                if (!m_genericControls.contains(next)) buildGenericRow(next);
+                const auto& target = m_genericControls[next];
+                QWidget* focus = backward && target.automate->isEnabled() ?
+                    static_cast<QWidget*>(target.automate) : static_cast<QWidget*>(target.slider);
+                focus->setFocus(backward ? Qt::BacktabFocusReason : Qt::TabFocusReason);
+                key->accept();
+                return true;
+            }
+        }
+    }
     switch (event->type()) {
     case QEvent::FocusIn:
     case QEvent::MouseButtonPress:
@@ -1928,7 +1979,7 @@ void PluginEditorWindow::setParameterDockVisible(bool visible) {
     if (visible) refreshParameterDock();
 }
 
-void PluginEditorWindow::buildGenericEditor() {
+void PluginEditorWindow::buildGenericEditor(std::vector<daw::plugins::ParameterInfo> parameters) {
     m_generic = new QWidget(this);
     if (const auto plugin = editorSnapshot(); plugin && plugin->format == daw::plugins::Format::Internal) {
         pluginStyle::bind(m_generic);
@@ -1939,9 +1990,8 @@ void PluginEditorWindow::buildGenericEditor() {
     outer->setSpacing(8);
 
     const bool loaded = m_controller && m_controller->hasInsert(m_channelKey, m_insertKey);
-    const std::vector<daw::plugins::ParameterInfo> parameters =
-        m_controller ? m_controller->insertParameters(m_channelKey, m_insertKey)
-                     : std::vector<daw::plugins::ParameterInfo>{};
+    if (parameters.empty() && m_controller)
+        parameters = m_controller->insertParameters(m_channelKey, m_insertKey);
 
     auto* header = ui::sectionLabel(
         m_nativeEditorFailed
@@ -1972,111 +2022,170 @@ void PluginEditorWindow::buildGenericEditor() {
         return;
     }
 
-    auto* scroll = new QScrollArea(m_generic);
-    scroll->setWidgetResizable(true);
-    auto* rows = new QWidget(scroll);
-    auto* grid = new QGridLayout(rows);
-    grid->setContentsMargins(0, 0, 0, 0);
-    grid->setHorizontalSpacing(10);
-    grid->setVerticalSpacing(6);
-    grid->setColumnStretch(1, 1);
-
-    int row = 0;
-    for (const daw::plugins::ParameterInfo& parameter : parameters) {
-        const QString parameterId = QString::fromStdString(parameter.id);
-        const std::string parameterKey = parameter.id;
-        auto* name = new QLabel(QString::fromStdString(parameter.name), rows);
-        auto* slider = new ui::GlassSlider(Qt::Horizontal, rows);
-        slider->setRange(0, kSliderSteps);
-        auto* value = new QLabel(rows);
-        value->setObjectName(QStringLiteral("PluginHint"));
-        value->setMinimumWidth(90);
-        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-        // The id, not the index: a plugin can renumber its parameters between
-        // versions, and the id is what the document stores.
-        slider->setProperty("parameterId", parameterId);
-        slider->setProperty("minValue", parameter.minValue);
-        slider->setProperty("maxValue", parameter.maxValue);
-        slider->setProperty("valueLabel", QVariant::fromValue<QObject*>(value));
-
-        const auto parameterIndex = std::int32_t(parameter.index);
-        const double current = m_controller->insertParameter(m_channelKey, m_insertKey, parameterKey);
-        value->setText(parameterText(parameterKey, current, parameterIndex));
-        const double span = parameter.maxValue - parameter.minValue;
-        const double fraction = span > 0.0 ? (current - parameter.minValue) / span : 0.0;
-        slider->setValue(int(fraction * kSliderSteps));
-
-        connect(slider, &QSlider::valueChanged, this,
-                [this, value, parameterKey, parameterIndex, minimum = parameter.minValue,
-                 maximum = parameter.maxValue](int position) {
-                    if (!m_controller) return;
-                    const double plain = minimum + (maximum - minimum) *
-                                                       (double(position) /
-                                                        kSliderSteps);
-                    m_controller->setInsertParameter(
-                        m_channelKey, m_insertKey, parameterKey, plain);
-                    const auto text = parameterText(parameterKey, plain, parameterIndex);
-                    if (value->text() != text) value->setText(text);
-                });
-        // Undo gets one entry per gesture, not one per pixel of drag — the
-        // same split `commitLaneEdit` uses for automation.
-        connect(slider, &QSlider::sliderPressed, this,
-                [this, slider, parameterKey] {
-                    slider->setProperty(
-                        "beforeValue",
-                        m_controller ? m_controller->insertParameter(
-                                           m_channelKey, m_insertKey,
-                                           parameterKey)
-                                     : 0.0);
-                });
-        connect(slider, &QSlider::sliderReleased, this,
-                [this, slider, parameterKey] {
-                    if (!m_controller) return;
-                    const QVariant before = slider->property("beforeValue");
-                    if (!before.isValid()) return;
-                    m_controller->commitInsertParameterEdit(
-                        m_channelKey, m_insertKey, parameterKey,
-                        before.toDouble(), "Change Plugin Parameter");
-                });
-
-        // The dock is hidden in this branch — it would only repeat the list
-        // that is already on screen — so the automate gesture gets a control of
-        // its own on each row instead.
-        auto* automate =
-            new ui::IconButton(icons::Glyph::Automation,
-                               tr("Automate this parameter"), rows);
-        automate->setButtonSize(22, 22);
-        automate->setEnabled(parameter.isAutomatable);
-        connect(automate, &QAbstractButton::clicked, this, [this, parameterId] {
-            emit automationRequested(m_channelId, m_insertId, parameterId);
-        });
-
-        grid->addWidget(name, row, 0);
-        grid->addWidget(slider, row, 1);
-        grid->addWidget(value, row, 2);
-        grid->addWidget(automate, row, 3);
-        m_genericControls.push_back(GenericControl{
-            slider, value, parameter.minValue, parameter.maxValue, current});
-        m_genericValues.push_back({parameterKey, parameterIndex, current, true});
-        ++row;
-    }
-
-    scroll->setWidget(rows);
-    outer->addWidget(scroll, 1);
+    m_genericParameters = std::move(parameters);
+    m_genericValues.reserve(m_genericParameters.size());
+    for (const auto& parameter : m_genericParameters)
+        m_genericValues.push_back({parameter.id, std::int32_t(parameter.index), 0.0, false});
+    m_genericScroll = new QScrollArea(m_generic);
+    m_genericScroll->setWidgetResizable(true);
+    m_genericRows = new QWidget(m_genericScroll);
+    m_genericRowHeight = std::max(30, fontMetrics().height() + 12);
+    m_genericRows->setFixedHeight(int(m_genericParameters.size()) * m_genericRowHeight);
+    m_genericScroll->setWidget(m_genericRows);
+    connect(m_genericScroll->verticalScrollBar(), &QScrollBar::valueChanged,
+            this, [this] { syncGenericRows(); refreshGenericEditor(); });
+    outer->addWidget(m_genericScroll, 1);
     m_contentRow->insertWidget(0, m_generic, 1);
-    m_fallbackContentSize = QSize(520, std::min(640, 120 + row * 30));
+    m_fallbackContentSize = QSize(520, std::min(640, 120 + int(m_genericParameters.size()) * m_genericRowHeight));
     resize(m_fallbackContentSize);
+    syncGenericRows();
     refreshGenericEditor();
 }
 
-void PluginEditorWindow::refreshGenericEditor() {
-    if (!m_generic || !m_controller) return;
-    m_controller->readInsertParameters(m_channelKey, m_insertKey, m_genericValues);
+void PluginEditorWindow::buildGenericRow(int index) {
+    const auto& parameter = m_genericParameters[std::size_t(index)];
+    auto* rows = new QWidget(m_genericRows);
+    rows->setObjectName(QStringLiteral("GenericParameterRow"));
+    auto* grid = new QHBoxLayout(rows);
+    grid->setContentsMargins(0, 0, 0, 6);
+    grid->setSpacing(10);
+    const QString parameterId = QString::fromStdString(parameter.id);
+    const std::string parameterKey = parameter.id;
+    auto* name = new QLabel(rows);
+    name->setToolTip(QString::fromStdString(parameter.name));
+    name->setFixedWidth(140);
+    name->setText(name->fontMetrics().elidedText(name->toolTip(), Qt::ElideRight, 140));
+    auto* slider = new ui::GlassSlider(Qt::Horizontal, rows);
+    slider->setRange(0, kSliderSteps);
+    slider->setAccessibleName(QString::fromStdString(parameter.name));
+    name->setBuddy(slider);
+    slider->setProperty("genericRow", index);
+    auto* value = new QLabel(rows);
+    value->setObjectName(QStringLiteral("PluginHint"));
+    value->setMinimumWidth(90);
+    value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-    for (std::size_t i = 0; i < m_genericControls.size(); ++i) {
-        auto& control = m_genericControls[i];
-        const auto& value = m_genericValues[i];
+    // The id, not the index: a plugin can renumber its parameters between
+    // versions, and the id is what the document stores.
+    slider->setProperty("parameterId", parameterId);
+    slider->setProperty("minValue", parameter.minValue);
+    slider->setProperty("maxValue", parameter.maxValue);
+    slider->setProperty("valueLabel", QVariant::fromValue<QObject*>(value));
+
+    const auto parameterIndex = std::int32_t(parameter.index);
+    const double current = m_controller->insertParameter(m_channelKey, m_insertKey, parameterKey);
+    value->setText(parameterText(parameterKey, current, parameterIndex));
+    const double span = parameter.maxValue - parameter.minValue;
+    const double fraction = span > 0.0 ? (current - parameter.minValue) / span : 0.0;
+    slider->setValue(int(fraction * kSliderSteps));
+
+    connect(slider, &QSlider::valueChanged, this,
+            [this, value, parameterKey, parameterIndex, minimum = parameter.minValue,
+             maximum = parameter.maxValue](int position) {
+                if (!m_controller) return;
+                const double plain = minimum + (maximum - minimum) *
+                                                   (double(position) /
+                                                    kSliderSteps);
+                m_controller->setInsertParameter(
+                    m_channelKey, m_insertKey, parameterKey, plain);
+                const auto text = parameterText(parameterKey, plain, parameterIndex);
+                if (value->text() != text) value->setText(text);
+            });
+    // Undo gets one entry per gesture, not one per pixel of drag — the
+    // same split `commitLaneEdit` uses for automation.
+    connect(slider, &QSlider::sliderPressed, this,
+            [this, slider, parameterKey] {
+                slider->setProperty(
+                    "beforeValue",
+                    m_controller ? m_controller->insertParameter(
+                                       m_channelKey, m_insertKey,
+                                       parameterKey)
+                                 : 0.0);
+            });
+    connect(slider, &QSlider::sliderReleased, this,
+            [this, slider, parameterKey] {
+                if (!m_controller) return;
+                const QVariant before = slider->property("beforeValue");
+                if (!before.isValid()) return;
+                m_controller->commitInsertParameterEdit(
+                    m_channelKey, m_insertKey, parameterKey,
+                    before.toDouble(), "Change Plugin Parameter");
+            });
+
+    // The dock is hidden in this branch — it would only repeat the list
+    // that is already on screen — so the automate gesture gets a control of
+    // its own on each row instead.
+    auto* automate =
+        new ui::IconButton(icons::Glyph::Automation,
+                           tr("Automate this parameter"), rows);
+    automate->setButtonSize(22, 22);
+    automate->setEnabled(parameter.isAutomatable);
+    automate->setProperty("genericRow", index);
+    connect(automate, &QAbstractButton::clicked, this, [this, parameterId] {
+        emit automationRequested(m_channelId, m_insertId, parameterId);
+    });
+
+
+    grid->addWidget(name);
+    grid->addWidget(slider, 1);
+    grid->addWidget(value);
+    grid->addWidget(automate);
+    m_genericControls.insert(index, GenericControl{
+        rows, automate, slider, value, parameter.minValue, parameter.maxValue, current});
+}
+
+void PluginEditorWindow::syncGenericRows() {
+    if (!m_genericScroll || !m_genericRows || m_syncingGeneric || m_genericParameters.empty()) return;
+    const QScopedValueRollback guard(m_syncingGeneric, true);
+    const int offset = m_genericScroll->verticalScrollBar()->value();
+    const int extent = std::max(m_genericRowHeight, m_genericScroll->viewport()->height());
+    const int first = std::max(0, (offset - extent) / m_genericRowHeight);
+    const int last = std::min(int(m_genericParameters.size()) - 1,
+                             (offset + 2 * extent) / m_genericRowHeight);
+    const auto owns = [](QWidget* row, QWidget* child) {
+        return child && (row == child || row->isAncestorOf(child));
+    };
+    for (auto it = m_genericControls.begin(); it != m_genericControls.end();) {
+        const auto& control = it.value();
+        if ((it.key() < first || it.key() > last) && !control.slider->isSliderDown() &&
+            !owns(control.row, QApplication::focusWidget()) && !owns(control.row, QWidget::mouseGrabber())) {
+            control.row->hide();
+            control.row->deleteLater();
+            it = m_genericControls.erase(it);
+        } else ++it;
+    }
+    for (int index = first; index <= last; ++index)
+        if (!m_genericControls.contains(index)) buildGenericRow(index);
+    QWidget* previous = nullptr;
+    for (auto it = m_genericControls.begin(); it != m_genericControls.end(); ++it) {
+        auto& control = it.value();
+        control.row->setGeometry(0, it.key() * m_genericRowHeight,
+                                 m_genericRows->width(), m_genericRowHeight);
+        control.row->show();
+        if (previous) QWidget::setTabOrder(previous, control.slider);
+        QWidget::setTabOrder(control.slider, control.automate);
+        previous = control.automate;
+    }
+}
+
+void PluginEditorWindow::refreshGenericEditor() {
+    if (!m_genericScroll || !m_controller) return;
+    syncGenericRows();
+    std::vector<daw::PluginParameterReadout> visibleValues;
+    std::vector<std::size_t> visibleIndices;
+    const auto viewport = m_genericScroll->viewport()->rect();
+    for (auto it = m_genericControls.cbegin(); it != m_genericControls.cend(); ++it) {
+        const auto& control = it.value();
+        if (!control.slider->isVisible() || !viewport.intersects(
+                QRect(control.slider->mapTo(m_genericScroll->viewport(), QPoint()), control.slider->size()))) continue;
+        visibleIndices.push_back(std::size_t(it.key()));
+        visibleValues.push_back(m_genericValues[std::size_t(it.key())]);
+    }
+    m_controller->readInsertParameters(m_channelKey, m_insertKey, visibleValues);
+    for (std::size_t at = 0; at < visibleIndices.size(); ++at) {
+        const auto i = visibleIndices[at];
+        auto& control = m_genericControls[int(i)];
+        const auto& value = visibleValues[at];
         // Never fight the user: a slider being dragged owns its own value.
         if (control.slider->isSliderDown() || !value.available) continue;
         const double plain = value.value;

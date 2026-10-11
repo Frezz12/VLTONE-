@@ -440,7 +440,8 @@ void appendCommand(const std::shared_ptr<collab::BatchCommand>& batch,
 
 bool supportedSharedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
-           (insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
+           (insert.uid == "daw.gain" || insert.uid == "daw.stereo-utility" || insert.uid == "daw.reverse" ||
+            insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.channel-color" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
@@ -1889,7 +1890,10 @@ std::shared_ptr<const engine::SampleBuffer> EngineController::loadSamples(
     const std::string& path) {
     if (path.empty()) return nullptr;
     auto found = m_samples.find(path);
-    if (found != m_samples.end()) return found->second;
+    // A live missing-file placeholder must not turn export into successful
+    // silence. Retry in the render clone, then report the load error normally.
+    if (found != m_samples.end() && (found->second || !m_isRenderClone))
+        return found->second;
 
     // A removed clip can leave the cache as the final owner of a large decoded
     // file. Reclaim such entries before admitting another one; buffers still
@@ -10651,8 +10655,6 @@ std::string EngineController::importSampleToMidiTrack(
     if (!sampler) return {};
     std::string name = platform::pathToUtf8(platform::pathFromUtf8(filePath).stem());
     if (name.empty()) name = "Sample";
-    const double start = std::max(0.0, startSeconds);
-
     if (cloudProjectBound()) {
         auto request = sharedAudioRequest(filePath);
         if (!request) return {};
@@ -10666,20 +10668,6 @@ std::string EngineController::importSampleToMidiTrack(
         applyDescriptor(instrument, *sampler);
         if (!cleanSharedInsert(instrument, track.instrument, false)) return {};
         track.samplerFx.ownerInstrumentId = track.instrument.id;
-        ClipModel clip;
-        clip.id = newUuid();
-        clip.name = name;
-        clip.kind = ClipKind::Midi;
-        clip.startSeconds = start;
-        clip.durationSeconds = std::max(kMinClipSeconds, double(request->frames) / request->sampleRate);
-        clip.color = track.color;
-        NoteModel note;
-        note.id = newUuid();
-        note.pitch = 60;
-        note.velocity = 127;
-        note.lengthBeats = clip.durationSeconds * m_project.tempo / 60.0;
-        clip.notes.push_back(note);
-        track.clips.push_back(clip);
         const std::string id = track.id;
         const std::string anchor = m_project.tracks.empty() ? std::string() : m_project.tracks.back().id;
         PendingSharedAssetMutation pending;
@@ -10700,7 +10688,6 @@ std::string EngineController::importSampleToMidiTrack(
 
     const auto samples = loadSamples(filePath);
     if (!samples || samples->sampleRate() <= 0 || samples->frames() == 0) return {};
-    const double duration = std::max(kMinClipSeconds, double(samples->frames()) / samples->sampleRate());
     const auto undoStart = m_undo.depth();
     const std::string id = addTrack(TrackKind::Instrument, name);
     if (id.empty()) return {};
@@ -10710,10 +10697,6 @@ std::string EngineController::importSampleToMidiTrack(
         return std::string{};
     };
     if (!loadInstrumentSampler(id, filePath)) return rollback();
-    const std::string clip = addMidiClip(id, start, duration);
-    if (clip.empty() || addNote(id, clip, 60, 0, duration * m_project.tempo / 60.0, 127).empty())
-        return rollback();
-    setClipName(id, clip, name);
     collapseUndo(undoStart, "Import Sample as MIDI");
     return id;
 }

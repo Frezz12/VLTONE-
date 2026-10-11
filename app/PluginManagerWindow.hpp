@@ -56,6 +56,7 @@ private:
     /// atomics. Called from the poll timer, so it must stay cheap.
     void refreshScanState();
     void refreshPlugins();
+    void filterPlugins();
     void refreshPaths();
     void refreshBlacklist();
 

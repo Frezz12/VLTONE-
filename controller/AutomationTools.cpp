@@ -225,6 +225,108 @@ Points dragPoint(const Points& points, std::size_t index, double beats,
     return finish(std::move(result));
 }
 
+Points sculptRegion(const Points& source, const Range& range, double amount,
+                    RegionShape shape, double softness, double fallback,
+                    double* appliedAmount) {
+    if (appliedAmount) *appliedAmount = 0.0;
+    const double lo = std::max(0.0, range.fromBeats);
+    const double hi = range.toBeats;
+    if (!std::isfinite(lo) || !std::isfinite(hi) || !std::isfinite(amount) ||
+        !std::isfinite(softness) || hi - lo < 1e-7 || std::abs(amount) < kEps)
+        return source;
+    softness = std::clamp(softness, 0.0, 1.0);
+    const double jump = std::min(1e-5, (hi - lo) * 0.001);
+    const double innerLo = lo + jump, innerHi = hi - jump;
+    Points points = finish(source);
+    const auto valueAt = [&](double beat) {
+        return automationValueAt(points, beat, fallback);
+    };
+
+    // A nonlinear segment cannot simply inherit its shape after a split: that
+    // would retime the bend outside the selection. Flatten only segments that
+    // need splitting, checking quarter points too (an S has a linear midpoint).
+    Points out;
+    const auto flatten = [&](auto&& self, double a, double va, double b,
+                             double vb, int depth) -> void {
+        bool straight = true;
+        for (double t : {0.25, 0.5, 0.75}) {
+            if (std::abs(valueAt(a + (b - a) * t) - (va + (vb - va) * t)) > 1e-5)
+                straight = false;
+        }
+        if (straight || depth >= 14) return;
+        const double mid = (a + b) * 0.5, vm = valueAt(mid);
+        self(self, a, va, mid, vm, depth + 1);
+        out.push_back(at(mid, vm));
+        self(self, mid, vm, b, vb, depth + 1);
+    };
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        out.push_back(points[i]);
+        if (i + 1 == points.size()) continue;
+        const auto& a = points[i];
+        const auto& b = points[i + 1];
+        const bool crossesEdge = (a.beats < innerLo && b.beats > lo) ||
+                                 (a.beats < hi && b.beats > innerHi);
+        const bool sculpted = (shape != RegionShape::Lift || softness > 0.0) &&
+                              a.beats < hi && b.beats > lo;
+        if ((crossesEdge || sculpted) && a.shape != AutomationSegment::Hold &&
+            (a.shape != AutomationSegment::Linear || std::abs(a.curve) > kEps)) {
+            out.back().shape = AutomationSegment::Linear;
+            out.back().curve = 0.0;
+            flatten(flatten, a.beats, a.value, b.beats, b.value, 0);
+        }
+    }
+    const auto anchor = [&](double beat) {
+        if (std::none_of(out.begin(), out.end(), [beat](const auto& p) {
+                return std::abs(p.beats - beat) < kEps;
+            })) {
+            auto p = automationPointOnCurve(out, beat, fallback);
+            p.value = valueAt(beat);
+            out.push_back(p);
+            normalizeAutomation(out);
+        }
+    };
+    anchor(lo);
+    anchor(innerLo);
+    anchor(innerHi);
+    anchor(hi);
+    if (shape != RegionShape::Lift || softness > 0.0) {
+        for (int i = 1; i < 64; ++i) anchor(lo + (hi - lo) * i / 64.0);
+    }
+
+    // Clamp the offset as a group: reaching a rail must not crush the original
+    // peaks. Every move is evaluated from the pickup state, so reversing at a
+    // rail or returning to zero never accumulates points or numerical drift.
+    if (shape == RegionShape::Lift && softness == 0.0) {
+        double minimum = 1.0, maximum = 0.0;
+        for (const auto& p : out) {
+            if (p.beats > lo && p.beats < hi) {
+                minimum = std::min(minimum, p.value);
+                maximum = std::max(maximum, p.value);
+            }
+        }
+        amount = std::clamp(amount, -minimum, 1.0 - maximum);
+        if (std::abs(amount) < kEps) return source;
+    }
+    if (appliedAmount) *appliedAmount = amount;
+    for (auto& p : out) {
+        if (p.beats < lo || p.beats > hi) continue;
+        if (p.beats == lo || p.beats == innerHi) {
+            p.shape = AutomationSegment::Linear;
+            p.curve = 0.0;
+        }
+        if (p.beats <= lo || p.beats >= hi) continue;
+        const double t = (p.beats - lo) / (hi - lo);
+        double weight = shape == RegionShape::Tilt ? 2.0 * t - 1.0 :
+                        shape == RegionShape::Arch ? std::pow(std::sin(std::numbers::pi * t), 2) : 1.0;
+        if (softness > 0.0) {
+            const double edge = std::clamp(std::min(t, 1.0 - t) / (softness * 0.5), 0.0, 1.0);
+            weight *= edge * edge * (3.0 - 2.0 * edge);
+        }
+        p.value = std::clamp(p.value + amount * weight, 0.0, 1.0);
+    }
+    return finish(std::move(out));
+}
+
 Points invert(Points points, const Range& range) {
     for (auto& p : points) {
         if (range.contains(p.beats)) p.value = 1.0 - p.value;

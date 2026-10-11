@@ -39,4 +39,5 @@ private:
     QSet<QString> m_requested;
     QPoint m_dragPressOffset{20, 20};
     double m_zoom = 1.0;
+    bool m_initialized = false;
 };

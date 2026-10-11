@@ -160,10 +160,6 @@ PluginManagerWindow::PluginManagerWindow(daw::EngineController* controller,
             &PluginManagerWindow::applyTheme);
     applyTheme();
 
-    refreshPaths();
-    refreshPlugins();
-    refreshBlacklist();
-    refreshScanState();
 }
 
 void PluginManagerWindow::showTab(int index) {
@@ -208,7 +204,7 @@ QWidget* PluginManagerWindow::buildPluginsTab() {
     m_filter->setPlaceholderText(tr("Filter by name, vendor or path…"));
     m_filter->setClearButtonEnabled(true);
     connect(m_filter, &QLineEdit::textChanged, this,
-            &PluginManagerWindow::refreshPlugins);
+            &PluginManagerWindow::filterPlugins);
 
     m_formatFilter = new QComboBox(page);
     m_formatFilter->addItem(tr("Preferred variants"),
@@ -224,7 +220,7 @@ QWidget* PluginManagerWindow::buildPluginsTab() {
     m_typeFilter->addItem(tr("Effects"));
     m_typeFilter->addItem(tr("Instruments"));
     connect(m_typeFilter, &QComboBox::currentIndexChanged, this,
-            [this](int) { refreshPlugins(); });
+            [this](int) { filterPlugins(); });
 
     filters->addWidget(m_filter, 1);
     filters->addWidget(m_formatFilter);
@@ -309,34 +305,16 @@ void PluginManagerWindow::refreshPlugins() {
                   return a.uid < b.uid;
               });
 
-    const QString needle = m_filter ? m_filter->text().trimmed() : QString();
-    const int typeWanted = m_typeFilter ? m_typeFilter->currentIndex() : 0;
-    const bool filtered = !needle.isEmpty() || typeWanted != 0 ||
-                          formatWanted != Format::Unknown;
-    m_clearFiltersButton->setEnabled(filtered);
-    m_copyPathButton->setEnabled(false);
-
     // Sorting has to be off while rows are filled, or each insertion re-sorts
     // the table under the column being written and the cells scatter.
     m_pluginTable->setSortingEnabled(false);
     m_pluginTable->setRowCount(0);
 
-    int shown = 0;
     for (const PluginDescriptor& descriptor : m_plugins) {
-        if (formatWanted != Format::Unknown && descriptor.format != formatWanted) continue;
-        if (typeWanted == 1 && descriptor.isInstrument) continue;
-        if (typeWanted == 2 && !descriptor.isInstrument) continue;
 
         const QString name = QString::fromStdString(descriptor.name);
         const QString vendor = QString::fromStdString(descriptor.vendor);
         const QString path = QString::fromStdString(descriptor.path);
-        if (!needle.isEmpty() &&
-            !name.contains(needle, Qt::CaseInsensitive) &&
-            !vendor.contains(needle, Qt::CaseInsensitive) &&
-            !path.contains(needle, Qt::CaseInsensitive)) {
-            continue;
-        }
-
         const int row = m_pluginTable->rowCount();
         m_pluginTable->insertRow(row);
         m_pluginTable->setItem(row, 0, readOnlyItem(name));
@@ -349,10 +327,29 @@ void PluginManagerWindow::refreshPlugins() {
         auto* pathItem = readOnlyItem(path);
         pathItem->setToolTip(path);
         m_pluginTable->setItem(row, 5, pathItem);
-        ++shown;
     }
     m_pluginTable->setSortingEnabled(true);
+    filterPlugins();
+}
 
+void PluginManagerWindow::filterPlugins() {
+    if (!m_pluginTable) return;
+    const QString needle = m_filter ? m_filter->text().trimmed() : QString();
+    const int typeWanted = m_typeFilter ? m_typeFilter->currentIndex() : 0;
+    const auto formatWanted = static_cast<Format>(m_formatFilter ? m_formatFilter->currentData().toInt() : 0);
+    const bool filtered = !needle.isEmpty() || typeWanted != 0 || formatWanted != Format::Unknown;
+    m_clearFiltersButton->setEnabled(filtered);
+    int shown = 0;
+    for (int row = 0; row < m_pluginTable->rowCount(); ++row) {
+        const auto text = [&](int column) { return m_pluginTable->item(row, column)->text(); };
+        const bool instrument = text(3) == tr("Instrument");
+        const bool matches = (formatWanted == Format::Unknown || text(2) == formatLabel(formatWanted)) &&
+            (typeWanted == 0 || (typeWanted == 2) == instrument) &&
+            (needle.isEmpty() || text(0).contains(needle, Qt::CaseInsensitive) ||
+             text(1).contains(needle, Qt::CaseInsensitive) || text(5).contains(needle, Qt::CaseInsensitive));
+        m_pluginTable->setRowHidden(row, !matches);
+        if (matches) ++shown;
+    }
     const int total = static_cast<int>(m_plugins.size());
     if (shown == 0 && filtered) {
         m_pluginCount->setText(tr("No matching plugins. Try another search or clear the filters."));

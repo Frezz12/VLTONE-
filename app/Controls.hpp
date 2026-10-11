@@ -51,7 +51,7 @@ protected:
     void paintEvent(QPaintEvent*) override;
 };
 
-/// Relative drag, wheel and keyboard all drive the same native slider value.
+/// Relative drag and keyboard drive the same native slider value.
 class ViewScrubSlider final : public QSlider {
 public:
     enum class Axis { Horizontal, Vertical };
@@ -168,7 +168,6 @@ private:
     void setFromCoordinate(double coordinate);
 
     double m_grabOffset = 0.0;
-    double m_wheelRemainder = 0.0;
     double m_fillFrom = 0.0;
     double m_detent = -1.0;
 };
@@ -329,8 +328,6 @@ public:
 
     double gain() const { return m_gain; }
     void setGain(double gain);
-    /// Let a scrollable channel strip keep wheel input for navigation.
-    void setWheelEnabled(bool enabled);
     /// Console strips already show gain above the fader; track headers use
     /// the floating readout while dragging.
     void setValueBubbleEnabled(bool enabled) { m_valueBubbleEnabled = enabled; }
@@ -351,7 +348,7 @@ public:
     /// creation gesture or context-menu command.
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
-    bool isEditing() const noexcept { return m_dragging || m_wheelEditing; }
+    bool isEditing() const noexcept { return m_dragging; }
 
 signals:
     void gainChanged(double gain);
@@ -388,7 +385,6 @@ private:
     void showBubble();
     void paintScale(QPainter& p) const;
     void paintCap(QPainter& p, const QRectF& cap) const;
-    void finishWheelEdit();
 
     Qt::Orientation m_orientation = Qt::Vertical;
     bool m_scale = false;
@@ -396,13 +392,10 @@ private:
     double m_dragStartPosition = 0.0;
     int m_dragStartCoord = 0;
     bool m_dragging = false;
-    bool m_wheelEditing = false;
-    bool m_wheelEnabled = true;
     bool m_valueBubbleEnabled = true;
     bool m_hovered = false;
     bool m_automatable = false;
     bool m_compactKnob = false;
-    QTimer* m_wheelCommit = nullptr;
     int m_regularMinimumWidth = -1;
     int m_regularMaximumWidth = QWIDGETSIZE_MAX;
 };
@@ -514,7 +507,7 @@ public:
     /// creation gesture or context-menu command.
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
-    bool isEditing() const noexcept { return m_dragging || m_wheelEditing; }
+    bool isEditing() const noexcept { return m_dragging; }
     static bool checkInteractionForTest();
 
 signals:
@@ -541,16 +534,13 @@ private:
     /// Float the L/C/R readout above the knob while dragging.
     void showBubble();
     void commit(double pan);
-    void finishWheelEdit();
 
     double m_pan = 0.0;
     double m_dragStart = 0.0;
     int m_dragStartX = 0;
     int m_dragStartY = 0;
     bool m_dragging = false;
-    bool m_wheelEditing = false;
     bool m_automatable = false;
-    QTimer* m_wheelCommit = nullptr;
     Fade m_hoverFade{this};
 };
 
@@ -627,7 +617,7 @@ public:
 
 signals:
     void valueChanged(double value);
-    /// A drag, wheel or reset finished — where an undo entry belongs.
+    /// An explicit value edit finished — where an undo entry belongs.
     void editFinished();
     /// The automation creation gesture or context-menu command was used.
     void automateRequested();

@@ -266,9 +266,8 @@ private:
     struct OfflineConfiguration {
         engine::FrameCount latency = 0;
         std::uint64_t tail = 0;
-        std::uint16_t inputs = 0;
-        std::uint16_t sidechain = 0;
-        std::uint16_t outputs = 0;
+        std::vector<std::uint16_t> inputs;
+        std::vector<std::uint16_t> outputs;
 
         bool operator==(const OfflineConfiguration&) const = default;
     };

@@ -269,11 +269,16 @@ audio::Result EngineController::renderSessionInWorker(
         const double rate = spec.sampleRate > 0.0 ? spec.sampleRate : data->sampleRate;
         if (!std::isfinite(rate) || rate < 1000 || rate > 768000)
             return audio::Result::fail(audio::EngineError::InvalidArgument, "invalid render sample rate");
+        // Mixer curves are evaluated per sample and do not require device-
+        // sized blocks. Keep that conservative granularity for MIDI and
+        // active plugin parameter streams, including their event budgets.
         const bool eventSensitive = std::any_of(snapshot.project.tracks.begin(),
             snapshot.project.tracks.end(), [](const auto& track) {
                 return std::any_of(track.clips.begin(), track.clips.end(), [](const auto& clip) {
                     return !clip.muted && (clip.kind == ClipKind::Midi ||
-                        clip.kind == ClipKind::Pattern || clip.kind == ClipKind::Automation);
+                        clip.kind == ClipKind::Pattern ||
+                        (clip.kind == ClipKind::Automation && clip.automation.active &&
+                         clip.automation.target.kind == AutomationTargetKind::PluginParameter));
                 });
             });
         const auto renderBlockSize = spec.blockSize ? spec.blockSize
@@ -629,6 +634,7 @@ audio::Result EngineController::renderProjectPass(
             m_runtime.get().engine.offlineError().empty() ? std::string(engine::describe(ready.error()))
                                            : m_runtime.get().engine.offlineError());
     const auto graph = m_runtime.get().engine.compiledGraph();
+    std::unordered_set<const engine::Node*> reverseNodes;
     const auto requireSlot = [&](const std::string& channelId, const InsertModel& model, bool frozen = false) {
         if (frozen || !model.isLoaded() || model.bypassed || model.mix == 0.f) return;
         validateRenderModule(model);
@@ -638,6 +644,10 @@ audio::Result EngineController::renderProjectPass(
              (!slot->rightNode || !slot->rightNode->isReady())))
             throw std::runtime_error("cannot prepare export plugin: " + model.name +
                                      " (channel " + channelId + ", slot " + model.id + ")");
+        if (model.format == PluginFormat::Internal && model.uid == "daw.reverse") {
+            reverseNodes.insert(slot->node.get());
+            if (slot->rightNode) reverseNodes.insert(slot->rightNode.get());
+        }
     };
     for (const auto& track : m_project.tracks) {
         if (!carriesAudio(track)) continue;
@@ -760,6 +770,35 @@ audio::Result EngineController::renderProjectPass(
     const engine::SamplePos holdSamples =
         toSamples(std::max(0.0, spec.tailHoldSeconds));
     engine::SamplePos quietFor = 0;
+    // Reverse may be silent until its captured slice reaches the read head.
+    // Inspect tails at the range end, when tempo/automation have reached DSP.
+    // Accumulate along paths, not across parallel tracks; include downstream
+    // effects so a delay following Reverse cannot hide its pending audio.
+    engine::SamplePos reverseDrain = -1;
+    std::vector<engine::SamplePos> pathTails(graph->nodes.size(), 0);
+    std::vector<engine::SamplePos> reversePathTails(graph->nodes.size(), -1);
+    const auto reverseTailBound = [&] {
+        const auto cap = toSamples(spec.tailMaxSeconds);
+        for (const auto index : graph->order) {
+            const auto& entry = graph->nodes[index];
+            engine::SamplePos upstream = 0, reverseUpstream = -1;
+            for (unsigned i = 0; i < entry.inputCount; ++i) {
+                const auto producer = graph->inputEdges[entry.firstInput + i].producer;
+                upstream = std::max(upstream, pathTails[producer]);
+                reverseUpstream = std::max(reverseUpstream, reversePathTails[producer]);
+            }
+            if (reverseNodes.contains(entry.node)) reverseUpstream = upstream;
+            const auto ownTail = engine::SamplePos(entry.node->tailSamples());
+            pathTails[index] = std::min(cap, upstream + ownTail);
+            reversePathTails[index] = reverseUpstream < 0 ? -1 : std::min(cap, reverseUpstream + ownTail);
+        }
+        engine::SamplePos result = 0;
+        for (unsigned i = 0; i < graph->nodes.size(); ++i)
+            if (i == graph->sinkNode || std::any_of(sinks.begin(), sinks.end(),
+                [&](const auto& sink) { return sink.tap && sink.tap == graph->nodes[i].node; }))
+                result = std::max(result, reversePathTails[i]);
+        return result;
+    };
     engine::SamplePos position = renderStart;
     engine::SamplePos written = 0;
     bool cancelled = false;
@@ -848,7 +887,8 @@ audio::Result EngineController::renderProjectPass(
                             peak = std::max(peak, std::fabs(sink.tap->captured()[channel][frame]));
                 }
                 quietFor = peak < silenceThreshold ? quietFor + frames : 0;
-                if (quietFor >= holdSamples) return false;
+                if (reverseDrain < 0) reverseDrain = reverseNodes.empty() ? 0 : reverseTailBound();
+                if (quietFor >= holdSamples && position - latency >= rangeEnd + reverseDrain) return false;
             }
 
             const auto now = std::chrono::steady_clock::now();

@@ -3,6 +3,8 @@
 #include "Theme.hpp"
 
 #include <QDialog>
+#include <array>
+#include <functional>
 #include <QHash>
 #include <QString>
 
@@ -108,6 +110,9 @@ private:
     /// Keep the dialog inside the current monitor's usable area. Every tab is
     /// scrollable, so shrinking the shell never hides a setting.
     void constrainToScreen();
+    void ensurePage(int index);
+    void refreshCurrentPage();
+    std::array<std::function<QWidget*()>, kMixerTab + 1> m_pageFactories;
     QWidget* buildThemesTab();
     QWidget* buildInterfaceTab();
     QWidget* buildMixerTab();

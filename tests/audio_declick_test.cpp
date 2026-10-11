@@ -187,15 +187,16 @@ void clipAndInputTransitions() {
     clips->push_back(placement); player.setClips(clips);
     player.process(c);
     check(out.left.front()==0.f && out.left.back()==.8f,"a timeline clip fades in at its exact boundary");
+    const auto realtimeStart = out.left;
     c.timelinePosition=512; player.process(c);
     const float previous=out.left.back();
     player.setClips(std::make_shared<ClipPlayerNode::ClipList>());
     c.timelinePosition=1024; player.process(c);
     check(out.left.front()==previous && out.smooth(previous) && out.left.back()==0.f,
           "removing a playing clip drains its output instead of cutting it");
-    player.setClips(clips); c.offline=true; c.timelinePosition=0; player.process(c);
-    check(std::all_of(out.left.begin(),out.left.end(),[](float v){return v==.8f;}),
-          "offline clip rendering keeps the source and user fade math unchanged");
+    player.setClips(clips); player.reset(); c.offline=true; c.timelinePosition=0; player.process(c);
+    check(out.left==realtimeStart && out.right==realtimeStart && out.smooth(0.f),
+          "offline clip edges use the same continuous protection as realtime playback");
 
     Output input(frames);
     std::fill(input.left.begin(),input.left.end(),.8f);
@@ -214,7 +215,7 @@ void clipAndInputTransitions() {
 }
 int main() {
     for(SampleRate rate:{44100.,48000.,96000.})
-        for(FrameCount frames:{32u,256u,1024u}) {
+        for(FrameCount frames:{8u,16u,32u,256u,1024u}) {
             std::printf("rate %.0f, block %u\n",rate,frames);
             previewTransitions(rate,frames);
             transportTransitions(rate,frames);

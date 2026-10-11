@@ -11,6 +11,12 @@ class RetainedScene {
 public:
     static constexpr qint64 budget = 32 * 1024 * 1024;
     void clear() { m_entries.clear(); m_bytes = 0; }
+    template<class Predicate> void invalidate(Predicate affected) {
+        for (auto it = m_entries.begin(); it != m_entries.end();) {
+            if (affected(it->first)) { m_bytes -= it->second.group->bytes; it = m_entries.erase(it); }
+            else ++it;
+        }
+    }
     bool paint(QPainter& painter, quint64 key, QSize size, QPointF origin,
                const std::function<void(QPainter&)>& draw) {
         auto* sink = sceneGeometrySink(painter);
@@ -33,7 +39,7 @@ public:
             // Oversized visible groups still render once, without entering the
             // cache. SceneRecorder and WorkspaceSurface enforce admission too.
             if (group->bytes > budget) { sink->appendGroup(std::move(group), origin); return true; }
-            while (m_bytes + group->bytes > budget || m_entries.size() >= 64) {
+            while (m_bytes + group->bytes > budget || m_entries.size() >= 512) {
                 auto oldest = m_entries.begin();
                 for (auto it = m_entries.begin(); it != m_entries.end(); ++it)
                     if (it->second.used < oldest->second.used) oldest = it;

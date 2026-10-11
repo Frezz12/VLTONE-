@@ -320,7 +320,7 @@ struct PreparedPluginCatalogue {
     std::uint64_t managerId = 0;
     std::uint64_t revision = 0;
     daw::plugins::Format preferredFormat = daw::plugins::Format::Unknown;
-    bool instruments = false;
+    std::optional<bool> instruments = false;
     std::vector<daw::plugins::PluginDescriptor> catalogue;
     std::vector<daw::plugins::PluginDescriptor> preferred;
     std::map<QString, std::vector<daw::plugins::PluginDescriptor>> categories;
@@ -330,7 +330,7 @@ struct PreparedPluginCatalogue {
 };
 
 std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
-    daw::EngineController* controller, bool instruments) {
+    daw::EngineController* controller, std::optional<bool> instruments) {
     const std::uint64_t managerId =
         controller->pluginManager().instanceId();
     const std::uint64_t revision =
@@ -342,7 +342,7 @@ std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
         std::uint64_t revision = 0;
         std::uint64_t sharedRevision = 0;
         daw::plugins::Format preferredFormat = daw::plugins::Format::Unknown;
-        bool instruments = false;
+        std::optional<bool> instruments = false;
         std::shared_ptr<const PreparedPluginCatalogue> catalogue;
     };
     static std::vector<CacheEntry> cache;
@@ -356,8 +356,12 @@ std::shared_ptr<const PreparedPluginCatalogue> preparedCatalogue(
     }
 
     std::vector<daw::plugins::PluginDescriptor> catalogue =
-        instruments ? controller->pluginManager().instruments()
+        instruments.value_or(false) ? controller->pluginManager().instruments()
                     : controller->pluginManager().effects();
+    if (!instruments.has_value()) {
+        const auto extra = controller->pluginManager().instruments();
+        catalogue.insert(catalogue.end(), extra.begin(), extra.end());
+    }
     std::erase_if(catalogue, [controller](const auto& descriptor) {
         return !controller->sharedPluginAllowed(descriptor);
     });
@@ -470,7 +474,7 @@ void clearPluginMenu(QMenu* menu) {
 }
 
 void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
-                        daw::EngineController* controller, bool instruments,
+                        daw::EngineController* controller, std::optional<bool> instruments,
                         const SharedPickCallback& onPick, bool openingNow,
                         const PluginPickerTarget& target = {}) {
     if (!menu || !controller) return;
@@ -532,7 +536,7 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
         current.uid = slot->uid;
         current.name = slot->name;
         current.vendor = slot->vendor;
-        current.isInstrument = instruments;
+        current.isInstrument = instruments.value_or(false);
         current.format = daw::plugins::formatFromString(daw::toString(slot->format));
         auto* currentMenu = menu->addMenu(menu->fontMetrics().elidedText(
             QString::fromStdString(slot->name), Qt::ElideRight, 250).replace('&', QStringLiteral("&&")));
@@ -546,7 +550,7 @@ void populatePluginMenu(QMenu* menu, QWidget* callbackContext,
         auto* modes = new QActionGroup(currentMenu);
         for (auto mode : {daw::PluginChannelMode::Auto, daw::PluginChannelMode::Mono,
                           daw::PluginChannelMode::Stereo, daw::PluginChannelMode::DualMono}) {
-            if (instruments && mode == daw::PluginChannelMode::DualMono) continue;
+            if (instruments.value_or(false) && mode == daw::PluginChannelMode::DualMono) continue;
             const char* label = mode == daw::PluginChannelMode::Auto ? QT_TR_NOOP("Auto") :
                                 mode == daw::PluginChannelMode::Mono ? QT_TR_NOOP("Mono") :
                                 mode == daw::PluginChannelMode::Stereo ? QT_TR_NOOP("Stereo") : QT_TR_NOOP("Dual Mono");
@@ -791,7 +795,7 @@ QAction* addPluginControlsAction(QMenu* menu, daw::EngineController* controller,
 }
 
 QMenu* buildPluginMenu(QWidget* parent, daw::EngineController* controller,
-                       bool instruments,
+                       std::optional<bool> instruments,
                        std::function<void(const daw::plugins::PluginDescriptor&)> onPick,
                        PluginPickerTarget target) {
     auto* menu = new QMenu(parent);

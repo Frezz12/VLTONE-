@@ -4863,11 +4863,12 @@ void MainWindow::openAutomationEditorForShot(const QString& mode) {
                              QString::fromStdString(track.clips.front().id));
         break;
     }
-    if (mode != QStringLiteral("select")) return;
+    if (mode != QStringLiteral("select") && mode != QStringLiteral("region")) return;
     QApplication::processEvents();
     for (AutomationEditorWindow* editor : m_automationEditors.values()) {
         auto* view = editor->findChild<AutomationCurveView*>();
         if (!view) continue;
+        if (mode == QStringLiteral("region")) view->setTool(AutomationCurveView::Tool::Region);
         // Shift-drag, the gesture itself, rather than a back door into the
         // selection: a still that shows something the mouse cannot produce is
         // worse than no still.
@@ -4876,12 +4877,18 @@ void MainWindow::openAutomationEditorForShot(const QString& mode) {
         const auto send = [&](QEvent::Type type, const QPoint& at,
                               Qt::MouseButton button, Qt::MouseButtons held) {
             QMouseEvent ev(type, QPointF(at), QPointF(view->mapToGlobal(at)),
-                           button, held, Qt::ShiftModifier);
+                           button, held, mode == QStringLiteral("region") ? Qt::NoModifier : Qt::ShiftModifier);
             QApplication::sendEvent(view, &ev);
         };
         send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+        if (mode == QStringLiteral("region")) {
+            const QPoint pickup((from.x() + to.x()) / 2, view->height() / 2);
+            send(QEvent::MouseButtonPress, pickup, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseMove, pickup + QPoint(0, 28), Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, pickup + QPoint(0, 28), Qt::LeftButton, Qt::NoButton);
+        }
         QApplication::processEvents();
     }
 }
@@ -5305,6 +5312,43 @@ bool MainWindow::checkAutomationForTest() {
         }
     }
 
+    // A Region over automation changes values without splitting or moving the
+    // clip. Pickup can be anywhere above the line, not just on a breakpoint.
+    {
+        m_controller.setAutomationPoints(lane, clip, {{0, .7}, {64, .7}});
+        const auto before = curve()->points;
+        const auto undoDepth = m_controller.undoDepth();
+        m_timeline->setTool(TimelineWidget::Tool::SelectRegion);
+        const QPoint a(m_timeline->width() / 5, y), b(m_timeline->width() * 2 / 5, y + 4);
+        click(a, b, Qt::NoModifier);
+        const double from = daw::secondsToBeats(m_timeline->regionStartSecondsForTest(), m_controller.tempo());
+        const double to = daw::secondsToBeats(m_timeline->regionEndSeconds(), m_controller.tempo());
+        const QPoint grab((a.x() + b.x()) / 2, y);
+        click(grab, grab + QPoint(0, 10), Qt::NoModifier);
+        const auto* result = curve();
+        if (!result || m_controller.project().findTrack(lane)->clips.size() != 1 ||
+            m_controller.undoDepth() != undoDepth + 1 ||
+            daw::automationValueAt(result->points, (from + to) / 2, .7) >= .69 ||
+            std::abs(daw::automationValueAt(result->points, from, .7) - .7) > 1e-6 ||
+            std::abs(daw::automationValueAt(result->points, to, .7) - .7) > 1e-6) {
+            std::fprintf(stderr, "Region did not lower automation with pinned edges and one undo\n");
+            return false;
+        }
+        m_controller.undo();
+        if (!curve() || curve()->points != before) return false;
+        send(QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        send(QEvent::MouseMove, grab + QPoint(0, 8), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(m_timeline, &escape);
+        send(QEvent::MouseButtonRelease, grab, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        if (!curve() || curve()->points != before || m_controller.undoDepth() != undoDepth) return false;
+        // A click outside the old region leaves no selection behind.
+        const QPoint outside(m_timeline->width() * 4 / 5, y);
+        click(outside, outside, Qt::NoModifier);
+        m_timeline->setTool(TimelineWidget::Tool::Select);
+        std::fprintf(stderr, "PASS Automation Region: vertical lift, outside anchors, undo and Escape\n");
+    }
+
     // ── The grip drags the clip; the curve does not ──
     //
     // Everywhere but the strip along the top, the pointer is editing the curve,
@@ -5669,6 +5713,43 @@ bool MainWindow::checkAutomationEditorForTest() {
         std::fprintf(stderr, "undo did not restore the editor's point reset\n");
         editor->close();
         return false;
+    }
+
+    {
+        view->setTool(AutomationCurveView::Tool::Region);
+        const QPoint zero = view->pointPositionForTest(0);
+        const QPoint four = view->pointPositionForTest(1);
+        const QPoint a(zero.x() + (four.x() - zero.x()) / 4, view->height() - 40);
+        const QPoint b(zero.x() + (four.x() - zero.x()) * 3 / 4, view->height() - 45);
+        const auto depth = m_controller.undoDepth();
+        sendView(QEvent::MouseButtonPress, a, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendView(QEvent::MouseMove, b, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendView(QEvent::MouseButtonRelease, b, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        const auto range = view->range();
+        const QPoint grab((a.x() + b.x()) / 2, view->height() / 2);
+        sendView(QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendView(QEvent::MouseMove, grab + QPoint(0, 25), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendView(QEvent::MouseButtonRelease, grab + QPoint(0, 25), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        const double mid = (range.fromBeats + range.toBeats) * .5;
+        if (!view->hasSelection() || !curve() || m_controller.undoDepth() != depth + 1 ||
+            daw::automationValueAt(curve()->points, mid, .5) >= daw::automationValueAt(shape, mid, .5) - .01 ||
+            std::abs(daw::automationValueAt(curve()->points, .25, .5) - daw::automationValueAt(shape, .25, .5)) > 1e-6) {
+            std::fprintf(stderr, "editor Region failed to move only its selected range\n");
+            editor->close(); return false;
+        }
+        m_controller.undo();
+        if (!curve() || curve()->points != shape) { editor->close(); return false; }
+        sendView(QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendView(QEvent::MouseMove, grab + QPoint(0, 25), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(view, &escape);
+        sendView(QEvent::MouseButtonRelease, grab, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        if (!curve() || curve()->points != shape || m_controller.undoDepth() != depth) {
+            editor->close(); return false;
+        }
+        view->clearSelection();
+        view->setTool(AutomationCurveView::Tool::Select);
+        std::fprintf(stderr, "PASS Automation editor Region: direct drag, undo and Escape\n");
     }
 
     // Nothing selected means the whole clip, which is what the toolbar acts on.
@@ -8485,6 +8566,8 @@ bool MainWindow::checkLiveTempoForTest() {
 
 bool MainWindow::checkSettingsViewportForTest() {
     if (!m_settingsWindow) return false;
+    // Settings pages are constructed on first visit.
+    m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
     auto* smooth=m_settingsWindow->findChild<QCheckBox*>("SmoothScrollingEnabled");
     auto* speed=m_settingsWindow->findChild<QSpinBox*>("ScrollMotionSpeed");
     auto* strength=m_settingsWindow->findChild<QSlider*>("ScrollMotionStrength");
@@ -8565,6 +8648,7 @@ bool MainWindow::checkSettingsViewportForTest() {
     if (!filterControl || !pluginFilter->text().isEmpty() ||
         clearFilters->isEnabled()) return false;
     if (!m_timeline->checkGridAppearanceForTest()) return false;
+    m_settingsWindow->showTab(SettingsWindow::kThemesTab);
     auto* gridWidth = m_settingsWindow->findChild<QSlider*>(
         QStringLiteral("TimelineGridWidth"));
     auto* gridOpacity = m_settingsWindow->findChild<QSlider*>(
@@ -8577,9 +8661,14 @@ bool MainWindow::checkSettingsViewportForTest() {
     const bool gridControls = ui::gridLineWidth() == 2.3 && ui::gridOpacity() == 0 &&
         QSettings().value(ui::kGridLineWidthSetting).toDouble() == 2.3 &&
         QSettings().value(ui::kGridOpacitySetting).toInt() == 0;
+    m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
+    ui::setGridLineWidth(1.7);
+    ui::setGridOpacity(37);
+    m_settingsWindow->showTab(SettingsWindow::kThemesTab);
+    const bool themePageRefreshed = gridWidth->value() == 17 && gridOpacity->value() == 37;
     gridWidth->setValue(savedGridWidth);
     gridOpacity->setValue(savedGridOpacity);
-    if (!gridControls) return false;
+    if (!gridControls || !themePageRefreshed) return false;
     auto* roundedClips = m_settingsWindow->findChild<QCheckBox*>(
         QStringLiteral("RoundedClipCorners"));
     if (!roundedClips) return false;
@@ -10411,8 +10500,31 @@ void MainWindow::buildLayout() {
     m_aiPanel = new AiChatPanel(&m_controller, central);
     m_aiPanel->setSelectionModel(&m_selection);
     m_aiPanel->setCommandManager(m_shortcuts);
+    m_aiPanel->setUiFocusHandler([this](const nlohmann::json& target) {
+        const auto track = QString::fromStdString(target.value("trackId", ""));
+        const auto clip = QString::fromStdString(target.value("clipId", ""));
+        const auto action = target.value("action", "");
+        if (track != QString::fromLatin1(daw::EngineController::kMasterChannelId)) {
+            m_trackList->setSelectedTrack(track);
+            m_timeline->setSelectedTrack(track);
+            if (clip.isEmpty()) m_selection.setTracks({track});
+            else { m_timeline->selectClips({{track, clip}}); m_selection.setClips({{track, clip}}); }
+        }
+        if (action == "plugin") openPluginEditor(track, QString::fromStdString(target.value("insertId", "")));
+        else if (action == "piano_roll") openPianoRoll(track, clip);
+        else if (action == "pattern") openPatternClip(track, clip);
+        else if (action == "sample") openSampleEditor(track, clip);
+        else if (action == "automation") openAutomationEditor(track, clip);
+        return target;
+    });
     m_aiPanel->setUiContextProvider([this] {
         nlohmann::json state;
+        state["selectedTracks"] = nlohmann::json::array();
+        for (const auto& id : m_selection.tracks()) state["selectedTracks"].push_back(id.toStdString());
+        state["selectedClips"] = nlohmann::json::array();
+        for (const auto& clip : m_selection.clips()) state["selectedClips"].push_back({{"trackId", clip.trackId.toStdString()}, {"clipId", clip.clipId.toStdString()}});
+        if (m_patternWindow && m_patternWindow->isVisible())
+            state["patternEditor"] = {{"patternId", m_patternWindow->patternId().toStdString()}};
         state["openPluginEditors"] = nlohmann::json::array();
         for (auto* editor : m_pluginEditors) {
             if (!editor || !editor->isVisible() || editor->isClosing()) continue;
@@ -13634,7 +13746,7 @@ void MainWindow::automateTarget(const daw::AutomationTarget& target) {
 void MainWindow::openSampleEditor(const QString& trackId, const QString& clipId) {
     const QString key = trackId + '/' + clipId;
     if (SampleEditorWindow* open = m_sampleEditors.value(key, nullptr)) {
-        open->showAudioEditor();
+        open->showSampler();
         presentInternalWindow(open);
         return;
     }
@@ -18779,6 +18891,9 @@ void MainWindow::queueUiChange(const ui::UiChangeSet& change) {
                 else for (const auto& id : changes.arrangementTracks) m_timeline->invalidateTrack(id);
             }
             if (changes.clipContent) {
+                // Editor metadata can reference other tracks (clip pickers,
+                // linked content and automation targets). Let each view's
+                // model signature decide whether its geometry changed.
                 if (m_pianoRoll) m_pianoRoll->refresh();
                 for (auto* editor : m_automationEditors.values()) editor->refresh();
                 m_selection.refresh();
@@ -19909,46 +20024,52 @@ void MainWindow::updateLocalProcessingActions() {
     const bool hasPatternSources = m_patternWindow &&
         m_patternWindow->isVisible() &&
         !m_patternWindow->selectedSourceTrackIds().isEmpty();
-    bool hasTrackMaterial = false;
-    for (const QString& id : selectedTrackIds()) {
-        const auto* track = m_controller.project().findTrack(id.toStdString());
-        if (track && std::any_of(track->clips.begin(), track->clips.end(),
-                [](const daw::ClipModel& clip) {
-                    return clip.kind == daw::ClipKind::Midi ||
-                           clip.kind == daw::ClipKind::Audio ||
-                           clip.kind == daw::ClipKind::Pattern;
-                })) {
-            hasTrackMaterial = true;
-            break;
+    const auto tracks = selectedTrackIds();
+    if (m_processingSelectionRevision != m_selection.revision() ||
+        m_processingProjectRevision != m_controller.projectRevision() ||
+        m_processingProjectGeneration != m_controller.projectGeneration() ||
+        m_processingGeometryRevision != m_controller.clipGeometryRevision() ||
+        m_processingTracks != tracks) {
+        m_processingSelectionRevision = m_selection.revision();
+        m_processingProjectRevision = m_controller.projectRevision();
+        m_processingProjectGeneration = m_controller.projectGeneration();
+        m_processingGeometryRevision = m_controller.clipGeometryRevision();
+        m_processingTracks = tracks;
+        m_processingHasMaterial = false;
+        for (const QString& id : tracks) {
+            const auto* track = m_controller.project().findTrack(id.toStdString());
+            if (track && std::any_of(track->clips.begin(), track->clips.end(),
+                    [](const daw::ClipModel& clip) {
+                        return clip.kind == daw::ClipKind::Midi ||
+                               clip.kind == daw::ClipKind::Audio ||
+                               clip.kind == daw::ClipKind::Pattern;
+                    })) {
+                m_processingHasMaterial = true;
+                break;
+            }
         }
+        m_processingAudioOnly = hasClips;
+        QHash<QString, QSet<QString>> selectedClips;
+        for (const auto& selected : m_selection.clips())
+            selectedClips[selected.trackId].insert(selected.clipId);
+        for (auto it = selectedClips.begin(); it != selectedClips.end(); ++it) {
+            const auto* track = m_controller.project().findTrack(it.key().toStdString());
+            if (track) for (const auto& clip : track->clips)
+                if (clip.kind == daw::ClipKind::Audio)
+                    it.value().remove(QString::fromStdString(clip.id));
+            if (!it.value().isEmpty()) { m_processingAudioOnly = false; break; }
+        }
+        const auto targets = PluginBatchDialog::selectedTargets(m_selection);
+        m_processingBatchValid = targets.size() >= 2 &&
+            m_controller.validatePluginBatch(targets, 1).isOk();
     }
+    const bool audioOnly = m_processingAudioOnly;
     if (m_bounceInPlaceAction) {
-        m_bounceInPlaceAction->setEnabled(
-            localOnlyAvailable && (hasRegion || hasLoop || hasClips ||
-                                   hasPatternSources ||
-                                   hasTrackMaterial));
-        m_bounceInPlaceAction->setToolTip(
-            localOnlyAvailable ? tr("Render and insert selected material")
-                               : tr("Editing is unavailable until the session is ready"));
-    }
-
-    bool audioOnly = hasClips;
-    for (const ui::ClipSel& selected : m_selection.clips()) {
-        const daw::TrackModel* track =
-            m_controller.project().findTrack(selected.trackId.toStdString());
-        if (!track) {
-            audioOnly = false;
-            break;
-        }
-        const auto clip = std::find_if(
-            track->clips.begin(), track->clips.end(),
-            [&](const daw::ClipModel& item) {
-                return item.id == selected.clipId.toStdString();
-            });
-        if (clip == track->clips.end() || clip->kind != daw::ClipKind::Audio) {
-            audioOnly = false;
-            break;
-        }
+        m_bounceInPlaceAction->setEnabled(localOnlyAvailable &&
+            (hasRegion || hasLoop || hasClips || hasPatternSources || m_processingHasMaterial));
+        m_bounceInPlaceAction->setToolTip(localOnlyAvailable
+            ? tr("Render and insert selected material")
+            : tr("Editing is unavailable until the session is ready"));
     }
     if (m_offlineRenderAction) {
         m_offlineRenderAction->setEnabled(localOnlyAvailable && audioOnly);
@@ -19963,9 +20084,8 @@ void MainWindow::updateLocalProcessingActions() {
                                                           : tr("Editing is unavailable until the session is ready"));
     }
     if (m_sharedPluginsAction) {
-        const auto targets = PluginBatchDialog::selectedTargets(m_selection);
         m_sharedPluginsAction->setEnabled(localOnlyAvailable && !m_controller.isRecording() &&
-            targets.size() >= 2 && m_controller.validatePluginBatch(targets, 1).isOk());
+            m_processingBatchValid);
     }
 }
 

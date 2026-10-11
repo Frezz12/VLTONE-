@@ -5,12 +5,15 @@
 #include <algorithm>
 #include <QAbstractScrollArea>
 #include <QApplication>
+#include <QAbstractSlider>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QSpinBox>
+#include <QScrollBar>
 #include <QWheelEvent>
 #include <cmath>
 
@@ -210,27 +213,46 @@ protected:
         case QEvent::ShortcutOverride: case QEvent::KeyPress: break;
         default: return false;
         }
-        auto* box = qobject_cast<QAbstractSpinBox*>(object);
-        if (!box && qobject_cast<QLineEdit*>(object))
-            box = qobject_cast<QAbstractSpinBox*>(object->parent());
-        if (!box || (!qobject_cast<QSpinBox*>(box) && !qobject_cast<QDoubleSpinBox*>(box)))
-            return false;
         if (event->type() == QEvent::Wheel) {
+            auto* control = qobject_cast<QWidget*>(object);
+            if (qobject_cast<QLineEdit*>(control)) control = control->parentWidget();
+            const bool slider = qobject_cast<QAbstractSlider*>(control) &&
+                                !qobject_cast<QScrollBar*>(control);
+            if (!control || (!slider && !qobject_cast<QComboBox*>(control) &&
+                             !qobject_cast<QAbstractSpinBox*>(control))) return false;
             auto* wheel = static_cast<QWheelEvent*>(event);
-            // Deliver scrolling to the surrounding viewport, including when
-            // a focused field's embedded line editor received the wheel.
-            for (auto* parent = box->parentWidget(); parent; parent = parent->parentWidget()) {
-                if (auto* area = qobject_cast<QAbstractScrollArea*>(parent)) {
-                    QWheelEvent forwarded(area->viewport()->mapFromGlobal(wheel->globalPosition()),
-                        wheel->globalPosition(), wheel->pixelDelta(), wheel->angleDelta(),
-                        wheel->buttons(), wheel->modifiers(), wheel->phase(), wheel->inverted(), wheel->source());
-                    QApplication::sendEvent(area->viewport(), &forwarded);
-                    break;
+            // Preserve Qt's parent propagation, including custom track/timeline
+            // navigation, rather than delivering a value edit to the control.
+            for (auto* parent = control->parentWidget(); parent; parent = parent->parentWidget()) {
+                auto* area = qobject_cast<QAbstractScrollArea*>(parent);
+                QWidget* receiver = area ? area->viewport() : parent;
+                QWheelEvent forwarded(receiver->mapFromGlobal(wheel->globalPosition()),
+                    wheel->globalPosition(), wheel->pixelDelta(), wheel->angleDelta(),
+                    wheel->buttons(), wheel->modifiers(), wheel->phase(), wheel->inverted(),
+                    wheel->source(), wheel->pointingDevice());
+                forwarded.setTimestamp(wheel->timestamp());
+                forwarded.ignore();
+                QApplication::sendEvent(receiver, &forwarded);
+                if (forwarded.isAccepted()) break;
+                // Precision scrolling normally passes through QWidgetWindow,
+                // which this explicit forwarding bypasses.
+                if (area && !wheel->pixelDelta().isNull()) {
+                    const int x = area->horizontalScrollBar()->value();
+                    const int y = area->verticalScrollBar()->value();
+                    area->horizontalScrollBar()->setValue(x - wheel->pixelDelta().x());
+                    area->verticalScrollBar()->setValue(y - wheel->pixelDelta().y());
+                    if (x != area->horizontalScrollBar()->value() ||
+                        y != area->verticalScrollBar()->value()) break;
                 }
             }
             event->accept();
             return true;
         }
+        auto* box = qobject_cast<QAbstractSpinBox*>(object);
+        if (!box && qobject_cast<QLineEdit*>(object))
+            box = qobject_cast<QAbstractSpinBox*>(object->parent());
+        if (!box || (!qobject_cast<QSpinBox*>(box) && !qobject_cast<QDoubleSpinBox*>(box)))
+            return false;
         // Inspector and Creator already implement their own domain-specific
         // scrubs. Wheel suppression still applies to them, even in text mode.
         if (!box->property("vlt.customNumericScrub").toBool() && !box->isReadOnly() &&

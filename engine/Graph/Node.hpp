@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <cmath>
+#include <limits>
 
 namespace daw::engine {
 
@@ -70,12 +71,17 @@ struct ProcessContext {
     /// Musical time of the aligned inputs, adjusted for upstream latency.
     TransportInfo transport;
 
-    void compensateInputLatency(FrameCount latency) noexcept {
-        if (latency == 0 || (!playing && !offline) || sampleRate <= 0.0 ||
-            transport.tempo <= 0.0) return;
+    void compensateInputLatency(FrameCount latency,
+        SamplePos sourcesEnd = std::numeric_limits<SamplePos>::max()) noexcept {
+        if (!playing && !offline) return;
+        timelinePosition -= SamplePos(latency);
+        // Stop follows the aligned input, just like sample/PPQ time. Otherwise
+        // a downstream processor can discard the last upstream latency frames.
+        if (offline && sourcesEnd != std::numeric_limits<SamplePos>::max())
+            playing = timelinePosition < sourcesEnd;
+        if (latency == 0 || sampleRate <= 0.0 || transport.tempo <= 0.0) return;
         const double samplesPerBeat = 60.0 * sampleRate / transport.tempo;
         const double originalBeat = transport.ppqPosition;
-        timelinePosition -= SamplePos(latency);
         transport.ppqPosition -= double(latency) / samplesPerBeat;
         // During a live cycle, delayed audio at the loop's beginning belongs
         // to the preceding cycle's end. Offline passes run a linear range.

@@ -33,7 +33,6 @@ protected:
 };
 
 inline void configureConsoleLevel(FaderWidget* fader, LevelMeter* meter) {
-    fader->setWheelEnabled(false);
     fader->setValueBubbleEnabled(false);
     fader->setMinimumHeight(60);
     fader->setScaleVisible(true);

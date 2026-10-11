@@ -164,7 +164,7 @@ ProcessContext GraphProcessor::makeContext(
     context.playing = m_playing;
     context.offline = m_offline;
     context.transport = m_transport;
-    context.compensateInputLatency(entry.inputLatency);
+    context.compensateInputLatency(entry.inputLatency, m_sourcesEnd);
     context.midiInputs = std::span<const MidiBuffer* const>(
         graph.midiInputScratch.data() + first, entry.inputCount);
     context.midiOutput = midiOutput;
@@ -187,9 +187,10 @@ void GraphProcessor::processNode(const CompiledGraph& graph,
     }
 }
 
-void GraphProcessor::runNode(const CompiledGraph& graph,
+std::uint32_t GraphProcessor::runNode(const CompiledGraph& graph,
                              std::uint32_t nodeIndex,
                              unsigned workerIndex) noexcept {
+    std::uint32_t completed = 1;
     for (;;) {
         const auto& entry = graph.nodes[nodeIndex];
         processNode(graph, entry, workerIndex);
@@ -197,9 +198,21 @@ void GraphProcessor::runNode(const CompiledGraph& graph,
             nodeIndex = entry.inlineSuccessor;
             continue;
         }
-
+        // A sole successor cannot overlap this node. Keep the chain on this
+        // worker instead of publishing it to be stolen onto another core.
+        // Unlike compile-time fusion this also covers plugins, MIDI and PDC:
+        // every node still builds and processes its own full context.
+        if (entry.successorCount == 1) {
+            const auto successor = graph.successors[entry.firstSuccessor];
+            if (graph.pending[successor].value.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                nodeIndex = successor;
+                ++completed;
+                continue;
+            }
+            return completed;
+        }
         releaseSuccessors(graph, entry, workerIndex);
-        return;
+        return completed;
     }
 }
 
@@ -224,10 +237,10 @@ void GraphProcessor::releaseSuccessors(const CompiledGraph& graph,
     if (newlyReady > 1) m_jobs.wakeHelpers(newlyReady - 1);
 }
 
-void GraphProcessor::executeJob(void* context, std::uint32_t nodeIndex,
+std::uint32_t GraphProcessor::executeJob(void* context, std::uint32_t nodeIndex,
                                 unsigned workerIndex) noexcept {
     auto* self = static_cast<GraphProcessor*>(context);
-    self->runNode(*self->m_active, nodeIndex, workerIndex);
+    return self->runNode(*self->m_active, nodeIndex, workerIndex);
 }
 
 void GraphProcessor::runScheduled(const CompiledGraph& graph) noexcept {
@@ -244,21 +257,21 @@ void GraphProcessor::runScheduled(const CompiledGraph& graph) noexcept {
 
 Status GraphProcessor::process(const AudioBlock& output, FrameCount frames,
                                SamplePos timelinePosition, bool playing,
-                               bool offline, const TransportInfo& transport) {
-    return processBlock(output, frames, timelinePosition, playing, offline, transport, false, {});
+                               bool offline, const TransportInfo& transport, SamplePos sourcesEnd) {
+    return processBlock(output, frames, timelinePosition, playing, offline, transport, false, {}, sourcesEnd);
 }
 
 Status GraphProcessor::processSerial(const AudioBlock& output, FrameCount frames,
                                      SamplePos timelinePosition, bool playing,
                                      bool offline, const TransportInfo& transport,
-                                     std::span<double> nodeCosts) {
-    return processBlock(output, frames, timelinePosition, playing, offline, transport, true, nodeCosts);
+                                     std::span<double> nodeCosts, SamplePos sourcesEnd) {
+    return processBlock(output, frames, timelinePosition, playing, offline, transport, true, nodeCosts, sourcesEnd);
 }
 
 Status GraphProcessor::processBlock(const AudioBlock& output, FrameCount frames,
                                     SamplePos timelinePosition, bool playing,
                                     bool offline, const TransportInfo& transport,
-                                    bool forceSerial, std::span<double> nodeCosts) {
+                                    bool forceSerial, std::span<double> nodeCosts, SamplePos sourcesEnd) {
     const rt::ScopedNoDenormals noDenormals;
     const CompiledGraph* snapshot = acquireGraph();
     m_lastBlockLatency = snapshot ? snapshot->totalLatency : 0;
@@ -276,6 +289,7 @@ Status GraphProcessor::processBlock(const AudioBlock& output, FrameCount frames,
     m_active = snapshot;
     m_frames = frames;
     m_position = timelinePosition;
+    m_sourcesEnd = sourcesEnd;
     m_playing = playing;
     m_offline = offline;
     m_transport = transport;

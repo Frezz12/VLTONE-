@@ -56,6 +56,11 @@ int main() {
     const auto automation = c.addTrack(daw::TrackKind::Automation, "Automation");
     const auto leadClip = c.importAudio(wav, lead, 0.0);
     const auto doubleClip = c.importAudio(wav, doubleTrack, 0.0);
+    check(c.linkedClipCount({lead, leadClip}) == c.linkedClips({lead, leadClip}).size(), "linked count matches full lookup");
+    const auto linked = c.duplicateLinkedClips({{lead, leadClip}});
+    check(!linked.empty() && c.linkedClipCount({lead, leadClip}) == c.linkedClips({lead, leadClip}).size(), "linked count invalidates after duplication");
+    c.undo();
+    check(c.linkedClipCount({lead, leadClip}) == 1 && c.linkedClipCount({lead, "missing"}) == 0, "linked count invalidates on undo and rejects missing clips");
     const auto& eq = daw::plugins::equalizer::EqualizerInstance::staticDescriptor();
     const auto oldFx = c.addInsert(doubleTrack, eq);
     c.setInsertParameter(doubleTrack, oldFx, "output.gain", -3.0);

@@ -574,7 +574,7 @@ struct ClipContent {
 struct MidiClipView {
     bool sequence = false;
     int pitch = 60;             // C5 in VLTONE's octave convention
-    double stepBeats = 0.25;    // sixteenth notes, independent of arrangement snap
+    double stepBeats = 0.5;     // eighth notes, independent of arrangement snap
     friend bool operator==(const MidiClipView&, const MidiClipView&) = default;
 };
 

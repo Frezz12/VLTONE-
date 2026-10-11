@@ -269,8 +269,10 @@ void AudioEditPanel::refresh(){
     const auto* clip=m_target.instrument?nullptr:m_controller->audioClip(m_target.trackId,m_target.objectId);
     m_flatten->setVisible(clip&&!clip->takes.empty());
     m_flatten->setEnabled(!m_controller->hasCloudProjectBinding());
+    if(!m_target.instrument){const auto count=m_controller->linkedClipCount({m_target.trackId,m_target.objectId});m_links->setText(count>1?tr("Linked: %1").arg(count):QString());}
+    // Read the revision before copying a potentially large edit document.
+    if (clip && clip->audioEdit.initialized && m_audio && m_doc.revision == clip->audioEdit.revision) return;
     const auto doc=m_controller->audioEditDocument(m_target);if(!doc.initialized){m_status->setText(tr("Load a sample. For takes, first create a flattened version."));return;}
-    if(!m_target.instrument){const auto count=m_controller->linkedClips({m_target.trackId,m_target.objectId}).size();m_links->setText(count>1?tr("Linked: %1").arg(count):QString());}
     if(m_doc.revision==doc.revision&&m_audio)return;
     prepare(doc,{},false);
 }

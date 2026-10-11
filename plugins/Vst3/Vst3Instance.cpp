@@ -690,6 +690,11 @@ bool Vst3Instance::serviceOfflineRestart() {
         kLatencyChanged | kPrefetchableSupportChanged;
     const int32 flags = m_restartFlags.fetch_and(structural, std::memory_order_acq_rel);
     if (flags & structural) {
+        // The offline host compares the new configuration before deciding
+        // whether a repeated restart needs another pass. Publish fresh values,
+        // not the caches from the preceding activation.
+        if (flags & kLatencyChanged) refreshLatency();
+        if (flags & kIoChanged) readBuses();
         m_restartFlags.fetch_or(flags, std::memory_order_release);
         return true; // activate() consumes the full request
     }

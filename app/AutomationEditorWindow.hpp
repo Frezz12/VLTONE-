@@ -40,12 +40,13 @@ class AutomationCurveView : public ui::FrameWidget , public ui::graphics::SceneP
 public:
     using ui::FrameWidget::update;
     void update() { m_staticValid = false; ui::FrameWidget::update(); }
-    enum class Tool { Select, Draw };
+    enum class Tool { Select, Draw, Region };
 
     explicit AutomationCurveView(daw::EngineController* controller,
                                  QWidget* parent = nullptr);
 
     void setClip(const QString& trackId, const QString& clipId);
+    void refreshModel();
     void setTool(Tool tool);
     Tool tool() const noexcept { return m_tool; }
     /// Grid division in beats; 0 switches snapping off.
@@ -86,12 +87,14 @@ public:
     static bool checkCollaborationPresenceForTest(QString* error = nullptr);
 
 signals:
+    void toolChanged();
     void edited();       ///< A finished change: mark the project dirty.
     void liveEdited();   ///< Mid-gesture: repaint, touch nothing else.
     void selectionChanged();
     void readoutChanged(const QString& text);
 
 protected:
+    bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void paintScene(QPainter&, const QRegion&) override;
     void mousePressEvent(QMouseEvent*) override;
@@ -104,6 +107,9 @@ protected:
 
 private:
     void paintStatic(QPainter& painter);
+    void validateStaticModel();
+    QByteArray m_modelSignature;
+    daw::autotools::Points m_modelPoints;
     ui::graphics::RetainedScene m_gpuStatic;
     QSize m_gpuStaticSize;
     qreal m_gpuStaticDpr = 0;
@@ -132,6 +138,7 @@ private:
     void pushLive(daw::autotools::Points points);
     void commit(const QString& label);
     void beginGesture();
+    void cancelGesture();
     QString readoutFor(double beats, double value) const;
 
     daw::EngineController* m_controller = nullptr;
@@ -159,6 +166,10 @@ private:
     double m_bendStartY = 0.0;
     double m_bendStartCurve = 0.0;
     bool m_drawing = false;
+    bool m_regionDragging = false;
+    double m_regionLastY = 0.0;
+    double m_regionAmount = 0.0;
+    QPointF m_pointGrabOffset;
 
     bool m_hasSelection = false;
     double m_selectFrom = 0.0;
@@ -212,6 +223,8 @@ private:
     void reloadTargetFields();
     void applyTargetFromFields();
     void showLfoDialog();
+    void showContourDialog();
+    void updateHint();
     void updateTitle();
 
     /// The target the three combos currently spell out.
@@ -232,6 +245,8 @@ private:
     QComboBox* m_shape = nullptr;
     QToolButton* m_select = nullptr;
     QToolButton* m_draw = nullptr;
+    QToolButton* m_region = nullptr;
+    QLabel* m_scope = nullptr;
     AutomationCurveView* m_view = nullptr;
 
     /// Set while the combos are being repopulated, so filling them does not

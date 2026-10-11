@@ -228,7 +228,9 @@ json insertJson(const InsertModel& slot) {
                 {"name", slot.name},
                 {"format", toString(slot.format)},
                 {"uid", slot.uid},
-                {"bypassed", slot.bypassed}};
+                {"bypassed", slot.bypassed},
+                {"channelMode", toString(slot.channelMode)},
+                {"mix", slot.mix}, {"sidechainTrackIds", slot.sidechainTrackIds}};
 }
 
 json clipJson(const EngineController& c, const ClipModel& clip) {
@@ -237,8 +239,17 @@ json clipJson(const EngineController& c, const ClipModel& clip) {
            {"kind", toString(clip.kind)},
            {"startBar", round2(secondsToBars(c, clip.startSeconds) + 1.0)},
            {"lengthBars", round2(secondsToBars(c, clip.durationSeconds))}};
-    if (clip.kind == ClipKind::Midi) j["noteCount"] = clip.notes.size();
+    if (clip.kind == ClipKind::Midi) {
+        j["noteCount"] = clip.notes.size();
+        j["sequence"] = {{"enabled", clip.midiView.sequence},
+                         {"pitch", clip.midiView.pitch}, {"stepBeats", clip.midiView.stepBeats}};
+    }
+    if (!clip.patternClipId.empty()) j["patternClipId"] = clip.patternClipId;
     if (!clip.filePath.empty()) j["sampleName"] = privateFileLabel(clip.filePath);
+    if (!clip.inserts.empty()) {
+        j["inserts"] = json::array();
+        for (const auto& slot : clip.inserts) if (slot.isLoaded()) j["inserts"].push_back(insertJson(slot));
+    }
     if (clip.muted) j["muted"] = true;
     return j;
 }
@@ -249,6 +260,8 @@ json trackJson(const EngineController& c, const TrackModel& t) {
            {"kind", toString(t.kind)},
            {"volumeDb", round2(gainToDb(t.volume))},
            {"pan", round2(t.pan)}};
+    j["parentId"] = t.parentId;
+    j["outputBusId"] = t.outputBusId;
     if (t.muted) j["muted"] = true;
     if (t.soloed) j["soloed"] = true;
     if (t.instrument.isLoaded()) j["instrument"] = insertJson(t.instrument);
@@ -258,12 +271,17 @@ json trackJson(const EngineController& c, const TrackModel& t) {
         if (slot.isLoaded()) inserts.push_back(insertJson(slot));
     if (!inserts.empty()) j["inserts"] = std::move(inserts);
 
+    if (t.samplerFx.isOwnedBy(t.instrument) && !t.samplerFx.inserts.empty()) {
+        j["samplerFx"] = json::array();
+        for (const auto& slot : t.samplerFx.inserts) if (slot.isLoaded()) j["samplerFx"].push_back(insertJson(slot));
+    }
+
     json sends = json::array();
     for (const SendModel& s : t.sends)
         sends.push_back(json{{"id", s.id},
                              {"to", s.destinationTrackId},
                              {"level", round2(s.level)},
-                             {"preFader", s.preFader}});
+                             {"preFader", s.preFader}, {"enabled", s.enabled}});
     if (!sends.empty()) j["sends"] = std::move(sends);
 
     json clips = json::array();
@@ -288,6 +306,25 @@ const ClipModel* findClip(const EngineController& c, const std::string& trackId,
 bool channelExists(const EngineController& c, const std::string& channelId) {
     return channelId == EngineController::kMasterChannelId ||
            c.project().findTrack(channelId) != nullptr;
+}
+
+struct EffectChain {
+    const std::vector<InsertModel>* slots = nullptr;
+    std::string kind = "channel", ownerId;
+};
+
+EffectChain effectChain(const EngineController& c, const std::string& channelId, const std::string& insertId) {
+    const auto contains = [&](const auto* slots) {
+        return slots && std::any_of(slots->begin(), slots->end(), [&](const auto& s) { return s.id == insertId; });
+    };
+    if (const auto* slots = c.channelInserts(channelId); contains(slots)) return {slots, "channel", {}};
+    if (const auto* track = c.project().findTrack(channelId)) {
+        if (track->samplerFx.isOwnedBy(track->instrument) && contains(&track->samplerFx.inserts))
+            return {&track->samplerFx.inserts, "sampler_fx", track->instrument.id};
+        for (const auto& clip : track->clips)
+            if (contains(&clip.inserts)) return {&clip.inserts, "clip", clip.id};
+    }
+    return {};
 }
 
 /// Resolve a plugin the model named by format + uid, or explain what is there.
@@ -654,6 +691,32 @@ std::vector<ToolSpec> buildSpecs() {
                {}));
 
     add("get_ui_context", "Inspect the currently open plugin editors and piano roll. Use exact channel and insert ids to edit plugin parameters; do not guess from window titles.", schema(json::object(), {}));
+    add("focus_in_app", "Select a track/clip or open its native editor, so the user can inspect the work and commands act on the right element. Does not start playback or alter musical content. Use exact ids from get_project.",
+        schema(obj({{"action", json{{"type", "string"}, {"enum", {"select", "plugin", "piano_roll", "pattern", "sample", "automation"}}}},
+                    {"trackId", prop("string", "track/channel id, master allowed for a plugin")},
+                    {"clipId", prop("string", "clip id, required for clip editors")},
+                    {"insertId", prop("string", "loaded slot id, required for plugin")}}), {"action", "trackId"}));
+
+    add("get_sequence", "Read a MIDI clip as editable sequencer steps, including its grid, selected pitch and visible source range. Other pitches are kept intact when editing one lane.",
+        schema(obj({{"trackId", prop("string", "track id")}, {"clipId", prop("string", "clip id")},
+                    {"pitch", prop("integer", "optional MIDI pitch 0..127; defaults to the visible lane")}}), {"trackId", "clipId"}));
+    add("set_sequence", "Write a drum or rhythmic lane directly in Sequence view. Steps are 1-based from source beat zero (step 1 is beat 0); use get_sequence for trimmed clips. One batch edits one pitch and preserves all other pitches. Omit steps to change only the view/grid. Prefer this for drums over set_clip_notes.",
+        schema(obj({{"trackId", prop("string", "track id")}, {"clipId", prop("string", "clip id")},
+                    {"pitch", prop("integer", "MIDI pitch 0..127; 60 for a single-sample sampler")},
+                    {"stepBeats", prop("number", "grid in beats, 1/64..4; 0.25 = sixteenths, 0.5 = eighths")},
+                    {"mode", json{{"type", "string"}, {"enum", {"replace", "merge"}}, {"description", "replace the visible pitch lane (default), or merge only named steps; velocity 0 erases a step"}}},
+                    {"steps", json{{"type", "array"}, {"maxItems", 4096}, {"items", schema(obj({
+                        {"step", prop("integer", "1-based source grid cell")},
+                        {"velocity", prop("integer", "0..127; default 100; 0 is a rest")},
+                        {"offsetBeats", prop("number", "timing within this cell; default 0")},
+                        {"lengthBeats", prop("number", "gate duration; default half a step")}}), {"step"})}}}}), {"trackId", "clipId"}));
+    add("create_pattern", "Create a Pattern track with an arrangement clip. Add independent sampler/instrument lanes with add_pattern_lane, then write each using set_sequence. The Pattern is their mix bus.",
+        schema(obj({{"name", prop("string", "pattern name")}, {"startBar", prop("number", "start bar, default 1")},
+                    {"lengthBars", prop("number", "length, default 4; maximum 256")}}), {"name"}));
+    add("add_pattern_lane", "Add a sample or installed instrument to a specific Pattern clip. Returns trackId, clipId and insertId, ready for set_sequence. Supply contentId for an attached/catalog sample OR format and uid from list_plugins.",
+        schema(obj({{"patternId", prop("string", "Pattern track id")}, {"patternClipId", prop("string", "owning Pattern clip id")},
+                    {"name", prop("string", "optional lane name")}, {"contentId", prop("string", "authorized sample id")},
+                    {"format", prop("string", "installed plugin format")}, {"uid", prop("string", "installed instrument uid")}}), {"patternId", "patternClipId"}));
 
     add("compose_candidates",
         "Generate and validate three to five deterministic MIDI alternatives "
@@ -914,6 +977,7 @@ std::vector<ToolSpec> buildSpecs() {
                           "false")}}),
                {"trackId", "destinationTrackId", "level"}));
 
+
     // ── Instruments ──
     add("set_track_instrument",
         "Put a plugin instrument in a track's instrument slot, so its MIDI "
@@ -997,12 +1061,12 @@ std::vector<ToolSpec> buildSpecs() {
 
     // ── Effects ──
     add("add_insert",
-        "Add an effect plugin to a channel's insert chain and return the new "
-        "slot's id. Order matters: inserts process in the order they are "
-        "added, so EQ before compression before reverb is the usual shape.",
+        "Add an installed effect to a channel (default), an audio clip, or the instrument's sampler FX chain. Returns the slot id. Order determines processing; choose it for the musical purpose.",
         schema(obj({{"channelId", prop("string", "a track id, or \"master\"")},
                     {"format", prop("string", "clap, vst3, vst, au or internal")},
                     {"uid", prop("string", "the plugin's uid from list_plugins")},
+                    {"chain", json{{"type", "string"}, {"enum", json::array({"channel", "clip", "sampler_fx"})}, {"description", "target chain; default channel"}}},
+                    {"clipId", prop("string", "required for chain=clip: audio clip id")},
                     {"index",
                      prop("integer",
                           "position in the chain; omit to append at the end")}}),
@@ -1052,6 +1116,16 @@ std::vector<ToolSpec> buildSpecs() {
                {"channelId", "insertId", "parameters"}));
 
     // ── Harmony and measurement ──
+    add("get_plugin_state", "Inspect host wet/dry, bypass, channel mode and available sidechain sources for a loaded instrument or effect. Plugin-owned controls are listed separately by list_plugin_parameters.",
+        schema(obj({{"channelId", prop("string", "track id or master")}, {"insertId", prop("string", "loaded slot id")}}), {"channelId", "insertId"}));
+    add("configure_plugin", "Change one host control for a loaded plugin: wet/dry, channel mode, sidechain sources or position in the insert chain. Use get_plugin_state first.",
+        schema(obj({{"channelId", prop("string", "track id or master")}, {"insertId", prop("string", "loaded slot id")},
+                    {"action", json{{"type", "string"}, {"enum", {"mix", "channel_mode", "sidechain", "move"}}}},
+                    {"mix", prop("number", "0=dry, 1=wet")},
+                    {"channelMode", json{{"type", "string"}, {"enum", {"auto", "mono", "stereo", "dual-mono"}}}},
+                    {"sourceTrackIds", json{{"type", "array"}, {"items", prop("string", "source track id")}, {"description", "sidechain sources from get_plugin_state; [] turns it off"}}},
+                    {"toIndex", prop("integer", "0-based position in the insert chain")}}), {"channelId", "insertId", "action"}));
+
     add("analyze_harmony",
         "What is actually playing: the key, and the chord in every bar with "
         "its root note. CALL THIS BEFORE ADDING A PART TO EXISTING MATERIAL — "
@@ -1232,7 +1306,7 @@ std::vector<ToolSpec> buildSpecs() {
                           {"enum", json::array({"set_level", "set_pan", "mute",
                                                 "unmute", "solo", "unsolo",
                                                 "clear_solos", "set_send",
-                                                "remove_send",
+                                                "remove_send", "set_output",
                                                 "set_master_volume"})},
                           {"description",
                            "set_level takes levelDb; set_pan takes pan; "
@@ -1245,7 +1319,9 @@ std::vector<ToolSpec> buildSpecs() {
                           "clear_solos or set_master_volume")},
                     {"levelDb", prop("number", "-60 to 6")},
                     {"pan", prop("number", "-1 left to 1 right")},
-                    {"toTrackId", prop("string", "for set_send: the bus to feed")},
+                    {"toTrackId", prop("string", "for set_send/set_output: bus to feed; set_output accepts master")},
+                    {"preFader", prop("boolean", "optional for set_send")},
+                    {"enabled", prop("boolean", "optional for set_send")},
                     {"sendId", prop("string", "for remove_send")}}),
                {"action"}));
 
@@ -1372,7 +1448,7 @@ std::vector<ToolSpec> buildSpecs() {
             spec.effect = ToolSpec::Effect::DestructiveEdit;
         } else if (name == "undo" || name == "redo") {
             spec.effect = ToolSpec::Effect::History;
-        } else if (name == "transport" || name == "set_loop") {
+        } else if (name == "transport" || name == "set_loop" || name == "focus_in_app") {
             spec.effect = ToolSpec::Effect::LiveControl;
         } else if (name == "save_project" || name == "export_audio" ||
                    name == "run_command") {
@@ -1484,6 +1560,26 @@ ToolResult callTool(EngineController& c, const std::string& name,
     std::string err;
 
     if (name == "get_ui_context") return done(ctx.uiContext ? ctx.uiContext() : json::object());
+    if (name == "focus_in_app") {
+        std::string action, trackId, clipId, insertId;
+        wantString(args, "action", action, err); wantString(args, "trackId", trackId, err);
+        optString(args, "clipId", clipId, err); optString(args, "insertId", insertId, err);
+        if (!err.empty()) return fail(err);
+        if (!ctx.focusInApp) return fail("UI navigation is unavailable in this session");
+        if (!channelExists(c, trackId)) return fail(unknownTrack(c, trackId));
+        const auto* clip = clipId.empty() ? nullptr : findClip(c, trackId, clipId);
+        if (!clipId.empty() && !clip) return fail("clipId does not belong to trackId");
+        if (action == "plugin") {
+            const auto* slot = c.insertModel(trackId, insertId);
+            if (!slot || !slot->isLoaded()) return fail("select a loaded instrument or effect slot");
+        } else if (action == "piano_roll" || action == "pattern" || action == "sample" || action == "automation") {
+            const ClipKind kind = action == "piano_roll" ? ClipKind::Midi : action == "pattern" ? ClipKind::Pattern
+                : action == "automation" ? ClipKind::Automation : ClipKind::Audio;
+            if (!clip || clip->kind != kind) return fail("clip kind does not match the requested editor");
+        } else if (action != "select") return fail("unknown focus action");
+        if (trackId == EngineController::kMasterChannelId && action != "plugin") return fail("master has no arrangement track to select");
+        return done(ctx.focusInApp(json{{"action", action}, {"trackId", trackId}, {"clipId", clipId}, {"insertId", insertId}}));
+    }
 
     // ── Instructions ──
     if (name == "get_playbook") {
@@ -1496,10 +1592,18 @@ ToolResult callTool(EngineController& c, const std::string& name,
             return fail("no playbook '" + id + "'. The ones that exist are: " +
                         join(playbookIds(pack)));
         }
-        return done(json{{"id", book->id},
+        json result{{"id", book->id},
                          {"title", book->title},
                          {"use_when", book->useWhen},
-                         {"body", book->body}});
+                         {"body", book->body}};
+        // Server packs can predate this client's sequencer and parameter API.
+        // Retain custom guidance, but include the current host contract rather
+        // than letting a cached recipe hide newly available capabilities.
+        if (id == "tools-reference" || id == "drums" || id == "mixing" || id == "vocal-processing") {
+            if (const auto* current = findPlaybook(builtinPrompts(), id); current && current->body != book->body)
+                result["hostAddendum"] = current->body;
+        }
+        return done(std::move(result));
     }
 
     if (name == "search_commands") {
@@ -1893,8 +1997,8 @@ ToolResult callTool(EngineController& c, const std::string& name,
         for (const plugins::ParameterInfo& p : params) {
             if (!filter.empty() && lower(p.name + " " + p.id).find(filter) == std::string::npos) continue;
             if (matched++ < int(offset) || list.size() >= std::size_t(limit)) continue;
-            list.push_back(
-                json{{"id", p.id},
+            const double current = c.insertParameter(channelId, insertId, p.id);
+            json parameter{{"id", p.id},
                      {"name", p.name},
                      {"min", p.minValue},
                      {"max", p.maxValue},
@@ -1902,7 +2006,16 @@ ToolResult callTool(EngineController& c, const std::string& name,
                      {"stepped", p.isStepped},
                      {"automatable", p.isAutomatable},
                      {"unit", p.unit},
-                     {"current", c.insertParameter(channelId, insertId, p.id)}});
+                     {"current", current},
+                     {"display", c.insertParameterText(channelId, insertId, p.id, current)}};
+            if (p.isStepped && std::isfinite(p.minValue) && std::isfinite(p.maxValue) &&
+                std::abs(p.minValue) < 1e9 && p.maxValue >= p.minValue && p.maxValue - p.minValue <= 32 &&
+                p.minValue == std::floor(p.minValue) && p.maxValue == std::floor(p.maxValue)) {
+                parameter["choices"] = json::array();
+                for (double v = p.minValue; v <= p.maxValue; v += 1)
+                    parameter["choices"].push_back({{"value", v}, {"label", c.insertParameterText(channelId, insertId, p.id, v)}});
+            }
+            list.push_back(std::move(parameter));
         }
         const auto next = int(offset) + int(list.size());
         return done(json{{"parameters", std::move(list)}, {"totalMatched", matched},
@@ -2258,15 +2371,157 @@ ToolResult callTool(EngineController& c, const std::string& name,
         if (level < 0.0 || level > 1.0)
             return fail("level must be between 0 and 1");
 
+        const auto group = c.beginUndoGroup();
         const std::string sendId = c.addSend(trackId, destId);
-        if (sendId.empty())
+        if (sendId.empty()) {
+            c.releaseUndoGroup(group);
             return fail("that send would feed a signal back into itself");
+        }
+        const auto* source = c.project().findTrack(trackId);
+        const auto send = std::find_if(source->sends.begin(), source->sends.end(), [&](const auto& s) { return s.id == sendId; });
+        if (send == source->sends.end()) { c.releaseUndoGroup(group); return fail("send is not available in the current project"); }
+        const float before = send->level;
         c.setSendLevel(trackId, sendId, float(level));
+        c.commitSendLevelEdit(trackId, sendId, before, "AI: Send Level");
         if (preFader) c.setSendPreFader(trackId, sendId, true);
+        c.collapseUndo(group, "AI: Add Send");
         return done(json{{"sendId", sendId}});
     }
 
     // ── Instruments ──
+    if (name == "get_sequence" || name == "set_sequence") {
+        std::string trackId, clipId, mode = "replace";
+        wantString(args, "trackId", trackId, err);
+        wantString(args, "clipId", clipId, err);
+        if (!err.empty()) return fail(err);
+        const auto* clip = findClip(c, trackId, clipId);
+        if (!clip || clip->kind != ClipKind::Midi || isLayered(*clip))
+            return fail("select a plain MIDI/Sequence clip, not an audio, Pattern container or layered clip");
+        double pitch = clip->midiView.pitch, grid = clip->midiView.stepBeats;
+        optNumber(args, "pitch", pitch, err);
+        optNumber(args, "stepBeats", grid, err);
+        optString(args, "mode", mode, err);
+        if (!err.empty()) return fail(err);
+        if (pitch < 0 || pitch > 127 || pitch != std::floor(pitch)) return fail("pitch must be an integer 0..127");
+        if (grid < 1.0 / 64.0 || grid > 4) return fail("stepBeats must be 1/64..4 beats");
+        if (mode != "replace" && mode != "merge") return fail("mode must be replace or merge");
+        const double offset = clip->contentOffsetBeats != 0.0 ? clip->contentOffsetBeats
+            : secondsToBeats(clip->offsetSeconds, c.tempo());
+        const double end = offset + secondsToBeats(clip->durationSeconds, c.tempo());
+        const auto visible = [&](const NoteModel& note) {
+            return note.pitch == int(pitch) && note.startBeats >= offset - 1e-8 && note.startBeats < end - 1e-8;
+        };
+        if (name == "set_sequence") {
+            auto notes = clip->notes;
+            if (args.contains("steps")) {
+                json steps;
+                wantArray(args, "steps", steps, err);
+                if (!err.empty()) return fail(err);
+                if (steps.size() > 4096) return fail("write at most 4096 steps per call");
+                std::vector<NoteModel> added;
+                std::vector<double> cells;
+                for (const auto& raw : steps) {
+                    if (!raw.is_object()) return fail("each step must be an object");
+                    double step = 0, velocity = 100, shift = 0, length = grid * .5;
+                    wantNumber(raw, "step", step, err);
+                    optNumber(raw, "velocity", velocity, err);
+                    optNumber(raw, "offsetBeats", shift, err);
+                    optNumber(raw, "lengthBeats", length, err);
+                    if (!err.empty()) return fail(err);
+                    if (step < 1 || step > 1000000 || step != std::floor(step)) return fail("step must be an integer 1..1000000");
+                    if (velocity < 0 || velocity > 127 || velocity != std::floor(velocity)) return fail("velocity must be an integer 0..127");
+                    if (shift < 0 || shift >= grid) return fail("offsetBeats must stay within its grid cell, 0 <= offsetBeats < stepBeats");
+                    const double start = (step - 1) * grid + shift;
+                    if (start < offset - 1e-8 || start >= end - 1e-8)
+                        return fail("step is outside the visible clip; inspect get_sequence or extend the clip with edit_clip trim first");
+                    if (velocity > 0 && (length <= 0 || length > end - start + 1e-8)) return fail("lengthBeats must be positive and fit inside the clip");
+                    if (std::find(cells.begin(), cells.end(), step) != cells.end()) return fail("duplicate step in one pitch lane");
+                    cells.push_back(step);
+                    if (velocity == 0) continue;
+                    NoteModel note;
+                    note.pitch = int(pitch); note.startBeats = start;
+                    note.lengthBeats = length; note.velocity = int(velocity);
+                    added.push_back(std::move(note));
+                }
+                std::erase_if(notes, [&](const NoteModel& note) {
+                    if (!visible(note)) return false;
+                    const double cell = std::floor((note.startBeats + 1e-8) / grid) + 1;
+                    return mode == "replace" || std::find(cells.begin(), cells.end(), cell) != cells.end();
+                });
+                notes.insert(notes.end(), added.begin(), added.end());
+            }
+            const auto group = c.beginUndoGroup();
+            if (args.contains("steps")) c.setClipNotes(trackId, clipId, std::move(notes), "AI: Write Sequence");
+            c.setMidiClipView(trackId, clipId, MidiClipView{true, int(pitch), grid}, true);
+            c.collapseUndo(group, "AI: Write Sequence");
+            clip = findClip(c, trackId, clipId);
+        }
+        json steps = json::array();
+        for (const auto& note : clip->notes) {
+            if (!visible(note)) continue;
+            const double cell = std::floor((note.startBeats + 1e-8) / grid);
+            steps.push_back({{"step", cell + 1}, {"velocity", note.velocity}, {"muted", note.muted},
+                             {"offsetBeats", note.startBeats - cell * grid}, {"lengthBeats", note.lengthBeats}});
+        }
+        return done(json{{"trackId", trackId}, {"clipId", clipId}, {"sequence", clip->midiView.sequence},
+                         {"pitch", int(pitch)}, {"stepBeats", grid}, {"sourceOffsetBeats", offset}, {"endBeat", end},
+                         {"firstStep", std::floor(offset / grid) + 1}, {"lastStep", std::ceil(end / grid)},
+                         {"steps", std::move(steps)}, {"totalNoteCount", clip->notes.size()}});
+    }
+
+    if (name == "create_pattern") {
+        std::string title;
+        double start = 1, length = 4;
+        wantString(args, "name", title, err);
+        optNumber(args, "startBar", start, err);
+        optNumber(args, "lengthBars", length, err);
+        if (!err.empty()) return fail(err);
+        if (start < 1 || start > 100000 || length <= 0 || length > 256) return fail("startBar must be 1..100000; lengthBars must be >0 and <=256");
+        const auto group = c.beginUndoGroup();
+        const auto id = c.addPattern(title);
+        const auto* pattern = c.project().findTrack(id);
+        if (!pattern || pattern->clips.empty()) { c.releaseUndoGroup(group); return fail("Pattern creation was refused"); }
+        const auto clipId = pattern->clips.front().id;
+        c.setClipTrim(id, clipId, barsToSeconds(c, start - 1), 0, barsToSeconds(c, length));
+        c.collapseUndo(group, "AI: Create Pattern");
+        return done(json{{"patternId", id}, {"patternClipId", clipId}, {"lengthBars", length}});
+    }
+
+    if (name == "add_pattern_lane") {
+        std::string patternId, ownerId, title, contentId, format, uid;
+        wantString(args, "patternId", patternId, err); wantString(args, "patternClipId", ownerId, err);
+        optString(args, "name", title, err); optString(args, "contentId", contentId, err);
+        optString(args, "format", format, err); optString(args, "uid", uid, err);
+        if (!err.empty()) return fail(err);
+        const auto* pattern = c.project().findTrack(patternId);
+        const auto* owner = findClip(c, patternId, ownerId);
+        if (!pattern || pattern->kind != TrackKind::Pattern || !owner || owner->kind != ClipKind::Pattern)
+            return fail("patternId and patternClipId must identify an existing Pattern and its arrangement clip");
+        if ((!contentId.empty()) == (!uid.empty()) || (contentId.empty() && format.empty()))
+            return fail("provide either contentId OR format and uid, not both");
+        const double start = owner->startSeconds, duration = owner->durationSeconds;
+        std::optional<std::string> sample;
+        std::optional<plugins::PluginDescriptor> descriptor;
+        if (!contentId.empty()) sample = authorizedInputPath(args, ctx, err);
+        else {
+            descriptor = findPlugin(c, format, uid, err);
+            if (descriptor && !descriptor->isInstrument) return fail("use an instrument plugin for a Pattern lane");
+        }
+        if (!err.empty()) return fail(err);
+        if (!sample && !descriptor) return fail("sample or instrument could not be resolved");
+        const auto group = c.beginUndoGroup();
+        const auto id = sample ? c.addPatternSample(patternId, *sample, start, ownerId)
+            : c.addPatternInstrument(patternId, *descriptor, start, ownerId);
+        const auto* lane = c.project().findTrack(id);
+        if (!lane || lane->clips.empty()) { c.releaseUndoGroup(group); return fail("Pattern lane could not be loaded"); }
+        const auto clipId = lane->clips.front().id, slotId = lane->instrument.id;
+        if (!title.empty()) { c.renameTrack(id, title); c.setClipName(id, clipId, title); }
+        c.setClipTrim(id, clipId, start, 0, duration);
+        c.setMidiClipView(id, clipId, MidiClipView{true, 60, .25}, true);
+        c.collapseUndo(group, "AI: Add Pattern Lane");
+        return done(json{{"trackId", id}, {"clipId", clipId}, {"insertId", slotId}, {"patternClipId", ownerId}});
+    }
+
     if (name == "set_track_instrument") {
         std::string trackId, format, uid;
         wantString(args, "trackId", trackId, err);
@@ -2462,14 +2717,23 @@ ToolResult callTool(EngineController& c, const std::string& name,
 
     // ── Effects ──
     if (name == "add_insert") {
-        std::string channelId, format, uid;
+        std::string channelId, format, uid, chain = "channel", clipId;
         double index = -1.0;
         wantString(args, "channelId", channelId, err);
         wantString(args, "format", format, err);
         wantString(args, "uid", uid, err);
         optNumber(args, "index", index, err);
+        optString(args, "chain", chain, err); optString(args, "clipId", clipId, err);
         if (!err.empty()) return fail(err);
         if (!channelExists(c, channelId)) return fail(unknownTrack(c, channelId));
+        if (index < -1 || index > 1000000 || index != std::floor(index)) return fail("index must be a nonnegative integer, or omitted to append");
+        if (chain != "channel" && chain != "clip" && chain != "sampler_fx") return fail("chain must be channel, clip or sampler_fx");
+        const auto* targetTrack = c.project().findTrack(channelId);
+        if (chain == "clip") {
+            const auto* targetClip = findClip(c, channelId, clipId);
+            if (!targetClip || targetClip->kind != ClipKind::Audio) return fail("chain=clip requires an audio clip on this channel");
+        } else if (chain == "sampler_fx" && (!targetTrack || !c.samplerFx(channelId, targetTrack->instrument.id)))
+            return fail("no instrument-owned FX chain on this channel");
 
         const auto descriptor =
             findPlugin(c, format, uid, err);
@@ -2481,11 +2745,13 @@ ToolResult callTool(EngineController& c, const std::string& name,
 
         const std::size_t at =
             index >= 0.0 ? std::size_t(index) : std::size_t(-1);
-        const std::string insertId = c.addInsert(channelId, *descriptor, at);
+        const std::string insertId = chain == "clip" ? c.addClipFxInsert(channelId, clipId, *descriptor, at)
+            : chain == "sampler_fx" ? c.addSamplerFxInsert(channelId, targetTrack->instrument.id, *descriptor, at)
+            : c.addInsert(channelId, *descriptor, at);
         if (insertId.empty())
             return fail("'" + descriptor->name +
                         "' failed to load — it may be broken or blacklisted");
-        return done(json{{"insertId", insertId}, {"name", descriptor->name}});
+        return done(json{{"insertId", insertId}, {"name", descriptor->name}, {"chain", chain}});
     }
 
     if (name == "remove_insert") {
@@ -2494,9 +2760,14 @@ ToolResult callTool(EngineController& c, const std::string& name,
         wantString(args, "insertId", insertId, err);
         if (!err.empty()) return fail(err);
         if (!channelExists(c, channelId)) return fail(unknownTrack(c, channelId));
+        const auto chain = effectChain(c, channelId, insertId);
+        if (!chain.slots) return fail("no effect with that insertId on the channel, its clips or sampler FX");
         if (!allowed(ctx, "remove an effect from that channel"))
             return fail(kRefused);
-        c.removeInsert(channelId, insertId);
+        if (chain.kind == "clip") c.removeClipFxInsert(channelId, chain.ownerId, insertId);
+        else if (chain.kind == "sampler_fx") c.removeSamplerFxInsert(channelId, chain.ownerId, insertId);
+        else c.removeInsert(channelId, insertId);
+        if (c.insertModel(channelId, insertId)) return fail("the host refused to remove that effect");
         return done();
     }
 
@@ -2509,8 +2780,67 @@ ToolResult callTool(EngineController& c, const std::string& name,
         optBool(args, "bypassed", bypassed, err);
         if (!err.empty()) return fail(err);
         if (!channelExists(c, channelId)) return fail(unknownTrack(c, channelId));
+        if (!c.insertModel(channelId, insertId)) return fail("no plugin with that insertId on the channel");
         c.setInsertBypassed(channelId, insertId, bypassed);
         return done(json{{"bypassed", bypassed}});
+    }
+
+    if (name == "get_plugin_state" || name == "configure_plugin") {
+        std::string channelId, insertId, action;
+        wantString(args, "channelId", channelId, err); wantString(args, "insertId", insertId, err);
+        if (name == "configure_plugin") wantString(args, "action", action, err);
+        if (!err.empty()) return fail(err);
+        const auto* slot = c.insertModel(channelId, insertId);
+        if (!slot || !slot->isLoaded()) return fail("no loaded plugin at that channelId/insertId");
+        if (action == "mix") {
+            double mix = 1;
+            wantNumber(args, "mix", mix, err);
+            if (!err.empty()) return fail(err);
+            if (mix < 0 || mix > 1) return fail("mix must be 0..1");
+            const float before = slot->mix;
+            c.setInsertMix(channelId, insertId, float(mix));
+            c.commitInsertMixEdit(channelId, insertId, before, "AI: Plugin Wet/Dry");
+        } else if (action == "channel_mode") {
+            std::string mode;
+            wantString(args, "channelMode", mode, err);
+            if (!err.empty()) return fail(err);
+            if (mode != "auto" && mode != "mono" && mode != "stereo" && mode != "dual-mono") return fail("unknown channelMode");
+            if (!c.setInsertChannelMode(channelId, insertId, pluginChannelModeFromString(mode))) return fail("plugin does not support that channel mode");
+        } else if (action == "sidechain") {
+            json sources;
+            wantArray(args, "sourceTrackIds", sources, err);
+            if (!err.empty()) return fail(err);
+            std::vector<std::string> ids;
+            for (const auto& id : sources) {
+                if (!id.is_string()) return fail("sourceTrackIds must contain string ids");
+                ids.push_back(id.get<std::string>());
+            }
+            if (!c.setInsertSidechainSources(channelId, insertId, ids)) return fail("sidechain routing was refused; inspect supported sources and avoid feedback loops");
+        } else if (action == "move") {
+            double index = 0;
+            wantNumber(args, "toIndex", index, err);
+            if (!err.empty()) return fail(err);
+            const auto chain = effectChain(c, channelId, insertId);
+            const auto* inserts = chain.slots;
+            if (!inserts || index < 0 || index >= inserts->size() || index != std::floor(index)) return fail("toIndex must identify an existing position in the insert chain");
+            if (std::none_of(inserts->begin(), inserts->end(), [&](const auto& s) { return s.id == insertId; })) return fail("an instrument cannot move into the effect chain");
+            if (chain.kind == "clip") c.moveClipFxInsert(channelId, chain.ownerId, insertId, std::size_t(index));
+            else if (chain.kind == "sampler_fx") c.moveSamplerFxInsert(channelId, chain.ownerId, insertId, std::size_t(index));
+            else c.moveInsert(channelId, insertId, std::size_t(index));
+        } else if (name == "configure_plugin") return fail("action must be mix, channel_mode, sidechain or move");
+        slot = c.insertModel(channelId, insertId);
+        json result = insertJson(*slot);
+        const auto chain = effectChain(c, channelId, insertId);
+        result["chain"] = chain.slots ? chain.kind : "instrument";
+        if (chain.kind == "clip") result["clipId"] = chain.ownerId;
+        result["supportsSidechain"] = c.insertSupportsSidechain(channelId, insertId);
+        result["sidechainSources"] = json::array();
+        for (const auto& source : c.insertSidechainSources(channelId))
+            result["sidechainSources"].push_back({{"id", source.id}, {"name", source.name}});
+        result["supportedChannelModes"] = json::array();
+        for (const auto mode : {PluginChannelMode::Auto, PluginChannelMode::Mono, PluginChannelMode::Stereo, PluginChannelMode::DualMono})
+            if (c.insertSupportsChannelMode(channelId, insertId, mode)) result["supportedChannelModes"].push_back(toString(mode));
+        return done(std::move(result));
     }
 
     if (name == "set_insert_parameter") {
@@ -3144,6 +3474,14 @@ ToolResult callTool(EngineController& c, const std::string& name,
         const TrackModel* track = c.project().findTrack(channelId);
         if (!track) return fail(unknownTrack(c, channelId));
 
+        if (action == "set_output") {
+            wantString(args, "toTrackId", toTrackId, err);
+            if (!err.empty()) return fail(err);
+            if (toTrackId == EngineController::kMasterChannelId) toTrackId.clear();
+            if (!c.setTrackOutputBus(channelId, toTrackId)) return fail("output routing was refused; use a bus and avoid feedback loops");
+            return done(json{{"outputBusId", c.project().findTrack(channelId)->outputBusId}});
+        }
+
         if (action == "set_level") {
             if (levelDb < -60.0 || levelDb > 6.0)
                 return fail("levelDb runs from -60 to +6");
@@ -3164,6 +3502,10 @@ ToolResult callTool(EngineController& c, const std::string& name,
             return done(json{{"soloed", action == "solo"}});
         }
         if (action == "set_send") {
+            bool preFader = false, enabled = true;
+            optBool(args, "preFader", preFader, err); optBool(args, "enabled", enabled, err);
+            if (!err.empty()) return fail(err);
+            if (levelDb < -60 || levelDb > 6) return fail("levelDb runs from -60 to +6");
             if (toTrackId.empty())
                 return fail("set_send needs 'toTrackId' — the bus being fed");
             if (!c.project().findTrack(toTrackId))
@@ -3171,20 +3513,31 @@ ToolResult callTool(EngineController& c, const std::string& name,
             if (toTrackId == channelId)
                 return fail("a channel cannot send to itself");
             std::string id = sendId;
+            if (!id.empty() && std::none_of(track->sends.begin(), track->sends.end(), [&](const auto& s) {
+                    return s.id == id && s.destinationTrackId == toTrackId;
+                })) return fail("sendId does not route from this channel to toTrackId");
             if (id.empty()) {
                 for (const SendModel& send : track->sends)
                     if (send.destinationTrackId == toTrackId) id = send.id;
             }
+            const bool creating = id.empty();
             if (id.empty()) {
                 id = c.addSend(channelId, toTrackId);
                 if (id.empty())
                     return fail("that send could not be made — a send has to "
                                 "reach a bus, and it cannot loop back");
             }
-            const double level = args.contains("levelDb") ? dbToGain(levelDb) : 0.5;
+            track = c.project().findTrack(channelId);
+            const auto send = std::find_if(track->sends.begin(), track->sends.end(), [&](const auto& s) { return s.id == id; });
+            if (send == track->sends.end()) return fail("send is not available in the current project");
+            const float before = send->level;
+            const double level = args.contains("levelDb") ? dbToGain(levelDb) : creating ? 0.5 : before;
             c.setSendLevel(channelId, id,
                            std::clamp(float(level), 0.0f,
-                                      EngineController::kMaxSendLevel));
+                                        EngineController::kMaxSendLevel));
+            c.commitSendLevelEdit(channelId, id, before, "AI: Send Level");
+            if (args.contains("preFader")) c.setSendPreFader(channelId, id, preFader);
+            if (args.contains("enabled")) c.setSendEnabled(channelId, id, enabled);
             return done(json{{"sendId", id}, {"to", toTrackId}});
         }
         if (action == "remove_send") {
@@ -3194,7 +3547,7 @@ ToolResult callTool(EngineController& c, const std::string& name,
         }
         return fail("'" + action +
                     "' is not a mix action. Use set_level, set_pan, mute, "
-                    "unmute, solo, unsolo, clear_solos, set_send, remove_send "
+                    "unmute, solo, unsolo, clear_solos, set_send, remove_send, set_output "
                     "or set_master_volume");
     }
 
@@ -3518,6 +3871,15 @@ std::string systemPrompt(const EngineController& c, const ToolContext& ctx) {
 
     std::string out = pack.main;
     out += "\n\nHOST CAPABILITIES AND WORKFLOW\n"
+           "These current host rules override conflicting legacy prompt recipes. Reply in the user's language. "
+           "For drums use create_pattern/add_pattern_lane and set_sequence, or edit an existing clip with get_sequence/set_sequence. "
+           "Sequence and piano-roll views share the same notes; do not create a duplicate MIDI copy. "
+           "Drum candidate tools are optional rhythmic references; write sampler lanes at MIDI 60 with the step tools. "
+           "Load drums, mixing and vocal-processing when relevant; a returned hostAddendum is the current client guide and "
+           "takes precedence over stale advice. Treat chain orders, EQ bands and levels as context-dependent starting points, "
+           "not universal rules. Prefer suitable installed third-party effects when useful and never invent their controls. "
+           "get_plugin_state/configure_plugin control host mix, channel layout, sidechain and effect order. "
+           "focus_in_app selects exact project objects and opens their editors before selection-dependent commands. "
            "Inspect selected clip notes and inspect_music_context before composing; respect meter, phrase length, "
            "chord changes, bass motion and register. Preserve seventh and extended chord tones. When the user specifies "
            "a progression, pass explicit harmony to compose_candidates instead of silently substituting the default. "

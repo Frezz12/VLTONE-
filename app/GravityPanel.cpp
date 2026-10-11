@@ -833,9 +833,18 @@ ui::Knob* GravityPanel::makeKnob(const QString& parameterId, int diameter) {
 }
 
 double GravityPanel::readParameter(const QString& parameterId) const {
+    if (m_refreshing) {
+        const auto found = m_refreshValues.constFind(parameterId);
+        if (found != m_refreshValues.cend()) return found.value();
+    }
+    const double value = [&] {
     if (!m_controller) return 0.0;
     return m_controller->insertParameter(m_channelKey, m_insertKey,
                                          parameterId.toStdString());
+
+    }();
+    if (m_refreshing) m_refreshValues.insert(parameterId, value);
+    return value;
 }
 
 void GravityPanel::writeParameter(const QString& parameterId, double value) {
@@ -922,6 +931,7 @@ void GravityPanel::applyUserPreset(const QString& name) {
 }
 
 void GravityPanel::reloadUserPresets() {
+    m_presetMatchValid = false;
     m_userPresets.clear();
     const QByteArray raw = QSettings().value(QLatin1String(kUserPresetKey)).toByteArray();
     const QJsonDocument document = QJsonDocument::fromJson(raw);
@@ -952,6 +962,7 @@ void GravityPanel::reloadUserPresets() {
 }
 
 void GravityPanel::storeUserPresets() const {
+    m_presetMatchValid = false;
     QJsonArray presets;
     const auto parameters = gravity::parameterTable();
     for (const UserPreset& preset : m_userPresets) {
@@ -1143,6 +1154,7 @@ QString GravityPanel::matchingUserPreset() const {
 
 void GravityPanel::refresh() {
     if (!m_controller) return;
+    m_refreshValues.clear();
     m_refreshing = true;
     for (auto it = m_knobs.begin(); it != m_knobs.end(); ++it) {
         if (!it.value()->isEditing() && !m_gestureStart.contains(it.key()))
@@ -1187,8 +1199,16 @@ void GravityPanel::refresh() {
         m_selectedName = QString::fromStdString(name);
     }
 
-    const int exactFactory = matchingPreset();
-    const QString exactUser = exactFactory < 0 ? matchingUserPreset() : QString{};
+    for (const auto& parameter : gravity::parameterTable())
+        readParameter(QString::fromStdString(parameter.id));
+    if (!m_presetMatchValid || m_presetValues != m_refreshValues) {
+        m_exactFactory = matchingPreset();
+        m_exactUser = m_exactFactory < 0 ? matchingUserPreset() : QString{};
+        m_presetValues = m_refreshValues;
+        m_presetMatchValid = true;
+    }
+    const int exactFactory = m_exactFactory;
+    const QString exactUser = m_exactUser;
     QString preset;
     bool exact = false;
     if (exactFactory >= 0) {

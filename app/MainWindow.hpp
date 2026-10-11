@@ -720,6 +720,13 @@ private:
 
     void buildMenus();
     void updateLocalProcessingActions();
+    quint64 m_processingSelectionRevision = ~quint64(0);
+    quint64 m_processingProjectRevision = ~quint64(0);
+    quint64 m_processingProjectGeneration = ~quint64(0);
+    quint64 m_processingGeometryRevision = ~quint64(0);
+    QStringList m_processingTracks;
+    bool m_processingHasMaterial = false, m_processingAudioOnly = false;
+    bool m_processingBatchValid = false;
     /// Register stable, non-menu actions for permanent toolbar controls so the
     /// shortcut editor and assistant use the same handlers as their buttons.
     void buildSemanticCommands();

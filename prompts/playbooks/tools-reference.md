@@ -4,6 +4,19 @@ title: Tool reference
 use_when: before using edit_clip, edit_notes, mix, arrange_tracks, channel_strip, automation or transport for the first time
 tags: [tools, actions, reference]
 ---
+CURRENT HOST ADDITIONS
+- add_insert accepts chain=channel (default), clip (also needs clipId), or sampler_fx. get_project includes clip inserts and samplerFx slots. The same parameter, bypass and host-control tools address these slots by channelId+insertId; remove_insert and configure_plugin move resolve the owning chain automatically.
+- create_pattern: name, optional startBar (default 1), lengthBars (default 4, max 256). Returns patternId and patternClipId.
+- add_pattern_lane: patternId, patternClipId, optional name, and EITHER authorized contentId OR installed format+uid. Returns trackId, clipId and insertId. The lane routes through its Pattern bus.
+- get_sequence: trackId, clipId, optional pitch. Returns source range, 1-based steps, velocity, gate and timing offsets. Does not mutate.
+- set_sequence: trackId, clipId, optional pitch, stepBeats, mode (replace/merge), steps [{step,velocity,offsetBeats,lengthBeats}]. Steps start at source beat zero, step 1. Changes one visible pitch lane and enables Sequence view. Omit steps for view-only changes. 0 velocity erases a step. Validate trimmed clip bounds with get_sequence. Other pitches remain intact.
+- get_plugin_state: channelId, insertId. Returns host mix, bypass, channel mode and sidechain support/sources.
+- configure_plugin: channelId, insertId, action. mix takes mix=0..1; channel_mode takes channelMode from supportedChannelModes; sidechain takes sourceTrackIds (empty array=off); move takes zero-based toIndex. These are host controls; use list_plugin_parameters/set_insert_parameters for plugin-owned controls.
+- list_plugin_parameters: filter nameContains, offset and limit; follow nextOffset. display is the plugin's current formatted value, choices gives labels for small stepped controls. Units remain plugin plain units, not normalized automation values.
+- focus_in_app: action=select/plugin/piano_roll/pattern/sample/automation, trackId, and the appropriate clipId or insertId. Selects the exact object and opens the requested editor without playback. Use it before selection-dependent run_command. get_ui_context reports the live selection and open editors.
+- mix set_output: channelId, toTrackId (a bus ID or master). mix set_send also accepts preFader and enabled. Inspect routing before altering it.
+
+
 Seven tools take an `action` and behave differently for each one. Their schemas list the action names; this is what each one actually needs. Read it once per session, not before every call.
 
 edit_clip — always with trackId and clipId

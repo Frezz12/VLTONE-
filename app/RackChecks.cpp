@@ -1,4 +1,6 @@
 #include "Controls.hpp"
+#include "FileTypes.hpp"
+#include "PluginPickerMenu.hpp"
 #include "Internal/CompressorInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/EqualizerParams.hpp"
@@ -9,6 +11,7 @@
 #include "RackDeviceCard.hpp"
 #include "RackDrag.hpp"
 #include "RackParameterBinding.hpp"
+#include "UtilityPanel.hpp"
 #include "RackWidget.hpp"
 #include "Theme.hpp"
 #include "plugins/PluginManager.hpp"
@@ -25,10 +28,12 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMimeData>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSlider>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
@@ -282,7 +287,8 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         }
     }
     for (const auto* uid :
-         {"daw.equalizer", "daw.compressor", "daw.cla2a", "daw.delay", "daw.pitch-corrector", "daw.graphit",
+         {"daw.gain", "daw.stereo-utility", "daw.reverse",
+          "daw.equalizer", "daw.compressor", "daw.cla2a", "daw.delay", "daw.pitch-corrector", "daw.graphit",
           "daw.gravity", "daw.modulation", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger",
           "daw.phaser", "daw.sampler", "daw.slicer"}) {
         const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, uid);
@@ -321,15 +327,120 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         rack->m_scroll->ensureWidgetVisible(card, 0, 0);
         rack->refresh();
         QApplication::processEvents();
+        for (auto* panel : card->findChildren<UtilityPanel*>()) panel->refresh();
         for (auto* knob : card->findChildren<ui::Knob*>())
-            if (knob->isVisible() && (!knob->isEnabled() || !card->rect().contains(QRect(
+            if (knob->isVisible() && ((!knob->isEnabled() &&
+                    !(QString::fromUtf8(uid) == "daw.reverse" && knob->objectName() == "RackParameter.timeMs")) || !card->rect().contains(QRect(
                                                                 knob->mapTo(card, QPoint()), knob->size()))))
                 return fail(QString("native control unavailable or clipped: ") + uid + "/" +
                             knob->objectName());
         capture(QString::fromUtf8(uid).mid(4));
+        if (auto* panel = card->findChild<UtilityPanel*>()) {
+            const auto utilityFits = [&] {
+                for (auto* control : panel->findChildren<QWidget*>()) {
+                    if (!control->isVisible() || (!qobject_cast<QSlider*>(control) &&
+                        !qobject_cast<QDoubleSpinBox*>(control) && !qobject_cast<QAbstractButton*>(control))) continue;
+                    if (!panel->rect().contains(QRect(control->mapTo(panel, QPoint()), control->size()))) return false;
+                }
+                return true;
+            };
+            if (!utilityFits()) return fail(QString("utility controls fit minimum rack height: ") + uid);
+            if (QString::fromUtf8(uid) == "daw.stereo-utility") {
+                controller.setInsertParameter(gallery, slot, "mode", 2);
+                panel->refresh();
+                auto* width = panel->findChild<QSlider*>("RackParameter.width");
+                if (!width || width->isEnabled()) return fail("stereo width disabled outside Stereo mode");
+                controller.setInsertParameter(gallery, slot, "mode", 0);
+                panel->refresh();
+                if (!width->isEnabled()) return fail("stereo width enabled in Stereo mode");
+            }
+            if (QString::fromUtf8(uid) == "daw.reverse") {
+                controller.setInsertParameter(gallery, slot, "timeMode", 1);
+                panel->refresh();
+                if (!panel->findChild<QSlider*>("RackParameter.timeMs")->isEnabled() ||
+                    panel->findChild<QWidget*>("RackChoice.division")->isEnabled())
+                    return fail("reverse switches milliseconds and tempo controls");
+                QApplication::processEvents();
+                if (!utilityFits()) return fail("reverse millisecond controls fit the rack");
+                capture("reverse-ms");
+            }
+            RackParameterBinding binding(&controller, QString::fromStdString(gallery), QString::fromStdString(slot), nullptr);
+            UtilityPanel editor(&binding, QString::fromUtf8(uid));
+            editor.resize(editor.sizeHint());
+            editor.show();
+            QApplication::processEvents();
+            if (!screenshot.isEmpty()) editor.grab().save(screenshot + "." + QString::fromUtf8(uid).mid(4) + "-editor.png");
+            editor.hide();
+        }
         if (!instrument)
             controller.removeRackSelection(gallery, {slot, neighbour});
     }
+    const auto insertionTrack = controller.addTrack(daw::TrackKind::Instrument, "Rack insertion");
+    rack->setChannel(QString::fromStdString(insertionTrack));
+    QApplication::processEvents();
+    auto* addDevice = rack->findChild<ui::IconButton*>("RackAddDevice");
+    if (!addDevice || rack->findChildren<ui::IconButton*>("RackAddDevice").size() != 1 ||
+        addDevice->size() != QSize(32, 32) || addDevice->x() < 8 || addDevice->accessibleName().isEmpty())
+        return fail("one compact, accessible add button with an inset on an empty MIDI rack");
+    capture("empty");
+    const auto browserDrop = [&](const QString& uid, QWidget* target = nullptr) {
+        QMimeData payload;
+        payload.setData(ui::kPluginDragMime, ui::encodePluginRef(int(daw::plugins::Format::Internal), uid));
+        auto* surface = rack->m_scroll->viewport();
+        auto* destination = target ? target : rack->findChild<QWidget*>("RackAddDevice");
+        rack->m_scroll->ensureWidgetVisible(destination);
+        QApplication::processEvents();
+        const QPoint at = destination->mapTo(surface, target ? QPoint(4, target->height() / 2)
+                                                             : destination->rect().center());
+        QDragEnterEvent enter(at, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(surface, &enter);
+        if (!enter.isAccepted()) return false;
+        QDropEvent drop(at, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(surface, &drop);
+        rack->sync();
+        QApplication::processEvents();
+        return drop.isAccepted();
+    };
+    if (!browserDrop("daw.equalizer") || !browserDrop("daw.sampler"))
+        return fail("browser plugins drop into the rack");
+    const auto* insertedTrack = controller.project().findTrack(insertionTrack);
+    const auto effectId = QString::fromStdString(insertedTrack->inserts.front().id);
+    auto* effectCard = rack->m_cards.value(effectId).data();
+    auto* instrumentCard = rack->m_cards.value(QString::fromStdString(insertedTrack->instrument.id)).data();
+    if (insertedTrack->inserts.size() != 1 || !instrumentCard ||
+        instrumentCard->geometry().right() >= effectCard->geometry().left())
+        return fail("an instrument added after effects must be the first device");
+    if (!browserDrop("daw.slicer") || controller.project().findTrack(insertionTrack)->inserts.size() != 1 ||
+        controller.project().findTrack(insertionTrack)->instrument.uid != "daw.slicer" || rack->m_cards.size() != 2)
+        return fail("adding another instrument replaces the single instrument slot");
+    auto* eqView = effectCard->findChild<RackBuiltinView*>();
+    rack->m_scroll->ensureWidgetVisible(effectCard);
+    QApplication::processEvents();
+    if (!eqView || !eqView->checkEqualizerForTest(error))
+        return fail(error ? *error : "rack EQ gestures");
+    QApplication::processEvents();
+    capture("insertion");
+    if (!browserDrop("daw.compressor", effectCard) ||
+        controller.project().findTrack(insertionTrack)->inserts.front().uid != "daw.compressor")
+        return fail("browser effects respect the indicated insertion point");
+    for (const auto filter : {std::optional<bool>(false), std::optional<bool>(true), std::optional<bool>{}}) {
+        std::unique_ptr<QMenu> picker(ui::buildPluginMenu(rack, &controller, filter, [](const auto&) {}));
+        auto* search = picker->findChild<QLineEdit*>("PluginPickerSearch");
+        if (!search) return fail("plugin picker search");
+        for (const auto* uid : {"daw.sampler", "daw.equalizer"}) {
+            search->setText(QString::fromUtf8(uid).mid(4));
+            QApplication::processEvents();
+            bool found = false;
+            for (auto* action : picker->findChildren<QAction*>())
+                found |= action->isVisible() && action->property("pluginUid").toString() == uid;
+            const bool expected = !filter.has_value() || *filter == (QString::fromUtf8(uid) == "daw.sampler");
+            if (found != expected) return fail("mixed and single-kind plugin picker search");
+        }
+    }
+    rack->setChannel(QString::fromStdString(a));
+    QApplication::processEvents();
+    if (browserDrop("daw.sampler") || browserDrop("missing-plugin"))
+        return fail("audio racks reject instruments and stale browser references");
     const auto folder = controller.addTrack(daw::TrackKind::Folder, "Folder");
     rack->setChannel(QString::fromStdString(folder));
     QApplication::processEvents();
@@ -344,6 +455,6 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         return fail("hidden rack polls telemetry");
     std::fprintf(
         stderr,
-        "PASS rack UI: groups, focus, virtual controls, synchronization, narrow layout, hidden telemetry\n");
+        "PASS rack UI: groups, focus, virtual controls, synchronization, narrow layout, browser plugins, single instrument, mixed picker, EQ gestures, hidden telemetry\n");
     return true;
 }

@@ -49,6 +49,7 @@ for (const width of [320, 375, 768, 1440]) {
     await expect(page.locator(".hero-product .product-shot img")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator(".workflow-card")).toHaveCount(3);
+    await expect(page.locator(".playground-card")).toHaveCount(3);
     await expect(page.locator(".gallery-switcher button")).toHaveCount(4);
     await expect(page.locator(".vlt-nav")).toBeVisible();
     await expect(page.locator(".vlt-nav a")).toHaveCount(4);
@@ -198,7 +199,7 @@ test("gallery playhead drags between views and responds immediately to keyboard 
   await page.mouse.move(bounds.x + bounds.width - 8, bounds.y + bounds.height / 2, { steps: 16 });
   await page.mouse.up();
   await expect(playhead).toHaveValue("3");
-  await expect(page.locator(".hero-product .product-shot img")).toHaveAttribute("src", /showcase-eq-ru.webp/);
+  await expect(page.locator(".hero-product .product-shot img")).toHaveAttribute("src", /showcase-rack-ru.webp/);
   await expect(page.locator('.gallery-channel[aria-pressed="true"]')).toHaveCount(1);
   await playhead.focus();
   await page.keyboard.press("ArrowLeft");

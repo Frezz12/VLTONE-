@@ -2000,8 +2000,19 @@ const TimelineWidget::ClipIntervals& TimelineWidget::clipIntervals(
     cached.lastUse = ++m_clipIntervalClock;
     const auto geometry = m_controller->clipGeometryRevision();
     const auto undo = m_controller->projectRevision();
-    if (cached.geometryRevision != geometry || cached.undoRevision != undo ||
-        cached.data != track.clips.data() || cached.entries.size() != track.clips.size()) {
+    bool rebuild = cached.data != track.clips.data() || cached.entries.size() != track.clips.size();
+    if (!rebuild && (cached.geometryRevision != geometry || cached.undoRevision != undo)) {
+        for (const auto& entry : cached.entries) {
+            const auto& clip = track.clips[entry.index];
+            const auto id = cached.ids.find(clip.id);
+            if (entry.start != clip.startSeconds ||
+                entry.end != clip.startSeconds + std::max(0.0, m_controller->clipDisplayDuration(clip)) ||
+                id == cached.ids.end() || id->second != entry.index) { rebuild = true; break; }
+        }
+    }
+    cached.geometryRevision = geometry;
+    cached.undoRevision = undo;
+    if (rebuild) {
         ui::perf::Scope measured("timeline.clip_index.ms");
         m_clipIntervalEntries -= cached.entries.size();
         cached.entries.clear(); cached.ids.clear();
@@ -2949,7 +2960,30 @@ void TimelineWidget::drawRuler(QPainter& p) {
     drawArrangementRows(p);
 }
 
-void TimelineWidget::drawLanes(QPainter& p) {
+void TimelineWidget::drawMidiClipHeaders(QPainter& p) {
+    const auto& rows = visibleRows();
+    p.save();
+    p.setClipRect(QRect(0, tracksTop(), width(), visibleLaneHeight()), Qt::IntersectClip);
+    const auto dirty = p.clipRegion();
+    for (std::size_t lane = 0; lane < rows.size(); ++lane) {
+        const auto& track = m_controller->project().tracks[rows[lane].index];
+        if (track.kind == daw::TrackKind::Folder || track.kind == daw::TrackKind::Pattern ||
+            daw::isAutomationLane(track)) continue;
+        const int top = tracksTop() - m_scrollY + m_laneOffsets[lane] + kClipVerticalInset;
+        const int height = std::max(2, ui::laneHeightFor(track.height) - 2 * kClipVerticalInset);
+        if (height < 36 || !dirty.intersects(QRect(0, top, width(), 24))) continue;
+        for (const auto index : clipsInRange(track, dirty.boundingRect().left(), dirty.boundingRect().right())) {
+            const auto& clip = track.clips[index];
+            if (clip.kind != daw::ClipKind::Midi) continue;
+            const QRectF body(secondsToX(clip.startSeconds), top,
+                std::max(2, int(m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond)), height);
+            drawMidiClipHeader(p, clip, body);
+        }
+    }
+    p.restore();
+}
+
+void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
     ui::perf::Scope timing("timeline.lanes.paint.ms");
     const Theme& t = th();
     const auto& project = m_controller->project();
@@ -3266,7 +3300,7 @@ void TimelineWidget::drawLanes(QPainter& p) {
             drawTakeBadge(p, clip, r);
 
             if (clip.kind == daw::ClipKind::Midi) {
-                drawMidiClipHeader(p, clip, r);
+                if (midiHeaders) drawMidiClipHeader(p, clip, r);
                 continue;
             }
 
@@ -3369,7 +3403,7 @@ namespace {
 /// is still a circle rather than half of one.
 constexpr double kAutomationPad = 7.0;
 /// A breakpoint's radius, and how close the pointer must come to grab it.
-constexpr double kPointRadius = 4.0;
+constexpr double kPointRadius = 2.75;
 constexpr double kPointGrab = 8.0;
 /// The strip along the top of an automation clip that is *not* the curve.
 ///
@@ -3555,6 +3589,22 @@ void TimelineWidget::selectAutomationClip(const QString& trackId,
     emit clipSelected(trackId, clipId);
 }
 
+bool TimelineWidget::hitTestAutomationRegion(const QPoint& pos, PointHit& out) const {
+    if (!m_regionActive || m_regionLaneA != m_regionLaneB || !regionContains(pos))
+        return false;
+    ClipHit hit;
+    if (!hitTestClip(pos, hit) || hit.kind != daw::ClipKind::Automation || hit.edge != Edge::None)
+        return false;
+    const auto* clip = findClipModel(hit.trackId, hit.clipId);
+    if (!clip || laneBodyHeightAt(laneAt(pos.y())) < 36) return false;
+    const QRectF body = clipRect(laneAt(pos.y()), *clip);
+    if (automationGrip(body).contains(QPointF(pos))) return false;
+    out.trackId = hit.trackId;
+    out.clipId = hit.clipId;
+    out.body = body;
+    return true;
+}
+
 bool TimelineWidget::hitTestAutomationPoint(const QPoint& pos,
                                            PointHit& out) const {
     // Only the pointer and the brush draw curves. Under the knife, the eraser,
@@ -3660,11 +3710,11 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
         // drawn *on*: a solid clip the colour of the track would fight the line
         // it is there to show.
         QColor fill = mixColors(t.well(), accent, t.dark ? 0.16 : 0.10);
-        if (selected) fill = mixColors(fill, t.textPrimary, 0.10);
+        if (selected) fill = mixColors(fill, t.textPrimary, 0.06);
         p.setBrush(fill);
         p.setPen(QPen(selected ? t.textPrimary
                                : mixColors(accent, t.background, 0.45),
-                      selected ? 1.8 : 1.0));
+                      selected ? 1.25 : 1.0));
         p.drawRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
 
         p.save();
@@ -3707,18 +3757,15 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
             under << QPointF(line.back().x(), body.bottom());
             under << QPointF(line.front().x(), body.bottom());
             QColor wash = accent;
-            wash.setAlpha(t.dark ? 44 : 54);
+            wash.setAlpha(t.dark ? 24 : 30);
             p.setPen(Qt::NoPen);
             p.setBrush(wash);
             p.drawPolygon(under);
 
             p.setRenderHint(QPainter::Antialiasing, true);
             p.setBrush(Qt::NoBrush);
-            // A dark halo under the line, so it stays readable where it crosses
-            // its own fill.
-            p.setPen(QPen(mixColors(t.background, accent, 0.25), 3.0));
-            p.drawPolyline(line);
-            p.setPen(QPen(mixColors(accent, t.textPrimary, 0.25), 1.8));
+            p.setPen(QPen(mixColors(accent, t.textPrimary, 0.30), 1.25,
+                          Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p.drawPolyline(line);
         }
 
@@ -3752,11 +3799,12 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
             if (x < body.left() - 2 || x > body.right() + 2) continue;
             const QPointF at(x, automationValueToY(body, point->value));
             p.setBrush(t.surfaceElevated);
-            p.setPen(QPen(mixColors(accent, t.textPrimary, 0.30), 1.8));
+            p.setPen(QPen(mixColors(accent, t.textPrimary, 0.30), 1.1));
             p.drawEllipse(at, kPointRadius, kPointRadius);
             p.setPen(Qt::NoPen);
             p.setBrush(mixColors(accent, t.textPrimary, 0.30));
-            p.drawEllipse(at, 1.5, 1.5);
+            if (point->shape == daw::AutomationSegment::SCurve)
+                p.drawEllipse(at, 1.0, 1.0);
         }
         p.setRenderHint(QPainter::Antialiasing, false);
 
@@ -5245,17 +5293,29 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
                 const qint64 last = qint64(std::floor((offset + width()) / tileWidth));
                 for (qint64 tile = first; tile <= last; ++tile) {
                     const double left = double(tile) * tileWidth;
-                    m_gpuLaneTiles.paint(p, quint64(tile), QSize(tileWidth, height()), QPointF(left - offset, 0),
-                        [&](QPainter& local) {
-                            QScopedValueRollback<double> scroll(m_scrollSeconds, left / m_pixelsPerSecond);
-                            local.setRenderHint(QPainter::Antialiasing, true);
-                            // Retain the whole on-screen height once. The outer
-                            // laneRegion clips it as the mixer covers/reveals it.
-                            local.setClipRect(QRect(0, tracksTop(), tileWidth,
-                                std::max(0, height() - kTimelineScrollExtent - tracksTop())));
-                            drawLanes(local);
-                        });
+                    for (int row = tracksTop() / 256; row * 256 < height() - kTimelineScrollExtent; ++row) {
+                        m_gpuLaneTiles.paint(p, (quint64(tile) << 16) | quint64(row), QSize(tileWidth, 256), QPointF(left - offset, row * 256),
+                            [&](QPainter& local) {
+                                local.translate(0, -row * 256);
+                                QScopedValueRollback<double> scroll(m_scrollSeconds, left / m_pixelsPerSecond);
+                                local.setRenderHint(QPainter::Antialiasing, true);
+                                // Keep damage local in both time and track coordinates.
+                                local.setClipRect(QRect(0, row * 256, tileWidth, 256));
+                                local.setClipRect(QRect(0, tracksTop(), tileWidth,
+                                    std::max(0, height() - kTimelineScrollExtent - tracksTop())), Qt::IntersectClip);
+                                drawLanes(local, false);
+                            });
+                    }
                 }
+                // Viewport-anchored controls cannot live in time tiles: each
+                // tile would repeat the header at its own temporary origin.
+                // These controls stay anchored to the viewport while their
+                // visibility under the mixer changes. Keep their geometry at
+                // full height and apply the current lane clip to the group.
+                m_gpuMidiHeaders.paint(p, 0, size(), {}, [&](QPainter& local) {
+                    QScopedValueRollback<int> inset(m_bottomInset, 0);
+                    drawMidiClipHeaders(local);
+                });
             } else drawLanes(p);
             p.restore();
         }
@@ -5375,9 +5435,23 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
     if (auto* scene = ui::graphics::sceneGeometrySink(p)) {
         const qreal dpr = p.device()->devicePixelRatioF();
         const QSize tileSize(std::max(1, std::min(512, width())), height());
-        if (!m_staticFrameValid || !m_staticDirty.isEmpty() ||
-            m_staticFrameScale != m_pixelsPerSecond || m_gpuTileSize != tileSize || m_gpuTileDpr != dpr)
+        if (!m_staticFrameValid || !m_lastPaintWasScene || !m_staticDirty.isEmpty() ||
+            m_staticFrameScroll != m_scrollSeconds || m_staticFrameScale != m_pixelsPerSecond ||
+            m_gpuMidiHeaderSize != size() || m_gpuTileDpr != dpr)
+            m_gpuMidiHeaders.clear();
+        m_gpuMidiHeaderSize = size();
+        if (!m_staticFrameValid || m_staticFrameScale != m_pixelsPerSecond ||
+            m_gpuTileSize != tileSize || m_gpuTileDpr != dpr) {
             m_gpuLaneTiles.clear();
+        } else if (!m_staticDirty.isEmpty()) {
+            const double offset = m_scrollSeconds * m_pixelsPerSecond;
+            m_gpuLaneTiles.invalidate([&](quint64 key) {
+                const auto tile = qint64(key >> 16);
+                const int row = int(key & 0xffff);
+                const QRectF bounds(double(tile) * tileSize.width() - offset, row * 256., tileSize.width(), 256.);
+                return m_staticDirty.intersects(bounds.toAlignedRect());
+            });
+        }
         m_gpuTileSize = tileSize;
         m_gpuTileDpr = dpr;
         p.setRenderHint(QPainter::Antialiasing, true);
@@ -5523,6 +5597,10 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
 // ── Interaction ────────────────────────────────────────────────────────────
 
 void TimelineWidget::updateCursor(const QPoint& pos) {
+    if (PointHit point; m_draggingAutomationRegion || hitTestAutomationRegion(pos, point)) {
+        setCursor(Qt::SizeVerCursor);
+        return;
+    }
     if (arrangementRowAt(pos.y()) >= 1) {
         const auto* label = arrangementLabelAt(arrangementRowAt(pos.y()), pos.x());
         const bool edge = label && std::abs(pos.x() - (((label->startBeats + label->durationBeats) * 60.0 / m_controller->tempo() - m_scrollSeconds) * m_pixelsPerSecond)) <= 6;
@@ -5575,7 +5653,10 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
     }
     ClipHit hit;
     const bool over = hitTestClip(pos, hit);
-    if (m_sequenceEditing) { setCursor(Qt::SizeVerCursor); return; }
+    if (m_sequenceEditing) {
+        setCursor(m_sequenceDrag.part == SequencePart::Velocity ? Qt::SizeVerCursor : Qt::PointingHandCursor);
+        return;
+    }
     if (tool() == Tool::Select || tool() == Tool::Draw) {
         SequenceHit sequence;
         if (hitTestSequence(pos, sequence)) {
@@ -5738,10 +5819,36 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     }
 
+    // The body of a selected automation region adjusts values. Its name strip
+    // still moves clips in time, exactly like an audio region.
+    if (PointHit point; hitTestAutomationRegion(pos, point) &&
+        ev->type() != QEvent::MouseButtonDblClick && !(ev->modifiers() & Qt::ControlModifier)) {
+        const auto* clip = findClipModel(point.trackId, point.clipId);
+        const double tempo = m_controller->project().tempo;
+        m_automationRegionFrom = clip->contentOffsetBeats + daw::secondsToBeats(
+            std::max(m_regionStart, clip->startSeconds) - clip->startSeconds, tempo);
+        m_automationRegionTo = clip->contentOffsetBeats + daw::secondsToBeats(
+            std::min(m_regionEnd, clip->startSeconds + clip->durationSeconds) - clip->startSeconds, tempo);
+        if (m_automationRegionTo - m_automationRegionFrom > 1e-7) {
+            m_pointDrag = point;
+            m_pointsBefore = clip->automation.points;
+            m_pointsBeforeActive = clip->automation.active;
+            m_bendStartY = pos.y();
+            m_draggingAutomationRegion = true;
+            m_automationRegionAmount = 0.0;
+            setCursor(Qt::SizeVerCursor);
+            ev->accept();
+            return;
+        }
+    }
+
     // Once committed, a region stays a first-class selection even after the
     // user picks another tool. Grabbing inside it always moves its contents;
     // the Region tool is only needed to draw the rectangle in the first place.
-    if (m_regionActive && regionContains(pos)) {
+    ClipHit regionClip;
+    const bool openAutomation = ev->type() == QEvent::MouseButtonDblClick &&
+        hitTestClip(pos, regionClip) && regionClip.kind == daw::ClipKind::Automation;
+    if (m_regionActive && regionContains(pos) && !openAutomation) {
         m_lastRegionStart = m_regionStart;
         m_lastRegionEnd = m_regionEnd;
         m_lastRegionLaneA = m_regionLaneA;
@@ -5904,6 +6011,14 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
             }
             m_dragPoints = points;
             m_draggingPoint = m_pointDrag.index >= 0;
+            m_automationPointGrabOffset = {};
+            if (point.index >= 0 && std::size_t(point.index) < points.size()) {
+                const auto& picked = points[std::size_t(point.index)];
+                m_automationPointGrabOffset = QPointF(pos) - QPointF(
+                    secondsToX(clip->startSeconds + daw::beatsToSeconds(
+                        picked.beats - clip->contentOffsetBeats, m_controller->project().tempo)),
+                    automationValueToY(point.body, picked.value));
+            }
             setCursor((ev->modifiers() & Qt::ShiftModifier)
                           ? Qt::SizeHorCursor
                           : Qt::SizeAllCursor);
@@ -6631,6 +6746,22 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     const bool snapOn =
         m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
 
+    if (m_draggingAutomationRegion) {
+        const auto* clip = findClipModel(m_pointDrag.trackId, m_pointDrag.clipId);
+        if (!clip) return;
+        const double height = automationValueToY(m_pointDrag.body, 0.0) -
+                              automationValueToY(m_pointDrag.body, 1.0);
+        m_automationRegionAmount += (m_bendStartY - pos.y()) / std::max(1.0, height) *
+                                   ((ev->modifiers() & Qt::ShiftModifier) ? 0.1 : 1.0);
+        m_bendStartY = pos.y();
+        const auto points = daw::autotools::sculptRegion(m_pointsBefore,
+            {m_automationRegionFrom, m_automationRegionTo}, m_automationRegionAmount,
+            daw::autotools::RegionShape::Lift, 0.0, clip->automation.defaultValue, &m_automationRegionAmount);
+        m_controller->setAutomationPoints(m_pointDrag.trackId.toStdString(), m_pointDrag.clipId.toStdString(),
+            points, std::abs(m_automationRegionAmount) < 1e-9 ? m_pointsBeforeActive : true);
+        update();
+        return;
+    }
     if (m_drawingCurve) {
         paintCurveAt(pos, snapOn);
         return;
@@ -6657,14 +6788,15 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
                 std::size_t(m_pointDrag.index) >= m_dragPoints.size()) {
                 return;
             }
+            const QPointF grabbed = QPointF(pos) - m_automationPointGrabOffset;
             const double moved = std::max(
-                0.0, snapBeats(automationBeatsAtX(*clip, pos.x()), snapOn));
+                0.0, snapBeats(automationBeatsAtX(*clip, qRound(grabbed.x())), snapOn));
             // The height is never snapped: a grid of values is not a thing, and
             // a curve is drawn by eye. Shift is the exception: it locks the
             // starting value and turns the gesture into horizontal-only timing.
             const double value = (ev->modifiers() & Qt::ShiftModifier)
                                      ? m_dragPoints[std::size_t(m_pointDrag.index)].value
-                                     : automationValueAtY(m_pointDrag.body, pos.y());
+                                     : automationValueAtY(m_pointDrag.body, grabbed.y());
             points = daw::autotools::dragPoint(
                 m_dragPoints, std::size_t(m_pointDrag.index), moved, value);
             m_controller->setAutomationPoints(m_pointDrag.trackId.toStdString(),
@@ -7071,6 +7203,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
 
 void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
     if (m_sequenceEditing && ev->button() == Qt::LeftButton) {
+        if (m_sequenceDrag.part == SequencePart::Step) moveSequence(ev);
         finishSequence();
         updateCursor(ev->position().toPoint());
         ev->accept();
@@ -7085,7 +7218,10 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         }
         m_staticFrameValid = false; syncNavigationControls(); updateCursor(ev->position().toPoint()); update(); ev->accept(); return;
     }
-    if (m_draggingPoint || m_bendingSegment || m_drawingCurve) {
+    if (m_draggingPoint || m_bendingSegment || m_drawingCurve || m_draggingAutomationRegion) {
+        if (ev->button() != Qt::LeftButton) return;
+        const bool region = m_draggingAutomationRegion;
+        m_draggingAutomationRegion = false;
         m_draggingPoint = false;
         m_bendingSegment = false;
         m_drawingCurve = false;
@@ -7093,7 +7229,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         // the hand went down — the split every curve editor here uses.
         m_controller->commitAutomationEdit(m_pointDrag.trackId.toStdString(),
                                            m_pointDrag.clipId.toStdString(),
-                                           m_pointsBefore, "Edit Automation",
+                                           m_pointsBefore, region ? "Move Automation Region" : "Edit Automation",
                                            m_pointsBeforeActive);
         m_pointsBefore.clear();
         m_dragPoints.clear();
@@ -7276,7 +7412,7 @@ bool TimelineWidget::hasActivePointerGesture() const {
            m_clipTrimEditOpen || m_stretching ||
            m_dragging || m_trimming || m_fading || m_fadeCurving ||
            m_gainDragging || m_erasing || m_swiping || m_expandDrag ||
-           m_draggingPoint || m_bendingSegment || m_drawingCurve;
+           m_draggingPoint || m_bendingSegment || m_drawingCurve || m_draggingAutomationRegion;
 }
 
 void TimelineWidget::finishInterruptedPointerGesture() {
@@ -7302,7 +7438,7 @@ bool TimelineWidget::event(QEvent* e) {
     if (e->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(e);
         const bool labelKey = m_labelSelectionRow >= 1 && (key->key() == Qt::Key_Delete || key->key() == Qt::Key_Backspace || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter);
-        if (labelKey || (key->key() == Qt::Key_Escape && (m_labelDragRow >= 1 || m_sequenceEditing)) || isArrangementEditShortcut(key)) {
+        if (labelKey || (key->key() == Qt::Key_Escape && (m_labelDragRow >= 1 || m_sequenceEditing || m_draggingAutomationRegion)) || isArrangementEditShortcut(key)) {
             // Claim the chord before duplicate menu actions can make Qt mark
             // it ambiguous. The matching KeyPress is handled below.
             key->accept();
@@ -7368,6 +7504,16 @@ bool TimelineWidget::event(QEvent* e) {
 }
 
 void TimelineWidget::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape && m_draggingAutomationRegion) {
+        m_controller->setAutomationPoints(m_pointDrag.trackId.toStdString(), m_pointDrag.clipId.toStdString(),
+                                          m_pointsBefore, m_pointsBeforeActive);
+        m_draggingAutomationRegion = false;
+        m_pointsBefore.clear();
+        updateCursor(m_lastPointerPosition.toPoint());
+        update();
+        event->accept();
+        return;
+    }
     if (event->key() == Qt::Key_Escape && m_sequenceEditing) {
         finishSequence(true); unsetCursor(); event->accept(); return;
     }

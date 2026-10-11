@@ -55,6 +55,10 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
     chip(layout.pitch, seq::pitchName(clip.midiView.pitch));
     chip(layout.division, seq::divisionName(clip.midiView.stepBeats));
     QRectF name = layout.name;
+    // The name belongs to the clip's beginning; only controls follow scrolling.
+    name.translate(std::min(0.0, body.left()), 0);
+    p.save();
+    p.setClipRect(layout.name, Qt::IntersectClip);
     if (clip.muted && name.width() >= 16) {
         const QPointF center(name.left() + 6, name.center().y());
         p.setBrush(Qt::NoBrush);
@@ -67,6 +71,7 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
     if (name.width() >= 14)
         p.drawText(name, Qt::AlignVCenter | Qt::AlignLeft,
                    QFontMetrics(p.font()).elidedText(linkedName(clip), Qt::ElideRight, int(name.width())));
+    p.restore();
     const auto mode = [&](QRectF rect, icons::Glyph glyph, bool active, bool enabled) {
         if (rect.isEmpty()) return;
         p.setPen(Qt::NoPen);
@@ -261,14 +266,13 @@ bool TimelineWidget::pressSequence(QMouseEvent* event) {
             m_sequenceEditing = true;
             m_controller->beginNoteEdit(track, id);
             setCursor(Qt::SizeVerCursor);
-        } else if (!hit.noteId.empty()) {
-            m_controller->removeNote(track, id, hit.noteId);
-            emit projectEdited();
         } else {
-            const double length = std::min({clip->midiView.stepBeats * .5, .125,
-                                           endBeat(*clip, m_controller->tempo()) - hit.beat});
-            m_controller->addNote(track, id, clip->midiView.pitch, hit.beat, length, 100);
-            emit projectEdited();
+            m_sequenceDrag = hit;
+            m_sequenceBefore = clip->notes;
+            m_sequenceAdd = hit.noteId.empty();
+            m_sequenceEditing = true;
+            m_controller->beginNoteEdit(track, id);
+            paintSequenceSteps(hit.beat);
         }
     }
     update();
@@ -277,6 +281,17 @@ bool TimelineWidget::pressSequence(QMouseEvent* event) {
 }
 
 void TimelineWidget::moveSequence(QMouseEvent* event) {
+    if (m_sequenceDrag.part == SequencePart::Step) {
+        SequenceHit hit;
+        if (hitTestSequence(event->position().toPoint(), hit) &&
+            hit.clip.trackId == m_sequenceDrag.clip.trackId && hit.clip.clipId == m_sequenceDrag.clip.clipId &&
+            (hit.part == SequencePart::Step || hit.part == SequencePart::Velocity) &&
+            std::abs(hit.beat - m_sequenceDrag.beat) > 1e-8)
+            paintSequenceSteps(hit.beat);
+        setCursor(Qt::PointingHandCursor);
+        event->accept();
+        return;
+    }
     // Incremental deltas keep reversal immediate after hitting 1 or 127;
     // there is no invisible overshoot for the pointer to travel back through.
     m_sequenceVelocity = std::clamp(m_sequenceVelocity +
@@ -291,12 +306,54 @@ void TimelineWidget::moveSequence(QMouseEvent* event) {
     event->accept();
 }
 
+void TimelineWidget::paintSequenceSteps(double beat) {
+    const auto* clip = findClipModel(m_sequenceDrag.clip.trackId, m_sequenceDrag.clip.clipId);
+    if (!clip) return;
+    const double step = clip->midiView.stepBeats;
+    const double offset = sourceOffset(*clip, m_controller->tempo());
+    const double end = endBeat(*clip, m_controller->tempo());
+    const double first = std::min(m_sequenceDrag.beat, beat);
+    const double last = std::min(end, seq::stepAt(std::max(m_sequenceDrag.beat, beat), step) + step);
+    auto notes = clip->notes;
+    const int pitch = clip->midiView.pitch;
+    if (m_sequenceAdd) {
+        // Fill intermediate cells too: mouse events may skip several steps.
+        for (double cell = seq::stepAt(first, step); cell < last - 1e-8; cell += step) {
+            const double start = std::max(offset, cell);
+            if (std::any_of(notes.begin(), notes.end(), [&](const auto& note) {
+                return note.pitch == pitch && note.startBeats >= start - 1e-8 && note.startBeats < cell + step - 1e-8;
+            })) continue;
+            daw::NoteModel note;
+            note.pitch = pitch;
+            note.startBeats = start;
+            note.lengthBeats = std::min({step * .5, .125, end - start});
+            note.velocity = 100;
+            notes.push_back(note);
+        }
+    } else {
+        std::erase_if(notes, [&](const auto& note) {
+            return note.pitch == pitch && note.startBeats >= first - 1e-8 && note.startBeats < last - 1e-8;
+        });
+    }
+    m_controller->setClipNotes(m_sequenceDrag.clip.trackId.toStdString(),
+        m_sequenceDrag.clip.clipId.toStdString(), std::move(notes), "Edit Notes");
+    m_sequenceDrag.beat = beat;
+    invalidateTrack(m_sequenceDrag.clip.trackId);
+    update();
+}
+
 void TimelineWidget::finishSequence(bool cancel) {
     if (!m_sequenceEditing) return;
     m_sequenceEditing = false;
-    if (cancel) m_controller->setNoteVelocity(m_sequenceDrag.clip.trackId.toStdString(),
-        m_sequenceDrag.clip.clipId.toStdString(), m_sequenceDrag.noteId, m_sequenceDrag.velocity);
-    m_controller->endNoteEdit("Change Note Velocity");
+    const bool painting = m_sequenceDrag.part == SequencePart::Step;
+    if (cancel) {
+        if (painting) m_controller->setClipNotes(m_sequenceDrag.clip.trackId.toStdString(),
+            m_sequenceDrag.clip.clipId.toStdString(), std::move(m_sequenceBefore), "Edit Notes");
+        else m_controller->setNoteVelocity(m_sequenceDrag.clip.trackId.toStdString(),
+            m_sequenceDrag.clip.clipId.toStdString(), m_sequenceDrag.noteId, m_sequenceDrag.velocity);
+    }
+    m_sequenceBefore.clear();
+    m_controller->endNoteEdit(painting ? "Edit Notes" : "Change Note Velocity");
     QToolTip::hideText();
     emit projectEdited();
     update();

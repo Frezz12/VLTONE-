@@ -88,6 +88,7 @@ audio::Result EngineController::validatePluginBatch(
     if (targets.empty()) return batchError("Select tracks or audio clips.");
     const bool clips = !targets.front().clipId.empty();
     std::unordered_set<std::string> seen;
+    std::unordered_map<std::string, std::unordered_map<std::string, const ClipModel*>> clipIndexes;
     for (const auto& target : targets) {
         if (clips != !target.clipId.empty())
             return batchError("Track inserts and Clip FX cannot be combined in one batch.");
@@ -97,9 +98,13 @@ audio::Result EngineController::validatePluginBatch(
         if (!track || !carriesAudio(*track))
             return batchError("A selected track does not support inserts.");
         if (clips) {
-            const auto* slots = clipFx(target.trackId, target.clipId);
-            if (!slots) return batchError("Clip FX are available for audio clips only.");
-            if (slots->size() + addedSlots > kSamplerFxSlots)
+            auto [index, inserted] = clipIndexes.try_emplace(target.trackId);
+            if (inserted) for (const auto& clip : track->clips)
+                index->second.emplace(clip.id, &clip);
+            const auto clip = index->second.find(target.clipId);
+            if (clip == index->second.end() || clip->second->kind != ClipKind::Audio)
+                return batchError("Clip FX are available for audio clips only.");
+            if (clip->second->inserts.size() + addedSlots > kSamplerFxSlots)
                 return batchError("Not enough free Clip FX slots on every selected clip.");
         }
     }

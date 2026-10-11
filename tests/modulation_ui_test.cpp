@@ -10,6 +10,18 @@ int main(int argc, char **argv) {
          const auto &insert) {
         check(panel.template findChildren<ui::Knob *>().size() == 15,
               "all rack knobs use native controls");
+        auto *art = child<QWidget>(panel, "module-art-0");
+        auto *depthKnob = child<ui::Knob>(panel, "chorus.depth");
+        const auto artBefore = art->grab().toImage();
+        const auto depthBefore = depthKnob->value();
+        depthKnob->editValue(depthBefore < .5 ? .85 : .15);
+        events();
+        check(art->grab().toImage() != artBefore,
+              "module contours respond to their parameter");
+        c.undo();
+        events();
+        check(std::abs(depthKnob->value() - depthBefore) < 1.e-6,
+              "interactive artwork preserves parameter undo");
         emit view.reorder(0, 3);
         events();
         check(Rack::decodeOrder(unsigned(c.insertParameter(

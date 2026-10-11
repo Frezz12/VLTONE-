@@ -4,6 +4,7 @@
 #include "ProjectSerializer.hpp"
 #include "cloud/CloudDocumentProjection.hpp"
 #include "UiConstants.hpp"
+#include "graphics/SceneRecorder.hpp"
 #include <QAction>
 #include <QApplication>
 #include <QDir>
@@ -56,8 +57,30 @@ bool TimelineWidget::checkMidiSequenceForTest(const QString& images) {
     };
     const auto viewDepth = controller.undoDepth();
     click(layout().sequence.center());
-    check(clip()->midiView.sequence && clip()->midiView.pitch == 60 && clip()->midiView.stepBeats == .25 &&
-          controller.undoDepth() == viewDepth, "C5 / 1/16 defaults, no musical undo for mode switch");
+    check(clip()->midiView.sequence && clip()->midiView.pitch == 60 && clip()->midiView.stepBeats == .5 &&
+          controller.undoDepth() == viewDepth, "C5 / 1/8 defaults, no musical undo for mode switch");
+    auto testView = clip()->midiView;
+    testView.stepBeats = .25;
+    controller.setMidiClipView(track, id, testView);
+
+    // The real GPU path must contain one title even across several time tiles.
+    ui::graphics::SceneRecorder header(timeline.size(), 1);
+    { QPainter p(&header); timeline.drawMidiClipHeader(p, *clip(), timeline.clipRect(0, *clip())); }
+    QImage title;
+    for (const auto& mesh : header.takeMeshes())
+        if (mesh.texture.width() > title.width()) title = mesh.texture;
+    ui::graphics::SceneRecorder frame(timeline.size(), 1);
+    { QPainter p(&frame); timeline.drawStaticFrame(p, QRegion(timeline.rect())); }
+    const auto countTitle = [&](const auto& self, const std::vector<ui::graphics::SceneMesh>& meshes) -> int {
+        int count = 0;
+        for (const auto& mesh : meshes) {
+            if (!title.isNull() && mesh.texture == title) ++count;
+            if (mesh.group) count += self(self, mesh.group->meshes);
+        }
+        return count;
+    };
+    check(!title.isNull() && frame.supported() && countTitle(countTitle, frame.takeMeshes()) == 1,
+          "GPU time tiles render the MIDI clip title only once");
     click(stepPoint(0)); click(stepPoint(4));
     check(clip()->notes.size() == 2 && clip()->notes[0].pitch == 60 && clip()->notes[0].lengthBeats == .125 &&
           clip()->notes[1].startBeats == 1, "clicks insert short C5 notes on the step grid");
@@ -77,6 +100,45 @@ bool TimelineWidget::checkMidiSequenceForTest(const QString& images) {
     click(stepPoint(2)); check(clip()->notes.size() == 4, "C5 can share a step with D5");
     click(stepPoint(2)); check(clip()->notes.size() == 3 && clip()->notes.back().pitch == 62, "toggle removes only current pitch");
     controller.undo(); check(clip()->notes.size() == 4, "step removal undo"); controller.redo();
+
+    const auto beforePaint = clip()->notes;
+    const auto paintDepth = controller.undoDepth();
+    send(QEvent::MouseButtonPress, stepPoint(5), Qt::LeftButton);
+    send(QEvent::MouseMove, stepPoint(10), Qt::LeftButton);
+    send(QEvent::MouseMove, stepPoint(6), Qt::LeftButton);
+    check(clip()->notes.size() == beforePaint.size() + 6 && controller.undoDepth() == paintDepth,
+          "fast paint fills skipped steps; reversing does not toggle them off");
+    send(QEvent::MouseButtonRelease, stepPoint(6), Qt::NoButton);
+    const auto paintedNotes = clip()->notes;
+    check(controller.undoDepth() == paintDepth + 1, "whole paint gesture is one undo step");
+    controller.undo(); check(clip()->notes == beforePaint, "paint undo restores original notes");
+    controller.redo(); check(clip()->notes == paintedNotes, "paint redo restores all filled steps");
+    controller.undo();
+
+    send(QEvent::MouseButtonPress, stepPoint(0), Qt::LeftButton);
+    send(QEvent::MouseMove, stepPoint(4), Qt::LeftButton);
+    send(QEvent::MouseMove, stepPoint(0), Qt::LeftButton);
+    check(clip()->notes.size() == 1 && clip()->notes.front().pitch == 62,
+          "erase drag removes current pitch only and never creates notes in gaps");
+    QKeyEvent cancelPaint(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&timeline, &cancelPaint);
+    check(clip()->notes == beforePaint && controller.undoDepth() == paintDepth && !timeline.m_sequenceEditing,
+          "Escape cancels the whole erase gesture without history");
+    send(QEvent::MouseButtonPress, stepPoint(10), Qt::LeftButton);
+    send(QEvent::MouseMove, stepPoint(5), Qt::LeftButton);
+    check(clip()->notes.size() == beforePaint.size() + 6, "paint fills skipped steps right to left");
+    QApplication::sendEvent(&timeline, &cancelPaint);
+    check(clip()->notes == beforePaint && controller.undoDepth() == paintDepth,
+          "Escape cancels added steps without history");
+
+    send(QEvent::MouseButtonPress, stepPoint(1), Qt::LeftButton);
+    send(QEvent::MouseMove, stepPoint(4), Qt::LeftButton);
+    check(clip()->notes.size() == beforePaint.size() + 3,
+          "painting over existing steps keeps them and can share a cell with another pitch");
+    QEvent endPaint(QEvent::WindowDeactivate); QApplication::sendEvent(&timeline, &endPaint);
+    check(!timeline.m_sequenceEditing && controller.undoDepth() == paintDepth + 1,
+          "lost capture commits a single paint operation");
+    controller.undo();
 
     const auto velocityPoint = [&] {
         const double pixels = daw::beatsToSeconds(clip()->midiView.stepBeats, controller.tempo()) * timeline.m_pixelsPerSecond;

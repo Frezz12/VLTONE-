@@ -5,15 +5,23 @@
 
 namespace daw {
 void EngineController::setMidiClipView(const std::string& trackId,
-                                      const std::string& clipId, MidiClipView view) {
+                                      const std::string& clipId, MidiClipView view, bool undoable) {
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->kind != ClipKind::Midi) return;
     view.pitch = std::clamp(view.pitch, 0, 127);
     view.stepBeats = std::isfinite(view.stepBeats)
-        ? std::clamp(view.stepBeats, 1.0 / 64.0, 4.0) : 0.25;
+        ? std::clamp(view.stepBeats, 1.0 / 64.0, 4.0) : MidiClipView{}.stepBeats;
     if (clip->midiView == view) return;
+    const auto before = clip->midiView;
     clip->midiView = view;
     ++m_clipGeometryRevision;
+    // Ordinary view changes stay out of musical history. An AI edit can opt
+    // in so recreating its clip on Redo also restores the Sequence it wrote.
+    if (undoable) {
+        m_undo.push("Change MIDI View",
+            [this, trackId, clipId, before] { setMidiClipView(trackId, clipId, before); },
+            [this, trackId, clipId, view] { setMidiClipView(trackId, clipId, view); });
+    }
 }
 
 std::string EngineController::splitLinkedClip(const ClipAddress& address, double at) {
@@ -100,6 +108,24 @@ std::string EngineController::splitLinkedClip(const ClipAddress& address, double
     apply(true);
     m_undo.push("Split Linked Clip", [apply] { apply(false); }, [apply] { apply(true); });
     return rightId;
+}
+
+std::size_t EngineController::linkedClipCount(const ClipAddress& address) const {
+    if (m_linkCountRevision != projectRevision() || m_linkCountGeometry != clipGeometryRevision() ||
+        m_linkCountGeneration != projectGeneration()) {
+        std::unordered_map<std::string, std::size_t> contents;
+        for (const auto& track : m_project.tracks) for (const auto& clip : track.clips)
+            if (!clip.contentId.empty()) ++contents[clip.contentId];
+        m_linkCounts.clear();
+        for (const auto& track : m_project.tracks) for (const auto& clip : track.clips)
+            m_linkCounts.emplace(track.id + "\n" + clip.id,
+                clip.contentId.empty() ? 1 : contents.at(clip.contentId));
+        m_linkCountRevision = projectRevision();
+        m_linkCountGeometry = clipGeometryRevision();
+        m_linkCountGeneration = projectGeneration();
+    }
+    const auto found = m_linkCounts.find(address.trackId + "\n" + address.clipId);
+    return found == m_linkCounts.end() ? 0 : found->second;
 }
 
 std::vector<EngineController::ClipAddress> EngineController::linkedClips(const ClipAddress& address) const {

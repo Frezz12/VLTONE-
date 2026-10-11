@@ -25,6 +25,7 @@
 #include <QDoubleSpinBox>
 #include <QCursor>
 #include <QDesktopServices>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEnterEvent>
@@ -931,7 +932,7 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, QString channelId,
                    std::move(slotId), parent) {}
 
 void SamplerPanel::showDefaultPage() {
-    if(auto* tabs=findChild<QTabWidget*>("SamplerTabs"))tabs->setCurrentIndex(m_context==Context::Clip?1:0);
+    if (auto* tabs = findChild<QTabWidget*>("SamplerTabs")) tabs->setCurrentIndex(0);
 }
 
 SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
@@ -948,19 +949,21 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
     // a reduced secondary dialog: it is the same Sample Editor with state
     // routed to a ClipModel instead of the built-in sampler instance.
     auto* splitter = new QSplitter(Qt::Horizontal, this);
+    splitter->setObjectName(QStringLiteral("SamplerSplit"));
     splitter->setChildrenCollapsible(false);
-    splitter->setHandleWidth(0);
+    splitter->setHandleWidth(8);
     splitter->addWidget(buildFxStrip());
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("SamplerTabs"));
-    tabs->setDocumentMode(true);
+    tabs->tabBar()->setObjectName(QStringLiteral("SamplerPrimaryTabs"));
+    tabs->tabBar()->setDrawBase(false);
+    tabs->tabBar()->setExpanding(false);
     tabs->addTab(buildSamplerBody(), tr("Sampler"));
     m_audioEditor = new AudioEditPanel(m_controller,
         {m_channelId.toStdString(),m_slotId.toStdString(),m_context == Context::Instrument},tabs);
     tabs->addTab(m_audioEditor,tr("Editor"));
     connect(m_audioEditor,&AudioEditPanel::projectEdited,this,&SamplerPanel::projectEdited);
     connect(m_audioEditor,&AudioEditPanel::liveEdited,this,&SamplerPanel::liveEdited);
-    tabs->setCurrentIndex(m_context == Context::Clip ? 1 : 0);
     splitter->addWidget(tabs);
     splitter->setSizes({118, 842});
     splitter->setStretchFactor(0, 0);
@@ -1064,6 +1067,19 @@ void SamplerPanel::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
 #SamplerPanel, #SamplerBody, #SamplerBodyScroll, #SamplerPage { background: %BG%; }
+QSplitter#SamplerSplit::handle { background: transparent; }
+QTabWidget#SamplerTabs::pane { background: %BG%; border: 1px solid %BORDER%;
+    border-top-color: %EDGE%; border-radius: %RADIUS%px; top: -1px; padding: 8px; }
+QTabWidget#SamplerTabs::tab-bar { left: 8px; }
+QTabBar#SamplerPrimaryTabs { background: transparent; }
+QTabBar#SamplerPrimaryTabs::tab { color: %TEXT2%; background: transparent;
+    border: 1px solid transparent; border-top-left-radius: %RADIUS%px;
+    border-top-right-radius: %RADIUS%px; padding: 7px 18px; margin-right: 2px;
+    font-size: 11px; font-weight: 500; }
+QTabBar#SamplerPrimaryTabs::tab:!selected:hover { color: %TEXT%; background: %HOVER%; }
+QTabBar#SamplerPrimaryTabs::tab:selected { color: %TEXT%; background: %BG%;
+    border-color: %BORDER%; border-top-color: %EDGE%; border-bottom-color: %BG%; }
+QTabBar#SamplerPrimaryTabs::tab:focus { color: %ACCENT%; }
 #SamplerSection { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %BOTTOM%);
                   border: 1px solid %BORDER%; border-top-color: %EDGE%; border-bottom-color: %SHADOW%; border-radius: %RADIUS%px; }
 #SamplerGroupTitle { color: %TEXT2%; font-size: 10px; font-weight: 600; }
@@ -1761,7 +1777,7 @@ QWidget* SamplerPanel::buildSamplerBody() {
     auto* page = new QWidget(scroll);
     page->setObjectName(QStringLiteral("SamplerPage"));
     auto* column = new QVBoxLayout(page);
-    column->setContentsMargins(8, 0, 0, 0);
+    column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(8);
     column->addWidget(buildWaveformSection());
     column->addWidget(buildToolSection());
@@ -2649,9 +2665,11 @@ bool SamplerPanel::checkLayoutForTest() {
         SamplerPanel panel(&controller, context, QString::fromStdString(track),
                            QString::fromStdString(slot));
         auto* primaryTabs = panel.findChild<QTabWidget*>("SamplerTabs");
-        check(primaryTabs && primaryTabs->currentIndex() == (context == Context::Clip ? 1 : 0),
-              "clip opens editor, instrument opens sampler");
-        primaryTabs->setCurrentIndex(0);
+        check(primaryTabs && primaryTabs->currentIndex() == 0,
+              "both clip and instrument open on Sampler");
+        primaryTabs->setCurrentIndex(1);
+        panel.showDefaultPage();
+        check(primaryTabs->currentIndex() == 0, "reopening a clip returns from Editor to Sampler");
         panel.show();
         auto* tabs = panel.findChild<QTabBar*>("SamplerToolsTabs");
         auto* scroll = panel.findChild<QScrollArea*>("SamplerBodyScroll");
@@ -2662,9 +2680,9 @@ bool SamplerPanel::checkLayoutForTest() {
         // sizes. QSS lighting must not change layout or retain stale surfaces.
         for (const Theme& preset : ThemeManager::instance().presets()) {
             ThemeManager::instance().setThemeId(preset.id, false);
-            for (const QSize size : {QSize(1040, 722), QSize(960, 562), QSize(860, 520)}) {
+            for (const QSize size : {QSize(1040, 770), QSize(960, 562), QSize(860, 520)}) {
                 panel.resize(size);
-                const bool fullSize = size == QSize(1040, 722);
+                const bool fullSize = size == QSize(1040, 770);
                 keyboard->setChecked(fullSize);
                 for (int index = 0; index < tabs->count(); ++index) {
                     tabs->setCurrentIndex(index);
@@ -2681,9 +2699,9 @@ bool SamplerPanel::checkLayoutForTest() {
                         check(panel.m_keyboardScroll->viewport()->height() >= panel.m_keyboard->height(),
                               "the keyboard scrollbar clips the bottom of the keys");
                     }
-                    check(fxStrip->mapTo(&panel, QPoint()).y() ==
-                              panel.m_waveform->parentWidget()->mapTo(&panel, QPoint()).y(),
-                          "FX strip and waveform section have different top margins");
+                    check(fxStrip->mapTo(&panel, QPoint()).y() == primaryTabs->mapTo(&panel, QPoint()).y() &&
+                              panel.m_waveform->parentWidget()->mapTo(primaryTabs, QPoint()).y() > primaryTabs->tabBar()->height(),
+                          "FX strip and tabbed panel align; content stays below the tabs");
                     int controlsBottom = 0;
                     for (QWidget* widget : pages->currentWidget()->findChildren<QWidget*>()) {
                         if (!widget->isVisible() ||
@@ -2710,6 +2728,19 @@ bool SamplerPanel::checkLayoutForTest() {
                     }
                     check(panel.m_waveform->isVisible(), "waveform disappeared when changing settings tabs");
                 }
+                if (fullSize && qEnvironmentVariableIsSet("DAW_SAMPLER_TABS_CHECK_DIR")) {
+                    const QDir images(qEnvironmentVariable("DAW_SAMPLER_TABS_CHECK_DIR"));
+                    QDir().mkpath(images.path());
+                    tabs->setCurrentIndex(0);
+                    for (int page = 0; page < primaryTabs->count(); ++page) {
+                        primaryTabs->setCurrentIndex(page);
+                        QApplication::processEvents();
+                        check(panel.grab().save(images.filePath(QStringLiteral("%1-%2-%3.png")
+                            .arg(context == Context::Clip ? "clip" : "instrument", preset.id).arg(page))),
+                            "sampler tabs screenshot saved");
+                    }
+                    primaryTabs->setCurrentIndex(0);
+                }
             }
         }
         tabs->setCurrentIndex(0);
@@ -2723,7 +2754,7 @@ bool SamplerPanel::checkLayoutForTest() {
         wheel(mode);
         check(mode->currentIndex() == modeBefore, "scrolling changes playback mode");
         if (context == Context::Instrument) {
-            panel.resize(1040, 722);
+            panel.resize(1040, 770);
             keyboard->setChecked(true);
             QApplication::processEvents();
             auto* root = panel.m_combos.value(QStringLiteral("rootnote"));

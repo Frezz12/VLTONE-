@@ -519,51 +519,55 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     m_pages->setObjectName(QStringLiteral("SettingsPages"));
     m_pages->setMinimumSize(0, 0);
     m_pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
-    const auto addPage = [this](QWidget* page) {
-        m_pages->addWidget(scrollablePage(page));
+    m_pageFactories[kAudioTab] = [this] {
+        m_audioPage = new AudioSettingsPage(m_controller, this);
+        connect(m_audioPage, &AudioSettingsPage::cpuStatusBarVisibilityChanged, this, &SettingsWindow::cpuStatusBarVisibilityChanged);
+        return m_audioPage;
     };
-
-    m_audioPage = new AudioSettingsPage(m_controller, this);
-    connect(m_audioPage, &AudioSettingsPage::cpuStatusBarVisibilityChanged,
-            this, &SettingsWindow::cpuStatusBarVisibilityChanged);
-    addPage(m_audioPage);
-    m_quickImportPage = new QuickImportSettingsPage(this);
-    addPage(m_quickImportPage);
-    auto* transportPage = new TransportSettingsPage(m_controller, this);
-    addPage(transportPage);
-    connect(transportPage, &TransportSettingsPage::panelStyleChanged, this,
-            &SettingsWindow::transportPanelStyleChanged);
-    m_recordingPage = new RecordingSettingsPage(m_controller, this);
-    connect(m_recordingPage, &RecordingSettingsPage::recordModeChanged, this,
-            &SettingsWindow::recordModeChanged);
-    addPage(m_recordingPage);
-    auto* contextPage = new ContextPanelPage(this);
-    connect(contextPage, &ContextPanelPage::changed, this,
-            &SettingsWindow::contextPanelSettingsChanged);
-    addPage(contextPage);
-    auto* browserPage = new BrowserSettingsPage(this);
-    connect(browserPage, &BrowserSettingsPage::changed, this,
-            &SettingsWindow::browserSettingsChanged);
-    addPage(browserPage);
-    m_notebookPage = new NotebookSettingsPage(this);
-    connect(m_notebookPage, &NotebookSettingsPage::changed, this,
-            &SettingsWindow::notebookSettingsChanged);
-    addPage(m_notebookPage);
-    auto* aiPage = new AiSettingsPage(this);
-    connect(aiPage, &AiSettingsPage::changed, this,
-            &SettingsWindow::aiSettingsChanged);
-    addPage(aiPage);
-    auto* accountPage = new AccountSettingsPage(this);
-    connect(accountPage, &AccountSettingsPage::logoutRequested, this,
-            &SettingsWindow::accountLogoutRequested);
-    addPage(accountPage);
-    addPage(buildLanguageTab());
-    addPage(new RecoverySettingsPage(this));
-    addPage(buildThemesTab());
-    addPage(buildThemeEditorTab());
-    addPage(buildShortcutsTab());
-    addPage(buildInterfaceTab());
-    addPage(buildMixerTab());
+    m_pageFactories[kQuickImportTab] = [this] { return m_quickImportPage = new QuickImportSettingsPage(this); };
+    m_pageFactories[kTransportTab] = [this] {
+        auto* page = new TransportSettingsPage(m_controller, this);
+        connect(page, &TransportSettingsPage::panelStyleChanged, this, &SettingsWindow::transportPanelStyleChanged);
+        return page;
+    };
+    m_pageFactories[kRecordingTab] = [this] {
+        m_recordingPage = new RecordingSettingsPage(m_controller, this);
+        connect(m_recordingPage, &RecordingSettingsPage::recordModeChanged, this, &SettingsWindow::recordModeChanged);
+        return m_recordingPage;
+    };
+    m_pageFactories[kContextPanelTab] = [this] {
+        auto* page = new ContextPanelPage(this);
+        connect(page, &ContextPanelPage::changed, this, &SettingsWindow::contextPanelSettingsChanged);
+        return page;
+    };
+    m_pageFactories[kBrowserTab] = [this] {
+        auto* page = new BrowserSettingsPage(this);
+        connect(page, &BrowserSettingsPage::changed, this, &SettingsWindow::browserSettingsChanged);
+        return page;
+    };
+    m_pageFactories[kNotebookTab] = [this] {
+        m_notebookPage = new NotebookSettingsPage(this);
+        connect(m_notebookPage, &NotebookSettingsPage::changed, this, &SettingsWindow::notebookSettingsChanged);
+        return m_notebookPage;
+    };
+    m_pageFactories[kAiTab] = [this] {
+        auto* page = new AiSettingsPage(this);
+        connect(page, &AiSettingsPage::changed, this, &SettingsWindow::aiSettingsChanged);
+        return page;
+    };
+    m_pageFactories[kAccountTab] = [this] {
+        auto* page = new AccountSettingsPage(this);
+        connect(page, &AccountSettingsPage::logoutRequested, this, &SettingsWindow::accountLogoutRequested);
+        return page;
+    };
+    m_pageFactories[kLanguageTab] = [this] { return buildLanguageTab(); };
+    m_pageFactories[kRecoveryTab] = [this] { return new RecoverySettingsPage(this); };
+    m_pageFactories[kThemesTab] = [this] { return buildThemesTab(); };
+    m_pageFactories[kThemeEditorTab] = [this] { return buildThemeEditorTab(); };
+    m_pageFactories[kShortcutsTab] = [this] { return buildShortcutsTab(); };
+    m_pageFactories[kInterfaceTab] = [this] { return buildInterfaceTab(); };
+    m_pageFactories[kMixerTab] = [this] { return buildMixerTab(); };
+    for (const auto& factory : m_pageFactories) m_pages->addWidget(new QWidget(m_pages));
 
     m_navigation = new QTreeWidget(this);
     m_navigation->setObjectName(QStringLiteral("SettingsNavigation"));
@@ -648,7 +652,9 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                 bool valid = false;
                 const int page = current->data(0, Qt::UserRole).toInt(&valid);
                 if (!valid || page < 0 || page >= m_pages->count()) return;
+                ensurePage(page);
                 m_pages->setCurrentIndex(page);
+                refreshCurrentPage();
                 refreshNavigationAppearance();
                 setWindowTitle(tr("Settings — %1 · %2")
                                    .arg(QApplication::applicationDisplayName(),
@@ -732,12 +738,7 @@ void SettingsWindow::refreshTimelineBackgroundSource() {
 }
 
 void SettingsWindow::showEvent(QShowEvent* event) {
-    refreshTimelineBackgroundSource();
-    refreshStartupTemplateOptions();
-    refreshThemeLibrary();
-    refreshThemeControls();
-    if (m_notebookPage) m_notebookPage->refresh();
-    if (m_quickImportPage) m_quickImportPage->refresh();
+    refreshCurrentPage();
     QDialog::showEvent(event);
     constrainToScreen();
     // Native frame margins become reliable only after the first show. Clamp a
@@ -785,8 +786,31 @@ void SettingsWindow::constrainToScreen() {
     move(x, y);
 }
 
+void SettingsWindow::ensurePage(int index) {
+    if (index < 0 || index >= int(m_pageFactories.size()) || !m_pageFactories[index]) return;
+    auto create = std::move(m_pageFactories[index]);
+    QWidget* placeholder = m_pages->widget(index);
+    QWidget* page = scrollablePage(create());
+    m_pages->removeWidget(placeholder);
+    m_pages->insertWidget(index, page);
+    placeholder->deleteLater();
+}
+
+void SettingsWindow::refreshCurrentPage() {
+    if (!m_pages) return;
+    switch (m_pages->currentIndex()) {
+    case kThemesTab: refreshThemeLibrary(); refreshThemeControls(); break;
+    case kThemeEditorTab: refreshThemeControls(); break;
+    case kInterfaceTab: refreshStartupTemplateOptions(); break;
+    case kNotebookTab: if (m_notebookPage) m_notebookPage->refresh(); break;
+    case kQuickImportTab: if (m_quickImportPage) m_quickImportPage->refresh(); break;
+    default: break;
+    }
+}
+
 void SettingsWindow::showTab(int index) {
     if (!m_pages || index < 0 || index >= m_pages->count()) return;
+    ensurePage(index);
     m_pages->setCurrentIndex(index);
     if (QTreeWidgetItem* item = m_navigationItems.value(index)) {
         m_navigation->setCurrentItem(item);
@@ -802,6 +826,7 @@ void SettingsWindow::reloadRecordingPage() {
 }
 
 bool SettingsWindow::checkAudioPageForTest() const {
+    const_cast<SettingsWindow*>(this)->ensurePage(kAudioTab);
     return m_audioPage && m_audioPage->checkForTest();
 }
 

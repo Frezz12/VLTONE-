@@ -9,7 +9,29 @@
 #include <stdexcept>
 #include <thread>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace daw::engine {
+namespace {
+// Some plugin DSP depends on posted messages even with no editor. Dispatch on
+// the owning thread only while ALL graph workers are parked. Bound the pump so
+// a plugin continuously posting messages cannot monopolise the render loop.
+void pumpOfflineMessages() {
+#if defined(_WIN32)
+    MSG message;
+    for (unsigned i = 0; i < 256 && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++i) {
+        if (message.message == WM_QUIT) {
+            PostQuitMessage(int(message.wParam));
+            break;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+#endif
+}
+} // namespace
 
 RealtimeEngine::RenderGate::RenderGate(RealtimeEngine& engine)
     : m_engine(engine), m_lock(engine.m_controlMutex) {
@@ -428,6 +450,7 @@ Status RealtimeEngine::prepareOfflineGraph() {
             snapshot = *compiled;
             m_processor.setGraph(snapshot);
         }
+        pumpOfflineMessages();
         bool stable = true;
         for (const auto& entry : snapshot->nodes) {
             if (const auto status = entry.node->serviceOffline(); !status)
@@ -501,16 +524,19 @@ Status RealtimeEngine::renderOffline(
                 return {};
             };
             const auto service = [&](SamplePos position) -> Status {
+                pumpOfflineMessages();
                 for (std::uint32_t node = 0; node < snapshot->nodes.size(); ++node)
                     if (auto status = serviceNode(node, position); !status) return status;
                 return {};
             };
             result = service(startSample);
             SamplePos position = startSample;
+            const auto stopBoundaries = offlineStopBoundaries(*snapshot, options.sourcesEndSample);
             const auto framesAt = [&](SamplePos at) {
                 auto frames = FrameCount(std::min<SamplePos>(block, endSample - at));
-                if (at < options.sourcesEndSample)
-                    frames = FrameCount(std::min<SamplePos>(frames, options.sourcesEndSample - at));
+                const auto next = std::upper_bound(stopBoundaries.begin(), stopBoundaries.end(), at);
+                if (next != stopBoundaries.end())
+                    frames = FrameCount(std::min<SamplePos>(frames, *next - at));
                 return frames;
             };
             bool stopped = false;
@@ -525,7 +551,8 @@ Status RealtimeEngine::renderOffline(
                 for (; measured < 3 && result && position < endSample; ++measured) {
                     const auto frames = framesAt(position);
                     result = m_processor.processSerial(output, frames, position,
-                        position < options.sourcesEndSample, true, m_transport.infoAt(position), observation);
+                        position < options.sourcesEndSample, true, m_transport.infoAt(position), observation,
+                        options.sourcesEndSample);
                     if (!result) break;
                     result = service(position);
                     if (!result) break;
@@ -546,7 +573,7 @@ Status RealtimeEngine::renderOffline(
                 const auto frames = framesAt(position);
                 const TransportInfo transport = m_transport.infoAt(position);
                 result = m_processor.process(output, frames, position,
-                    position < options.sourcesEndSample, true, transport);
+                    position < options.sourcesEndSample, true, transport, options.sourcesEndSample);
                 if (!result) break;
                 // Workers are finished. Both error inspection and format
                 // main-thread callbacks happen here, before a sink can write

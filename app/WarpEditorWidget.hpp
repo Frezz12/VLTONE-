@@ -93,6 +93,7 @@ private:
     std::vector<daw::miditools::Groove> m_grooves;
     QTimer* m_analysisTimer;
     ui::FrameTimer* m_frameTimer;
+    QTimer* m_transportPoll = nullptr;
     daw::ClipWarpModel m_previewBase, m_lastMap;
     daw::warptools::Proposal m_proposal;
     bool m_previewing = false;

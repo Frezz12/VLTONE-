@@ -37,6 +37,8 @@ private:
   void step();
   void next(daw::ai::AiSession::Step);
   void render();
+  std::vector<std::size_t> m_messageHashes;
+  std::vector<int> m_messageWidgetEnds;
   void updateState();
   void saveHistory();
   QString historyPath() const;

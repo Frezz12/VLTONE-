@@ -40,6 +40,7 @@ class SelectionModel : public QObject {
 public:
     explicit SelectionModel(QObject* parent = nullptr) : QObject(parent) {}
 
+    quint64 revision() const { return m_revision; }
     SelectionKind kind() const;
     const QStringList& tracks() const { return m_tracks; }
     const QVector<ClipSel>& clips() const { return m_clips; }
@@ -58,12 +59,13 @@ public:
     /// Re-emit changed() without a content change, so observers re-read the
     /// document. The controller emits nothing of its own, so this is how undo,
     /// redo and edits made elsewhere reach anything watching the selection.
-    void refresh() { emit changed(); }
+    void refresh() { ++m_revision; emit changed(); }
 
 signals:
     void changed();
 
 private:
+    quint64 m_revision = 0;
     QStringList m_tracks;
     QVector<ClipSel> m_clips;
 };

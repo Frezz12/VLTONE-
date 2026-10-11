@@ -11,6 +11,9 @@ namespace daw::engine {
 /// Zero means ineligible; otherwise the number of retained temporal slots.
 std::size_t offlinePipelineWindow(const CompiledGraph& graph, unsigned workers);
 
+// A stop must occur at a block boundary for every input-latency domain.
+std::vector<SamplePos> offlineStopBoundaries(const CompiledGraph& graph, SamplePos sourcesEnd);
+
 /// Runs an exclusively owned offline graph through a bounded temporal window.
 /// nullopt means the graph is ineligible and no DSP or sink was called.
 /// The service callback runs on the caller, with that node's DSP parked.

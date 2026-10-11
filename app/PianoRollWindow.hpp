@@ -553,6 +553,7 @@ private:
     mutable const daw::miditools::Notes* m_soundingPitchSource = nullptr;
     mutable const daw::NoteModel* m_soundingPitchData = nullptr;
     mutable std::size_t m_soundingPitchCount = 0;
+    mutable std::uint64_t m_soundingPitchRevision = ~std::uint64_t(0);
     mutable std::size_t m_soundingPitchIndexRebuilds = 0;
     mutable bool m_soundingPitchIndexDirty = true;
     /// Live geometry/mute/context-length gestures keep the previous interval
@@ -851,6 +852,9 @@ private:
     void refreshGhostMenu();
     void refreshPatternGhosts();
     void refreshClipSelector();
+    quint64 m_selectorRevision = ~quint64(0), m_selectorGeneration = 0, m_selectorGeometry = 0;
+    QString m_selectorTrack, m_selectorClip;
+    QFont m_selectorFont;
     QString auditionTrackForCurrentClip() const;
     /// Keep the tool palette and the Tools menu showing the same choice.
     void syncToolActions();

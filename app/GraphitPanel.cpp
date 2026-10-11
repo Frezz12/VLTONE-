@@ -41,6 +41,7 @@ namespace graphit = daw::plugins::graphit;
 namespace {
 
 constexpr double kPi = std::numbers::pi_v<double>;
+QColor graphitCopper() { return QColor(th().dark ? "#d6a47e" : "#975e39"); }
 
 const daw::plugins::ParameterInfo* parameterInfo(std::string_view id) {
     for (const auto& info : graphit::parameterTable())
@@ -55,7 +56,53 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        pluginStyle::knob(p,rect(),value(),isEditing(),isEnabled(),hasFocus());
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setOpacity(isEnabled() ? 1. : .4);
+        p.translate(rect().center());
+        const double scale = std::min(width(), height()) / 220.;
+        p.scale(scale, scale);
+        const auto point = [](double f, double radius) {
+            const double a = (225. - f * 270.) * kPi / 180.;
+            return QPointF(std::cos(a) * radius, -std::sin(a) * radius);
+        };
+        for (int i = 0; i <= 40; ++i) {
+            p.setPen(QPen(i / 40. <= value() ? graphitCopper() : th().textSecondary,
+                          i % 5 == 0 ? 1.7 : .7));
+            p.drawLine(point(i / 40., i % 5 == 0 ? 96 : 100), point(i / 40., 104));
+        }
+        p.setPen(Qt::NoPen);
+        for (int i = 5; i > 0; --i) {
+            p.setBrush(QColor(0, 0, 0, 16));
+            p.drawEllipse(QPointF(0, 3), 86 + i, 86 + i);
+        }
+        QLinearGradient rim(-55, -85, 65, 85);
+        rim.setColorAt(0, QColor("#777b7c"));
+        rim.setColorAt(.4, QColor("#343839"));
+        rim.setColorAt(1, QColor("#101314"));
+        p.setBrush(rim);
+        p.drawEllipse(QPointF(), 87, 87);
+        for (int i = 0; i < 60; ++i) {
+            const double a = i * 2 * kPi / 60.;
+            const QPointF d(std::cos(a), std::sin(a));
+            p.setPen(QPen(QColor(0, 0, 0, 100), 1));
+            p.drawLine(d * 81, d * 86);
+        }
+        QRadialGradient carbon(QPointF(-35, -46), 145);
+        carbon.setColorAt(0, QColor("#45494a"));
+        carbon.setColorAt(.6, QColor("#262a2b"));
+        carbon.setColorAt(1, QColor("#171a1b"));
+        p.setBrush(carbon);
+        p.setPen(QPen(QColor("#555a5b"), 1));
+        p.drawEllipse(QPointF(), 79, 79);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(0, 0, 0, 50), .8));
+        for (int r = 20; r < 75; r += 3) p.drawEllipse(QPointF(), r, r);
+        p.setPen(QPen(graphitCopper(), 4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(point(value(), 56), point(value(), 72));
+        if (hasFocus()) {
+            p.setPen(QPen(graphitCopper(), 1.5, Qt::DotLine));
+            p.drawEllipse(QPointF(), 108, 108);
+        }
     }
 };
 
@@ -152,7 +199,7 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     m_amountReadout = new QLabel(this);
     m_amountReadout->setAlignment(Qt::AlignCenter);
     m_amountReadout->setStyleSheet(QStringLiteral(
-        "font-size:11px;font-weight:600;letter-spacing:2px;"));
+        "font-size:18px;font-weight:600;letter-spacing:1px;"));
     layout->addWidget(m_amountReadout);
     layout->addLayout(modeRow);
     layout->addStretch(1);
@@ -183,6 +230,21 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     m_activeButton->setGeometry(width() - 132, 127, 102, 32);
 
     pluginStyle::bind(this);
+    const auto tintControls = [this] {
+        auto colours = palette();
+        colours.setColor(QPalette::Highlight, graphitCopper());
+        setPalette(colours);
+        setStyleSheet(QStringLiteral(
+            "#GraphitModeButton, #GraphitActiveButton { color: %1; background: %2;"
+            " border: 1px solid %3; border-radius: 6px; font-size: 12px; }"
+            "#GraphitModeButton:checked, #GraphitActiveButton:checked { color: %4;"
+            " border-color: %4; background: %5; }"
+            "#GraphitModeButton:focus, #GraphitActiveButton:focus { border: 2px solid %4; }")
+            .arg(th().textPrimary.name(), pluginStyle::shell().name(), th().separator().name(),
+                 graphitCopper().name(), mixColors(th().well(), graphitCopper(), .10).name()));
+    };
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, tintControls);
+    tintControls();
 
 
     dial->setProperty("parameterId", QStringLiteral("amount"));
@@ -228,7 +290,10 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
     connect(m_visualTimer, &ui::FrameTimer::timeout, this, &GraphitPanel::refreshTelemetry);
     m_timer = new QTimer(this);
     m_timer->setInterval(33);
-    connect(m_timer, &QTimer::timeout, this, &GraphitPanel::refresh);
+    connect(m_timer, &QTimer::timeout, this, [this] {
+        refresh();
+        if (isVisible() && !m_visualTimer->isActive()) refreshTelemetry();
+    });
     refresh();
 }
 
@@ -429,9 +494,12 @@ void GraphitPanel::refreshTelemetry() {
             m_historyTime -= double(steps) * 0.033;
         }
     }
-    if (hadHistory || previousLevel != m_meterLevel || previousReduction != m_gainReduction ||
-        std::any_of(m_history.begin(), m_history.end(), [](float level) { return level > 0.0f; }))
+    const bool active = m_meterLevel > 0 || m_gainReduction > 0 ||
+        std::any_of(m_history.begin(), m_history.end(), [](float level) { return level > 0.0f; });
+    if (hadHistory || active || previousLevel != m_meterLevel || previousReduction != m_gainReduction)
         update(QRect(20, 35, width() - 40, 68));
+    if (active && isVisible()) m_visualTimer->start();
+    else m_visualTimer->stop();
 }
 
 void GraphitPanel::paintEvent(QPaintEvent*) {
@@ -442,7 +510,14 @@ void GraphitPanel::paintEvent(QPaintEvent*) {
 void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(),th().background);
-    pluginStyle::surface(painter,QRectF(rect()).adjusted(1,1,-1,-3));
+    const auto base = mixColors(pluginStyle::shell(), graphitCopper(), .035);
+    QLinearGradient graphite(0, 0, width(), height());
+    graphite.setColorAt(0, th().edgeLight(base));
+    graphite.setColorAt(.6, base);
+    graphite.setColorAt(1, th().edgeDark(base));
+    painter.setPen(QPen(th().separator(), 1));
+    painter.setBrush(graphite);
+    painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -3), 14, 14);
 
     const double centreX = width() * 0.5;
     QPainterPath headerShape;
@@ -467,7 +542,7 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     painter.drawPath(headerShape);
 
     QFont header = painter.font();
-    header.setPixelSize(11);
+    header.setPixelSize(14);
     header.setWeight(QFont::DemiBold);
     header.setLetterSpacing(QFont::PercentageSpacing, 180.0);
     painter.setFont(header);
@@ -481,7 +556,7 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
                      Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("VLTONE"));
 
     QFont small = painter.font();
-    small.setPixelSize(8);
+    small.setPixelSize(9);
     small.setWeight(QFont::Medium);
     small.setLetterSpacing(QFont::PercentageSpacing, 135.0);
     painter.setFont(small);
@@ -500,7 +575,7 @@ void GraphitPanel::paintScene(QPainter& painter, const QRegion&) {
     for (std::size_t index = 0; index < m_history.size(); ++index) {
         const double x = graph.left() + double(index) * spacing;
         const double height = 2.0 + m_history[index] * (graph.height() - 3.0);
-        QColor bar = pluginStyle::accent();
+        QColor bar = graphitCopper();
         bar.setAlpha(int(55 + m_history[index] * 150.0));
         painter.setPen(QPen(bar, 1.0, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(QPointF(x, graph.bottom()),

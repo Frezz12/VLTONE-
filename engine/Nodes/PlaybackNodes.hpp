@@ -55,6 +55,22 @@ struct ClipPlacement {
     std::shared_ptr<dsp::WarpPlayback> warpPlayback;
     float fadeInExponent = 1.0f, fadeOutExponent = 1.0f;
     std::shared_ptr<dsp::TimeStretch> stretcher; // prepared off the audio thread
+
+    // Integrate speed inside each fade, anchoring the head to its END and
+    // the tail to its START. The unaffected region stays on the timeline.
+    // Prefetch and DSP must use the same source position, including on seeks.
+    double sourceProgressAt(SamplePos position, SamplePos available) const noexcept {
+        const double end = double(std::max<SamplePos>(0, available));
+        const double p = std::clamp(double(position), 0.0, end);
+        const double head = std::clamp(double(tapeStartSamples), 0.0, end);
+        const double tail = std::clamp(double(tapeStopSamples), 0.0, end - head);
+        if (p < head) return head * 0.5 + p * p / (2.0 * head);
+        if (tail > 0.0 && p > end - tail) {
+            const double q = p - (end - tail);
+            return p - q * q / (2.0 * tail);
+        }
+        return p;
+    }
 };
 
 /// The audio source of one track: plays whatever clips overlap the block.
@@ -177,7 +193,11 @@ private:
             if (clip.startSample >= end) return;
             if (clip.audio && clipEnd(clip) > position) {
                 const double rate = clip.audio->sampleRate() / m_sampleRate;
-                const double rel = double(std::max<SamplePos>(0, position - clip.startSample));
+                // WarpPlayback receives timeline time directly and owns its
+                // source mapping. Prefetch must use that same origin.
+                const double rel = clip.warpPlayback
+                    ? double(std::max<SamplePos>(0, position - clip.startSample))
+                    : clip.sourceProgressAt(position - clip.startSample, clipEnd(clip) - clip.startSample);
                 const double start = clip.warp ? daw::warpSourceAt(*clip.warp, rel / m_sampleRate * clip.warpTempo / 60.) * clip.audio->sampleRate() :
                     clip.sourceStartFrame >= 0 ? clip.sourceStartFrame + rel * rate / std::max(.001, clip.stretchTime)
                                                                : (clip.offsetSamples + rel) * rate;
@@ -220,18 +240,16 @@ public:
         const FrameCount fadeLimit = context.transport.looping && loopFrames > 0.0
             ? FrameCount(std::clamp(loopFrames * 0.5, 1.0, double(kMaxBlockSize)))
             : kMaxBlockSize;
-        if (!context.offline) {
-            if (m_hasOutput && (m_wasPlaying != context.playing ||
-                (context.playing && m_expectedPosition != context.timelinePosition) ||
-                m_outputRevision != (schedule ? schedule->revision : 0)))
-                m_declick.begin(context.sampleRate, fadeLimit);
-            m_hasOutput = true;
-            m_wasPlaying = context.playing;
-            m_expectedPosition = context.timelinePosition + context.frames;
-            m_outputRevision = schedule ? schedule->revision : 0;
-        }
+        if (m_hasOutput && (m_wasPlaying != context.playing ||
+            (context.playing && m_expectedPosition != context.timelinePosition) ||
+            m_outputRevision != (schedule ? schedule->revision : 0)))
+            m_declick.begin(context.sampleRate, fadeLimit);
+        m_hasOutput = true;
+        m_wasPlaying = context.playing;
+        m_expectedPosition = context.timelinePosition + context.frames;
+        m_outputRevision = schedule ? schedule->revision : 0;
         if (!context.playing || !schedule) {
-            if (!context.offline) m_declick.process(context.output, context.frames);
+            m_declick.process(context.output, context.frames);
             return;
         }
         const auto* clips = schedule->clips.get();
@@ -274,6 +292,7 @@ public:
                 clip.lengthSamples > 0
                     ? clip.lengthSamples
                     : SamplePos(double(clip.audio->frames()) / step) - clip.offsetSamples;
+            if (available <= 0) return;
             const SamplePos clipEnd = clip.startSample + available;
             if (clipEnd <= blockStart || clip.startSample >= blockEnd) return;
 
@@ -282,38 +301,19 @@ public:
             const FrameCount count = FrameCount(to - from);
             const FrameCount destinationOffset = FrameCount(from - blockStart);
             const SamplePos clipRelStart = from - clip.startSample;
-            const bool tape = clip.tapeStartSamples > 0 || clip.tapeStopSamples > 0;
-
-            // Integrate the tape-speed ramps rather than multiplying an
-            // absolute source position by speed. That keeps the source phase
-            // continuous at both ends of the fade (no jump/click when the
-            // speed reaches 1x or begins to wind down).
-            auto sourceProgressAt = [&](SamplePos pos) -> double {
-                const double p = std::clamp(double(pos), 0.0, double(available));
-                double mapped = p;
-                double headLag = 0.0;
-                if (clip.tapeStartSamples > 0) {
-                    const double length = double(clip.tapeStartSamples);
-                    if (p < length) mapped = p * p / (2.0 * length);
-                    else mapped = p - length * 0.5;
-                    headLag = length * 0.5;
-                }
-                if (clip.tapeStopSamples > 0) {
-                    const double length = double(clip.tapeStopSamples);
-                    const double start = std::max(0.0, double(available) - length);
-                    if (p > start) {
-                        const double q = p - start;
-                        mapped = start - headLag + q - q * q / (2.0 * length);
-                    }
-                }
-                return std::max(0.0, mapped);
-            };
+            const bool hasTape = clip.tapeStartSamples > 0 || clip.tapeStopSamples > 0;
+            const auto tapeHead = std::clamp<SamplePos>(clip.tapeStartSamples, 0, available);
+            const auto tapeTail = std::clamp<SamplePos>(clip.tapeStopSamples, 0, available - tapeHead);
+            // Outside the ramps the source is timeline-aligned again. Reuse
+            // the contiguous PCM path instead of resampling the entire clip.
+            const bool tape = (tapeHead > 0 && clipRelStart < tapeHead) ||
+                (tapeTail > 0 && clipRelStart + count > available - tapeTail);
 
             // Gain of the fade envelope at position `pos` samples into the clip
             // (0 … available). Linear for user fades, sqrt for equal-power
             // crossfades so an overlap keeps constant loudness.
-            const bool fading =
-                clip.fadeInSamples > 0 || clip.fadeOutSamples > 0;
+            const bool fading = (clip.fadeInSamples > 0 && clipRelStart < clip.fadeInSamples) ||
+                (clip.fadeOutSamples > 0 && clipRelStart + count > available - clip.fadeOutSamples);
             const double inStep = clip.fadeInSamples > 0 ? 1.0 / double(clip.fadeInSamples) : 0.0;
             const double outStep = clip.fadeOutSamples > 0 ? 1.0 / double(clip.fadeOutSamples) : 0.0;
             const auto shapeFade = [&](double in, double out) {
@@ -369,7 +369,7 @@ public:
                     std::clamp(clip.loopEnd, 0.0, 1.0) * sourceSpan;
                 const bool looping = clip.loopMode != 0 && loopEnd - loopBegin >= 16.0;
                 const double timeRatio = std::max(clip.stretchTime, 0.001);
-                if (!tape && clip.stretcher) {
+                if (!hasTape && clip.stretcher) {
                     const dsp::StretchSource source{clip.audio.get(), sourceBegin, sourceEnd,
                                                    loopBegin, loopEnd, looping ? clip.loopMode : 0};
                     for (FrameCount done = 0; done < count;) {
@@ -466,7 +466,7 @@ public:
                     for (FrameCount i = 0; i < count; ++i) {
                         const SamplePos timelineFrame = clipRelStart + i;
                         const double outputFrame = tape
-                            ? sourceProgressAt(timelineFrame)
+                            ? clip.sourceProgressAt(timelineFrame, available)
                             : double(timelineFrame);
                         double value = read(ch, sourceBegin + outputFrame * step / timeRatio);
 
@@ -518,7 +518,7 @@ public:
                     for (FrameCount i = 0; i < count; ++i) {
                         const SamplePos timelineFrame = clipRelStart + i;
                         const double progress = tape
-                            ? sourceProgressAt(timelineFrame)
+                            ? clip.sourceProgressAt(timelineFrame, available)
                             : double(timelineFrame);
                         const double pos = (double(clip.offsetSamples) + progress) * step;
                         const SamplePos index = SamplePos(pos);
@@ -548,7 +548,7 @@ public:
             self(self, mid + 1, last);
         };
         visit(visit, 0, clips->size());
-        if (!context.offline) {
+        {
             // Clip edges can occur inside a callback. Apply the transition at
             // that exact sample; the prepared boundary list never grows in DSP.
             FrameCount offset = 0;

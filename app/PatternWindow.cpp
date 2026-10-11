@@ -674,7 +674,7 @@ void PatternWindow::refresh() {
     }
     setWindowTitle(tr("%1 — Pattern")
                        .arg(QString::fromStdString(pattern->name)));
-    if (!m_patternClipId.isEmpty()) { const auto count = m_controller->linkedClips({m_patternId.toStdString(),m_patternClipId.toStdString()}).size();
+    if (!m_patternClipId.isEmpty()) { const auto count = m_controller->linkedClipCount({m_patternId.toStdString(),m_patternClipId.toStdString()});
         if (count > 1) setWindowTitle(windowTitle() + tr(" · Linked: %1").arg(count)); }
     const QStringList ids = childTrackIds();
     if (!rowStructureMatches(ids) || !syncRowsFromModel()) rebuildRows();
@@ -683,19 +683,32 @@ void PatternWindow::refresh() {
 QStringList PatternWindow::childTrackIds() const {
     QStringList ids;
     if (!m_controller || m_patternId.isEmpty()) return ids;
-    const auto& tracks = m_controller->project().tracks;
+    const auto& project = m_controller->project();
+    if (m_childRevision == m_controller->projectRevision() &&
+        m_childGeneration == m_controller->projectGeneration() &&
+        m_childGeometry == m_controller->clipGeometryRevision() &&
+        m_childStructure == project.structureRevision() &&
+        m_childPattern == m_patternId && m_childClip == m_patternClipId) return m_childIds;
+    const auto& tracks = project.tracks;
+    const std::string patternClip = m_patternClipId.toStdString();
     ids.reserve(int(tracks.size()));
     for (const auto& track : tracks) {
         const bool channel = daw::trackAccepts(track.kind, daw::ClipKind::Midi) ||
             track.kind == daw::TrackKind::Audio ||
             (track.kind == daw::TrackKind::Folder && track.summing) ||
             track.kind == daw::TrackKind::Group;
+        if (!channel || !ownsTrack(&track)) continue;
         const bool hasPart=m_patternClipId.isEmpty() ||
-            std::any_of(track.clips.begin(),track.clips.end(),[&](const auto& clip){return clip.patternClipId==m_patternClipId.toStdString();}) ||
+            std::any_of(track.clips.begin(),track.clips.end(),[&](const auto& clip){return clip.patternClipId==patternClip;}) ||
             track.kind==daw::TrackKind::Folder || track.kind==daw::TrackKind::Group;
-        if (channel && ownsTrack(&track) && hasPart)
+        if (hasPart)
             ids.push_back(QString::fromStdString(track.id));
     }
+    m_childRevision = m_controller->projectRevision();
+    m_childGeneration = m_controller->projectGeneration();
+    m_childGeometry = m_controller->clipGeometryRevision();
+    m_childStructure = project.structureRevision();
+    m_childPattern = m_patternId; m_childClip = m_patternClipId; m_childIds = ids;
     return ids;
 }
 

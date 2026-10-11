@@ -39,6 +39,7 @@ set(DAW_PLUGINHOST_SOURCES
     Creator/WasmProgram.cpp
     Internal/MiniModuleInstance.cpp
     Internal/DelayInstance.cpp
+    Internal/UtilityInstance.cpp
     Internal/PitchCorrectorInstance.cpp
     Internal/PitchCorrectorDSP.cpp
     Internal/ModulationInstance.cpp

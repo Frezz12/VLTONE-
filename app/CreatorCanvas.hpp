@@ -24,7 +24,8 @@ public:
   void restoreViewport(const CreatorViewport &);
   void fitGraph();
   void actualSize();
-  void updateWires();
+  void updateWires(const QString& node = {});
+  void setPositions(const QMap<QString, QPointF>& positions);
   void updateCodeStatus(const daw::plugins::mini::MiniModuleDefinition &);
   void updateValues(const daw::plugins::mini::MiniModuleDefinition &);
   void highlightConnectionPath(const QString &from, const QString &to, bool includeMemory);
@@ -80,5 +81,6 @@ private:
   QMap<QString, QPointF> m_beforeMove;
   daw::plugins::mini::MiniModuleDefinition m_graph;
   QMap<QString, QString> m_libraryNodes;
+  QHash<QString, QList<QGraphicsPathItem*>> m_nodeWires;
 };
 } // namespace ui

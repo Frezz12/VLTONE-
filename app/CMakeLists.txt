@@ -359,6 +359,22 @@ if(DAW_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
+    qt_add_executable(utility_ui_test
+        ../tests/utility_ui_test.cpp UtilityPanel.cpp UtilityPanel.hpp RackParameterBinding.cpp RackParameterBinding.hpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(utility_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(utility_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    if(APPLE)
+        target_link_libraries(utility_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME utility_ui_test COMMAND utility_ui_test)
+    set_tests_properties(utility_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 45)
+    if(WIN32)
+        set_tests_properties(utility_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     qt_add_executable(pitch_corrector_ui_test
         ../tests/pitch_corrector_ui_test.cpp PitchCorrectorPanel.cpp PitchCorrectorPanel.hpp
         WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
@@ -403,7 +419,7 @@ qt_add_executable(daw ${DAW_APP_SOURCES})
 # They share a wire protocol and the plugin compatibility checks.
 add_dependencies(daw daw_scan creator_tools)
 # Built-in effect editors use Qt Widgets/QPainter; no web documents are bundled.
-foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test)
+foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test)
     if(TARGET ${native_target})
         target_sources(${native_target} PRIVATE
             NativePluginView.cpp NativePluginView.hpp Controls.cpp Controls.hpp
@@ -451,8 +467,9 @@ if(TARGET browser_navigation_test)
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
 endif()
 
-foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test)
+foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test)
     if(TARGET ${native_target})
+        # Test captures must use the same Latin/Cyrillic faces as the app.
         qt_add_resources(${native_target} "${native_target}_fonts"
             PREFIX "/fonts" BASE "${CMAKE_SOURCE_DIR}/fonts"
             FILES ${VLTONE_UI_FONTS})

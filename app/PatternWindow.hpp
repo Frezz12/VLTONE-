@@ -103,6 +103,10 @@ private:
     daw::EngineController* m_controller = nullptr;
     QString m_patternId;
     QString m_patternClipId;
+    mutable QStringList m_childIds;
+    mutable QString m_childPattern, m_childClip;
+    mutable quint64 m_childRevision = ~quint64(0), m_childGeneration = 0;
+    mutable quint64 m_childGeometry = 0, m_childStructure = 0;
     QWidget* m_rowsHost = nullptr;
     QVBoxLayout* m_rowsLayout = nullptr;
     QWidget* m_dropIndicator = nullptr;

@@ -50,7 +50,8 @@ public:
     Status process(const AudioBlock& output, FrameCount frames,
                    SamplePos timelinePosition, bool playing,
                    bool offline = false,
-                   const TransportInfo& transport = TransportInfo{});
+                   const TransportInfo& transport = TransportInfo{},
+                   SamplePos sourcesEnd = std::numeric_limits<SamplePos>::max());
 
     /// Single-threaded rendering in topological order. Used as the reference
     /// for tests and for graphs too small to be worth waking the pool.
@@ -58,7 +59,8 @@ public:
                          SamplePos timelinePosition, bool playing,
                          bool offline = false,
                          const TransportInfo& transport = TransportInfo{},
-                         std::span<double> nodeCosts = {});
+                         std::span<double> nodeCosts = {},
+                         SamplePos sourcesEnd = std::numeric_limits<SamplePos>::max());
 
     /// Baseline node-count crossover for the pool. Smaller graphs may still run
     /// in parallel when compilation found a wide enough independent frontier;
@@ -84,12 +86,13 @@ public:
 private:
     Status processBlock(const AudioBlock& output, FrameCount frames,
                         SamplePos timelinePosition, bool playing, bool offline,
-                        const TransportInfo& transport, bool forceSerial, std::span<double> nodeCosts);
+                        const TransportInfo& transport, bool forceSerial, std::span<double> nodeCosts,
+                        SamplePos sourcesEnd);
     void processNode(const CompiledGraph& graph, const CompiledGraph::CompiledNode& entry,
                      unsigned workerIndex, double* nodeCost = nullptr);
-    static void executeJob(void* context, std::uint32_t nodeIndex,
+    static std::uint32_t executeJob(void* context, std::uint32_t nodeIndex,
                            unsigned workerIndex) noexcept;
-    void runNode(const CompiledGraph& graph, std::uint32_t nodeIndex,
+    std::uint32_t runNode(const CompiledGraph& graph, std::uint32_t nodeIndex,
                  unsigned workerIndex) noexcept;
     void releaseSuccessors(const CompiledGraph& graph,
                            const CompiledGraph::CompiledNode& entry, unsigned workerIndex) noexcept;
@@ -129,6 +132,7 @@ private:
     FrameCount m_lastBlockLatency = 0;
     std::uint64_t m_lastBlockGraphGeneration = 0;
     SamplePos m_position = 0;
+    SamplePos m_sourcesEnd = std::numeric_limits<SamplePos>::max();
     bool m_playing = false;
     bool m_offline = false;
     std::atomic<bool> m_taskFusion{true};

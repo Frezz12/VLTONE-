@@ -24,7 +24,7 @@ class RackDeviceCard final : public QFrame {
         return m_slot;
     }
     void sync();
-    void refresh();
+    void refresh(bool synchronize = true);
     void finishEdits();
     void setSelected(bool);
     bool expanded() const {

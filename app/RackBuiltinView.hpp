@@ -11,6 +11,7 @@ class RackBuiltinView final : public QWidget {
     static int preferredWidth(const QString& uid);
     static bool supports(const QString& uid);
     void refresh();
+    bool checkEqualizerForTest(QString* error);
 
   private:
     RackParameterBinding* m_binding;

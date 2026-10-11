@@ -57,6 +57,8 @@ enum class Glyph {
     Copy, Edit,
     /// The arrangement with its sidebar and lower panel: workspace controls.
     Workspace,
+    /// One piano-roll note, paired with Chord for slide target selection.
+    SingleNote,
     /// An open arc, meant to be rotated by the caller to indicate work in
     /// flight. It carries no animation of its own.
     Spinner

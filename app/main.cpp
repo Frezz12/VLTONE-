@@ -713,6 +713,20 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    // Focused AI checks should exercise the panel even when an unrelated
+    // collaboration fixture fails before the main window is constructed.
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.populateDemo();
+        window.resize(1280, 900);
+        window.show();
+        QApplication::processEvents();
+        if (!window.checkAiAssistant()) {
+            std::fprintf(stderr, "focused AI assistant selftest failed\n");
+            return 6;
+        }
+        return g_selftestQtFailure.load(std::memory_order_relaxed) ? 7 : 0;
+    }
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PROJECT_DIALOGS_ONLY")) {
         if (!ui::checkProjectDialogsForTest()) return 40;
         MainWindow window(/*openDevice=*/false);
@@ -2029,13 +2043,6 @@ int main(int argc, char** argv) {
             }
             std::fprintf(stderr,
                          "PASS Browser: rounded rows, audio/MIDI previews and empty selection\n");
-            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
-        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY")) {
-            window.populateDemo();
-            if (!window.checkAiAssistant()) {
-                std::fprintf(stderr, "focused AI assistant selftest failed\n");
-                return 6;
-            }
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_NOTEBOOK_ONLY")) {
             if (!window.checkNotebookForTest()) return 41;

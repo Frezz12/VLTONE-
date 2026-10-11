@@ -113,6 +113,8 @@ public:
                FrameCount blockSize, SamplePos sourcesEnd, const Transport& transport,
                const std::function<bool(const AudioBlock&, FrameCount)>& sink,
                const std::function<Status(std::uint32_t, SamplePos)>& service) {
+        m_sourcesEnd = sourcesEnd;
+        const auto stopBoundaries = offlineStopBoundaries(m_graph, sourcesEnd);
         const auto count = std::min<std::size_t>({workers, m_stages.size(), 16});
         for (std::size_t i = 0; i < count; ++i)
             m_threads.emplace_back([this] { worker(); });
@@ -123,8 +125,9 @@ public:
                 auto& block = m_blocks[m_opened % m_window];
                 block.position = position;
                 block.frames = FrameCount(std::min<SamplePos>(blockSize, end - position));
-                if (position < sourcesEnd)
-                    block.frames = FrameCount(std::min<SamplePos>(block.frames, sourcesEnd - position));
+                const auto next = std::upper_bound(stopBoundaries.begin(), stopBoundaries.end(), position);
+                if (next != stopBoundaries.end())
+                    block.frames = FrameCount(std::min<SamplePos>(block.frames, *next - position));
                 block.transport = transport.infoAt(position);
                 block.playing = position < sourcesEnd;
                 block.remaining = m_stages.size();
@@ -250,7 +253,7 @@ private:
             context.playing = block.playing;
             context.offline = true;
             context.transport = block.transport;
-            context.compensateInputLatency(entry.inputLatency);
+            context.compensateInputLatency(entry.inputLatency, m_sourcesEnd);
             entry.node->process(context);
         }
     }
@@ -279,6 +282,7 @@ private:
 
     const CompiledGraph& m_graph;
     std::size_t m_window;
+    SamplePos m_sourcesEnd = std::numeric_limits<SamplePos>::max();
     BufferArena m_arena;
     std::vector<Block> m_blocks;
     std::vector<Stage> m_stages;
@@ -295,6 +299,18 @@ private:
 };
 
 } // namespace
+
+std::vector<SamplePos> offlineStopBoundaries(const CompiledGraph& graph, SamplePos sourcesEnd) {
+    std::vector<SamplePos> boundaries;
+    if (sourcesEnd == std::numeric_limits<SamplePos>::max()) return boundaries;
+    boundaries.reserve(graph.nodes.size());
+    for (const auto& entry : graph.nodes)
+        if (sourcesEnd <= std::numeric_limits<SamplePos>::max() - entry.inputLatency)
+            boundaries.push_back(sourcesEnd + entry.inputLatency);
+    std::sort(boundaries.begin(), boundaries.end());
+    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+    return boundaries;
+}
 
 std::size_t offlinePipelineWindow(const CompiledGraph& graph, unsigned workers) {
     if (workers < 2 || graph.taskCount < 2 || graph.sinkNode == kInvalidNode ||

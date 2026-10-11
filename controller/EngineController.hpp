@@ -1301,8 +1301,8 @@ public:
         PreparedTemplateAudioImport prepared);
 
     // ── Clips ──
-    /// Import a sample into a new Sampler track with a MIDI trigger at the drop
-    /// position. Track, instrument, sample and note form one undo operation.
+    /// Import a sample into a new, empty Sampler track.
+    /// Track, instrument and sample form one undo operation.
     std::string importSampleToMidiTrack(const std::string& filePath, double startSeconds);
     /// Create an audio track named after `trackName` (or the file), import the
     /// file at `startSeconds`, and expose the whole operation as one undo
@@ -1430,6 +1430,7 @@ public:
     bool adoptCompAudioEdit(const AudioEditTarget&, PreparedCompEdit);
 
     std::vector<ClipAddress> linkedClips(const ClipAddress&) const;
+    std::size_t linkedClipCount(const ClipAddress&) const;
     std::vector<ClipAddress> duplicateLinkedClips(const std::vector<ClipAddress>&);
     bool makeClipsIndependent(const std::vector<ClipAddress>&);
     std::string splitLinkedClip(const ClipAddress&, double atSeconds);
@@ -1486,9 +1487,9 @@ public:
     void setClipExpanded(const std::string& trackId, const std::string& clipId,
                          bool expanded);
     /// Persist the local MIDI/sequence view without changing musical content
-    /// or adding a navigation action to the musical undo history.
+    /// or adding navigation to history, unless grouped into an undoable edit.
     void setMidiClipView(const std::string& trackId, const std::string& clipId,
-                         MidiClipView view);
+                         MidiClipView view, bool undoable = false);
     /// Start a comp gesture: snapshots the clip's comp so the whole stroke can
     /// be undone as one edit. Nesting is a no-op, so a stroke that re-enters is
     /// still a single entry.
@@ -2576,6 +2577,9 @@ private:
     std::unordered_map<std::string, PendingSharedAssetMutation>
         m_pendingSharedAssetMutations;
     std::uint64_t m_clipGeometryRevision = 1;
+    mutable std::uint64_t m_linkCountRevision = ~std::uint64_t(0);
+    mutable std::uint64_t m_linkCountGeometry = 0, m_linkCountGeneration = 0;
+    mutable std::unordered_map<std::string, std::size_t> m_linkCounts;
     std::uint64_t m_sharedProjectionRevision = 0;
     std::function<bool(std::string_view)> m_sharedGestureLeaseCheck;
     bool m_restoringSharedPreview = false;

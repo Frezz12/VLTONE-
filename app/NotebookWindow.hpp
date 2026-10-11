@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QWidget>
+#include <vector>
+#include <utility>
 #include <QString>
 #include "model/Document.hpp"
 
@@ -67,6 +69,8 @@ private:
     void updateTimedTextButtons();
     void readCurrentLine();
     void updateTimedTextPosition();
+    bool m_cueIndexDirty = true;
+    std::vector<std::pair<double, QString>> m_cueIndex;
     void renderDocument();
     QString pageHtml() const;
     void applyTheme();

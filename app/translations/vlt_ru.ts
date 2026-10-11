@@ -70,6 +70,170 @@
 <context>
     <name>AiChatPanel</name>
     <message>
+        <source>Studio assistant</source>
+        <translation>Студийный ассистент</translation>
+    </message>
+    <message>
+        <source>Conversation actions</source>
+        <translation>Действия с чатом</translation>
+    </message>
+    <message>
+        <source>Message to the AI assistant</source>
+        <translation>Сообщение AI-ассистенту</translation>
+    </message>
+    <message>
+        <source>Type a request. Enter sends; Shift+Enter inserts a new line.</source>
+        <translation>Введите запрос. Enter — отправить; Shift+Enter — новая строка.</translation>
+    </message>
+    <message>
+        <source>Auto</source>
+        <translation>Авто</translation>
+    </message>
+    <message>
+        <source>Choose whether AI explains, teaches or edits the project</source>
+        <translation>Выберите режим: объяснение, обучение или изменение проекта</translation>
+    </message>
+    <message>
+        <source>Assistant interaction mode</source>
+        <translation>Режим ассистента</translation>
+    </message>
+    <message>
+        <source>Ask</source>
+        <translation>Спросить</translation>
+    </message>
+    <message>
+        <source>Learn</source>
+        <translation>Учиться</translation>
+    </message>
+    <message>
+        <source>Do</source>
+        <translation>Изменить</translation>
+    </message>
+    <message>
+        <source>Compose</source>
+        <translation>Сочинить</translation>
+    </message>
+    <message>
+        <source>Choose from the request</source>
+        <translation>Определять по запросу</translation>
+    </message>
+    <message>
+        <source>Answers without project edits</source>
+        <translation>Ответы без изменений проекта</translation>
+    </message>
+    <message>
+        <source>Step-by-step guidance without edits</source>
+        <translation>Пошаговые объяснения без изменений</translation>
+    </message>
+    <message>
+        <source>Apply changes to the project</source>
+        <translation>Вносить изменения в проект</translation>
+    </message>
+    <message>
+        <source>Create editable musical parts</source>
+        <translation>Создавать музыкальные партии</translation>
+    </message>
+    <message>
+        <source>VLT AI</source>
+        <translation>VLT AI</translation>
+    </message>
+    <message>
+        <source>Connect an AI model</source>
+        <translation>Подключите AI-модель</translation>
+    </message>
+    <message>
+        <source>Connect an AI model to send this request</source>
+        <translation>Подключите AI-модель для отправки запроса</translation>
+    </message>
+    <message>
+        <source>Error</source>
+        <translation>Ошибка</translation>
+    </message>
+    <message>
+        <source>Inspect plugin controls</source>
+        <translation>Изучить параметры плагина</translation>
+    </message>
+    <message>
+        <source>Build drum pattern</source>
+        <translation>Создать драм-паттерн</translation>
+    </message>
+    <message>
+        <source>Write sequencer steps</source>
+        <translation>Записать шаги секвенсора</translation>
+    </message>
+    <message>
+        <source>Read sequencer steps</source>
+        <translation>Прочитать шаги секвенсора</translation>
+    </message>
+    <message>
+        <source>Analyze the project</source>
+        <translation>Проанализировать проект</translation>
+    </message>
+    <message>
+        <source>Read production guide</source>
+        <translation>Изучить руководство по обработке</translation>
+    </message>
+    <message>
+        <source>Find sounds and effects</source>
+        <translation>Найти звуки и эффекты</translation>
+    </message>
+    <message>
+        <source>Adjust mix and routing</source>
+        <translation>Настроить микс и маршрутизацию</translation>
+    </message>
+    <message>
+        <source>Edit automation</source>
+        <translation>Изменить автоматизацию</translation>
+    </message>
+    <message>
+        <source>Open project element</source>
+        <translation>Открыть элемент проекта</translation>
+    </message>
+    <message>
+        <source>What are we making?</source>
+        <translation>Что создадим?</translation>
+    </message>
+    <message>
+        <source>Create a beat, shape a sound or work on your mix. Start with the selected track.</source>
+        <translation>Создайте бит, настройте звук или доработайте микс. Начните с выбранной дорожки.</translation>
+    </message>
+    <message>
+        <source>Program a beat</source>
+        <translation>Создать бит</translation>
+    </message>
+    <message>
+        <source>Create a 4-bar drum pattern in the step sequencer with separate kick, snare and hi-hat lanes. Use the project's tempo and choose suitable sounds from my library.</source>
+        <translation>Создай драм-паттерн на 4 такта в пошаговом секвенсоре: отдельные линии бочки, малого барабана и хай-хэта. Используй темп проекта и подбери звуки из моей библиотеки.</translation>
+    </message>
+    <message>
+        <source>Mix a vocal</source>
+        <translation>Свести вокал</translation>
+    </message>
+    <message>
+        <source>Mix the selected vocal: inspect levels and the current effects, choose suitable installed plugins, set up compression and de-essing, and add tasteful space using sends. Explain the changes.</source>
+        <translation>Сведи выбранный вокал: проверь уровни и текущие эффекты, подбери подходящие установленные плагины, настрой компрессию и деэссинг по необходимости, добавь пространство через посылы. Объясни изменения.</translation>
+    </message>
+    <message>
+        <source>Shape this sound</source>
+        <translation>Настроить звук</translation>
+    </message>
+    <message>
+        <source>Inspect the selected track's instrument and effects and their parameters. Suggest three useful sound directions before editing.</source>
+        <translation>Изучи инструмент и эффекты выбранной дорожки, а также их параметры. Предложи три варианта звучания перед изменениями.</translation>
+    </message>
+    <message>
+        <source>Check the mix</source>
+        <translation>Проверить микс</translation>
+    </message>
+    <message>
+        <source>Analyze the project balance and master headroom. Explain the main issues and suggest the next steps without changing the project.</source>
+        <translation>Проанализируй баланс проекта и запас уровня на мастере. Объясни основные проблемы и предложи дальнейшие шаги без изменения проекта.</translation>
+    </message>
+    <message>
+        <source>Suggestions fill the message box. You decide when to send.</source>
+        <translation>Выберите задачу, уточните запрос и отправьте его.</translation>
+    </message>
+    <message>
         <source>AI CHAT</source>
         <translation>ЧАТ С ИИ</translation>
     </message>
@@ -1537,6 +1701,9 @@ Selection is captured when you send a request.
 </context>
 <context>
     <name>AutomationCurveView</name>
+    <message><source>Edit Automation</source><translation>Редактировать автоматизацию</translation></message>
+    <message><source>Move Automation Region</source><translation>Сдвинуть область автоматизации</translation></message>
+    <message><source>Region: %1%2%</source><translation>Область: %1%2%</translation></message>
     <message>
         <source>%1.%2   %3</source>
         <translation>%1.%2   %3</translation>
@@ -1612,6 +1779,22 @@ Selection is captured when you send a request.
 </context>
 <context>
     <name>AutomationEditorWindow</name>
+    <message><source>Region</source><translation>Область</translation></message>
+    <message><source>Select a time range, then drag inside it to raise or lower the curve</source><translation>Выделите отрезок времени, затем потяните внутри него, чтобы поднять или опустить кривую</translation></message>
+    <message><source>Contour…</source><translation>Контур…</translation></message>
+    <message><source>Contour</source><translation>Контур</translation></message>
+    <message><source>Contour Automation</source><translation>Изменить контур автоматизации</translation></message>
+    <message><source>Lift, tilt or arch the curve while keeping the outside unchanged</source><translation>Сдвиг, наклон или изгиб кривой с сохранением значений за границами области</translation></message>
+    <message><source>Drag to select · drag inside: raise/lower · Shift: fine · ↑/↓: nudge · Ctrl-drag: new region · Esc: cancel</source><translation>Протяните для выделения · внутри: вверх/вниз · Shift: точно · ↑/↓: шаг · Ctrl: новая область · Esc: отмена</translation></message>
+    <message><source>Selection: %1–%2 beats · tools affect this range</source><translation>Выделено: %1–%2 доли · инструменты действуют в этой области</translation></message>
+    <message><source>Whole clip · select a region to shape only part of the curve</source><translation>Весь клип · выделите область для изменения отдельного участка кривой</translation></message>
+    <message><source>Shape the selected range. Outside values stay pinned. Changes preview live; Cancel restores the curve.</source><translation>Изменяйте выделенную область с сохранением значений снаружи. Результат слышен сразу; «Отмена» возвращает исходную кривую.</translation></message>
+    <message><source>Lift — move the whole region</source><translation>Сдвиг — вся область вверх или вниз</translation></message>
+    <message><source>Tilt — balance start and end</source><translation>Наклон — баланс начала и конца</translation></message>
+    <message><source>Arch — lift or dip the middle</source><translation>Дуга — подъём или провал середины</translation></message>
+    <message><source>Amount</source><translation>Величина</translation></message>
+    <message><source>Soft edges</source><translation>Мягкость краёв</translation></message>
+    <message><source>0%: square edges. 100%: blend through the whole region.</source><translation>0%: прямоугольные края. 100%: плавный переход по всей области.</translation></message>
     <message><source>Master</source><translation>Мастер</translation></message>
     <message>
         <source>Click to add · Shift-click: add on curve · drag to move · Shift-drag: time/range · double-click: reset · Alt-segment: curve</source>
@@ -21740,6 +21923,8 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>RackWidget</name>
+    <message><source>Add device</source><translation>Добавить устройство</translation></message>
+    <message><source>Add device…</source><translation>Добавить устройство…</translation></message>
     <message><source>%1 devices</source><translation>Устройств: %1</translation></message>
     <message><source>%1 effects</source><translation>Эффектов: %1</translation></message>
     <message><source>+ Effect</source><translation>+ Эффект</translation></message>
@@ -21786,5 +21971,51 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
 <context>
     <name>RackParameterBinding</name>
     <message><source>Create automation</source><translation>Создать автоматизацию</translation></message>
+</context>
+<context>
+    <name>UtilityPanel</name>
+    <message><source>Gain</source><translation>Усиление</translation></message>
+    <message><source>Mute</source><translation>Заглушить</translation></message>
+    <message><source>Output</source><translation>Выход</translation></message>
+    <message><source>Stereo</source><translation>Стерео</translation></message>
+    <message><source>Mono / Mid</source><translation>Моно / Mid</translation></message>
+    <message><source>Side</source><translation>Side</translation></message>
+    <message><source>Left</source><translation>Левый</translation></message>
+    <message><source>Right</source><translation>Правый</translation></message>
+    <message><source>Width</source><translation>Ширина</translation></message>
+    <message><source>Swap L/R</source><translation>Обмен L/R</translation></message>
+    <message><source>Invert L</source><translation>Инверсия L</translation></message>
+    <message><source>Invert R</source><translation>Инверсия R</translation></message>
+    <message><source>Time source</source><translation>Режим времени</translation></message>
+    <message><source>Host sync</source><translation>Темп проекта</translation></message>
+    <message><source>Milliseconds</source><translation>Миллисекунды</translation></message>
+    <message><source>Division</source><translation>Длительность</translation></message>
+    <message><source>Length</source><translation>Длина</translation></message>
+    <message><source>Dry / Wet</source><translation>Dry / Wet</translation></message>
+    <message><source>Slice: %1 ms</source><translation>Отрезок: %1 мс</translation></message>
+    <message><source>Reverse plays buffered slices. The dry signal passes immediately.</source><translation>Reverse проигрывает накопленные отрезки задом наперёд. Сухой сигнал проходит сразу.</translation></message>
+    <message><source>Reset</source><translation>Сброс</translation></message>
+    <message><source>Reset parameters</source><translation>Сбросить параметры</translation></message>
+    <message><source>Create automation</source><translation>Создать автоматизацию</translation></message>
+    <message><source>Drag to adjust · Shift for fine control · double-click to reset</source><translation>Перетащите для настройки · Shift — точно · двойной щелчок — сброс</translation></message>
+    <message><source>Type an exact value</source><translation>Введите точное значение</translation></message>
+    <message><source>Mute output</source><translation>Заглушить выход</translation></message>
+    <message><source>Left channel to both outputs</source><translation>Левый канал на оба выхода</translation></message>
+    <message><source>Right channel to both outputs</source><translation>Правый канал на оба выхода</translation></message>
+    <message><source>Channel routing</source><translation>Маршрутизация каналов</translation></message>
+    <message><source>Channel routing. Dashed lines indicate inverted polarity.</source><translation>Маршрутизация каналов. Пунктир обозначает инверсию полярности.</translation></message>
+    <message><source>Swap left and right before processing</source><translation>Поменять левый и правый каналы перед обработкой</translation></message>
+    <message><source>Invert left polarity</source><translation>Инвертировать полярность левого канала</translation></message>
+    <message><source>Invert right polarity</source><translation>Инвертировать полярность правого канала</translation></message>
+    <message><source>Sync</source><translation>Темп</translation></message>
+    <message><source>Actual slice length, including tempo and the 50–4000 ms limit</source><translation>Фактическая длина отрезка с учётом темпа и диапазона 50–4000 мс</translation></message>
+    <message><source> ms</source><translation> мс</translation></message>
+    <message><source>%1 ms</source><translation>%1 мс</translation></message>
+    <message><source>Record a slice, then play it backwards</source><translation>Запись отрезка, затем воспроизведение в обратную сторону</translation></message>
+    <message><source>Width changes the stereo spread. 100% keeps the original image.</source><translation>Ширина стереобазы. 100% сохраняет исходное звучание.</translation></message>
+    <message><source>The shared center, sent equally to both outputs.</source><translation>Общий центр стереосигнала на обоих выходах.</translation></message>
+    <message><source>The difference between channels. The shared center is removed.</source><translation>Разность каналов. Общий центр стереосигнала убран.</translation></message>
+    <message><source>Left channel, sent equally to both outputs.</source><translation>Левый канал на обоих выходах.</translation></message>
+    <message><source>Right channel, sent equally to both outputs.</source><translation>Правый канал на обоих выходах.</translation></message>
 </context>
 </TS>

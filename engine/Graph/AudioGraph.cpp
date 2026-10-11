@@ -506,6 +506,21 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
                                            ++levelWidth[level]);
     }
 
+    // Start the longest dependency chains first. Helpers steal roots from the
+    // front; the calling audio thread pops from the back, so reserve the
+    // deepest chain there. Otherwise the caller can finish a short leaf and
+    // spend most of the block waiting for the serial plugin path to the mix.
+    std::vector<std::uint32_t> depth(order.size(), 1);
+    for (std::size_t i = order.size(); i-- > 0;) {
+        const auto& entry = compiled->nodes[i];
+        for (std::uint32_t j = 0; j < entry.successorCount; ++j)
+            depth[i] = std::max(depth[i], 1 + depth[compiled->successors[entry.firstSuccessor + j]]);
+    }
+    std::stable_sort(compiled->roots.begin(), compiled->roots.end(),
+        [&](auto a, auto b) { return depth[a] > depth[b]; });
+    if (!compiled->roots.empty())
+        std::rotate(compiled->roots.begin(), compiled->roots.begin() + 1, compiled->roots.end());
+
     compiled->sinkNode =
         m_sink != kInvalidNode ? denseIndex[m_sink] : kInvalidNode;
 

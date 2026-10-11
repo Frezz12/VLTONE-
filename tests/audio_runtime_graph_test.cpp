@@ -214,6 +214,23 @@ void sessionContentAndIncrementalUpdates() {
             planes[1][0], planes[1][frames - 1], level);
         return correct;
     };
+    const auto transition = [&](engine::SamplePos position, unsigned blocks, float target) {
+        float previous = planes[0][frames - 1];
+        const bool rising = target >= previous;
+        bool correct = true;
+        for (unsigned block = 0; block < blocks; ++block) {
+            correct &= bool(processor.processSerial({planes, 2, frames}, frames,
+                position + block * frames, true, true));
+            for (unsigned i = 0; i < frames; ++i) {
+                const float value = planes[0][i];
+                correct &= std::isfinite(value) && near(value, planes[1][i]) &&
+                    std::abs(value - previous) < .025f &&
+                    (rising ? value >= previous - 2e-6f : value <= previous + 2e-6f);
+                previous = value;
+            }
+        }
+        return correct && near(previous, target);
+    };
     // Static faders retain their existing one-block smoothing, including the
     // private clip fader on first use and a return from automation to manual.
     check(bool(processor.processSerial({planes, 2, frames}, frames, 0, true, true)),
@@ -226,19 +243,20 @@ void sessionContentAndIncrementalUpdates() {
         controller |= (event.status & 0xf0) == 0xb0 && event.data1 == 1 && event.data2 == 32;
     }
     check(noteAtOffset && controller, "prepared MIDI notes and controller curves retain sample positions");
-    check(render(64, .3f), "session renders shared/private audio and automates the correct send across a missing destination");
+    check(transition(64, 3, .3f) && render(256, .3f),
+          "session clip edges settle smoothly at the exact shared/private audio and automated send levels");
 
     AudioContentSpec edit;
     edit.levels.emplace();
     check(runtime.applyContent("play", std::move(edit)) && runtime.routingGraph() == graph &&
-          bool(processor.processSerial({planes, 2, frames}, frames, 128, true, true)) && render(192, .6f),
+          bool(processor.processSerial({planes, 2, frames}, frames, 320, true, true)) && render(384, .6f),
           "clearing automation restores static levels without rebuilding or erasing clips");
     edit = {}; edit.clips.emplace();
-    check(runtime.applyContent("play", std::move(edit)) && render(256, 0),
-          "an empty clip section clears both shared and private players");
+    check(runtime.applyContent("play", std::move(edit)) && transition(448, 4, 0) && render(704, 0),
+          "an empty clip section smoothly drains and clears both shared and private players");
     edit = {}; edit.midi = AudioContentSpec::Midi{notes, controls, true};
     runtime.applyContent("notes", std::move(edit));
-    check(runtime.sendLiveMidi("notes", engine::MidiEvent::noteOn(0, 0, 72, 100)) && render(320, 0),
+    check(runtime.sendLiveMidi("notes", engine::MidiEvent::noteOn(0, 0, 72, 100)) && render(768, 0),
           "live MIDI remains available while timeline playback is suppressed");
     bool released = false, live = false, oldRestarted = false;
     for (const auto& event : events.events()) {

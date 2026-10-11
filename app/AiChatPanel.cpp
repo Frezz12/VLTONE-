@@ -28,6 +28,7 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QActionGroup>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -451,33 +452,35 @@ AiChatPanel::~AiChatPanel() {
 QWidget* AiChatPanel::buildHeader() {
     auto* header = new QWidget(this);
     header->setObjectName("AiHeader");
-    header->setFixedHeight(kHeaderHeight);
-
+    header->setMinimumHeight(kHeaderHeight);
     auto* column = new QVBoxLayout(header);
-    column->setContentsMargins(4, 8, 0, 8);
-    column->setSpacing(2);
+    column->setContentsMargins(4, 12, 4, 10);
+    column->setSpacing(9);
 
     auto* row = new QHBoxLayout;
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(5);
-
+    row->setSpacing(8);
     auto* mark = new QLabel(QStringLiteral("AI"), header);
     mark->setObjectName("AiMark");
     mark->setAlignment(Qt::AlignCenter);
-    mark->setFixedSize(27, 27);
+    mark->setFixedSize(32, 32);
     row->addWidget(mark);
-
-    m_titleLabel = new QLabel(tr("AI chat"), header);
+    m_titleLabel = new QLabel(tr("Studio assistant"), header);
     m_titleLabel->setObjectName("AiTitle");
     m_titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_titleLabel->setWordWrap(true);
     row->addWidget(m_titleLabel, 1);
 
-    auto* clear = new ui::IconButton(icons::Glyph::Trash,
-                                     tr("Start a new conversation"), header);
-    clear->setButtonSize(26, 26);
-    clear->setAccessibleName(clear->toolTip());
-    clear->setFocusPolicy(Qt::StrongFocus);
-    connect(clear, &QAbstractButton::clicked, this, [this] {
+    auto* more = new QToolButton(header);
+    more->setObjectName("AiMessageAction");
+    more->setText(QStringLiteral("···"));
+    more->setFixedSize(28, 28);
+    more->setToolTip(tr("Conversation actions"));
+    more->setAccessibleName(more->toolTip());
+    more->setFocusPolicy(Qt::StrongFocus);
+    more->setPopupMode(QToolButton::InstantPopup);
+    auto* menu = new QMenu(more);
+    auto* clear = menu->addAction(tr("New conversation"));
+    connect(clear, &QAction::triggered, this, [this] {
         if (m_session->running()) return;
         if (!m_session->messages().empty() && QMessageBox::question(
                 this, tr("New conversation"), tr("Clear the conversation? Project edits will be kept.")) != QMessageBox::Yes) return;
@@ -485,67 +488,41 @@ QWidget* AiChatPanel::buildHeader() {
         renderTranscript();
         updateUsageLabel();
     });
-    row->addWidget(clear);
-
-    auto* history = messageAction(header, icons::Glyph::Search,
-                                  tr("Search, copy or export this conversation (Ctrl+F)"));
-    history->setFixedSize(26, 26);
-    connect(history, &QToolButton::clicked, this, &AiChatPanel::showConversation);
-    row->addWidget(history);
-
-    auto* rules = new ui::IconButton(
-        icons::Glyph::NoteStyle,
-        tr("Standing instructions for this project"), header);
-    rules->setButtonSize(26, 26);
-    rules->setAccessibleName(rules->toolTip());
-    rules->setFocusPolicy(Qt::StrongFocus);
-    connect(rules, &QAbstractButton::clicked, this,
-            &AiChatPanel::editInstructions);
-    row->addWidget(rules);
-
-    auto* gear = new ui::IconButton(icons::Glyph::Gear,
-                                    tr("Assistant settings"), header);
-    gear->setButtonSize(26, 26);
+    connect(menu, &QMenu::aboutToShow, this, [this, clear] { clear->setEnabled(!m_session->running()); });
+    menu->addAction(tr("Search, copy or export this conversation (Ctrl+F)"), this, &AiChatPanel::showConversation);
+    menu->addSeparator();
+    menu->addAction(tr("Standing instructions for this project"), this, &AiChatPanel::editInstructions);
+    more->setMenu(menu);
+    row->addWidget(more);
+    auto* gear = new ui::IconButton(icons::Glyph::Gear, tr("Assistant settings"), header);
+    gear->setButtonSize(28, 28);
     gear->setAccessibleName(gear->toolTip());
     gear->setFocusPolicy(Qt::StrongFocus);
-    connect(gear, &QAbstractButton::clicked, this,
-            &AiChatPanel::settingsRequested);
+    connect(gear, &QAbstractButton::clicked, this, &AiChatPanel::settingsRequested);
     row->addWidget(gear);
     column->addLayout(row);
 
     auto* meta = new QHBoxLayout;
-    meta->setContentsMargins(0, 2, 0, 0);
     meta->setSpacing(6);
-    // The model is a *choice*, not a caption: one key and one URL cover every
-    // model a provider offers, and which one suits the request is decided here
-    // rather than in a settings window.
     m_modelLabel = new QToolButton(header);
     m_modelLabel->setObjectName("AiModel");
     m_modelLabel->setAccessibleName(tr("AI model"));
     m_modelLabel->setPopupMode(QToolButton::InstantPopup);
     m_modelLabel->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_modelLabel->setFocusPolicy(Qt::StrongFocus);
     m_modelLabel->setCursor(Qt::PointingHandCursor);
     m_modelLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     auto* modelMenu = new QMenu(m_modelLabel);
-    connect(modelMenu, &QMenu::aboutToShow, this,
-            [this, modelMenu] { populateModelMenu(modelMenu); });
+    connect(modelMenu, &QMenu::aboutToShow, this, [this, modelMenu] { populateModelMenu(modelMenu); });
     m_modelLabel->setMenu(modelMenu);
     meta->addWidget(m_modelLabel, 1);
-
     m_contentIndexLabel = new QLabel(header);
     m_contentIndexLabel->setObjectName("AiIndexStatus");
-    m_contentIndexLabel->setText(tr("LIB —"));
     meta->addWidget(m_contentIndexLabel);
-
     m_usageLabel = new QLabel(header);
     m_usageLabel->setObjectName("AiUsage");
     meta->addWidget(m_usageLabel);
     column->addLayout(meta);
-
-    // The Music mode is built and works, but the user asked for it to be out of
-    // sight until it is ready to show — so the switch is not created and the
-    // panel stays in Assistant. `setMode` and everything behind it are
-    // untouched; putting the control back is what turns it on again.
     m_modeSwitch = nullptr;
     return header;
 }
@@ -638,7 +615,7 @@ QWidget* AiChatPanel::buildComposer() {
     m_input->viewport()->setProperty("vlt.nativeControlAsset", true);
     m_input->setPlaceholderText(
         tr("Write a message…"));
-    m_input->setFixedHeight(68);
+    m_input->setFixedHeight(80);
     m_input->setFrameShape(QFrame::NoFrame);
     m_input->setFocusPolicy(Qt::StrongFocus);
     m_input->setTabChangesFocus(true);
@@ -697,6 +674,33 @@ QWidget* AiChatPanel::buildComposer() {
     connect(m_promptsButton, &QAbstractButton::clicked, this,
             &AiChatPanel::showPromptMenu);
     buttons->addWidget(m_promptsButton);
+
+    m_interactionButton = new QToolButton(composer);
+    m_interactionButton->setObjectName("AiInteractionMode");
+    m_interactionButton->setText(tr("Auto"));
+    m_interactionButton->setToolTip(tr("Choose whether AI explains, teaches or edits the project"));
+    m_interactionButton->setAccessibleName(tr("Assistant interaction mode"));
+    m_interactionButton->setFocusPolicy(Qt::StrongFocus);
+    m_interactionButton->setPopupMode(QToolButton::InstantPopup);
+    auto* modes = new QMenu(m_interactionButton);
+    auto* modeGroup = new QActionGroup(modes);
+    const QStringList labels{tr("Auto"), tr("Ask"), tr("Learn"), tr("Do"), tr("Compose")};
+    const QStringList descriptions{tr("Choose from the request"), tr("Answers without project edits"),
+        tr("Step-by-step guidance without edits"), tr("Apply changes to the project"), tr("Create editable musical parts")};
+    for (int i = 0; i < labels.size(); ++i) {
+        auto* action = modes->addAction(labels[i] + QStringLiteral(" · ") + descriptions[i]);
+        action->setCheckable(true);
+        action->setChecked(i == 0);
+        modeGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, i, label = labels[i], description = descriptions[i]] {
+            m_requestedMode = i - 1;
+            m_interactionButton->setText(label);
+            m_interactionButton->setToolTip(description);
+            m_input->setFocus(Qt::ShortcutFocusReason);
+        });
+    }
+    m_interactionButton->setMenu(modes);
+    buttons->addWidget(m_interactionButton);
 
     // Music only: the one choice that changes what comes back enough to be
     // worth a control instead of a word in the request.
@@ -856,9 +860,20 @@ void AiChatPanel::applyTheme() {
 #AiMessageAction:hover { background: %MODEL_FILL%; }
 #AiMessageAction:pressed { background: %MARK_FILL%; }
 #AiMark { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-          border-radius: 8px; color: %TEXT1%; font-size: 10px;
+          border-radius: 8px; color: %TEXT1%; font-size: 12px;
           font-weight: 750; }
-#AiTitle { color: %TEXT1%; font-size: 12px; font-weight: 650; }
+#AiTitle { color: %TEXT1%; font-size: 14px; font-weight: 650; }
+#AiWelcome { background: transparent; border: none; }
+#AiWelcomeTitle { color: %TEXT1%; font-size: 19px; font-weight: 650; }
+#AiStarter { background: %ASSISTANT_TOP%; color: %TEXT1%; border: 1px solid %ASSISTANT_BORDER%;
+             border-radius: 8px; text-align: left; padding: 10px; font-size: 12px; }
+#AiStarter:hover { background: %MODEL_FILL%; border-color: %INPUT_BORDER%; }
+#AiStarter:pressed { background: %MARK_FILL%; }
+#AiStarter:focus, #AiInteractionMode:focus, #AiMessageAction:focus, #AiModel:focus { border: 1px solid %ACCENT_SOFT%; }
+#AiInteractionMode { background: %MODEL_FILL%; color: %TEXT1%; border: 1px solid %SEP%;
+                     border-radius: 6px; padding: 4px 16px 4px 8px; font-size: 11px; }
+#AiInteractionMode::menu-indicator { subcontrol-position: right center; right: 4px; }
+#AiMessageAction::menu-indicator { image: none; }
 /* Room on the right for the menu caret QToolButton draws itself, or it lands
    on the last letter of the model's name. */
 #AiModel { background: %MODEL_FILL%; border: 1px solid %SEP%;
@@ -914,11 +929,11 @@ void AiChatPanel::applyTheme() {
 #AiActionText { color: %TEXT2%; font-size: 11px; }
 #AiCandidateCard { background: %ASSISTANT_TOP%; border: 1px solid %ACTION_BORDER%;
                    border-radius: 8px; }
-#AiCandidateTitle { color: %TEXT1%; font-size: 9px; font-weight: 750;
+#AiCandidateTitle { color: %TEXT1%; font-size: 12px; font-weight: 650;
                     letter-spacing: 0.7px; }
-#AiCandidateScore { color: %TEXT2%; font-size: 9px; }
+#AiCandidateScore { color: %TEXT2%; font-size: 11px; }
 #AiCandidateButton { background: %MARK_FILL%; border: 1px solid %ACCENT_SOFT%;
-                     border-radius: 8px; color: %TEXT1%; font-size: 8px;
+                     border-radius: 8px; color: %TEXT1%; font-size: 11px;
                      font-weight: 700; padding: 3px 7px; }
 #AiCandidateButton:hover { background: %MODEL_FILL%; }
 #AiRevertButton { background: transparent; border: none; color: %TEXT2%;
@@ -1557,7 +1572,9 @@ void AiChatPanel::send() {
     }
 
     ai::ToolContext context;
+    if (m_requestedMode >= 0) context.requestedMode = ai::InteractionMode(m_requestedMode);
     context.uiContext = m_uiContext;
+    context.focusInApp = m_uiFocus;
     for (int i = 0; i < m_attachments->count(); ++i) {
         const QString path = m_attachments->item(i)->data(Qt::UserRole).toString();
         audio::platform::AudioFileInfo probed;
@@ -1815,6 +1832,7 @@ void AiChatPanel::updateBusyState() {
     // response runs. The Stop button replaces Send until this turn finishes.
     m_input->setEnabled(true);
     if (m_modelLabel) m_modelLabel->setEnabled(!running);
+    if (m_interactionButton) m_interactionButton->setEnabled(!running);
 }
 
 // ── The music mode ──────────────────────────────────────────────────────────
@@ -1849,7 +1867,7 @@ void AiChatPanel::setMode(Mode mode, bool persist) {
 void AiChatPanel::applyModeToComposer() {
     const bool music = m_mode == Mode::Music;
     if (m_titleLabel)
-        m_titleLabel->setText(music ? tr("AI music") : tr("AI chat"));
+        m_titleLabel->setText(music ? tr("AI music") : tr("Studio assistant"));
     if (m_instrumentalButton) m_instrumentalButton->setVisible(music);
     if (m_attachHint) m_attachHint->hide();
     if (m_attachmentButton) m_attachmentButton->setVisible(!music &&
@@ -2106,7 +2124,7 @@ void AiChatPanel::renderTranscript() {
         for (const auto& outcome : message.outcomes) {
             mix(std::hash<std::string>{}(outcome.callId));
             mix(std::hash<std::string>{}(outcome.name)); mix(outcome.ok);
-            mix(std::hash<std::string>{}(outcome.result.dump()));
+            mix(std::hash<nlohmann::json>{}(outcome.result));
         }
         hashes.push_back(hash);
     }
@@ -2204,9 +2222,19 @@ void AiChatPanel::renderTranscript() {
                             if (name == "set_clip_notes") return tr("Write notes");
                             if (name == "compose_candidates") return tr("Prepare musical variations");
                             if (name == "get_project" || name == "get_project_context") return tr("Read project");
-                            if (name == "load_sample") return tr("Load sample");
-                            if (name == "add_plugin") return tr("Add instrument or effect");
-                            if (name == "set_plugin_parameter") return tr("Adjust sound");
+                            if (name == "load_sampler") return tr("Load sample");
+                            if (name == "add_insert" || name == "set_track_instrument") return tr("Add instrument or effect");
+                            if (name == "set_insert_parameter" || name == "set_insert_parameters" || name == "configure_plugin") return tr("Adjust sound");
+                            if (name == "list_plugin_parameters" || name == "get_plugin_state") return tr("Inspect plugin controls");
+                            if (name == "create_pattern" || name == "add_pattern_lane") return tr("Build drum pattern");
+                            if (name == "set_sequence") return tr("Write sequencer steps");
+                            if (name == "get_sequence") return tr("Read sequencer steps");
+                            if (name.starts_with("analyze_") || name == "inspect_music_context") return tr("Analyze the project");
+                            if (name == "get_playbook") return tr("Read production guide");
+                            if (name == "list_plugins" || name == "search_files") return tr("Find sounds and effects");
+                            if (name == "mix" || name == "add_send") return tr("Adjust mix and routing");
+                            if (name == "automation") return tr("Edit automation");
+                            if (name == "focus_in_app") return tr("Open project element");
                             return tr("Project action");
                         };
                         QString detail = activityLabel(out.name);
@@ -2347,14 +2375,35 @@ void AiChatPanel::renderTranscript() {
     }
 
     if (m_session->messages().empty()) {
-        auto card = messageCard(m_transcriptBody, "AiAssistantCard", tr("VLT AI"),
-                             "AiAssistantRole");
-        card.second->addWidget(cardText(m_transcriptBody, 
-            tr("Ask me to create, arrange, edit or explain anything in the open project."),
-            "AiMessageSecondary", true));
-        wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 10, 1);
-
-
+        auto card = messageCard(m_transcriptBody, "AiWelcome", {}, "AiAssistantRole");
+        card.second->setSpacing(10);
+        card.second->addWidget(cardText(card.first, tr("What are we making?"), "AiWelcomeTitle"));
+        card.second->addWidget(cardText(card.first,
+            tr("Create a beat, shape a sound or work on your mix. Start with the selected track."), "AiMessageSecondary", true));
+        const auto starter = [&](icons::Glyph glyph, const QString& title, const QString& prompt) {
+            auto* button = new QPushButton(icons::icon(glyph, th().textSecondary, 18), title, card.first);
+            button->setObjectName("AiStarter");
+            button->setMinimumHeight(40);
+            button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Minimum);
+            button->setToolTip(prompt);
+            button->setAccessibleName(title);
+            button->setFocusPolicy(Qt::StrongFocus);
+            connect(button, &QPushButton::clicked, this, [this, prompt] {
+                m_input->setPlainText(prompt);
+                m_input->setFocus(Qt::ShortcutFocusReason);
+            });
+            card.second->addWidget(button);
+        };
+        starter(icons::Glyph::Grid, tr("Program a beat"),
+            tr("Create a 4-bar drum pattern in the step sequencer with separate kick, snare and hi-hat lanes. Use the project's tempo and choose suitable sounds from my library."));
+        starter(icons::Glyph::Mic, tr("Mix a vocal"),
+            tr("Mix the selected vocal: inspect levels and the current effects, choose suitable installed plugins, set up compression and de-essing, and add tasteful space using sends. Explain the changes."));
+        starter(icons::Glyph::Plugin, tr("Shape this sound"),
+            tr("Inspect the selected track's instrument and effects and their parameters. Suggest three useful sound directions before editing."));
+        starter(icons::Glyph::Search, tr("Check the mix"),
+            tr("Analyze the project balance and master headroom. Explain the main issues and suggest the next steps without changing the project."));
+        card.second->addWidget(cardText(card.first, tr("Suggestions fill the message box. You decide when to send."), "AiMessageSecondary", true));
+        wrapRow(m_transcriptLayout, m_transcriptBody, card.first, 0, 0, 0);
     }
 
     m_transcriptLayout->addStretch(1);
@@ -2471,6 +2520,19 @@ bool AiChatPanel::checkAgentForTest() {
     // keys straight to m_input would miss the viewport/focus routing bug.
     renderTranscript();
     if (!findChildren<QWidget*>(QStringLiteral("AiSuggestionPanel")).isEmpty()) return false;
+    const auto starters = m_transcriptBody->findChildren<QPushButton*>("AiStarter");
+    if (starters.size() != 4 || !m_interactionButton || !m_interactionButton->menu()) return false;
+    const auto initialRevision = m_controller->projectRevision();
+    starters.front()->click();
+    if (m_input->toPlainText().isEmpty() || m_session->running() ||
+        m_controller->projectRevision() != initialRevision) return false;
+    const auto modes = m_interactionButton->menu()->actions();
+    if (modes.size() != 5) return false;
+    modes[1]->trigger();
+    if (m_requestedMode != int(ai::InteractionMode::Help)) return false;
+    modes[0]->trigger();
+    if (m_requestedMode != -1) return false;
+    std::fprintf(stderr, "PASS AI chat: starter drafts do not execute; explicit mode selection works\n");
     window()->activateWindow();
     QWidget* inputSource = window();
     QWindow* inputWindow = window()->windowHandle();
@@ -2709,6 +2771,10 @@ void AiChatPanel::showDemoTranscriptForTest() {
     const bool russian = qEnvironmentVariable("DAW_SHOT_DEMO_LOCALE") == QLatin1String("ru");
     m_client.reset(new ScriptedClient(this, projectDemo, russian));
     updateReadiness();
+    if (qEnvironmentVariable("DAW_SHOT_AI") == QLatin1String("welcome")) {
+        renderTranscript();
+        return;
+    }
     m_input->setPlainText(projectDemo
         ? (russian ? QStringLiteral("Добавь в Night Bloom четыре такта аккордов в до миноре на новую MIDI-дорожку с 17-го такта.")
                    : QStringLiteral("Add four bars of C minor chords to Night Bloom on a new MIDI track, starting at bar 17."))

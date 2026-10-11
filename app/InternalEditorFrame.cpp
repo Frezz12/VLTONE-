@@ -4,6 +4,7 @@
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "graphics/WorkspaceSurface.hpp"
+#include "graphics/WidgetUpdates.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include "UiFrameClock.hpp"
 
@@ -34,7 +35,7 @@
 namespace {
 
 constexpr int kTitleHeight = 22;
-constexpr int kCornerRadius = 5;
+constexpr int kCornerRadius = 8;
 constexpr int kResizeBand = 6;
 constexpr int kCornerBand = 12;
 constexpr int kMinimumWidth = 420;
@@ -44,9 +45,10 @@ constexpr int kInteractiveResizeFrameMs = 16;
 QSize minimumFrameSize(const QWidget* content, const QRect& bounds) {
     QSize minimum(kMinimumWidth, kMinimumHeight);
     if (content && content->property("vlt.compactEditor").toBool()) minimum = QSize(340, 220);
-    // A vendor GUI owns its pixel dimensions, including editors smaller than
-    // the usual application-editor minimum. Keep only its explicit minimum.
-    if (content && content->property("vlt.nativeEditor").toBool()) minimum = QSize(0, 0);
+    // Vendor GUIs and narrow instrument panels own their minimum dimensions.
+    // The content's explicit minimum still applies below.
+    if (content && (content->property("vlt.nativeEditor").toBool() ||
+                    content->property("vlt.contentSizedEditor").toBool())) minimum = QSize(0, 0);
     if (content)
         minimum = minimum.expandedTo(content->minimumSize() + QSize(2, kTitleHeight + 2));
     return minimum.boundedTo(bounds.size());
@@ -91,7 +93,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     m_titleBar->setCursor(Qt::OpenHandCursor);
     m_titleBar->installEventFilter(this);
     auto* titleRow = new QHBoxLayout(m_titleBar);
-    titleRow->setContentsMargins(8, 1, 3, 1);
+    titleRow->setContentsMargins(8, 1, 8, 1);
     titleRow->setSpacing(2);
 
     m_title = new QLabel(tr("Editor"), m_titleBar);
@@ -132,7 +134,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
         icons::Glyph::Close, tr("Close editor"), m_titleBar);
     m_closeButton->setObjectName(QStringLiteral("InternalEditorClose"));
     m_closeButton->setButtonSize(24, 20);
-    m_closeButton->setGlyphSize(11);
+    m_closeButton->setGlyphSize(14);
     m_closeButton->setFocusPolicy(Qt::StrongFocus);
     m_closeButton->setAccessibleName(tr("Close editor"));
     m_closeButton->setAccessibleDescription(
@@ -245,6 +247,12 @@ void InternalEditorFrame::activateEditor() {
     installApplicationEventFilter();
     raiseEditor();
     setEditorActive(true);
+}
+
+void InternalEditorFrame::moveWithinWorkspace(const QPoint& position) {
+    const QRect wanted = constrainedGeometry(QRect(position, size()));
+    if (wanted.size() != size() || !ui::graphics::moveNativeOverlay(this, wanted.topLeft()))
+        setGeometry(wanted);
 }
 
 void InternalEditorFrame::setExpansionEnabled(bool enabled) {
@@ -408,14 +416,13 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         if (mouse && event->type() == QEvent::MouseMove && m_dragging &&
             (mouse->buttons() & Qt::LeftButton)) {
             const QPoint delta = mouse->globalPosition().toPoint() - m_pressGlobal;
-            setGeometry(constrainedGeometry(m_pressGeometry.translated(delta)));
+            moveWithinWorkspace(m_pressGeometry.topLeft() + delta);
             mouse->accept();
             return true;
         }
         if (mouse && event->type() == QEvent::MouseButtonRelease && m_dragging &&
             mouse->button() == Qt::LeftButton) {
-            setGeometry(constrainedGeometry(m_pressGeometry.translated(
-                mouse->globalPosition().toPoint() - m_pressGlobal)));
+            moveWithinWorkspace(m_pressGeometry.topLeft() + mouse->globalPosition().toPoint() - m_pressGlobal);
             m_dragging = false;
             m_titleBar->setCursor(Qt::OpenHandCursor);
             m_restoreGeometry = geometry();
@@ -877,12 +884,18 @@ bool InternalEditorFrame::checkPlacementForTest() {
             image.setDevicePixelRatio(rounded.devicePixelRatioF());
             image.fill(Qt::transparent);
             rounded.render(&image);
+            const QString screenshot = qEnvironmentVariable("DAW_EDITOR_CHECK_SCREENSHOT");
+            if (!screenshot.isEmpty())
+                image.save(screenshot + QStringLiteral("-%1x%2.png")
+                    .arg(size.width()).arg(size.height()));
             check(!rounded.mask().isEmpty(), "editor clips its rounded corners");
             check(rounded.mask().contains(QPoint(kCornerRadius, 0)) &&
                   !rounded.mask().contains(QPoint(0, 0)),
-                  "editor keeps a five-pixel corner radius after resizing");
+                  "editor keeps an eight-pixel corner radius after resizing");
             check(rounded.testAttribute(Qt::WA_OpaquePaintEvent),
                   "a filled editor does not repaint the workspace behind it");
+            check(rounded.m_closeButton->visibleRegion() == QRegion(rounded.m_closeButton->rect()),
+                  "the complete close button stays visible inside the rounded header");
             for (const QPoint point : {image.rect().topLeft(), image.rect().topRight(),
                                        image.rect().bottomLeft(), image.rect().bottomRight()})
                 check(image.pixelColor(point).alpha() == 0,

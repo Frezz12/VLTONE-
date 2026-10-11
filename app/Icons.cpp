@@ -954,6 +954,12 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         }
         break;
     }
+    case Glyph::SingleNote: {
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawRoundedRect(QRectF(5.0, 10.0, 14.0, 4.0), 1.3, 1.3);
+        break;
+    }
     case Glyph::Chord: {
         // Three blocks stacked at the same instant: notes struck together.
         p.setPen(Qt::NoPen);

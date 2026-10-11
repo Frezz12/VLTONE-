@@ -273,6 +273,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// Where a lane starts on screen, for the headless check that the header
     /// column is in step with the lanes.
     bool checkClipIndexForTest() const;
+    bool checkLocalDamageForTest();
     static bool checkClipTrimPreviewForTest();
     static bool checkFileDropPreviewForTest();
     bool checkAdaptiveGridForTest();
@@ -385,6 +386,8 @@ protected:
     void paintEvent(QPaintEvent*) override;
     void paintScene(QPainter&, const QRegion&) override;
     ui::graphics::RetainedScene m_gpuLaneTiles;
+    ui::graphics::RetainedScene m_gpuMidiHeaders;
+    QSize m_gpuMidiHeaderSize;
     QSize m_gpuTileSize;
     qreal m_gpuTileDpr = 0;
     void resizeEvent(class QResizeEvent*) override;
@@ -473,7 +476,9 @@ private:
     bool hitTestSequence(const QPoint& pos, SequenceHit& hit);
     bool pressSequence(QMouseEvent* event);
     void moveSequence(QMouseEvent* event);
+    void paintSequenceSteps(double beat);
     void finishSequence(bool cancel = false);
+    void drawMidiClipHeaders(QPainter& p);
     void drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip, const QRectF& body);
     void drawMidiSequence(QPainter& p, const daw::TrackModel& track,
                           const daw::ClipModel& clip, const QRectF& body,
@@ -484,6 +489,8 @@ private:
     QString sequenceToolTip(const SequenceHit& hit) const;
     SequenceHit m_sequenceDrag;
     bool m_sequenceEditing = false;
+    bool m_sequenceAdd = true;
+    std::vector<daw::NoteModel> m_sequenceBefore;
     double m_sequenceStartY = 0;
     double m_sequenceVelocity = 100;
 
@@ -659,7 +666,7 @@ private:
     void drawRuler(class QPainter& p);
     void drawGrid(QPainter& p, const QColor& laneBase = {},
                   const QColor& laneFill = {});
-    void drawLanes(QPainter& p);
+    void drawLanes(QPainter& p, bool midiHeaders = true);
     void drawTimelineBackground(QPainter& p);
     void drawTimedNotebookText(QPainter& p);
     QRect timedNotebookTextRect() const;
@@ -687,6 +694,7 @@ private:
     /// What is under `pos` on an automation lane. False when the pointer is not
     /// over an automation clip at all.
     bool hitTestAutomationPoint(const QPoint& pos, PointHit& out) const;
+    bool hitTestAutomationRegion(const QPoint& pos, PointHit& out) const;
     /// The index of the breakpoint sitting at `beats`, or −1. Used to re-find a
     /// point after the controller has sorted the vector under us.
     bool isOverAutomation(const QPoint& pos) const;
@@ -814,8 +822,13 @@ private:
     /// gesture began — the live-edit / commit-on-release split every curve
     /// editor here uses.
     PointHit m_pointDrag;
+    QPointF m_automationPointGrabOffset;
     bool m_draggingPoint = false;
     bool m_drawingCurve = false;
+    bool m_draggingAutomationRegion = false;
+    double m_automationRegionFrom = 0.0;
+    double m_automationRegionTo = 0.0;
+    double m_automationRegionAmount = 0.0;
 
     bool m_bendingSegment = false;
     double m_bendStartY = 0.0;

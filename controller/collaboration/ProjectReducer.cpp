@@ -704,7 +704,8 @@ bool pluginIsDeleted(const SharedProjectDocument& state,
 
 bool supportedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
-           (insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
+           (insert.uid == "daw.gain" || insert.uid == "daw.stereo-utility" || insert.uid == "daw.reverse" ||
+            insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
             insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.channel-color" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
@@ -756,6 +757,9 @@ bool validBindings(const std::vector<PluginAssetBinding>& bindings,
 
 bool validSharedInsert(const InsertModel& insert,
                        std::uint32_t schemaVersion) {
+    if (insert.format == PluginFormat::Internal && schemaVersion < 6 &&
+        (insert.uid == "daw.gain" || insert.uid == "daw.stereo-utility" || insert.uid == "daw.reverse"))
+        return false;
     if (insert.uid=="daw.mini-module") {
         if(schemaVersion<7 || !validMiniModule(insert)) return false;
     } else if (insert.miniModule) return false;

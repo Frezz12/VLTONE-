@@ -136,7 +136,9 @@ public:
 
     /// Called after an offline block, with all process workers stopped, when
     /// the listener requested a restart. Formats may service non-structural
-    /// notifications here without resetting DSP. True requires a new pass.
+    /// notifications here without resetting DSP. Refresh reported latency and
+    /// bus layout before returning true, so the host can compare configurations.
+    /// True requires a new pass unless that same configuration was already served.
     virtual bool serviceOfflineRestart() { return true; }
 
     // ── Editor, control thread only ──

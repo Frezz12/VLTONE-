@@ -204,7 +204,8 @@ void ClipLibraryView::refresh() {
     QString signature = m_filter;
     for (const auto& saved : m_controller->project().clipLibrary)
         signature += QChar(0x1f)+QString::fromStdString(saved.id)+QChar(0x1e)+QString::fromStdString(saved.name);
-    if (signature != m_signature || (count()==0 && !m_controller->project().clipLibrary.empty())) {
+    if (!m_initialized || signature != m_signature) {
+        m_initialized = true;
         const QString selected = currentItem() ? currentItem()->data(Qt::UserRole).toString() : QString{};
         const int scroll = verticalScrollBar()->value();
         clear(); m_signature = signature;
@@ -231,8 +232,22 @@ void ClipLibraryView::showEvent(QShowEvent* event) { QListWidget::showEvent(even
 
 void ClipLibraryView::queueWaveforms() {
     if (!m_loading.isEmpty() || !isVisible()) return;
-    for (int i=0;i<count();++i) {
-        if (!viewport()->rect().intersects(visualItemRect(item(i)))) continue;
+    const auto first = indexAt(QPoint(viewport()->width() / 2, 1));
+    int begin = first.isValid() ? first.row() : 0;
+    if (!first.isValid()) {
+        // The top pixel can be in the spacing between cards. Find the first
+        // visible row without walking all preceding library entries.
+        int end = count();
+        while (begin < end) {
+            const int middle = begin + (end - begin) / 2;
+            if (visualItemRect(item(middle)).bottom() < 0) begin = middle + 1;
+            else end = middle;
+        }
+    }
+    for (int i = begin; i < count(); ++i) {
+        const auto itemRect = visualItemRect(item(i));
+        if (itemRect.top() > viewport()->height()) break;
+        if (!viewport()->rect().intersects(itemRect)) continue;
         const auto* saved = entry(indexFromItem(item(i)));
         if (!saved || saved->tracks.empty() || saved->tracks.front().clips.empty()) continue;
         const auto& clip=saved->tracks.front().clips.front();

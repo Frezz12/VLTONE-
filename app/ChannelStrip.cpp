@@ -14,6 +14,7 @@
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "UiConstants.hpp"
+#include "graphics/WorkspaceSurface.hpp"
 
 #include "EngineController.hpp"
 #include "AutomationEditorWindow.hpp"
@@ -27,6 +28,8 @@
 #include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEnterEvent>
+#include <QEventLoop>
 #include <QDragMoveEvent>
 #include <QDrag>
 #include <QMimeData>
@@ -43,11 +46,14 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
+#include <QQuickWindow>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOption>
 #include <QToolButton>
 #include <QToolTip>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
@@ -359,7 +365,9 @@ public:
     }
 
 protected:
-    void enterEvent(QEnterEvent*) override { refreshHover(); }
+    void enterEvent(QEnterEvent* event) override {
+        refreshHover(event->globalPosition().toPoint());
+    }
     void leaveEvent(QEvent*) override { refreshHover(); }
     void resizeEvent(QResizeEvent*) override {
         layoutRow();
@@ -373,8 +381,10 @@ protected:
         if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseButtonRelease ||
             ev->type() == QEvent::DynamicPropertyChange || ev->type() == QEvent::EnabledChange)
             update();
-        if (ev->type() == QEvent::Enter || ev->type() == QEvent::Leave ||
-            ev->type() == QEvent::FocusIn || ev->type() == QEvent::FocusOut) {
+        if (ev->type() == QEvent::Enter) {
+            refreshHover(static_cast<QEnterEvent*>(ev)->globalPosition().toPoint());
+        } else if (ev->type() == QEvent::Leave || ev->type() == QEvent::FocusIn ||
+                   ev->type() == QEvent::FocusOut) {
             refreshHover();
         }
         // The name button fills the row, so a drag has to start from *its*
@@ -451,13 +461,13 @@ private:
         }
     }
 
-    void refreshHover() {
+    void refreshHover(QPoint globalPosition = QCursor::pos()) {
         // A grab cannot hold a pointer over a row, so a screenshot check asks
         // for the hovered state outright. Set once per process.
         static const bool forced = qEnvironmentVariableIsSet("DAW_SHOT_SLOT_HOVER");
         const auto* focused = QApplication::focusWidget();
         const bool on =
-            forced || rect().contains(mapFromGlobal(QCursor::pos())) ||
+            forced || rect().contains(mapFromGlobal(globalPosition)) ||
             (focused && isAncestorOf(focused)) || m_overflow->menu()->isVisible();
         if (on == m_hovered) return;
         m_hovered = on;
@@ -651,7 +661,56 @@ bool ChannelStrip::checkDragLifecycleForTest() {
     return ok;
 }
 
+namespace {
+bool checkControlWheelInputForTest() {
+    bool ok = true;
+    const auto check = [&](bool passed, const char* label) {
+        std::fprintf(stderr, "%s wheel controls: %s\n", passed ? "PASS" : "FAIL", label);
+        ok &= passed;
+    };
+    {
+        QWidget parent;
+        ui::Knob knob("Parameter", &parent);
+        knob.setRange(0, 100); knob.setValue(50);
+        ui::PanKnob pan(&parent);
+        pan.setPan(.25);
+        ui::FaderWidget fader(&parent);
+        fader.setGain(.5);
+        ui::MiniSlider mini(icons::Glyph::Volume, "Level", &parent);
+        mini.setRange(0, 100); mini.setValue(50);
+        ui::GlassSlider glass(Qt::Horizontal, &parent);
+        glass.setRange(0, 100); glass.setValue(50);
+        int edits = 0;
+        QObject::connect(&knob, &ui::Knob::editFinished, [&] { ++edits; });
+        QObject::connect(&pan, &ui::PanKnob::editFinished, [&] { ++edits; });
+        QObject::connect(&fader, &ui::FaderWidget::editFinished, [&] { ++edits; });
+        QObject::connect(&mini, &ui::MiniSlider::editFinished, [&] { ++edits; });
+        bool ignored = true;
+        for (auto* control : QList<QWidget*>{&knob, &pan, &fader, &mini, &glass}) {
+            for (const bool pixels : {false, true}) {
+                for (const auto modifiers : {Qt::NoModifier, Qt::ShiftModifier, Qt::ControlModifier}) {
+                    for (const int direction : {-1, 1}) {
+                        QWheelEvent wheel(control->rect().center(), control->mapToGlobal(control->rect().center()),
+                            pixels ? QPoint(0, direction * 30) : QPoint{},
+                            pixels ? QPoint{} : QPoint(0, direction * 120),
+                            Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+                        QApplication::sendEvent(control, &wheel);
+                        ignored &= !wheel.isAccepted() || control == &glass;
+                    }
+                }
+            }
+        }
+        check(ignored, "custom controls leave wheel input available for navigation");
+        check(edits == 0 && knob.value() == 50 && pan.pan() == .25 && fader.gain() == .5 &&
+              mini.value() == 50 && glass.value() == 50,
+              "all custom controls preserve values and do not commit wheel edits");
+    }
+    return ok;
+}
+} // namespace
+
 bool ChannelStrip::checkFaderInputForTest() {
+    if (!checkControlWheelInputForTest()) return false;
     daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     const auto trackId = controller.addTrack(daw::TrackKind::Audio, "Fader input");
@@ -2964,6 +3023,104 @@ QMenu* ChannelStrip::buildContextMenu(QWidget* parent) {
 }
 
 bool ChannelStrip::checkContextMenusForTest() {
+    if (!checkControlWheelInputForTest()) return false;
+    // Quick forwards the event's position without moving the system cursor.
+    // Exercise the same row and child controls used by real sends.
+    {
+        QWidget window;
+        QWidget host(&window);
+        const bool gpuCheck = qEnvironmentVariableIsSet("DAW_SEND_HOVER_GPU_CHECK");
+        window.setAttribute(Qt::WA_DontShowOnScreen, !gpuCheck);
+        const QRect screen = window.screen()->availableGeometry();
+        QPoint position = screen.topLeft() + QPoint(40, 40);
+        if (QRect(position, QSize(200, 100)).contains(QCursor::pos()))
+            position = screen.bottomRight() - QPoint(220, 140);
+        window.move(gpuCheck ? position : QPoint(20000, 20000));
+        window.resize(180, 40);
+        host.setGeometry(window.rect());
+        auto* name = new SlotNameButton;
+        name->setObjectName("SlotButton");
+        name->setProperty("sendRow", true);
+        name->setText("Send destination");
+        name->setFixedHeight(kSlotHeight);
+        name->setFocusPolicy(Qt::NoFocus);
+        SlotRow row(name, &host);
+        row.resize(170, kSlotHeight);
+        auto* power = new ui::IconButton(icons::Glyph::Power, "Power", &row);
+        auto* tap = new QToolButton(&row);
+        tap->setObjectName("TapButton");
+        tap->setStyleSheet("font-size: 9px; padding: 0px;");
+        tap->setText("PST");
+        auto* remove = new ui::IconButton(icons::Glyph::Close, "Remove", &row);
+        const QList<QAbstractButton*> actions{power, tap, remove};
+        for (auto* action : actions) {
+            action->setFocusPolicy(Qt::NoFocus);
+            row.addSlotAction(action, action == tap ? kTapWidth : kActionSide);
+        }
+        auto* level = new ui::Knob({}, &row);
+        level->setBare(kSendKnobSide);
+        level->setFocusPolicy(Qt::NoFocus);
+        row.setLeading(level);
+        bool gpuFailed = false;
+        const auto surface = gpuCheck ? std::make_unique<ui::graphics::WorkspaceSurface>(&host) : nullptr;
+        if (surface) connect(surface.get(), &ui::graphics::WorkspaceSurface::failed, &host,
+                             [&](const QString&) { gpuFailed = true; });
+        const auto settle = [&](int milliseconds = 120) {
+            QEventLoop loop;
+            QTimer::singleShot(surface ? milliseconds : 0, &loop, &QEventLoop::quit);
+            loop.exec();
+        };
+        window.show();
+        if (surface) {
+            window.raise();
+            window.activateWindow();
+            surface->quickWindow()->requestActivate();
+        }
+        settle(1200);
+        if (surface && (!surface->quickWindow()->isExposed() ||
+                        surface->quickWindow()->property("vlt.sceneMeshes").toInt() == 0)) {
+            std::fprintf(stderr, "FAIL send hover: GPU fixture did not present its controls (exposed=%d layers=%d meshes=%d)\n",
+                surface->quickWindow()->isExposed(), surface->quickWindow()->property("vlt.sceneLayers").toInt(),
+                surface->quickWindow()->property("vlt.sceneMeshes").toInt());
+            return false;
+        }
+        const auto enter = [&](QWidget* target) {
+            const QPointF local(target->rect().center());
+            if (surface) {
+                QMouseEvent event(QEvent::MouseMove, target->mapTo(&host, local), target->mapToGlobal(local),
+                                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(surface->quickWindow(), &event);
+            } else {
+                QEnterEvent event(local, target->mapTo(&host, local), target->mapToGlobal(local));
+                QApplication::sendEvent(target, &event);
+            }
+            settle();
+        };
+        enter(name);
+        bool revealed = name->text().isEmpty() && level->isVisible();
+        for (auto* action : actions)
+            revealed &= action->isVisible() && row.childAt(action->geometry().center()) == action;
+        std::fprintf(stderr, "%s send hover: all actions are visible and clickable on enter\n",
+                     revealed ? "PASS" : "FAIL");
+        if (!revealed || gpuFailed) return false;
+        const QString shot = qEnvironmentVariable("DAW_SEND_HOVER_SCREENSHOT");
+        if (!shot.isEmpty()) {
+            const QImage image = surface ? surface->quickWindow()->grabWindow() : host.grab().toImage();
+            if (image.isNull() || !image.save(shot)) return false;
+        }
+        enter(tap);
+        if (!power->isVisible() || !tap->isVisible() || !remove->isVisible()) return false;
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(tap, &leave);
+        QApplication::sendEvent(&row, &leave);
+        if (power->isVisible() || tap->isVisible() || remove->isVisible() || name->text().isEmpty())
+            return false;
+        row.resize(50, kSlotHeight);
+        enter(level);
+        auto* overflow = row.findChild<QToolButton*>(QStringLiteral("SlotOverflow"));
+        if (!overflow || !overflow->isVisible() || !level->isVisible()) return false;
+        std::fprintf(stderr, "PASS send hover: entering a child preserves actions; compact rows reveal their menu\n");
+    }
     daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Channel");

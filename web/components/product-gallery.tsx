@@ -27,9 +27,14 @@ function GalleryVisual({ view }: { view: number }) {
         <rect className="gallery-fader" x={x - 8} y={12 + (index % 4) * 9} width="16" height="6" rx="2" fill="currentColor" />
       </g>)}
     </> : <>
-      {[16, 32, 48].map(y => <path key={y} d={`M6 ${y}H154`} stroke="currentColor" opacity=".12" />)}
-      <path d="M7 56C20 56 24 18 40 26S60 45 75 36 93 13 110 23 129 32 153 20" stroke="currentColor" strokeWidth="2.5" />
-      {[[40, 26], [75, 36], [110, 23]].map(([x, y]) => <circle key={x} cx={x} cy={y} r="4" fill="currentColor" />)}
+      {[7, 60, 113].map((x, index) => <g key={x}>
+        <rect x={x} y="9" width="40" height="46" rx="3" stroke="currentColor" opacity=".65" />
+        <path d={`M${x} 21H${x + 40}`} stroke="currentColor" opacity=".3" />
+        <circle cx={x + 7} cy="15" r="2" fill="currentColor" />
+        <circle cx={x + 20} cy="37" r="9" stroke="currentColor" opacity=".5" />
+        <path d={`M${x + 20} 37l${index === 1 ? 5 : -4} -6`} stroke="currentColor" strokeWidth="2" />
+        {index < 2 && <path d={`M${x + 42} 32h9m-3-3 3 3-3 3`} stroke="currentColor" />}
+      </g>)}
     </>}
   </svg>;
 }
@@ -59,7 +64,7 @@ export function StudioGallery({ locale, items }: { locale: string; items: Shot[]
   const warmed = useRef(new Set<string>());
   const shot = items[selected];
   const ru = locale === "ru";
-  const shortLabels = ru ? ["Проект", "Ноты", "Микшер", "EQ"] : ["Arrange", "Notes", "Mixer", "EQ"];
+  const shortLabels = ru ? ["Проект", "Ноты", "Микшер", "Рэк"] : ["Arrange", "Notes", "Mixer", "Rack"];
   function warmShot(index: number) {
     const src = `/images/studio/${items[index].name}-${ru ? "ru" : "en"}.webp?v=${screenshotVersion}`;
     if (warmed.current.has(src)) return;

@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUpRight, ArrowRight, Plus } from "lucide-react";
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { StudioGallery, ProductShot } from "@/components/product-gallery";
 import { AmbientMotionControl } from "@/components/ambient-motion-control";
+import { HomePlayground } from "@/components/home-playground";
 import { studioContent } from "@/lib/studio-content";
 import { screenshotVersion } from "@/lib/screenshot-version";
 import { siteMetadata, siteUrl } from "@/lib/seo";
@@ -100,7 +101,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
       <div className="studio-container">
       <header className="editorial-heading" data-reveal="0">
         <h2 id="studio-title">{ru ? "Весь проект" : "Your whole project"}<br /><span>{ru ? "перед глазами." : "in view."}</span></h2>
-        <p>{ru ? "Аудиодорожки, MIDI-партии и автоматизация на одном таймлайне. Переключай экраны, чтобы рассмотреть аранжировку, редактор нот, микшер и эквалайзер." : "Audio tracks, MIDI parts and automation on one timeline. Switch views to explore the arrangement, note editor, mixer and equalizer."}</p>
+        <p>{ru ? "Аудиодорожки, MIDI-партии и автоматизация на одном таймлайне. Переключай экраны, чтобы рассмотреть аранжировку, редактор нот, микшер и рэк с инструментами и эффектами." : "Audio tracks, MIDI parts and automation on one timeline. Switch views to explore the arrangement, note editor, mixer and the instrument and effects rack."}</p>
       </header>
       <div data-reveal="60"><StudioGallery locale={locale} items={c.gallery} /></div>
       </div>
@@ -132,18 +133,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
         )}</div>
     </section>
 
-    <section className="studio-tools studio-container section-space" aria-labelledby="tools-title">
-      <div data-reveal="0">
-        <h2 id="tools-title">{ru ? "Дополняй студию" : "Make room"}<br /><span>{ru ? "своими инструментами." : "for your tools."}</span></h2>
-        <p>{ru ? "Подключай привычные эффекты и синтезаторы. Помощник и восстановление проектов доступны прямо в программе." : "Connect the effects and synths you already use. An assistant and project recovery are built into the app."}</p>
-      </div>
-      <nav className="studio-extras" aria-label={c.allFeatures}>{c.extras.map((item, index) =>
-        <Link href={item.href} key={item.title} data-reveal={index * 60}>
-          <div><strong>{item.title}</strong><p>{item.copy}</p></div>
-          <ArrowUpRight size={24} strokeWidth={1.4} aria-hidden />
-        </Link>
-      )}</nav>
-    </section>
+    <HomePlayground locale={locale} />
 
     <section id="beta" className="studio-onboarding" aria-labelledby="beta-title">
       <div className="studio-container section-space">

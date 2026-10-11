@@ -557,6 +557,31 @@ void verifyVerifiedAssetActions() {
         FakeSharedAssetMutationSink assets;
         controller.attachSharedMutationSink(commands);
         controller.attachSharedAssetMutationSink(assets);
+        const auto track = controller.importSampleToMidiTrack(tone.string(), 3.0);
+        const bool completed = !track.empty() && finishLatest(controller, assets, commands, 0);
+        daw::collab::SharedProjectDocument projected;
+        projected.project = controller.project();
+        bool applied = false;
+        if (completed) {
+            daw::collab::ProjectCommand command;
+            command.meta.operationId = daw::newUuid();
+            command.body = commands.genericBodies.back();
+            applied = daw::collab::ProjectReducer::apply(projected, command).accepted();
+        }
+        const auto* imported = projected.project.findTrack(track);
+        check(applied && imported && imported->instrument.uid == "daw.sampler" && imported->clips.empty(),
+              "shared sample drop creates the verified Sampler track without a MIDI trigger");
+        controller.detachSharedAssetMutationSink(assets);
+        controller.detachSharedMutationSink(commands);
+    }
+
+    {
+        daw::EngineController controller{};
+        controller.initialize(48000.0, 512, false);
+        FakeSharedMutationSink commands;
+        FakeSharedAssetMutationSink assets;
+        controller.attachSharedMutationSink(commands);
+        controller.attachSharedAssetMutationSink(assets);
         const std::string track = controller.importAudioToNewTrack(
             tone.string(), 0.0, "Imported");
         // The track and its clip are shared immediately, as one batch that

@@ -45,17 +45,15 @@ QPointF polar(QPointF center, double radius, double degrees) {
 class Cla2aKnob final : public ui::Knob {
     Q_DECLARE_TR_FUNCTIONS(Cla2aKnob)
 public:
-    Cla2aKnob(QString name, double defaultValue, QWidget* parent) : ui::Knob({}, parent), m_default(defaultValue), m_wheel(this) {
+    Cla2aKnob(QString name, double defaultValue, QWidget* parent) : ui::Knob({}, parent), m_default(defaultValue) {
         setRange(0, 100); setDefaultValue(defaultValue); setBare(148); setAutomatable(true);
         setFocusPolicy(Qt::StrongFocus); setAccessibleName(name);
         setAccessibleDescription(tr("Drag vertically. Hold Shift for fine adjustment. Press Enter to enter a value."));
-        m_wheel.setSingleShot(true); m_wheel.setInterval(180);
-        connect(&m_wheel, &QTimer::timeout, this, [this] { emit editFinished(); });
         connect(this, &ui::Knob::valueChanged, this, [this](double value) { announce(value); });
     }
-    bool isEditing() const { return m_dragging || m_wheel.isActive(); }
+    bool isEditing() const { return m_dragging; }
     void finishEditing() {
-        const bool editing = isEditing(); m_dragging = false; m_wheel.stop();
+        const bool editing = isEditing(); m_dragging = false;
         if (QWidget::mouseGrabber() == this) releaseMouse();
         if (editing) emit editFinished();
     }
@@ -84,7 +82,7 @@ protected:
             m_face = QPixmap(this->size() * ratio); m_face.setDevicePixelRatio(ratio); m_face.fill(Qt::transparent); m_faceFont = font();
             QPainter p(&m_face); p.setRenderHint(QPainter::Antialiasing);
             const double size = std::min(width(), height()); const QPointF center(width() / 2., height() / 2.);
-            const double r = size * .295;
+            const double r = size * .31;
             p.setFont(faceFont(this, 10));
             for (int i = 0; i <= 20; ++i) {
                 const double angle = 225 - i * 13.5;
@@ -108,7 +106,7 @@ protected:
         }
         QPainter p(this); p.drawPixmap(0, 0, m_face); p.setRenderHint(QPainter::Antialiasing);
         const QPointF center(width() / 2., height() / 2.);
-        const double r = std::min(width(), height()) * .295;
+        const double r = std::min(width(), height()) * .31;
         const QRectF body(center.x() - r, center.y() - r, r * 2, r * 2);
         const double angle = 225 - value() * 2.7;
         p.save(); p.translate(center); p.rotate(-angle);
@@ -143,10 +141,7 @@ protected:
         else editValue(m_default);
     }
     void wheelEvent(QWheelEvent* e) override {
-        const double delta = e->angleDelta().y() ? e->angleDelta().y() / 120. : e->pixelDelta().y() / 30.;
-        if (delta == 0) { e->ignore(); return; }
-        editValue(value() + delta * (e->modifiers().testFlag(Qt::ShiftModifier) ? .5 : 2), false);
-        m_wheel.start(); e->accept();
+        e->ignore();
     }
     void keyPressEvent(QKeyEvent* e) override {
         if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) { enterValue(); e->accept(); return; }
@@ -172,7 +167,6 @@ private:
     void announce(double next) { QAccessibleValueChangeEvent event(this, next); QAccessible::updateAccessibility(&event); }
     double m_default, m_start = 0, m_lastY = 0;
     bool m_dragging = false;
-    QTimer m_wheel;
     QPixmap m_face;
     QFont m_faceFont;
 };
@@ -292,9 +286,11 @@ void Cla2aPanel::refresh() {
     if (!isVisible()) return;
     const auto telemetry = processor ? m_controller->effectMeterSnapshot(m_channel, m_insert) : daw::EffectMeterSnapshot{};
     const auto db = [](float amplitude) { return std::clamp(20 * std::log10(std::max(double(amplitude), 1e-12)), -60., 24.); };
+    const auto previous = m_meters;
     m_meters[0] = std::max(db(telemetry.input), m_meters[0] - 1.4);
     m_meters[1] = std::max(db(telemetry.output), m_meters[1] - 1.4);
     m_meters[2] = std::max(double(telemetry.reduction), m_meters[2] - .5);
+    if (previous == m_meters) return;
     setAccessibleDescription(tr("Input %1 dBFS, gain reduction %2 dB, output %3 dBFS")
         .arg(m_meters[0], 0, 'f', 1).arg(m_meters[2], 0, 'f', 1).arg(m_meters[1], 0, 'f', 1));
     update(meterRect().adjusted(-4, -4, 4, 43).toAlignedRect());
@@ -305,7 +301,10 @@ QRectF Cla2aPanel::meterRect() const {
 }
 void Cla2aPanel::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e); m_face = {};
-    const int diameter = std::clamp(int(width() * .18), 140, 164);
+    // Larger hardware controls, with room below for the engraved label and
+    // editable value even in a wide window at the minimum height.
+    const int diameter = std::min(std::clamp(int(width() * .20), 148, 180),
+                                  int(height() * .94 - 106));
     for (unsigned i = 0; i < 2; ++i) {
         m_knobs[i]->setFixedSize(diameter, diameter);
         const int x = int(width() * (i ? .77 : .23)) - diameter / 2;
@@ -334,6 +333,8 @@ void Cla2aPanel::cacheFace() {
     }
     p.restore();
     p.setPen(kRed); p.setFont(faceFont(this, 16, true)); p.drawText(QRect(26, 16, width() - 52, 28), Qt::AlignVCenter, "VLT 2A");
+    p.setPen(QPen(QColor(130, 75, 65, 75), 1));
+    p.drawLine(QPointF(26, 49), QPointF(width() - 26, 49));
     for (unsigned i = 0; i < 2; ++i) {
         const auto geometry = m_knobs[i]->geometry(); p.setFont(faceFont(this, 11, true)); p.setPen(kInk);
         p.drawText(QRect(geometry.x() - 14, geometry.bottom() + 4, geometry.width() + 28, 19), Qt::AlignCenter, i ? tr("PEAK REDUCTION") : tr("GAIN"));

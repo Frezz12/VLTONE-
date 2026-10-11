@@ -15,10 +15,13 @@
 #include "CreatorStyle.hpp"
 #include "ToolPanel.hpp"
 #include "UiFrameClock.hpp"
+#include "ScrollMotion.hpp"
+#include <QScopeGuard>
 #include "UiConstants.hpp"
 #include "Theme.hpp"
 #include "WaveformPaint.hpp"
 #include "graphics/WorkspaceSurface.hpp"
+#include "graphics/WidgetUpdates.hpp"
 #include <QQuickWindow>
 #include <QVBoxLayout>
 #include "Job/AudioWorkerRegistration.hpp"
@@ -406,6 +409,85 @@ bool TimelineWidget::checkGestureGridStabilityForTest() {
         std::fprintf(stderr,
                      "clip gesture switched away from the stable grid tiles\n");
     return tiled;
+}
+
+bool PluginEditorWindow::checkGenericVirtualizationForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false)) return false;
+    PluginEditorWindow window(&controller, {}, {});
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    window.m_editorInitialized = true;
+    window.clearEditorContent();
+    std::vector<daw::plugins::ParameterInfo> parameters(2000);
+    for (int i = 0; i < int(parameters.size()); ++i) {
+        parameters[i].index = i;
+        parameters[i].id = "parameter-" + std::to_string(i);
+        parameters[i].name = "Parameter " + std::to_string(i);
+    }
+    window.buildGenericEditor(std::move(parameters));
+    window.finishEditorContent();
+    window.show();
+    QApplication::processEvents();
+    window.syncGenericRows();
+    bool ok = window.m_genericControls.contains(0) && window.m_genericControls.size() < 100;
+    auto* first = window.m_genericControls[0].slider;
+    window.syncGenericRows();
+    ok = ok && first == window.m_genericControls[0].slider;
+    first->setFocus();
+    first->setSliderDown(true);
+    window.m_genericScroll->verticalScrollBar()->setValue(1000 * window.m_genericRowHeight);
+    window.syncGenericRows();
+    ok = ok && window.m_genericControls.contains(1000) &&
+        window.m_genericControls.contains(0) && window.m_genericControls.size() < 100;
+    first->setSliderDown(false);
+    window.m_genericControls[1000].slider->setFocus();
+    window.syncGenericRows();
+    ok = ok && !window.m_genericControls.contains(0);
+    // Tab must create the next logical row even at the edge of the live range.
+    const int last = window.m_genericControls.lastKey();
+    auto* automate = window.m_genericControls[last].automate;
+    automate->setFocus();
+    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(automate, &tab);
+    ok = ok && window.m_genericControls.contains(last + 1) &&
+        QApplication::focusWidget() == window.m_genericControls[last + 1].slider;
+    window.m_genericScroll->verticalScrollBar()->setValue(window.m_genericScroll->verticalScrollBar()->maximum());
+    window.syncGenericRows();
+    ok = ok && window.m_genericControls.contains(1999) && window.m_genericControls.size() < 100;
+    std::printf("Generic parameters: total=2000 live=%lld focus-and-drag=%s\n",
+        static_cast<long long>(window.m_genericControls.size()), ok ? "preserved" : "FAIL");
+    return ok;
+}
+
+bool TimelineWidget::checkLocalDamageForTest() {
+    const auto paint = [&] {
+        ui::graphics::SceneRecorder recorder(size(), devicePixelRatioF());
+        { QPainter painter(&recorder); paintScene(painter, QRegion(rect())); }
+        return recorder.supported();
+    };
+    m_gpuLaneTiles.clear(); m_staticFrameValid = false;
+    const auto before = m_gpuLaneTiles.builds();
+    if (!paint()) return false;
+    const auto complete = m_gpuLaneTiles.builds() - before;
+    if (complete < 2) return false;
+    update(QRect(80, tracksTop() + 4, 24, 24));
+    const auto localBefore = m_gpuLaneTiles.builds();
+    if (!paint()) return false;
+    const auto local = m_gpuLaneTiles.builds() - localBefore;
+    const auto stableBefore = m_gpuLaneTiles.builds();
+    if (!paint() || m_gpuLaneTiles.builds() != stableBefore) return false;
+    const auto headersBefore = m_gpuMidiHeaders.builds();
+    const int savedInset = m_bottomInset;
+    setBottomInset(height() / 3);
+    if (!paint() || m_gpuMidiHeaders.builds() != headersBefore ||
+        m_gpuLaneTiles.builds() != stableBefore) return false;
+    setBottomInset(savedInset);
+    if (!paint() || m_gpuMidiHeaders.builds() != headersBefore) return false;
+    std::printf("GPU tile damage: full=%llu local=%llu unchanged=0\n",
+        static_cast<unsigned long long>(complete), static_cast<unsigned long long>(local));
+    std::printf("Mixer reveal: lane rebuilds=0 MIDI header rebuilds=0\n");
+    m_staticFrameValid = false;
+    return local > 0 && local < complete;
 }
 
 bool TimelineWidget::checkFileDropPreviewForTest() {
@@ -970,10 +1052,35 @@ bool checkMixerPerformance() {
         std::fprintf(stderr, "Mixer has no GPU frame; benchmark is invalid\n");
         return false;
     }
-    QScrollArea* scroll = nullptr;
-    for (auto* area : mixer.findChildren<QScrollArea*>())
-        if (area->verticalScrollBarPolicy() == Qt::ScrollBarAsNeeded) { scroll = area; break; }
+    auto* scroll = mixer.findChild<QScrollArea*>(QStringLiteral("MixerChannelsScroll"));
     if (!scroll || scroll->verticalScrollBar()->maximum() < 100 || failed) return false;
+    const QString gesture = qEnvironmentVariable("VLT_MIXER_GESTURE", QStringLiteral("scroll"));
+    const bool hover = gesture == QStringLiteral("hover");
+    const bool drag = gesture == QStringLiteral("fader");
+    if (gesture != QStringLiteral("scroll") && !hover && !drag) return false;
+    ui::FaderWidget* fader = nullptr;
+    QPointF pointerStart, pointerPosition;
+    if (hover || drag) {
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        settle(600);
+        for (auto* candidate : scroll->findChildren<ui::FaderWidget*>()) {
+            const QRect bounds(candidate->mapTo(scroll->viewport(), QPoint()), candidate->size());
+            if (scroll->viewport()->rect().contains(bounds.center())) { fader = candidate; break; }
+        }
+        if (!fader) return false;
+        pointerStart = fader->mapTo(&mixer, fader->rect().center());
+        pointerPosition = pointerStart;
+    }
+    const auto sendPointer = [&](QEvent::Type type, const QPointF& position) {
+        const auto button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+        const auto buttons = drag && type != QEvent::MouseButtonRelease ? Qt::LeftButton : Qt::NoButton;
+        QWidget* target = drag ? fader : mixer.childAt(position.toPoint());
+        if (!target) target = &mixer;
+        const QPointF local = surface ? position : target->mapFrom(&mixer, position);
+        QMouseEvent event(type, local, mixer.mapToGlobal(position), button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(surface ? static_cast<QObject*>(surface->quickWindow()) : target, &event);
+    };
+    if (drag) sendPointer(QEvent::MouseButtonPress, pointerStart);
     int frames = 0;
     if (surface) QObject::connect(surface, &graphics::WorkspaceSurface::frameMeasured, &mixer,
         [&](double preparation, double sync, double render, double interval, double) {
@@ -991,6 +1098,17 @@ bool checkMixerPerformance() {
     QTimer timer;
     timer.setTimerType(Qt::PreciseTimer);
     QObject::connect(&timer, &QTimer::timeout, &mixer, [&] {
+        if (hover || drag) {
+            const double wave = std::sin(elapsed.elapsed() * 2.0 * M_PI / 1600.0);
+            pointerPosition = pointerStart + (drag ? QPointF(0, wave * 60.0)
+                : QPointF((wave + 1.0) * std::min(400, scroll->viewport()->width() / 3), 0));
+            const double before = fader->gain();
+            perf::Scope inputCost("mixer.pointer.ms");
+            sendPointer(QEvent::MouseMove, pointerPosition);
+            if (!drag || before != fader->gain()) ++scrollChanges;
+            ++inputs;
+            return;
+        }
         auto* bar = scroll->verticalScrollBar();
         const int before = bar->value();
         const double phase = std::fmod(elapsed.elapsed() / 1600., 1.);
@@ -1015,9 +1133,10 @@ bool checkMixerPerformance() {
     settle(4800);
     timer.stop();
     perf::flush();
-    std::printf("MIXER_SCROLL backend=%s viewport=%dx%d DPR=%.1f inputs=%d changes=%d frames=%d elapsed_ms=%lld\n",
-        surface ? "gpu" : "widgets", mixer.width(), mixer.height(), mixer.devicePixelRatioF(),
+    std::printf("MIXER_INTERACTION gesture=%s backend=%s viewport=%dx%d DPR=%.1f inputs=%d changes=%d frames=%d elapsed_ms=%lld\n",
+        qPrintable(gesture), surface ? "gpu" : "widgets", mixer.width(), mixer.height(), mixer.devicePixelRatioF(),
         inputs - warmupInputs, scrollChanges - warmupChanges, frames, static_cast<long long>(measured.elapsed()));
+    if (drag) sendPointer(QEvent::MouseButtonRelease, pointerPosition);
     if (const auto shot = qEnvironmentVariable("VLT_SCROLL_SCREENSHOT"); !shot.isEmpty()) {
         if (surface) surface->quickWindow()->grabWindow().save(shot);
         else mixer.grab().save(shot);
@@ -1218,10 +1337,33 @@ bool checkUiScaling() {
         return checkViewScrubInput();
     if (qEnvironmentVariableIsSet("VLT_TRACK_PRESENTATION_CHECK_ONLY"))
         return TimelineWidget::checkTrackPresentationForTest();
+    // These assertions measure delivered input distances, independently of
+    // the optional animation between a mouse-wheel target and its viewport.
+    auto& scrollPreferences = ui::ScrollPreferences::instance();
+    const bool smoothScrolling = scrollPreferences.enabled();
+    const auto restoreScrolling = qScopeGuard([&] { scrollPreferences.setEnabled(smoothScrolling); });
+    scrollPreferences.setEnabled(false);
     bool ok = true;
     const auto check = [&](bool result, const char* name) {
         std::printf("%s  %s\n", result ? "PASS" : "FAIL", name); ok = ok && result;
     };
+    check(PluginEditorWindow::checkGenericVirtualizationForTest(),
+          "generic parameter controls stay bounded and preserve focus, drag and keyboard navigation");
+    {
+        QWidget root;
+        QWidget left(&root), right(&root), hidden(&root);
+        root.resize(300, 100);
+        left.setGeometry(0, 0, 50, 80);
+        right.setGeometry(200, 0, 50, 80);
+        hidden.setGeometry(0, 0, 50, 80);
+        hidden.hide();
+        root.show(); QApplication::processEvents();
+        root.update(QRect(0, 0, 30, 30));
+        QSet<QWidget*> dirty;
+        check(ui::graphics::collectWidgetUpdates(&root, dirty) && dirty.contains(&root) &&
+              dirty.contains(&left) && !dirty.contains(&right) && !dirty.contains(&hidden),
+              "partial parent damage preserves unrelated and hidden child layers");
+    }
     // Exercise the same shared divider used by Browser, Mixer, Web and Warp.
     // Releases can arrive without a final move when native events coalesce.
     for (const auto orientation : {Qt::Horizontal, Qt::Vertical}) {
@@ -1377,6 +1519,7 @@ bool checkUiScaling() {
     check(tracks.findChildren<FaderWidget*>().size() < 64, "scroll releases distant controls");
     tracks.setVerticalScroll(0); settle();
     check(tracks.rowFaderForTest(first), "scroll back restores rows");
+    check(timeline.checkLocalDamageForTest(), "local GPU damage rebuilds only intersecting tiles and reuses unchanged tiles");
     check(timeline.checkClipIndexForTest(), "interval queries cover visible clip bodies and preserve ID lookup");
     controller.setClipStartSeconds(project.tracks.front().id, project.tracks.front().clips.front().id, 5000.0);
     check(timeline.checkClipIndexForTest(), "live placement invalidates interval geometry before undo commit");
@@ -1516,8 +1659,12 @@ bool checkUiScaling() {
     timeline.zoomBy(1.0 / 1.1);
 
     int headerScroll = 0;
+    tracks.setVerticalScroll(0);
     const auto scrollConnection = QObject::connect(&tracks, &TrackListWidget::verticalScrollRequested,
-        &tracks, [&](int delta) { headerScroll += delta; });
+        &tracks, [&](int delta) {
+            headerScroll += delta;
+            tracks.setVerticalScroll(headerScroll);
+        });
     wheel(tracks, {0, -2}, {0, -120});
     wheel(tracks, {}, {0, -1}); wheel(tracks, {}, {0, -1});
     check(headerScroll == 3, "track headers use the same pixel and fractional-wheel distances");
@@ -1949,7 +2096,10 @@ bool MainWindow::checkWorkspaceMotionForTest() {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
     m_controller.addTrack(daw::TrackKind::Midi);
-    if (!openDemoSampler({})) return false;
+    if (!openDemoSampler({})) {
+        std::fprintf(stderr, "Motion check could not open the fixture Sampler\n");
+        return false;
+    }
     // Heavy UI, without an audio device or hundreds of vendor DSP instances.
     auto& project = const_cast<daw::ProjectModel&>(m_controller.project());
     for (int t = 1; t < 500; ++t) {
@@ -1985,7 +2135,12 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     settle(1800);
     auto* editor = m_pluginEditors.isEmpty() ? nullptr : m_pluginEditors.begin().value();
     auto* frame = editor ? m_internalEditorFrames.value(editor, nullptr) : nullptr;
-    if (!frame || !editor->isEditorInitialized()) return false;
+    if (!frame || !editor->isEditorInitialized()) {
+        std::fprintf(stderr, "Motion fixture editor unavailable: editors=%lld frame=%d ready=%d\n",
+            static_cast<long long>(m_pluginEditors.size()), int(frame != nullptr),
+            int(editor && editor->isEditorInitialized()));
+        return false;
+    }
     QTimer noticeUpdates;
     if (qEnvironmentVariableIntValue("VLT_MOTION_NOTICES") != 0) {
         if (!m_audioNotifications) return false;
@@ -2022,7 +2177,10 @@ bool MainWindow::checkWorkspaceMotionForTest() {
         frame->present();
     }
     QPointer<ui::graphics::WorkspaceSurface> surface = findChild<ui::graphics::WorkspaceSurface*>();
-    if (ui::graphics::gpuWorkspaceEnabled() && !surface) return false;
+    if (ui::graphics::gpuWorkspaceEnabled() && !surface) {
+        std::fprintf(stderr, "Motion check has no GPU workspace surface\n");
+        return false;
+    }
     bool failed = false;
     int frames = 0;
     QObject measurementContext;
@@ -2038,7 +2196,10 @@ bool MainWindow::checkWorkspaceMotionForTest() {
             });
     }
     settle(500);
-    if (surface && (!surface->quickWindow()->isExposed() || surface->quickWindow()->grabWindow().isNull())) return false;
+    if (surface && (!surface->quickWindow()->isExposed() || surface->quickWindow()->grabWindow().isNull())) {
+        std::fprintf(stderr, "Motion check cannot capture an exposed GPU window\n");
+        return false;
+    }
     // Count damage separately from scene submissions: a native plugin moves
     // through Cocoa/Win32 and need not submit a new frame of the workspace.
     struct PaintProbe final : QObject {
@@ -2102,7 +2263,7 @@ bool MainWindow::checkWorkspaceMotionForTest() {
         if (overMixer && (targetName == "native" || targetName == "sampler")) {
             if (transparentFrame)
                 frame->setAttribute(Qt::WA_OpaquePaintEvent, false);
-            frame->move(QPoint(100, 420) + (lastGlobal - anchor).toPoint());
+            frame->moveWithinWorkspace(QPoint(100, 420) + (lastGlobal - anchor).toPoint());
         } else sendMouse(QEvent::MouseMove, lastGlobal);
         if (before != moving->geometry()) ++changes;
         ++inputs;

@@ -565,6 +565,36 @@ int main() {
         }
     }
 
+    // A repeated structural notification must compare the newly reported
+    // latency, not the adapter's previous activation cache.
+    {
+        const auto environment = [](const char* key, const std::string& value) {
+#if defined(_WIN32)
+            ::_putenv_s(key, value.c_str());
+#else
+            if (value.empty()) ::unsetenv(key); else ::setenv(key, value.c_str(), 1);
+#endif
+        };
+        engine::RealtimeEngine engine(2);
+        auto node = std::make_shared<PluginNode>(descriptor.name, factory.create(descriptor));
+        engine.graph().setSink(engine.graph().adoptNode(node));
+        check(bool(engine.prepare(48000, 128, 2, true)), "prepare dynamic VST3 latency");
+        environment("DAW_TEST_VST3_RESTART_FLAGS", std::to_string(int(Steinberg::Vst::kLatencyChanged)));
+        for (unsigned latency : {64u, 128u, 37u}) {
+            environment("DAW_TEST_VST3_LATENCY", std::to_string(latency));
+            node->instance()->setParameterFromHost(1, 0.25);
+            check(bool(node->serviceOffline()), "service VST3 structural notification");
+            check(!node->isPreparedFor({48000, 128, 2, true}), "new VST3 configuration invalidates the prepared graph");
+            check(bool(engine.prepare(48000, 128, 2, true)) && engine.latencySamples() == latency,
+                  "recompiled PDC uses the refreshed VST3 latency");
+            node->instance()->setParameterFromHost(1, 0.25);
+            check(bool(node->serviceOffline()) && node->isPreparedFor({48000, 128, 2, true}),
+                  "duplicate VST3 notification does not restart the same configuration");
+        }
+        environment("DAW_TEST_VST3_RESTART_FLAGS", "");
+        environment("DAW_TEST_VST3_LATENCY", "");
+    }
+
     // restartComponent includes metadata and parameter refreshes. Repeated
     // notifications between real offline blocks must neither abort the pass
     // nor reset the plugin's 64-sample delay line.

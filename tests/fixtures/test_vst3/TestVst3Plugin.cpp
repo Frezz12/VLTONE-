@@ -174,7 +174,8 @@ public:
             if (!m_audioOutputActive || (m_instrument && !m_eventInputActive)) {
                 return kResultFalse;
             }
-            m_delay.assign(std::size_t(kLatency) * 2, 0.0f);
+            m_delayLatency = getLatencySamples();
+            m_delay.assign(std::size_t(m_delayLatency) * 2, 0.0f);
             m_writePosition = 0;
         }
         m_active = state;
@@ -217,7 +218,10 @@ public:
     tresult PLUGIN_API canProcessSampleSize(int32 symbolicSampleSize) override {
         return symbolicSampleSize == kSample32 ? kResultTrue : kResultFalse;
     }
-    uint32 PLUGIN_API getLatencySamples() override { return uint32(kLatency); }
+    uint32 PLUGIN_API getLatencySamples() override {
+        const char* value = std::getenv("DAW_TEST_VST3_LATENCY");
+        return value ? uint32(std::clamp(std::atoi(value), 1, 4096)) : uint32(kLatency);
+    }
     uint32 PLUGIN_API getTailSamples() override { return 0; }
     tresult PLUGIN_API setupProcessing(ProcessSetup&) override { return kResultOk; }
     // Deliberately `kNotImplemented`, which is what the SDK's own base class
@@ -378,7 +382,7 @@ public:
                     out[ch][i] = float(m_gain);   // filler, but it must be written
                     continue;
                 }
-                float* ring = m_delay.data() + std::size_t(ch) * kLatency;
+                float* ring = m_delay.data() + std::size_t(ch) * m_delayLatency;
                 // The sidechain is read, not merely accepted: a bus handed over
                 // as a dangling pointer has to show up as wrong output.
                 const float sample = input[ch][i] + sidechain[ch][i];
@@ -386,7 +390,7 @@ public:
                 ring[slot] = sample;
                 out[ch][i] = float((delayed * m_gain + m_offset) * m_midiVolume);
             }
-            m_writePosition = (slot + 1) % kLatency;
+            m_writePosition = (slot + 1) % m_delayLatency;
         }
         return kResultOk;
     }
@@ -399,6 +403,7 @@ private:
     std::vector<float> m_delay;
     int32 m_outputChannels = 2;
     int32 m_writePosition = 0;
+    uint32 m_delayLatency = kLatency;
     double m_gain = 1.0;
     double m_offset = 0.0;
     double m_midiVolume = 1.0;

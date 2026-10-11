@@ -1412,10 +1412,14 @@ func validateSharedInsert(raw json.RawMessage,
 	if format == "internal" && uid == "daw.modulation" && schemaVersion < CollaborationCommandSchemaV6 {
 		return "", "", "", invalidf("modulation plugin requires protocol 6")
 	}
+	if format == "internal" && (uid == "daw.gain" || uid == "daw.stereo-utility" || uid == "daw.reverse") && schemaVersion < CollaborationCommandSchemaV6 {
+		return "", "", "", invalidf("utility plugins require protocol 6")
+	}
 	if format == "internal" && uid != "daw.delay" && uid != "daw.sampler" && uid != "daw.equalizer" &&
 		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" && uid != "daw.cla2a" && uid != "daw.channel-color" &&
 		uid != "daw.doubler" && uid != "daw.doubler-pro" && uid != "daw.chorus" &&
-		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.modulation" && uid != "daw.pitch-corrector" {
+		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.modulation" && uid != "daw.pitch-corrector" &&
+		uid != "daw.gain" && uid != "daw.stereo-utility" && uid != "daw.reverse" {
 		return "", "", "", invalidf("command payload built-in plugin uid is unsupported")
 	}
 	if uid == "daw.channel-color" {

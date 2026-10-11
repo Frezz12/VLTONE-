@@ -71,6 +71,7 @@ public:
         m_commands = commands;
     }
     void setUiContextProvider(std::function<nlohmann::json()> provider) { m_uiContext = std::move(provider); }
+    void setUiFocusHandler(std::function<nlohmann::json(const nlohmann::json&)> handler) { m_uiFocus = std::move(handler); }
     void refreshContext() { updateSelectionContext(); }
 
     /// Where the open project lives on disk, so the assistant can save it when
@@ -194,6 +195,7 @@ private:
     ui::SelectionModel* m_selection = nullptr;
     ShortcutManager* m_commands = nullptr;
     std::function<nlohmann::json()> m_uiContext;
+    std::function<nlohmann::json(const nlohmann::json&)> m_uiFocus;
     QString m_projectPath;
     std::unique_ptr<daw::ai::AiSession> m_session;
     std::shared_ptr<daw::ai::ContentCatalog> m_contentCatalog;
@@ -234,6 +236,8 @@ private:
     QLabel* m_requestStatusLabel = nullptr;
     QString m_requestStatus;
     QToolButton* m_contextButton = nullptr;
+    QToolButton* m_interactionButton = nullptr;
+    int m_requestedMode = -1;
     QToolButton* m_attachmentButton = nullptr;
     QToolButton* m_latestButton = nullptr;
     bool m_followOutput = true;

@@ -165,4 +165,9 @@ private:
     QString m_selectedKind{QStringLiteral("factory")};
     QString m_selectedName{QStringLiteral("WAVEFARERS")};
     bool m_refreshing = false;
+    mutable QHash<QString, double> m_refreshValues;
+    QHash<QString, double> m_presetValues;
+    int m_exactFactory = -1;
+    QString m_exactUser;
+    mutable bool m_presetMatchValid = false;
 };

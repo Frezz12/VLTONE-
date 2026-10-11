@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -112,6 +113,8 @@ struct Focus {
 struct ToolContext {
     Focus focus;
     InteractionMode mode = InteractionMode::Do;
+    /// Explicit UI choice; absent means infer intent from the user's request.
+    std::optional<InteractionMode> requestedMode;
     /// Asked before anything that destroys work — deleting a track, a clip or
     /// an effect. Returning false refuses the call, and the model is told why.
     /// Unset means allow, which is what a test wants and what the panel falls
@@ -130,6 +133,7 @@ struct ToolContext {
     std::function<bool(const std::string&, InteractionMode, std::string&)>
         invokeCommand;
     std::function<nlohmann::json()> uiContext;
+    std::function<nlohmann::json(const nlohmann::json&)> focusInApp;
     std::vector<Attachment> attachments;
     /// The instructions in force: the main prompt and the playbooks the model
     /// may load. Null means the text compiled into this build, which is what a

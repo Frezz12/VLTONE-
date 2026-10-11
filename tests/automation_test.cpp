@@ -100,6 +100,62 @@ static void swing(const at::Points& points, double fromBeats, double toBeats,
 }
 
 int main() {
+    // Region editing must preserve the outside signal, even when a boundary
+    // cuts a bend or a trimmed clip addresses nonzero source beats.
+    {
+        const at::Points flat{pt(0, 0.7), pt(12, 0.7)};
+        const at::Range region{3, 7};
+        const auto moved = at::sculptRegion(flat, region, -0.3);
+        check(wellFormed(moved) && moved.size() == 6,
+              "region lift makes four edge anchors");
+        check(near(daw::automationValueAt(moved, 2, 0), 0.7) &&
+              near(daw::automationValueAt(moved, 3, 0), 0.7) &&
+              near(daw::automationValueAt(moved, 5, 0), 0.4) &&
+              near(daw::automationValueAt(moved, 7, 0), 0.7) &&
+              near(daw::automationValueAt(moved, 10, 0), 0.7),
+              "region step pins both outside edges and lowers only the inside");
+        check(at::sculptRegion(flat, region, 0) == flat &&
+              at::sculptRegion(flat, {4, 4}, 0.2) == flat,
+              "zero movement and empty region leave no anchors");
+        const auto again = at::sculptRegion(moved, region, 0.1);
+        check(again.size() == moved.size() && near(daw::automationValueAt(again, 5, 0), 0.5),
+              "repeated region edits reuse edge anchors");
+        const at::Points peak{pt(0, .4), pt(4, .6), pt(5, .9), pt(6, .3), pt(12, .4)};
+        const auto limited = at::sculptRegion(peak, region, .8);
+        check(near(daw::automationValueAt(limited, 5, 0), 1) &&
+              near(daw::automationValueAt(limited, 6, 0), .4),
+              "region headroom clamps the group without crushing its drawing");
+        for (const auto shape : {AutomationSegment::Linear, AutomationSegment::SCurve,
+                                  AutomationSegment::Hold}) {
+            const at::Points curved{pt(0, .2, shape, .65), pt(12, .8)};
+            const auto result = at::sculptRegion(curved, region, .1);
+            double outsideError = 0;
+            for (int i = 0; i < 1200; ++i) {
+                const double beat = i / 100.0;
+                if (beat > 3 && beat < 7) continue;
+                outsideError = std::max(outsideError, std::abs(
+                    daw::automationValueAt(curved, beat, .5) - daw::automationValueAt(result, beat, .5)));
+            }
+            check(outsideError < 0.0001, "splitting shaped region preserves the outside signal");
+        }
+        const auto empty = at::sculptRegion({}, region, -.2, at::RegionShape::Lift, 0, .75);
+        check(near(daw::automationValueAt(empty, 2, .75), .75) &&
+              near(daw::automationValueAt(empty, 5, .75), .55) &&
+              near(daw::automationValueAt(empty, 8, .75), .75),
+              "region supports a curve with no breakpoints using its default value");
+        const auto arch = at::sculptRegion(flat, region, -.3, at::RegionShape::Arch);
+        const auto tilt = at::sculptRegion(flat, region, .2, at::RegionShape::Tilt);
+        const auto soft = at::sculptRegion(flat, region, -.3, at::RegionShape::Lift, 1);
+        check(near(daw::automationValueAt(arch, 5, 0), .4) &&
+              daw::automationValueAt(arch, 3.1, 0) > .69,
+              "arch sculpts the middle with pinned edges");
+        check(daw::automationValueAt(tilt, 4, 0) < .7 &&
+              daw::automationValueAt(tilt, 6, 0) > .7,
+              "tilt balances the two sides around the centre");
+        check(daw::automationValueAt(soft, 3.1, 0) > .69 &&
+              near(daw::automationValueAt(soft, 5, 0), .4),
+              "soft edges blend continuously into the original curve");
+    }
     // ── LFO ─────────────────────────────────────────────────────────────────
     {
         at::LfoSpec spec;

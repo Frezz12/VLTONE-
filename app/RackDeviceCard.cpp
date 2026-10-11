@@ -234,7 +234,7 @@ void RackDeviceCard::updateTheme() {
     const auto& t = th();
     setStyleSheet(
         QStringLiteral(
-            "#RackDeviceCard{background:%1;border:0;border-radius:6px;} #RackDeviceFooter{border-top:1px "
+            "#RackDeviceCard{background:%1;border:0;border-radius:9px;} #RackDeviceFooter{border-top:1px "
             "solid %2;} #RackDeviceCard QComboBox{font-size:10px;min-height:22px;padding:0 3px;} "
             "#RackDeviceCard QDoubleSpinBox{font-size:10px;min-height:22px;padding:0 2px;}")
             .arg(t.surface.name(), t.separator().name()));
@@ -298,8 +298,8 @@ void RackDeviceCard::sync() {
                                       : tr("This device has no sidechain input"));
     m_syncing = false;
 }
-void RackDeviceCard::refresh() {
-    sync();
+void RackDeviceCard::refresh(bool synchronize) {
+    if (synchronize) sync();
     if (m_binding)
         m_binding->refresh();
     if (m_builtin)
@@ -527,7 +527,7 @@ void RackDeviceCard::paintEvent(QPaintEvent* e) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(m_selected ? th().accent : th().separator(), m_selected ? 2 : 1));
-    p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
+    p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 8, 8);
 }
 void RackDeviceCard::hideEvent(QHideEvent* e) {
     finishEdits();

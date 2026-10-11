@@ -9,6 +9,8 @@
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
+#include <QDateTime>
+#include <QHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -814,6 +816,9 @@ ThemePackageResult ThemePackage::install(const QString& sourcePath,
 }
 
 QVector<ThemeLibraryEntry> ThemePackage::libraryEntries() {
+    struct CachedEntry { qint64 size = -1; QDateTime modified; ThemePackageResult result; };
+    static QHash<QString, CachedEntry> cache;
+    QSet<QString> present;
     QVector<ThemeLibraryEntry> entries;
     QDir directory(libraryDirectory());
     if (!directory.exists()) return entries;
@@ -822,7 +827,13 @@ QVector<ThemeLibraryEntry> ThemePackage::libraryEntries() {
         QDir::Name | QDir::IgnoreCase);
     for (const QFileInfo& file : files) {
         if (file.fileName().startsWith(QLatin1Char('.'))) continue;
-        const ThemePackageResult inspected = inspect(file.absoluteFilePath());
+        const auto path = file.absoluteFilePath();
+        present.insert(path);
+        auto& cached = cache[path];
+        if (cached.size != file.size() || cached.modified != file.lastModified()) {
+            cached = {file.size(), file.lastModified(), inspect(path)};
+        }
+        const auto& inspected = cached.result;
         if (!inspected.ok) continue;
         entries.push_back({
             inspected.manifest.value(QStringLiteral("packageId")).toString(),
@@ -830,6 +841,8 @@ QVector<ThemeLibraryEntry> ThemePackage::libraryEntries() {
             file.absoluteFilePath(),
         });
     }
+    for (auto it = cache.begin(); it != cache.end();)
+        if (!present.contains(it.key())) it = cache.erase(it); else ++it;
     std::stable_sort(entries.begin(), entries.end(),
                      [](const ThemeLibraryEntry& a, const ThemeLibraryEntry& b) {
                          const int nameOrder = QString::localeAwareCompare(a.name, b.name);

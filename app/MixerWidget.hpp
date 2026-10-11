@@ -133,6 +133,8 @@ private:
     QWidget* m_masterBottomGap = nullptr;
     ChannelStrip::RackHeights m_rackHeights{};
     int m_insertSlotCount = 2;
+    quint64 m_colorHeightRevision = ~quint64(0), m_colorHeightGeneration = 0;
+    int m_colorHeightWidth = -1, m_colorHeight = 0;
     std::vector<ChannelStrip*> m_strips;
     QString m_selectedTrackId;
 };

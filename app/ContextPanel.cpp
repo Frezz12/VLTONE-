@@ -2154,6 +2154,7 @@ void ContextPanel::onSelectionChanged(bool force) {
 }
 
 void ContextPanel::refresh() {
+    m_measuredSpace = -1;
     if (m_applyValues) m_applyValues();
     if (m_content && isVisible() && targetGeometry().size() != size()) relayout();
 }
@@ -2198,6 +2199,7 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
     const bool wasVisible = isVisible() && m_content;
     m_outgoing = m_content;
     m_content = next;
+    m_measuredSpace = -1;
     m_context = next ? context : Context::None;
     if (!next) m_applyValues = nullptr;
 
@@ -2378,9 +2380,14 @@ QRect ContextPanel::targetGeometry() const {
     }
     const int available = std::max(0, limitRight - limitLeft);
     const int contentSpace = std::max(0, available - 2 * (kShadow + kEndPadding));
-    if (m_quickAdder && m_content->isAncestorOf(m_quickAdder))
-        m_quickAdder->setAvailableWidth(contentSpace);
-    const int contentWidth = ui::fitContextRow(m_content, contentSpace);
+    if (m_measuredSpace != contentSpace || m_measuredFont != m_content->font()) {
+        if (m_quickAdder && m_content->isAncestorOf(m_quickAdder))
+            m_quickAdder->setAvailableWidth(contentSpace);
+        m_measuredWidth = ui::fitContextRow(m_content, contentSpace);
+        m_measuredSpace = contentSpace;
+        m_measuredFont = m_content->font();
+    }
+    const int contentWidth = m_measuredWidth;
     const int width = std::min(available, contentWidth + 2 * (kShadow + kEndPadding));
     const int rightmost = std::max(limitLeft, limitRight - width);
 
@@ -2428,6 +2435,7 @@ void ContextPanel::updateContentMasks() {
 }
 
 void ContextPanel::relayout() {
+    m_measuredSpace = -1;
     if (!m_content || !isVisible()) return;
     // A splitter is direct manipulation. Old animation endpoints belong to
     // the old bounds and must never pull the panel back across a neighbour.

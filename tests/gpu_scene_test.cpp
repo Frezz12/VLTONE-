@@ -1,5 +1,6 @@
 #include "graphics/SceneRecorder.hpp"
 #include "graphics/WorkspaceSurface.hpp"
+#include "graphics/WidgetUpdates.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
@@ -19,6 +20,9 @@
 #include <QSettings>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScreen>
+#include <QTableWidget>
+#include <QHeaderView>
 #include <QStyleHints>
 #include <QThread>
 #include <QTimer>
@@ -95,6 +99,13 @@ public:
     int paints = 0;
 protected:
     void paintEvent(QPaintEvent*) override { ++paints; QPainter painter(this); painter.fillRect(rect(), color); }
+};
+class TableControl final : public QTableWidget {
+public:
+    using QTableWidget::QTableWidget;
+    int paints = 0;
+protected:
+    void paintEvent(QPaintEvent* event) override { ++paints; QTableWidget::paintEvent(event); }
 };
 class HoverRow final : public QWidget {
 public:
@@ -449,6 +460,29 @@ int main(int argc, char** argv) {
     if (surface->quickWindow()->grabWindow().pixelColor(int(270*dpr), int(120*dpr)) != QColor(Qt::blue)) {
         std::cerr << "Ordinary QWidget damage was hidden behind the Quick container\n"; return 1;
     }
+    // A transparent child needs its ancestors painted in QWidget's backing
+    // store. The GPU scene already retains those layers: local control edits
+    // must not rerecord them, including synchronous repaint() calls.
+    for (const bool immediate : {false, true}) {
+        canvas->paints = control.paints = 0;
+        control.color = immediate ? Qt::yellow : Qt::green;
+        if (immediate) control.repaint(); else control.update();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        if (canvas->paints || !control.paints ||
+            surface->quickWindow()->grabWindow().pixelColor(int(270*dpr), int(120*dpr)) != control.color) {
+            std::cerr << "Local control damage rerecorded its parent or lost its pixels: parent="
+                      << canvas->paints << " control=" << control.paints << " immediate=" << immediate << '\n';
+            return 1;
+        }
+    }
+    // QWidget::scroll also invalidates newly exposed pixels without changing
+    // the widget's geometry (for example a code editor's line-number gutter).
+    control.color = Qt::cyan;
+    control.scroll(0, 5);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (surface->quickWindow()->grabWindow().pixelColor(int(270*dpr), int(120*dpr)) != control.color) {
+        std::cerr << "In-place QWidget scrolling lost its newly exposed content\n"; return 1;
+    }
     control.hide();
     HoverRow firstRow(canvas), secondRow(canvas);
     firstRow.setGeometry(255, 80, 50, 22);
@@ -557,6 +591,41 @@ int main(int argc, char** argv) {
         std::cerr << "Scrolling retained hover on the slot that moved away\n"; return 1;
     }
     scroll.hide();
+    {
+        // An item view scrolls both viewport pixels and embedded editors. Keep
+        // those pixels current, without repainting it when an overlay moves.
+        TableControl table(20, 1, canvas);
+        table.setGeometry(5, 5, 210, 125);
+        table.horizontalHeader()->hide(); table.verticalHeader()->hide();
+        table.setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+        table.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        for (int row = 0; row < table.rowCount(); ++row) {
+            auto* item = new QTableWidgetItem(QString::number(row));
+            item->setBackground(row % 2 ? Qt::blue : Qt::yellow);
+            table.setItem(row, 0, item);
+            table.setRowHeight(row, 25);
+        }
+        table.setCellWidget(2, 0, new PlainControl);
+        PlainControl overlay(canvas);
+        overlay.setGeometry(120, 15, 60, 50);
+        table.show(); overlay.show();
+        QTimer::singleShot(100, &loop, &QEventLoop::quit); loop.exec();
+        table.paints = 0;
+        overlay.move(145, 30);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        if (table.paints) {
+            std::cerr << "Moving an overlay rerecorded an unchanged viewport\n"; return 1;
+        }
+        table.verticalScrollBar()->setValue(40);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        const auto retained = surface->quickWindow()->grabWindow();
+        if (!table.paints) { std::cerr << "Item-view scroll lost viewport damage\n"; return 1; }
+        table.viewport()->update();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        if (retained != surface->quickWindow()->grabWindow()) {
+            std::cerr << "Scrolled item-view pixels differ from a fresh repaint\n"; return 1;
+        }
+    }
     // Moving an editor or resizing a mixer exposes QWidget backing-store
     // regions, but must not rerecord unchanged layers in the retained scene.
     PlainControl floating(canvas), child(&floating), stationary(canvas);
@@ -615,10 +684,43 @@ int main(int argc, char** argv) {
         // editor moves away, without rebuilding all other mixer-like controls.
         stationary.color = Qt::cyan; stationary.update();
         QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
-        nativeFrame.move(10, 70);
+        if (!ui::graphics::moveNativeOverlay(&nativeFrame, QPoint(10, 70))) return 1;
         QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
         if (surface->quickWindow()->grabWindow().pixelColor(int(120*dpr), int(25*dpr)) != QColor(Qt::cyan)) {
             std::cerr << "Moving an opaque editor exposed stale workspace content\n"; return 1;
+        }
+        canvas->paints = stationary.paints = 0;
+        for (int i = 0; i < 12; ++i) {
+            const QPoint position(15 + i * 3, 70 - i * 2);
+            if (!ui::graphics::moveNativeOverlay(&nativeFrame, position)) return 1;
+            if (nativeFrame.pos() != position) {
+                std::cerr << "Native movement lost QWidget coordinates\n"; return 1;
+            }
+            QTimer::singleShot(20, &loop, &QEventLoop::quit); loop.exec();
+        }
+        if (canvas->paints || stationary.paints) {
+            std::cerr << "Native editor movement rerecorded the workspace: canvas=" << canvas->paints
+                      << " stationary=" << stationary.paints << '\n'; return 1;
+        }
+#ifdef Q_OS_WIN
+        const QImage nativePixels = window.screen()->grabWindow(nativeFrame.winId()).toImage();
+        if (nativePixels.isNull() || nativePixels.pixelColor(int(12*dpr), int(12*dpr)) != Qt::blue ||
+            nativePixels.pixelColor(int(65*dpr), int(40*dpr)) != Qt::red) {
+            std::cerr << "Native editor pixels were lost after movement\n"; return 1;
+        }
+#endif
+        // Coalesced real updates, including a partial parent update, must still
+        // reach the retained scene while the native editor is moving.
+        stationary.color = Qt::green;
+        nativeControl.color = Qt::yellow;
+        nativeControl.paints = 0;
+        if (!ui::graphics::moveNativeOverlay(&nativeFrame, QPoint(20, 70))) return 1;
+        canvas->QWidget::update(stationary.geometry()); nativeControl.update();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        if (!nativeControl.paints || !stationary.paints ||
+            surface->quickWindow()->grabWindow().pixelColor(int(120*dpr), int(25*dpr)) != QColor(Qt::green)) {
+            std::cerr << "Native movement suppressed a real content update: editor=" << nativeControl.paints
+                      << " stationary=" << stationary.paints << '\n'; return 1;
         }
     }
     stationary.hide();

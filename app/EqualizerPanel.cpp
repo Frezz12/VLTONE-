@@ -49,14 +49,6 @@ namespace eq = daw::plugins::equalizer;
 namespace {
 
 constexpr auto kUserPresetKey = "equalizer/userPresets.v1";
-constexpr double kLowCutCreationBoundaryHz = 20.0;
-constexpr double kHighCutCreationBoundaryHz = 20000.0;
-
-eq::FilterType filterTypeForNewBand(double frequency) {
-    if (frequency < kLowCutCreationBoundaryHz) return eq::FilterType::LowCut;
-    if (frequency > kHighCutCreationBoundaryHz) return eq::FilterType::HighCut;
-    return eq::FilterType::Bell;
-}
 
 QColor bandColor(int band, bool dark) {
     return EqualizerGraph::colorForBand(band, dark);
@@ -659,14 +651,7 @@ void EqualizerGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 void EqualizerGraph::wheelEvent(QWheelEvent* event) {
-    const int band = bandAt(event->position());
-    if (band >= 0 && !containsBand(m_selection, band)) choose(band, {});
-    if (m_selection.empty()) return QWidget::wheelEvent(event);
-    if (gestureStarted) gestureStarted();
-    const double factor = std::pow(1.08, double(event->angleDelta().y()) / 120.0);
-    if (qChanged) qChanged(m_selection, factor);
-    if (gestureFinished) gestureFinished();
-    event->accept();
+    event->ignore();
 }
 
 void EqualizerGraph::nudge(double xOctaves, double gainDb) {
@@ -1292,7 +1277,7 @@ void EqualizerPanel::createBand(double frequency, double gain) {
                                  tr("All 24 equalizer bands are already in use."));
         return;
     }
-    const eq::FilterType type = filterTypeForNewBand(frequency);
+    const eq::FilterType type = eq::filterTypeForNewBand(frequency);
     const bool isCut = type == eq::FilterType::LowCut ||
                        type == eq::FilterType::HighCut;
     const std::vector<QString> ids{bandId(band, eq::BandParam::Enabled),
@@ -1934,14 +1919,14 @@ bool EqualizerPanel::checkForTest() {
         !m_bandPanel->isHidden() && !m_dynamicPanel->isHidden() &&
         selectedBand() == band && threshold->value() > thresholdBefore;
 
-    createBand(10.0, -12.0);
+    createBand(75.0, -12.0);
     const int lowCutBand = selectedBand();
     const bool createsLowCut = lowCutBand >= 0 && waitForReadout([&] {
         const auto state = equalizerSnapshot();
         return state && state->bands[lowCutBand].type == eq::FilterType::LowCut &&
             state->bands[lowCutBand].gainDb == 0.0;
     });
-    createBand(30000.0, 12.0);
+    createBand(18000.0, 12.0);
     const int highCutBand = selectedBand();
     const bool createsHighCut = highCutBand >= 0 && waitForReadout([&] {
         const auto state = equalizerSnapshot();

@@ -619,9 +619,9 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir,
     if (const auto view = j.find("midiView"); view != j.end() && view->is_object()) {
         c.midiView.sequence = view->value("sequence", false);
         c.midiView.pitch = std::clamp(view->value("pitch", 60), 0, 127);
-        const double step = view->value("stepBeats", 0.25);
+        const double step = view->value("stepBeats", MidiClipView{}.stepBeats);
         c.midiView.stepBeats = std::isfinite(step)
-            ? std::clamp(step, 1.0 / 64.0, 4.0) : 0.25;
+            ? std::clamp(step, 1.0 / 64.0, 4.0) : MidiClipView{}.stepBeats;
     }
     c.patternPartId=j.value("patternPartId",std::string{});
     if(j.contains("patternParts")) {

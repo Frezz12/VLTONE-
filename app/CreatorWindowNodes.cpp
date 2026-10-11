@@ -8,6 +8,8 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDateTime>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
@@ -61,18 +63,26 @@ void CreatorWindow::refreshNodeLibrary() {
   }
   m_personalNodes.clear();
   for (const auto &g : m_project.definition.subgraphs) m_personalNodes["custom:" + QString::fromStdString(g.id)] = QString::fromStdString(g.name);
+  struct CachedName { qint64 size = -1; QDateTime modified; QString name; };
+  static QHash<QString, CachedName> names;
   QDir directory(nodeDirectory());
   QStringList files;
   for (const auto &file : directory.entryInfoList({"*.vltnode"}, QDir::Files, QDir::Name)) {
     files.push_back(file.absoluteFilePath());
     try {
-      const auto data = readNode(file.absoluteFilePath());
-      const auto root = data.at("root").get<std::string>();
-      QString name = file.completeBaseName();
-      for (const auto &g : data.at("definition").at("subgraphs")) if (g.at("id") == root) name = QString::fromStdString(g.at("name").get<std::string>());
-      m_personalNodes["library:" + file.absoluteFilePath()] = name + tr(" · Library");
+      auto& cached = names[file.absoluteFilePath()];
+      if (cached.size != file.size() || cached.modified != file.lastModified()) {
+        const auto data = readNode(file.absoluteFilePath());
+        const auto root = data.at("root").get<std::string>();
+        QString name = file.completeBaseName();
+        for (const auto &g : data.at("definition").at("subgraphs")) if (g.at("id") == root) name = QString::fromStdString(g.at("name").get<std::string>());
+        cached = {file.size(), file.lastModified(), name};
+      }
+      m_personalNodes["library:" + file.absoluteFilePath()] = cached.name + tr(" · Library");
     } catch (...) { /* An unavailable file stays on disk and can be explicitly opened for diagnostics. */ }
   }
+  for (auto it = names.begin(); it != names.end();)
+    if (!files.contains(it.key())) it = names.erase(it); else ++it;
   const auto watched = m_nodeLibraryWatcher->files();
   for (const auto &path : watched) if (!files.contains(path)) m_nodeLibraryWatcher->removePath(path);
   for (const auto &path : files) if (!watched.contains(path)) m_nodeLibraryWatcher->addPath(path);

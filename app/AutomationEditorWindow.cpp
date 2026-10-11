@@ -13,7 +13,9 @@
 #include <QCoreApplication>
 #include <QContextMenuEvent>
 #include <QDialog>
+#include <QDataStream>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -36,7 +38,7 @@ namespace {
 
 /// How near the pointer has to be to grab a breakpoint.
 constexpr double kGrab = 7.0;
-constexpr double kPointRadius = 4.0;
+constexpr double kPointRadius = 3.0;
 
 /// The gutters around the plot: the value axis on the left, the bar ruler
 /// underneath.
@@ -87,8 +89,10 @@ void AutomationCurveView::setClip(const QString& trackId, const QString& clipId)
 }
 
 void AutomationCurveView::setTool(Tool tool) {
+    if (m_gesture) cancelGesture();
     m_tool = tool;
     setCursor(tool == Tool::Draw ? Qt::PointingHandCursor : Qt::CrossCursor);
+    emit toolChanged();
 }
 
 void AutomationCurveView::setSnapBeats(double beats) {
@@ -310,6 +314,39 @@ void AutomationCurveView::beginGesture() {
     m_gesture = true;
 }
 
+void AutomationCurveView::cancelGesture() {
+    if (m_gesture && m_controller) {
+        m_controller->setAutomationPoints(m_trackId.toStdString(), m_clipId.toStdString(),
+                                          m_before, m_beforeActive);
+        emit liveEdited();
+    }
+    m_gesture = m_regionDragging = m_drawing = m_previewing = m_banding = false;
+    m_dragPoint = m_bendSegment = -1;
+    m_dragPoints.clear();
+    m_preview.clear();
+    update();
+}
+
+bool AutomationCurveView::event(QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape && (m_gesture || m_hasSelection)) {
+            key->accept();
+            return true;
+        }
+    }
+    if (!m_previewing && (event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide)) {
+        if (m_gesture) {
+            m_dragPoint = m_bendSegment = -1;
+            m_regionDragging = m_drawing = false;
+            commit(tr("Edit Automation"));
+        }
+        m_banding = false;
+    }
+    return ui::FrameWidget::event(event);
+}
+
 void AutomationCurveView::pushLive(at::Points points) {
     if (!m_controller) return;
     if (m_previewing) m_preview = points;
@@ -404,12 +441,14 @@ void AutomationCurveView::paintStatic(QPainter& p) {
         const double from = beatsToX(std::min(m_selectFrom, m_selectTo));
         const double to = beatsToX(std::max(m_selectFrom, m_selectTo));
         QColor wash = t.accent;
-        wash.setAlpha(46);
+        wash.setAlpha(24);
         p.fillRect(QRectF(from, box.top(), std::max(1.0, to - from), box.height()),
                    wash);
         p.setPen(QPen(mixColors(t.accent, t.textPrimary, 0.3), 1.0));
         p.drawLine(QPointF(from, box.top()), QPointF(from, box.bottom()));
         p.drawLine(QPointF(to, box.top()), QPointF(to, box.bottom()));
+        p.drawLine(QPointF(from, box.top()), QPointF(to, box.top()));
+        p.drawLine(QPointF(from, box.bottom()), QPointF(to, box.bottom()));
     }
 
     // Beat and bar lines, and the same three value guides the lane draws — a
@@ -477,16 +516,15 @@ void AutomationCurveView::paintStatic(QPainter& p) {
         under << QPointF(line.back().x(), box.bottom());
         under << QPointF(line.front().x(), box.bottom());
         QColor wash = accent;
-        wash.setAlpha(t.dark ? 54 : 64);
+        wash.setAlpha(t.dark ? 26 : 32);
         p.setPen(Qt::NoPen);
         p.setBrush(wash);
         p.drawPolygon(under);
 
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(mixColors(t.background, accent, 0.25), 3.5));
-        p.drawPolyline(line);
-        p.setPen(QPen(mixColors(accent, t.textPrimary, 0.3), 2.0));
+        p.setPen(QPen(mixColors(accent, t.textPrimary, 0.3), 1.35,
+                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPolyline(line);
     }
 
@@ -500,7 +538,7 @@ void AutomationCurveView::paintStatic(QPainter& p) {
         const bool inRange = m_hasSelection && selected.contains(points[i].beats);
         const double radius = kPointRadius;
         p.setBrush(inRange ? t.accent : t.surfaceElevated);
-        p.setPen(QPen(mixColors(accent, t.textPrimary, 0.35), 1.8));
+        p.setPen(QPen(mixColors(accent, t.textPrimary, 0.35), 1.2));
         p.drawEllipse(centre, radius, radius);
         if (points[i].shape != daw::AutomationSegment::Linear) {
             // A shaped segment is marked at the point that owns it: a hollow
@@ -531,13 +569,40 @@ void AutomationCurveView::paintEvent(QPaintEvent*) {
     paintScene(p, QRegion(rect()));
 }
 
+void AutomationCurveView::validateStaticModel() {
+    QByteArray signature;
+    QDataStream stream(&signature, QIODevice::WriteOnly);
+    const auto* current = clip();
+    stream << bool(current);
+    if (current && m_controller) {
+        stream << current->color << lengthBeats() << current->automation.defaultValue
+               << m_controller->project().timeSigNumerator << m_controller->project().timeSigDenominator
+               << quint64(m_controller->projectGeneration());
+        for (const double value : {0., .25, .5, .75, 1.})
+            stream << QString::fromStdString(m_controller->automationValueText(current->automation.target, value));
+    }
+    const auto& points = curve();
+    if (signature != m_modelSignature || points != m_modelPoints) {
+        m_modelSignature = std::move(signature);
+        m_modelPoints = points;
+        m_staticValid = false;
+    }
+    m_staticRevision = m_controller ? m_controller->projectRevision() : 0;
+}
+
+void AutomationCurveView::refreshModel() {
+    validateStaticModel();
+    ui::FrameWidget::update();
+}
+
 void AutomationCurveView::paintScene(QPainter& p, const QRegion&) {
     const bool gpu = ui::graphics::isSceneRecording(p);
     const qreal dpr = devicePixelRatioF();
     const QSize pixels(qCeil(width() * dpr), qCeil(height() * dpr));
     const auto revision = m_controller ? m_controller->projectRevision() : 0;
+    if (revision != m_staticRevision) validateStaticModel();
     if (!gpu && (!m_staticValid || m_staticFont != font() || m_staticFrame.size() != pixels ||
-        m_staticFrame.devicePixelRatioF() != dpr || m_staticRevision != revision)) {
+        m_staticFrame.devicePixelRatioF() != dpr)) {
         if (m_staticFrame.size() != pixels) m_staticFrame = QPixmap(pixels);
         m_staticFrame.setDevicePixelRatio(dpr);
         QPainter cache(&m_staticFrame);
@@ -548,7 +613,7 @@ void AutomationCurveView::paintScene(QPainter& p, const QRegion&) {
     if (gpu) {
         m_staticFrame = {}; // A later compatibility fallback must repaint its pixmap.
         if (!m_staticValid || m_staticFont != font() || m_gpuStaticSize != size() ||
-            m_gpuStaticDpr != dpr || m_staticRevision != revision) m_gpuStatic.clear();
+            m_gpuStaticDpr != dpr) m_gpuStatic.clear();
         m_gpuStatic.paint(p, 0, size(), {}, [this](QPainter& cached) { paintStatic(cached); });
         m_gpuStaticSize = size(); m_gpuStaticDpr = dpr;
         m_staticValid = true; m_staticRevision = revision; m_staticFont = font();
@@ -568,8 +633,8 @@ void AutomationCurveView::paintScene(QPainter& p, const QRegion&) {
         const QPointF centre(beatsToX(point.beats), valueToY(point.value));
         p.setRenderHint(QPainter::Antialiasing);
         p.setBrush(m_hasSelection && range().contains(point.beats) ? t.accent : t.surfaceElevated);
-        p.setPen(QPen(mixColors(accent, t.textPrimary, .35), 1.8));
-        p.drawEllipse(centre, kPointRadius + 2.0, kPointRadius + 2.0);
+        p.setPen(QPen(mixColors(accent, t.textPrimary, .35), 1.4));
+        p.drawEllipse(centre, kPointRadius + 1.0, kPointRadius + 1.0);
         if (point.shape == daw::AutomationSegment::SCurve) {
             p.setPen(Qt::NoPen); p.setBrush(mixColors(accent, t.textPrimary, .35));
             p.drawEllipse(centre, 1.8, 1.8);
@@ -577,7 +642,7 @@ void AutomationCurveView::paintScene(QPainter& p, const QRegion&) {
     }
     // The pointer's own readout, drawn where the pointer is rather than in a
     // corner: shaping a curve is a thing done while looking at the curve.
-    if (m_hasCursor && box.contains(m_cursor)) {
+    if (m_hasCursor && box.contains(m_cursor) && (m_gesture || m_hoverPoint >= 0)) {
         const QString text = readoutFor(xToBeats(m_cursor.x()), yToValue(m_cursor.y()));
         const double textWidth = p.fontMetrics().horizontalAdvance(text) + 14.0;
         // Flipped to the other side of the pointer near the right edge, so the
@@ -609,6 +674,27 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
     at::Points points = curve();
     const int hit = pointAt(pos);
 
+    if (m_tool == Tool::Region && plot().contains(pos)) {
+        const double beat = xToBeats(pos.x());
+        if (m_hasSelection && range().contains(beat) &&
+            !(ev->modifiers() & Qt::ControlModifier)) {
+            beginGesture();
+            m_regionDragging = true;
+            m_regionLastY = pos.y();
+            m_regionAmount = 0.0;
+            setCursor(Qt::SizeVerCursor);
+        } else {
+            m_banding = true;
+            m_bandAnchor = std::clamp(snap(beat), 0.0, lengthBeats());
+            m_bandPressPosition = pos;
+            m_hasSelection = true;
+            m_selectFrom = m_selectTo = m_bandAnchor;
+            emit selectionChanged();
+        }
+        update();
+        return;
+    }
+
     // Shift on empty space starts a possible range gesture. If the pointer is
     // released without meaningful travel it becomes a timing anchor on the
     // existing curve; a drag still selects the range generators act on.
@@ -625,11 +711,10 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
     }
 
     if (m_tool == Tool::Draw) {
+        if (!plot().contains(pos)) return;
         beginGesture();
         m_drawing = true;
-        const double beats = snap(xToBeats(pos.x()));
-        points.push_back({beats, yToValue(pos.y()), m_newShape, 0.0});
-        pushLive(points);
+        mouseMoveEvent(ev);
         return;
     }
 
@@ -637,6 +722,8 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
         beginGesture();
         m_dragPoint = hit;
         m_dragPoints = points;
+        m_pointGrabOffset = pos - QPointF(beatsToX(points[std::size_t(hit)].beats),
+                                         valueToY(points[std::size_t(hit)].value));
         setCursor((ev->modifiers() & Qt::ShiftModifier)
                       ? Qt::SizeHorCursor
                       : Qt::SizeAllCursor);
@@ -666,6 +753,7 @@ void AutomationCurveView::mousePressEvent(QMouseEvent* ev) {
         {beats, yToValue(pos.y()), m_newShape, 0.0, daw::newUuid()});
     daw::normalizeAutomation(points);
     m_dragPoints = points;
+    m_pointGrabOffset = {};
     pushLive(points);
     for (std::size_t i = 0; i < m_dragPoints.size(); ++i) {
         if (std::abs(m_dragPoints[i].beats - beats) < 1e-9)
@@ -680,9 +768,24 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
     m_hasCursor = true;
 
     if (m_banding) {
-        m_selectTo = xToBeats(pos.x());
+        m_selectTo = m_tool == Tool::Region
+            ? std::clamp(snap(xToBeats(pos.x())), 0.0, lengthBeats()) : xToBeats(pos.x());
         emit selectionChanged();
         update();
+        return;
+    }
+
+    if (m_regionDragging) {
+        const auto* c = clip();
+        if (!c) return;
+        m_regionAmount += (m_regionLastY - pos.y()) / plot().height() *
+                          ((ev->modifiers() & Qt::ShiftModifier) ? 0.1 : 1.0);
+        m_regionLastY = pos.y();
+        pushLive(at::sculptRegion(m_before, range(), m_regionAmount, at::RegionShape::Lift,
+                                 0.0, c->automation.defaultValue, &m_regionAmount));
+        emit readoutChanged(tr("Region: %1%2%")
+            .arg(m_regionAmount >= 0.0 ? QStringLiteral("+") : QString())
+            .arg(m_regionAmount * 100.0, 0, 'f', 1));
         return;
     }
 
@@ -694,7 +797,7 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
         // freehand line that lands a point on every mouse event is unusable
         // afterwards, and sounds identical.
         const double spacing = m_snapBeats > 0.0 ? m_snapBeats * 0.5
-                                                 : xToBeats(6.0) - xToBeats(0.0);
+                                                 : lengthBeats() * 6.0 / plot().width();
         bool replaced = false;
         for (auto& point : points) {
             if (std::abs(point.beats - beats) < spacing) {
@@ -710,15 +813,16 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
     }
 
     if (m_dragPoint >= 0 && m_dragPoint < int(m_dragPoints.size())) {
+        const QPointF grabbed = pos - m_pointGrabOffset;
         // Alt while dragging a point drops the snap, the way every other
         // fine-adjustment in the program does.
         const double moved = std::clamp((ev->modifiers() & Qt::AltModifier)
-                                            ? xToBeats(pos.x())
-                                            : snap(xToBeats(pos.x())),
+                                            ? xToBeats(grabbed.x())
+                                            : snap(xToBeats(grabbed.x())),
                                         0.0, lengthBeats());
         const double value = (ev->modifiers() & Qt::ShiftModifier)
                                  ? m_dragPoints[std::size_t(m_dragPoint)].value
-                                 : yToValue(pos.y());
+                                 : yToValue(grabbed.y());
         at::Points points = at::dragPoint(
             m_dragPoints, std::size_t(m_dragPoint), moved, value);
         pushLive(points);
@@ -743,6 +847,9 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
 
     const int hover = pointAt(pos);
     m_hoverPoint = hover;
+    if (m_tool == Tool::Region)
+        setCursor(m_hasSelection && plot().contains(pos) && range().contains(xToBeats(pos.x()))
+                      ? Qt::SizeVerCursor : Qt::CrossCursor);
     if (plot().contains(pos)) {
         emit readoutChanged(readoutFor(xToBeats(pos.x()), yToValue(pos.y())));
     }
@@ -750,13 +857,22 @@ void AutomationCurveView::mouseMoveEvent(QMouseEvent* ev) {
 }
 
 void AutomationCurveView::mouseReleaseEvent(QMouseEvent* ev) {
+    if (ev->button() != Qt::LeftButton) return;
+    if (m_regionDragging) {
+        mouseMoveEvent(ev);
+        m_regionDragging = false;
+        commit(tr("Move Automation Region"));
+        return;
+    }
     if (m_banding) {
         m_banding = false;
         constexpr double kBandHysteresis = 5.0;
         const bool shiftClick =
             QLineF(m_bandPressPosition, ev->position()).length() <
             kBandHysteresis;
-        if (shiftClick) {
+        if (m_tool == Tool::Region) {
+            m_hasSelection = !shiftClick && std::abs(m_selectTo - m_selectFrom) > 1e-7;
+        } else if (shiftClick) {
             m_hasSelection = false;
             const daw::ClipModel* c = clip();
             if (c) {
@@ -795,6 +911,7 @@ void AutomationCurveView::mouseReleaseEvent(QMouseEvent* ev) {
 }
 
 void AutomationCurveView::mouseDoubleClickEvent(QMouseEvent* ev) {
+    if (m_tool == Tool::Region) return;
     // Double-click mirrors the control itself: return the breakpoint to the
     // target's factory/neutral value. Delete remains explicit on Backspace and
     // in the context menu, so an imprecise reset never destroys curve timing.
@@ -812,6 +929,16 @@ void AutomationCurveView::mouseDoubleClickEvent(QMouseEvent* ev) {
 }
 
 void AutomationCurveView::keyPressEvent(QKeyEvent* ev) {
+    if (m_tool == Tool::Region && m_hasSelection &&
+        (ev->key() == Qt::Key_Up || ev->key() == Qt::Key_Down)) {
+        const auto* c = clip();
+        if (!c) return;
+        const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.001 : 0.01;
+        applyPoints(at::sculptRegion(curve(), range(), ev->key() == Qt::Key_Up ? step : -step,
+                                    at::RegionShape::Lift, 0.0, c->automation.defaultValue),
+                    tr("Move Automation Region"));
+        return;
+    }
     if (ev->key() == Qt::Key_Delete || ev->key() == Qt::Key_Backspace) {
         at::Points points = curve();
         const at::Range r = range();
@@ -824,6 +951,7 @@ void AutomationCurveView::keyPressEvent(QKeyEvent* ev) {
                 kept.push_back(point);
         }
         if (kept.size() != points.size()) applyPoints(kept, tr("Delete Automation Points"));
+        m_hoverPoint = -1;
         return;
     }
     if (ev->key() == Qt::Key_A && (ev->modifiers() & Qt::ControlModifier)) {
@@ -831,6 +959,8 @@ void AutomationCurveView::keyPressEvent(QKeyEvent* ev) {
         return;
     }
     if (ev->key() == Qt::Key_Escape) {
+        if (m_gesture) { cancelGesture(); return; }
+        m_banding = false;
         clearSelection();
         return;
     }
@@ -931,9 +1061,11 @@ AutomationEditorWindow::AutomationEditorWindow(daw::EngineController* controller
     m_hint = new QLabel(this);
     m_hint->setObjectName(QStringLiteral("PluginHint"));
     m_hint->setContentsMargins(12, 4, 12, 6);
-    m_hint->setText(tr("Click to add · Shift-click: add on curve · drag to move · "
-                       "Shift-drag: time/range · double-click: reset · Alt-segment: curve"));
+    m_hint->setWordWrap(true);
     outer->addWidget(m_hint);
+    connect(m_view, &AutomationCurveView::selectionChanged, this, &AutomationEditorWindow::updateHint);
+    connect(m_view, &AutomationCurveView::toolChanged, this, &AutomationEditorWindow::updateHint);
+    updateHint();
 
     connect(m_view, &AutomationCurveView::edited, this, [this] {
         emit projectEdited();
@@ -964,13 +1096,13 @@ void AutomationEditorWindow::buildTargetRow(QVBoxLayout* outer) {
     row->addWidget(caption);
 
     m_channel = new QComboBox(bar);
-    m_channel->setMinimumWidth(150);
+    m_channel->setMinimumWidth(110);
     m_channel->setAccessibleName(tr("Automated channel"));
     m_what = new QComboBox(bar);
-    m_what->setMinimumWidth(170);
+    m_what->setMinimumWidth(120);
     m_what->setAccessibleName(tr("Automated control"));
     m_parameter = new QComboBox(bar);
-    m_parameter->setMinimumWidth(200);
+    m_parameter->setMinimumWidth(130);
     m_parameter->setAccessibleName(tr("Automated parameter"));
     row->addWidget(m_channel);
     row->addWidget(m_what);
@@ -982,13 +1114,15 @@ void AutomationEditorWindow::buildTargetRow(QVBoxLayout* outer) {
 
     m_readout = new QLabel(bar);
     m_readout->setObjectName(QStringLiteral("PluginWrapperFormat"));
-    m_readout->setMinimumWidth(120);
+    m_readout->setMinimumWidth(90);
     m_readout->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row->addWidget(m_readout);
 
     // Three fields, one meaning: the target the clip carries. Any of them
     // changing re-points the curve without touching a single point of it.
     for (QComboBox* box : {m_channel, m_what, m_parameter}) {
+        box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        box->setMinimumContentsLength(12);
         connect(box, &QComboBox::currentIndexChanged, this, [this] {
             if (m_reloading) return;
             applyTargetFromFields();
@@ -1003,6 +1137,7 @@ void AutomationEditorWindow::populateActionsMenu(QMenu& menu) {
     clearSelection->setEnabled(m_view->hasSelection());
     menu.addSeparator();
     menu.addAction(tr("LFO…"), this, &AutomationEditorWindow::showLfoDialog);
+    menu.addAction(tr("Contour…"), this, &AutomationEditorWindow::showContourDialog);
     auto* shapes = menu.addMenu(tr("Shape"));
     if (m_shapeActions) shapes->addActions(m_shapeActions->actions());
     const auto choices = [this, &menu](const QString& title, QComboBox* combo) {
@@ -1031,17 +1166,28 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     m_draw = new QToolButton(bar);
     m_draw->setIcon(icons::icon(icons::Glyph::Brush, th().textPrimary));
     m_draw->setToolTip(tr("Draw freehand"));
+    m_region = new QToolButton(bar);
+    m_region->setText(tr("Region"));
+    m_region->setToolTip(tr("Select a time range, then drag inside it to raise or lower the curve"));
     for (QToolButton* button : {m_select, m_draw}) {
         button->setCheckable(true);
         button->setAutoExclusive(true);
         button->setFixedSize(28, 28);
+        button->setAccessibleName(button->toolTip());
         row->addWidget(button);
     }
+    m_region->setCheckable(true);
+    m_region->setAutoExclusive(true);
+    m_region->setMinimumHeight(28);
+    m_region->setAccessibleName(tr("Region"));
+    row->addWidget(m_region);
     m_select->setChecked(true);
     connect(m_select, &QToolButton::clicked, this,
             [this] { m_view->setTool(AutomationCurveView::Tool::Select); });
     connect(m_draw, &QToolButton::clicked, this,
             [this] { m_view->setTool(AutomationCurveView::Tool::Draw); });
+    connect(m_region, &QToolButton::clicked, this,
+            [this] { m_view->setTool(AutomationCurveView::Tool::Region); });
 
     row->addWidget(ui::separatorLine(Qt::Vertical, 22, bar));
 
@@ -1049,6 +1195,7 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     snapCaption->setObjectName(QStringLiteral("PluginHint"));
     row->addWidget(snapCaption);
     m_snap = new QComboBox(bar);
+    m_snap->setAccessibleName(tr("Snap"));
     m_snap->addItem(tr("Off"), 0.0);
     m_snap->addItem(QStringLiteral("1/16"), 0.25);
     m_snap->addItem(QStringLiteral("1/8"), 0.5);
@@ -1064,6 +1211,7 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     shapeCaption->setObjectName(QStringLiteral("PluginHint"));
     row->addWidget(shapeCaption);
     m_shape = new QComboBox(bar);
+    m_shape->setAccessibleName(tr("New point"));
     m_shape->addItem(tr("Linear"), int(daw::AutomationSegment::Linear));
     m_shape->addItem(tr("Hold"), int(daw::AutomationSegment::Hold));
     m_shape->addItem(tr("S-Curve"), int(daw::AutomationSegment::SCurve));
@@ -1073,7 +1221,13 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     });
     row->addWidget(m_shape);
 
-    row->addWidget(ui::separatorLine(Qt::Vertical, 22, bar));
+    row->addStretch(1);
+    outer->addWidget(bar);
+    bar = new QWidget(this);
+    bar->setObjectName(QStringLiteral("PluginWrapper"));
+    row = new QHBoxLayout(bar);
+    row->setContentsMargins(12, 4, 12, 6);
+    row->setSpacing(8);
 
     auto* lfo = new QToolButton(bar);
     lfo->setText(tr("LFO…"));
@@ -1081,6 +1235,12 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     lfo->setToolTip(tr("Fill the selection with a shape"));
     connect(lfo, &QToolButton::clicked, this, &AutomationEditorWindow::showLfoDialog);
     row->addWidget(lfo);
+
+    auto* contour = new QToolButton(bar);
+    contour->setText(tr("Contour…"));
+    contour->setToolTip(tr("Lift, tilt or arch the curve while keeping the outside unchanged"));
+    connect(contour, &QToolButton::clicked, this, &AutomationEditorWindow::showContourDialog);
+    row->addWidget(contour);
 
     // Everything that acts on the selection, in one menu rather than eight
     // buttons: the toolbar is already the widest thing in the window, and these
@@ -1133,8 +1293,72 @@ void AutomationEditorWindow::buildToolbar(QVBoxLayout* outer) {
     tools->setMenu(menu);
     row->addWidget(tools);
 
-    row->addStretch(1);
+    m_scope = new QLabel(this);
+    m_scope->setObjectName(QStringLiteral("PluginHint"));
+    m_scope->setWordWrap(true);
+    m_scope->setContentsMargins(8, 0, 0, 0);
+    row->addWidget(m_scope, 1);
     outer->addWidget(bar);
+}
+
+void AutomationEditorWindow::updateHint() {
+    if (!m_view || !m_hint || !m_scope) return;
+    const bool region = m_view->tool() == AutomationCurveView::Tool::Region;
+    m_select->setChecked(m_view->tool() == AutomationCurveView::Tool::Select);
+    m_draw->setChecked(m_view->tool() == AutomationCurveView::Tool::Draw);
+    m_region->setChecked(region);
+    m_hint->setText(region
+        ? tr("Drag to select · drag inside: raise/lower · Shift: fine · ↑/↓: nudge · Ctrl-drag: new region · Esc: cancel")
+        : tr("Click to add · Shift-click: add on curve · drag to move · Shift-drag: time/range · double-click: reset · Alt-segment: curve"));
+    const auto range = m_view->range();
+    m_scope->setText(m_view->hasSelection()
+        ? tr("Selection: %1–%2 beats · tools affect this range").arg(range.fromBeats, 0, 'f', 2).arg(range.toBeats, 0, 'f', 2)
+        : tr("Whole clip · select a region to shape only part of the curve"));
+}
+
+void AutomationEditorWindow::showContourDialog() {
+    const auto* c = clip();
+    if (!m_view || !c) return;
+    const auto before = m_view->points();
+    const auto range = m_view->range();
+    const double fallback = c->automation.defaultValue;
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Contour"));
+    dialog.setMinimumWidth(380);
+    auto* form = new QFormLayout(&dialog);
+    auto* info = new QLabel(tr("Shape the selected range. Outside values stay pinned. Changes preview live; Cancel restores the curve."), &dialog);
+    info->setWordWrap(true);
+    form->addRow(info);
+    auto* shape = new QComboBox(&dialog);
+    shape->addItem(tr("Lift — move the whole region"), int(at::RegionShape::Lift));
+    shape->addItem(tr("Tilt — balance start and end"), int(at::RegionShape::Tilt));
+    shape->addItem(tr("Arch — lift or dip the middle"), int(at::RegionShape::Arch));
+    auto* amount = new QDoubleSpinBox(&dialog);
+    amount->setRange(-100, 100);
+    amount->setDecimals(1);
+    amount->setSingleStep(1);
+    amount->setSuffix(QStringLiteral(" %"));
+    auto* softness = new QDoubleSpinBox(&dialog);
+    softness->setRange(0, 100);
+    softness->setSingleStep(5);
+    softness->setSuffix(QStringLiteral(" %"));
+    softness->setToolTip(tr("0%: square edges. 100%: blend through the whole region."));
+    form->addRow(tr("Shape"), shape);
+    form->addRow(tr("Amount"), amount);
+    form->addRow(tr("Soft edges"), softness);
+    const auto preview = [&] {
+        m_view->showPreview(at::sculptRegion(before, range, amount->value() / 100.0,
+            at::RegionShape(shape->currentData().toInt()), softness->value() / 100.0, fallback));
+    };
+    connect(shape, &QComboBox::currentIndexChanged, &dialog, preview);
+    connect(amount, &QDoubleSpinBox::valueChanged, &dialog, preview);
+    connect(softness, &QDoubleSpinBox::valueChanged, &dialog, preview);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() == QDialog::Accepted) m_view->commitPreview(tr("Contour Automation"));
+    else m_view->cancelPreview();
 }
 
 const daw::ClipModel* AutomationEditorWindow::clip() const {
@@ -1153,7 +1377,7 @@ void AutomationEditorWindow::updateTitle() {
     setWindowTitle(c && !c->name.empty()
                        ? tr("Automation — %1").arg(QString::fromStdString(c->name))
                        : tr("Automation"));
-    if (c) { const auto count = m_controller->linkedClips({m_trackId.toStdString(), c->id}).size();
+    if (c) { const auto count = m_controller->linkedClipCount({m_trackId.toStdString(), c->id});
         if (count > 1) setWindowTitle(windowTitle() + tr(" · Linked: %1").arg(count)); }
 }
 
@@ -1402,7 +1626,7 @@ void AutomationEditorWindow::refresh() {
     }
     reloadTargetFields();
     updateTitle();
-    if (m_view) m_view->update();
+    if (m_view) m_view->refreshModel();
 }
 
 void AutomationEditorWindow::closeEvent(QCloseEvent* event) {

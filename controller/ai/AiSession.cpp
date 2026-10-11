@@ -163,7 +163,7 @@ std::string AiSession::systemPrompt() const {
 
 bool AiSession::begin(const std::string& prompt) {
     if (m_running) return false;
-    m_context.mode = inferInteractionMode(prompt);
+    m_context.mode = m_context.requestedMode.value_or(inferInteractionMode(prompt));
     m_running = true;
     m_cancelled = false;
     m_iterations = 0;

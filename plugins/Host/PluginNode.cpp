@@ -221,10 +221,10 @@ engine::Status PluginNode::serviceOffline() {
         m_instance->latencySamples() !=
             m_latency.load(std::memory_order_relaxed);
     if (restartNeedsPrepare || reportedLatencyChanged) {
+        const auto layout = m_instance->busLayout();
         const OfflineConfiguration current{
             m_instance->latencySamples(), m_instance->tailSamples(),
-            m_pluginInputChannels, m_pluginSidechainChannels,
-            m_pluginOutputChannels};
+            layout.inputs, layout.outputs};
         // Some processors emit the same structural notification after every
         // activation. Honour it once, then keep the replacement pass when the
         // host-visible configuration is unchanged; a real change still gets a

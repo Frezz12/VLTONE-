@@ -560,22 +560,7 @@ void GlassSlider::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void GlassSlider::wheelEvent(QWheelEvent* event) {
-    const double raw = !event->pixelDelta().isNull()
-                           ? event->pixelDelta().y() / 16.0
-                           : event->angleDelta().y() / 120.0 * 3.0;
-    if (std::abs(raw) < 1e-9) {
-        event->accept();
-        return;
-    }
-    const double fine = event->modifiers() & Qt::ShiftModifier ? 0.25 : 1.0;
-    m_wheelRemainder += raw * std::max(1, singleStep()) * fine;
-    const int whole = m_wheelRemainder > 0.0 ? int(std::floor(m_wheelRemainder))
-                                              : int(std::ceil(m_wheelRemainder));
-    if (whole != 0) {
-        setValue(std::clamp(value() + whole, minimum(), maximum()));
-        m_wheelRemainder -= whole;
-    }
-    event->accept();
+    event->ignore();
 }
 
 void GlassSlider::enterEvent(QEnterEvent* event) {
@@ -617,7 +602,7 @@ bool GlassSlider::checkInteractionForTest() {
                           Qt::NoModifier, Qt::ScrollUpdate, false);
         slider.wheelEvent(&wheel);
     }
-    return jumped >= 70 && slider.value() < beforeWheel &&
+    return jumped >= 70 && slider.value() == beforeWheel &&
            presses == 1 && releases == 1 && !slider.isSliderDown();
 }
 
@@ -1151,11 +1136,6 @@ FaderWidget::FaderWidget(Qt::Orientation orientation, QWidget* parent)
     setToolTip(tr("Drag to set level · double-click for unity · Shift for fine"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
-    m_wheelCommit = new QTimer(this);
-    m_wheelCommit->setSingleShot(true);
-    m_wheelCommit->setInterval(140);
-    connect(m_wheelCommit, &QTimer::timeout, this,
-            &FaderWidget::finishWheelEdit);
 }
 
 void FaderWidget::setGain(double gain) {
@@ -1338,11 +1318,10 @@ void FaderWidget::paintCap(QPainter& p, const QRectF& cap) const {
     const QRectF shell(0.8, 0.6, width - 1.6, height - 2.2);
     const QRectF face = shell.adjusted(2.0, 1.2, -2.0, -2.6);
     // Use the same raised-control material as the surrounding theme. Lighting
-    // shapes the grip without giving it a separate graphite/silver palette.
-    const QColor body = mixColors(t.controlBottom(), t.accent, lit ? 0.12 : 0.0);
+    // shapes the grip; hover and drag keep the material free of accent tint.
+    const QColor body = t.controlBottom();
     const QColor shade = t.edgeDark(body);
-    const QColor highlight = t.edgeLight(
-        mixColors(t.controlTop(), t.accent, lit ? 0.10 : 0.0));
+    const QColor highlight = t.edgeLight(t.controlTop());
     const auto material = [&](double lightness) {
         return mixColors(shade, highlight, lightness);
     };
@@ -1445,9 +1424,7 @@ void FaderWidget::paintCap(QPainter& p, const QRectF& cap) const {
     p.setPen(Qt::NoPen);
     p.setBrush(t.wellTop());
     p.drawRoundedRect(inlay.adjusted(-0.6, -0.6, 0.6, 0.6), 1.0, 1.0);
-    p.setBrush(isEnabled() ? (lit ? mixColors(t.textPrimary, t.accent, 0.22)
-                                : t.textPrimary)
-                           : t.textSecondary);
+    p.setBrush(isEnabled() ? t.textPrimary : t.textSecondary);
     p.drawRoundedRect(inlay, 0.35, 0.35);
     p.restore();
 }
@@ -1567,7 +1544,6 @@ void FaderWidget::showBubble() {
 
 void FaderWidget::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
-    finishWheelEdit();
     m_dragging = true;
     m_dragStartPosition = faderPositionFromGain(m_gain);
     m_dragStartCoord = int((m_orientation == Qt::Vertical || m_compactKnob)
@@ -1641,45 +1617,8 @@ void FaderWidget::contextMenuEvent(QContextMenuEvent* event) {
     if (automationContextMenu(this, event)) emit automateRequested();
 }
 
-void FaderWidget::setWheelEnabled(bool enabled) {
-    if (!enabled) finishWheelEdit();
-    m_wheelEnabled = enabled;
-}
-
 void FaderWidget::wheelEvent(QWheelEvent* ev) {
-    if (!m_wheelEnabled) {
-        ev->ignore();
-        return;
-    }
-    const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.005 : 0.02;
-    const double units = !ev->pixelDelta().isNull()
-                             ? ev->pixelDelta().y() / 60.0
-                             : ev->angleDelta().y() / 120.0;
-    if (std::abs(units) < 1e-9) {
-        if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
-        ev->accept();
-        return;
-    }
-    const double pos = std::clamp(
-        faderPositionFromGain(m_gain) + units * step,
-        0.0, 1.0);
-    const double next = gainFromFaderPosition(pos);
-    if (std::abs(next - m_gain) >= 1e-9) {
-        m_gain = next;
-        m_wheelEditing = true;
-        update();
-        emit gainChanged(m_gain);
-    }
-    if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
-    else if (m_wheelEditing) m_wheelCommit->start();
-    ev->accept();
-}
-
-void FaderWidget::finishWheelEdit() {
-    if (m_wheelCommit) m_wheelCommit->stop();
-    if (!m_wheelEditing) return;
-    m_wheelEditing = false;
-    emit editFinished();
+    ev->ignore();
 }
 
 // ── MiniSlider ──
@@ -1855,12 +1794,7 @@ protected:
         emit m_owner->editFinished();
     }
     void wheelEvent(QWheelEvent* ev) override {
-        if (!m_owner) return;
-        emit m_owner->editStarted();
-        const double span = m_owner->m_max - m_owner->m_min;
-        m_owner->commit(m_owner->m_value +
-                        (ev->angleDelta().y() > 0 ? 1 : -1) * span / 60.0);
-        emit m_owner->editFinished();
+        ev->ignore();
     }
 
 private:
@@ -2105,10 +2039,7 @@ void MiniSlider::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 void MiniSlider::wheelEvent(QWheelEvent* ev) {
-    emit editStarted();
-    const double fine = (ev->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
-    commit(m_value + (ev->angleDelta().y() > 0 ? 1 : -1) * m_step * 4.0 * fine);
-    emit editFinished();
+    ev->ignore();
 }
 
 // ── PanKnob ──
@@ -2124,11 +2055,6 @@ PanKnob::PanKnob(QWidget* parent) : QWidget(parent) {
         tr("Pan · drag horizontally or vertically · double-click to centre"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             QOverload<>::of(&QWidget::update));
-    m_wheelCommit = new QTimer(this);
-    m_wheelCommit->setSingleShot(true);
-    m_wheelCommit->setInterval(140);
-    connect(m_wheelCommit, &QTimer::timeout, this,
-            &PanKnob::finishWheelEdit);
 }
 
 void PanKnob::setPan(double pan) {
@@ -2219,7 +2145,6 @@ void PanKnob::paintEvent(QPaintEvent*) {
 
 void PanKnob::mousePressEvent(QMouseEvent* ev) {
     if (ev->button() != Qt::LeftButton) return;
-    finishWheelEdit();
     m_dragging = true;
     m_dragStart = m_pan;
     m_dragStartX = int(ev->position().x());
@@ -2268,28 +2193,7 @@ void PanKnob::mouseDoubleClickEvent(QMouseEvent*) {
 }
 
 void PanKnob::wheelEvent(QWheelEvent* ev) {
-    const double step = (ev->modifiers() & Qt::ShiftModifier) ? 0.01 : 0.05;
-    const double units = !ev->pixelDelta().isNull()
-                             ? ev->pixelDelta().y() / 60.0
-                             : ev->angleDelta().y() / 120.0;
-    if (std::abs(units) < 1e-9) {
-        if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
-        ev->accept();
-        return;
-    }
-    const double before = m_pan;
-    commit(m_pan + units * step);
-    if (std::abs(m_pan - before) >= 1e-9) m_wheelEditing = true;
-    if (ev->phase() == Qt::ScrollEnd) finishWheelEdit();
-    else if (m_wheelEditing) m_wheelCommit->start();
-    ev->accept();
-}
-
-void PanKnob::finishWheelEdit() {
-    if (m_wheelCommit) m_wheelCommit->stop();
-    if (!m_wheelEditing) return;
-    m_wheelEditing = false;
-    emit editFinished();
+    ev->ignore();
 }
 
 bool PanKnob::event(QEvent* event) {
@@ -2929,16 +2833,7 @@ void Knob::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 void Knob::wheelEvent(QWheelEvent* ev) {
-    if (ev->angleDelta().y()==0) { ev->ignore(); return; }
-    const double fine = (ev->modifiers() & Qt::ShiftModifier) ? 0.25 : 1.0;
-    const double direction = ev->angleDelta().y() > 0 ? 1.0 : -1.0;
-    if (m_logarithmic && m_min > 0.0 && m_max > m_min && !m_stepped)
-        commit(valueForFraction(fraction() + direction * 0.02 * fine));
-    else {
-        const double step = m_stepped ? 1.0 : (m_max - m_min) * 0.02;
-        commit(m_value + direction * step * fine);
-    }
-    emit editFinished();
+    ev->ignore();
 }
 
 bool Knob::event(QEvent* event) {

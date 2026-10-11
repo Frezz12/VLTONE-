@@ -13,6 +13,7 @@ class QVBoxLayout;
 class QRubberBand;
 class QTimer;
 class QLabel;
+class QMimeData;
 class RackDeviceCard;
 namespace ui {
 class MiniModuleRack;
@@ -60,7 +61,9 @@ class RackWidget final : public QWidget {
     void clearDrop();
     void startDrag(const QString&);
     void contextMenu(const QString&, const QPoint&, bool group = false);
-    void addDevice(const QPoint&, bool instrument = false);
+    void addDevice(const QPoint&);
+    bool insertPlugin(const daw::plugins::PluginDescriptor&, int index);
+    std::optional<daw::plugins::PluginDescriptor> pluginFromMime(const QMimeData*) const;
     void addSend(const QPoint&, const QString& replace = {});
     void groupSelection(bool ungroup);
     void transferTo(const QString& channel, bool copy);
@@ -83,6 +86,8 @@ class RackWidget final : public QWidget {
     QSet<QString> m_selection;
     QHash<QString, QSet<QString>> m_channelSelection;
     QByteArray m_structure, m_sendStructure;
+    quint64 m_structureRevision = ~quint64(0), m_structureGeneration = 0;
+    QString m_structureChannel;
     QRubberBand* m_rubber = nullptr;
     QPoint m_rubberOrigin, m_dragPosition;
     QSet<QString> m_rubberBefore;

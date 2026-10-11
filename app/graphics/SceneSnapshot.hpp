@@ -42,6 +42,7 @@ struct SceneLayer {
     QRectF clip;
     QRegion mask; // Effective QWidget/ancestor mask in layer coordinates; empty means rectangular.
     bool clipRequired = true;
+    qint64 geometryBytes = 0;
     std::vector<SceneMesh> meshes;
 };
 // A rectangular clip cannot affect triangles wholly inside it. Omitting that

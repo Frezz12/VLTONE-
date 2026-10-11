@@ -971,6 +971,7 @@ void MixerWidget::contextMenuEvent(QContextMenuEvent* event) {
 
 void MixerWidget::rebuild() {
     ui::perf::Scope timing("rebuild.MixerWidget.ms");
+    m_colorHeightRevision = ~quint64(0);
     const QScopedValueRollback<bool> guard(m_syncingStrips, true);
     m_deferredRackChange = false;
     m_rackHeights.fill(0);
@@ -1141,9 +1142,16 @@ void MixerWidget::syncVisibleStrips() {
     };
     m_rackHeights[1]=0;
     if(ui::MixerPreferences::instance().colorVisible()) {
-        for(const auto& track:m_controller->project().tracks) if(daw::carriesAudio(track))
-            m_rackHeights[1]=std::max(m_rackHeights[1],ui::MiniModuleRack::naturalHeight(m_controller->project(),track.miniModules,m_channelWidth));
-        m_rackHeights[1]=std::max(m_rackHeights[1],ui::MiniModuleRack::naturalHeight(m_controller->project(),m_controller->project().masterMiniModules,m_channelWidth));
+        if (m_colorHeightRevision != m_controller->projectRevision() ||
+            m_colorHeightGeneration != m_controller->projectGeneration() || m_colorHeightWidth != m_channelWidth) {
+            m_colorHeight = 0;
+            for (const auto& track : m_controller->project().tracks) if (daw::carriesAudio(track))
+                m_colorHeight = std::max(m_colorHeight, ui::MiniModuleRack::naturalHeight(m_controller->project(), track.miniModules, m_channelWidth));
+            m_colorHeight = std::max(m_colorHeight, ui::MiniModuleRack::naturalHeight(m_controller->project(), m_controller->project().masterMiniModules, m_channelWidth));
+            m_colorHeightRevision = m_controller->projectRevision();
+            m_colorHeightGeneration = m_controller->projectGeneration(); m_colorHeightWidth = m_channelWidth;
+        }
+        m_rackHeights[1] = m_colorHeight;
     }
     for (const auto* strip : m_slots) measure(strip);
     int consoleHeight = 0;

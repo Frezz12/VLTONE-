@@ -105,8 +105,7 @@ constexpr double kMaxPxPerBeat = 800.0;
 /// `kMinPxPerBeat`.
 constexpr double kMinFitPxPerBeat = 160.0;
 
-/// The velocity lane along the bottom: a stalk per note with a grab circle at
-/// its top, the height standing for the velocity.
+/// The velocity lane: a bar per note with a small cap at its value.
 constexpr double kLaneHeight = 84.0;
 constexpr double kMinLaneHeight = 44.0;
 constexpr double kMaxLaneHeight = 360.0;
@@ -3283,8 +3282,16 @@ void PianoRollView::paintScene(QPainter& p, const QRegion& region) {
     QDataStream stream(&signature, QIODevice::WriteOnly);
     stream << size() << font() << palette().cacheKey() << p.device()->devicePixelRatioF()
            << pxPerBeat() << m_rowHeight << keyboardWidth() << laneTop() << laneHeight() << int(m_laneParam)
-           << quint64(m_controller->projectRevision())
-           << quint64(m_controller->midiNotesRevision(m_trackId.toStdString()));
+           << quint64(m_controller->projectGeneration())
+           << quint64(m_controller->midiNotesRevision(m_trackId.toStdString()))
+           << m_trackId << m_clipId << clip()->color << clip()->startSeconds << clip()->offsetSeconds
+           << clip()->durationSeconds << clip()->contentOffsetBeats << clipBeats()
+           << m_controller->tempo() << m_controller->project().timeSigNumerator
+           << m_controller->project().timeSigDenominator;
+    // Ghost placement/colour also depends on other tracks. Keep the broad
+    // fallback only for this optional cross-track view.
+    if (!m_ghostTracks.isEmpty()) stream << quint64(m_controller->projectRevision())
+        << quint64(m_controller->clipGeometryRevision());
     if (signature != m_gpuTileSignature) {
         m_gpuNoteTiles.clear();
         m_gpuLaneTiles.clear();
@@ -3397,13 +3404,17 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
         p.drawLine(QPointF(keyWidth, y), QPointF(field.right(), y));
     }
 
-    // Vertical grid: subdivisions, then beats and bars on top. Contrast is a
-    // user setting because a busy part wants a fainter grid than a sparse one.
+    // Subdivisions recede behind beats, half-bars and bar boundaries. Keep the
+    // hierarchy at every contrast setting and use the meter's actual beat unit.
     const int beatsPerBar = std::max(1, m_controller->project().timeSigNumerator);
+    const double beatLength = 4.0 / std::max(1, m_controller->project().timeSigDenominator);
     const double totalBeats = clipBeats();
     const double px = pxPerBeat();
     const double grid = effectiveGridBeats();
     const double faint = 0.25 + 0.5 * m_gridContrast;
+    const QColor beatLine = mixColors(gridBase, t.textPrimary, 0.06 + 0.16 * m_gridContrast);
+    const QColor halfBarLine = mixColors(gridStrong, t.textPrimary, 0.05 + 0.16 * m_gridContrast);
+    const QColor barLine = mixColors(gridStrong, t.textPrimary, 0.14 + 0.22 * m_gridContrast);
 
     // Work from the actual disjoint update region rather than its bounding box.
     // A normal playback tick produces two tiny strips (old and new playhead); a
@@ -3464,15 +3475,19 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
             }
         }
     }
-    const int finalBeat = int(std::ceil(totalBeats));
+    const int finalBeat = int(std::ceil(totalBeats / beatLength));
     for (const auto& range : dirtyBeatRanges) {
-        const int firstBeat = std::max(0, int(std::floor(range.first)));
-        const int lastBeat = std::min(finalBeat, int(std::ceil(range.second)));
+        const int firstBeat = std::max(0, int(std::floor(range.first / beatLength)));
+        const int lastBeat = std::min(finalBeat, int(std::ceil(range.second / beatLength)));
         for (int beat = firstBeat; beat <= lastBeat; ++beat) {
             const bool bar = beat % beatsPerBar == 0;
-            const double x = beatsToX(double(beat));
+            const bool halfBar = beatsPerBar % 2 == 0 &&
+                                 beat % beatsPerBar == beatsPerBar / 2;
+            if (!bar && beatLength * px * (halfBar ? beatsPerBar / 2.0 : 1.0) < 8.0)
+                continue;
+            const double x = beatsToX(beat * beatLength);
             if (x < keyWidth || x > width()) continue;
-            p.setPen(QPen(bar ? gridStrong : gridBase,
+            p.setPen(QPen(bar ? barLine : halfBar ? halfBarLine : beatLine,
                           bar ? 1.0 + m_gridContrast : 1.0));
             p.drawLine(QPointF(x, gridTop), QPointF(x, fieldBottom));
         }
@@ -3484,10 +3499,10 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     QFont rulerFont = p.font();
     rulerFont.setPixelSize(10);
     p.setFont(rulerFont);
-    const double barWidth = beatsPerBar * px;
+    const double barWidth = beatsPerBar * beatLength * px;
     const int labelStride =
         std::max(1, int(std::ceil(48.0 / std::max(1.0, barWidth))));
-    const int rulerBeatCount = int(std::ceil(totalBeats - 1e-9));
+    const int rulerBeatCount = int(std::ceil(totalBeats / beatLength - 1e-9));
     // A playhead strip can cross the right half of a bar number while the
     // number's anchor beat lies just outside that strip. Include the maximum
     // label overhang so clearing the old playhead never erases part of a label.
@@ -3498,14 +3513,14 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
                6));
     for (const auto& range : dirtyBeatRanges) {
         const int firstBeat = std::max(
-            0, int(std::floor(range.first - rulerLabelOverhang / px)));
+            0, int(std::floor((range.first - rulerLabelOverhang / px) / beatLength)));
         const int lastBeat = std::min(
-            rulerBeatCount - 1, int(std::ceil(range.second)));
+            rulerBeatCount - 1, int(std::ceil(range.second / beatLength)));
         for (int beat = firstBeat; beat <= lastBeat; ++beat) {
-            const double x = beatsToX(double(beat));
+            const double x = beatsToX(beat * beatLength);
             if (x < keyWidth || x > width()) continue;
             const bool bar = beat % beatsPerBar == 0;
-            p.setPen(QPen(bar ? gridStrong : gridBase, 1.0));
+            p.setPen(QPen(bar ? barLine : beatLine, 1.0));
             p.drawLine(QPointF(x, gridTop - (bar ? 8.0 : 4.0)),
                        QPointF(x, gridTop));
             if (bar && (beat / beatsPerBar) % labelStride == 0) {
@@ -3896,25 +3911,41 @@ void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
     }
 
     p.setRenderHint(QPainter::Antialiasing, true);
+    // Keep the contact shadow inside the note's paint/hit envelope: the time
+    // edges stay exact, and tiled or partial repaints cannot clip a shadow tail.
+    const qreal lift = shape.height() >= 6.0 ? pixel : 0.0;
+    const qreal shadowRadius = std::min({4.0, shape.height() * 0.32,
+                                        shape.width() * 0.25});
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, muted ? 35 : t.dark ? 125 : 70));
+    p.drawRoundedRect(shape, shadowRadius, shadowRadius);
     const QRectF body = shape.adjusted(borderWidth * 0.5,
                                        borderWidth * 0.5,
                                       -borderWidth * 0.5,
-                                      -borderWidth * 0.5);
+                                      -borderWidth * 0.5 - lift);
     if (body.width() <= 0.0 || body.height() <= 0.0) {
         p.restore();
         return;
     }
     const qreal radius = std::min({4.0, body.height() * 0.32,
                                   body.width() * 0.25});
-    QColor top = mixColors(fill, Qt::white, muted ? 0.05 : 0.12);
-    QColor bottom = mixColors(fill, Qt::black, muted ? 0.04 : 0.10);
+    const QColor top = mixColors(fill, Qt::white, muted ? 0.05 : 0.22);
+    const QColor bottom = mixColors(fill, Qt::black, muted ? 0.06 : 0.20);
     QLinearGradient face(body.topLeft(), body.bottomLeft());
     face.setColorAt(0.0, top);
+    face.setColorAt(0.25, mixColors(fill, Qt::white, muted ? 0.02 : 0.06));
+    face.setColorAt(0.65, fill);
     face.setColorAt(1.0, bottom);
     p.setBrush(face);
     if (borderWidth > 0.0) p.setPen(QPen(border, borderWidth));
     else p.setPen(Qt::NoPen);
     p.drawRoundedRect(body, radius, radius);
+    if (body.width() >= 8.0 && body.height() >= 6.0) {
+        p.setPen(QPen(QColor(255, 255, 255, muted ? 20 : 65), pixel));
+        const qreal y = body.top() + borderWidth * 0.5 + pixel;
+        p.drawLine(QPointF(body.left() + radius, y),
+                   QPointF(body.right() - radius, y));
+    }
     p.restore();
 }
 
@@ -4107,11 +4138,14 @@ void PianoRollView::invalidateDocumentPaintCaches() {
 }
 
 void PianoRollView::ensureSoundingPitchIndex(const mt::Notes& notes) const {
-    if (!m_soundingPitchIndexDirty && m_soundingPitchSource == &notes &&
+    const auto revision = m_controller->midiNotesRevision(m_trackId.toStdString());
+    const bool frozen = m_moving || m_resizing || m_muting || m_selectionEditUndoActive;
+    if (!m_soundingPitchIndexDirty && (m_soundingPitchRevision == revision || frozen) && m_soundingPitchSource == &notes &&
         m_soundingPitchData == notes.data() &&
         m_soundingPitchCount == notes.size()) {
         return;
     }
+    m_soundingPitchRevision = revision;
     m_soundingPitchIndex.rebuild(notes);
     m_soundingPitchSource = &notes;
     m_soundingPitchData = notes.data();
@@ -4378,8 +4412,7 @@ void PianoRollView::paintLaneValues(QPainter& p) {
         return;
     }
 
-    // Pan hangs off its centre; velocity rises from a floor that leaves enough
-    // room for the full circular handle.
+    // Pan hangs off its centre; velocity rises from the floor.
     const bool signedParam = m_laneParam == LaneParam::Pan;
     const double baseY = signedParam ? laneValueToY(0.5) : laneValueToY(0.0);
     if (signedParam) {
@@ -4414,6 +4447,31 @@ void PianoRollView::paintLaneValues(QPainter& p) {
         const QString id = QString::fromStdString(n.id);
         const bool selected = m_selected.contains(id);
         const bool hovered = !hoveredId.isEmpty() && hoveredId == id;
+        if (!signedParam) {
+            // Match each note's colour and use a small solid cap rather than
+            // a target ring. The handle centre and its grab area stay exact.
+            QColor colour = selected ? laneAccent
+                : mixColors(colorFor(n, ui::colorFromRgb(c->color)), t.textSecondary, 0.20);
+            if (n.muted) colour = mixColors(colour, t.background, 0.60);
+            if (hovered) colour = mixColors(colour, t.textPrimary, 0.22);
+            const double barWidth = selected || hovered ? 4.0 : 3.0;
+            const QRectF bar(handle.x() - barWidth * 0.5, handle.y(),
+                             barWidth, std::max(1.0, baseY - handle.y()));
+            QLinearGradient fill(bar.topLeft(), bar.bottomLeft());
+            fill.setColorAt(0.0, colour);
+            fill.setColorAt(1.0, mixColors(colour, t.background, 0.48));
+            p.setPen(Qt::NoPen);
+            p.setBrush(fill);
+            p.drawRoundedRect(bar, 1.2, 1.2);
+            const double capWidth = hovered ? 10.0 : selected ? 9.0 : 7.0;
+            const QRectF cap(handle.x() - capWidth * 0.5, handle.y() - 1.5,
+                             capWidth, 3.0);
+            p.setBrush(QColor(0, 0, 0, t.dark ? 90 : 40));
+            p.drawRoundedRect(cap.translated(0.0, 1.0), 1.0, 1.0);
+            p.setBrush(colour);
+            p.drawRoundedRect(cap, 1.0, 1.0);
+            continue;
+        }
         const QColor colour =
             selected ? laneAccent
                      : mixColors(t.textSecondary, t.background, 0.28);
@@ -5986,19 +6044,6 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
             &PianoRollWindow::removeControllerLane);
     bottom->addWidget(m_removeLaneButton);
     bottom->addStretch(1);
-    auto* chords = new QToolButton(footer);
-    chords->setObjectName(QStringLiteral("PianoRollBuildChordsButton"));
-    chords->setProperty("pianoGlyph", int(icons::Glyph::Chord));
-    chords->setIcon(icons::icon(icons::Glyph::Chord, th().textPrimary, 16));
-    chords->setText(tr("Chords…"));
-    chords->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    chords->setToolTip(tr("Chord Generator (%1)").arg(m_chordAction->shortcut().toString(QKeySequence::NativeText)));
-    chords->setAccessibleName(chords->toolTip());
-    chords->setAutoRaise(true);
-    chords->setFocusPolicy(Qt::NoFocus);
-    chords->setFixedHeight(28);
-    connect(chords, &QToolButton::clicked, m_chordAction, &QAction::trigger);
-    bottom->addWidget(chords);
     column->addWidget(footer);
 
     refreshLaneSelector();
@@ -6139,17 +6184,60 @@ void PianoRollWindow::buildToolbar() {
         m_view->setTool(PianoRollView::Tool(id));
         syncToolActions();
     });
+    // The slide's scope belongs beside its tool, not in a wide text selector.
+    auto* slideScope = toolbarButton(m_toolbar, icons::Glyph::SingleNote,
+                                     tr("Slide targets"));
+    slideScope->setObjectName(QStringLiteral("PianoRollSlideScope"));
+    auto* scopeMenu = new QMenu(tr("Slide targets"), slideScope);
+    auto* scopeGroup = new QActionGroup(scopeMenu);
+    const auto applyScope = [this, slideScope](bool chord) {
+        m_view->m_slideChord = chord;
+        const auto glyph = chord ? icons::Glyph::Chord : icons::Glyph::SingleNote;
+        slideScope->setProperty("pianoGlyph", int(glyph));
+        slideScope->setIcon(icons::icon(glyph, th().textPrimary, 16));
+        const QString label = tr("Slide targets") + QStringLiteral(": ") +
+                              (chord ? tr("Chord") : tr("One note"));
+        slideScope->setAccessibleName(label);
+        slideScope->setToolTip(label + QLatin1Char('\n') +
+            tr("Slide the selected sounding note, or a fixed set of chord notes"));
+    };
+    for (bool chord : {false, true}) {
+        auto* action = scopeMenu->addAction(chord ? tr("Chord") : tr("One note"));
+        action->setCheckable(true);
+        action->setChecked(m_view->m_slideChord == chord);
+        scopeGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [applyScope, chord] { applyScope(chord); });
+    }
+    applyScope(m_view->m_slideChord);
+    slideScope->setMenu(scopeMenu);
+    slideScope->setPopupMode(QToolButton::InstantPopup);
+    row->addWidget(slideScope);
     row->addWidget(divider());
 
-    auto* slideScope = new QComboBox(m_toolbar);
-    slideScope->setObjectName(QStringLiteral("PianoRollSlideScope"));
-    slideScope->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    slideScope->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    slideScope->addItems({tr("One note"), tr("Chord")});
-    slideScope->setAccessibleName(tr("Slide targets"));
-    slideScope->setToolTip(tr("Slide the selected sounding note, or a fixed set of chord notes"));
-    connect(slideScope, &QComboBox::currentIndexChanged, this, [this](int i) { m_view->m_slideChord = i == 1; });
-    row->addWidget(slideScope);
+    auto* chords = toolbarButton(m_toolbar, icons::Glyph::Chord,
+        tr("Chord Generator (%1)").arg(m_chordAction->shortcut().toString(QKeySequence::NativeText)));
+    chords->setObjectName(QStringLiteral("PianoRollBuildChordsButton"));
+    chords->setText(tr("Chords…"));
+    chords->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    chords->setFixedWidth(chords->fontMetrics().horizontalAdvance(chords->text()) + 30);
+    connect(chords, &QToolButton::clicked, m_chordAction, &QAction::trigger);
+    row->addWidget(chords);
+    row->addWidget(divider());
+
+    // Editing aids follow the tools; clip selection and monitoring stay together.
+    auto* snap = toolbarButton(m_toolbar, icons::Glyph::Grid, tr("Snap and grid"));
+    snap->setObjectName(QStringLiteral("PianoRollSnap"));
+    snap->setMenu(m_snapMenu);
+    snap->setPopupMode(QToolButton::InstantPopup);
+    row->addWidget(snap);
+
+    auto* ghosts = toolbarButton(m_toolbar, icons::Glyph::Ghost,
+                                 tr("Ghost notes from other MIDI tracks"));
+    ghosts->setObjectName(QStringLiteral("PianoRollGhosts"));
+    ghosts->setMenu(m_ghostMenu);
+    ghosts->setPopupMode(QToolButton::InstantPopup);
+    row->addWidget(ghosts);
+    row->addStretch(1);
 
     // These letter chips match the track headers and channel strips. The note
     // disable tool deliberately uses Power, so track mute and note disable are
@@ -6169,7 +6257,6 @@ void PianoRollWindow::buildToolbar() {
         updateActionState();
         emit trackStateChanged(daw::collab::marksLocalFileDirty(result));
     });
-    row->addWidget(m_trackMuteButton);
 
     m_trackSoloButton = new ui::MsrButton(
         tr("S"), Theme::solo(), tr("Solo this MIDI track"), m_toolbar);
@@ -6181,8 +6268,6 @@ void PianoRollWindow::buildToolbar() {
         updateActionState();
         emit trackStateChanged();
     });
-    row->addWidget(m_trackSoloButton);
-    row->addWidget(divider());
 
     m_auditionButton = toolbarButton(
         m_toolbar, icons::Glyph::Headphones,
@@ -6194,7 +6279,6 @@ void PianoRollWindow::buildToolbar() {
         m_controller->setExclusiveAuditionTrack(target.toStdString());
         updateActionState();
     });
-    row->addWidget(m_auditionButton);
 
     m_clipSelector = new QComboBox(m_toolbar);
     m_clipSelector->setObjectName(QStringLiteral("PianoRollClipSelector"));
@@ -6212,29 +6296,10 @@ void PianoRollWindow::buildToolbar() {
             emit clipSwitchRequested(track, clip);
     });
     row->addWidget(m_clipSelector);
-    row->addStretch(1);
     row->addWidget(divider());
-
-    // ── Snap, ghosts, note style ──
-    auto* snap = toolbarButton(m_toolbar, icons::Glyph::Magnet, tr("Snap and grid"));
-    snap->setMenu(m_snapMenu);
-    snap->setPopupMode(QToolButton::InstantPopup);
-    row->addWidget(snap);
-
-    auto* ghosts = toolbarButton(m_toolbar, icons::Glyph::Ghost,
-                                 tr("Ghost notes from other MIDI tracks"));
-    ghosts->setMenu(m_ghostMenu);
-    ghosts->setPopupMode(QToolButton::InstantPopup);
-    row->addWidget(ghosts);
-
-    auto* style = toolbarButton(m_toolbar, icons::Glyph::NoteStyle,
-                                tr("How notes are drawn"));
-    style->setMenu(m_noteStyleMenu);
-    style->setPopupMode(QToolButton::InstantPopup);
-    row->addWidget(style);
-    row->addWidget(divider());
-
-
+    row->addWidget(m_trackMuteButton);
+    row->addWidget(m_trackSoloButton);
+    row->addWidget(m_auditionButton);
 }
 
 void PianoRollWindow::syncToolActions() {
@@ -6861,8 +6926,7 @@ void PianoRollWindow::buildViewMenu(QMenu* menu) {
 
     // ── Ghost notes and note appearance ──
     //
-    // Both hang off their own toolbar buttons rather than appearing here too:
-    // one menu shown from two places is one menu the user has to learn twice.
+    // Ghosts remain a frequent editing aid; note appearance belongs in View.
     m_ghostMenu = new QMenu(tr("Ghost Notes"), this);
     m_ghostMenu->setObjectName(QStringLiteral("PianoRollGhostMenu"));
     connect(m_ghostMenu, &QMenu::aboutToShow, this,
@@ -6881,6 +6945,7 @@ void PianoRollWindow::buildViewMenu(QMenu* menu) {
               [this](bool on) { m_view->setShowAllKeyNames(on); });
     addToggle(m_noteStyleMenu, tr("Note Borders"), "view.noteBorders", true,
               [this](bool on) { m_view->setNoteBorders(on); });
+    menu->addMenu(m_noteStyleMenu);
 
     // ── Zoom ──
     menu->addSeparator();
@@ -7879,6 +7944,14 @@ QString PianoRollWindow::auditionTrackForCurrentClip() const {
 
 void PianoRollWindow::refreshClipSelector() {
     if (!m_clipSelector || !m_controller) return;
+    if (m_selectorRevision == m_controller->projectRevision() &&
+        m_selectorGeneration == m_controller->projectGeneration() &&
+        m_selectorGeometry == m_controller->clipGeometryRevision() &&
+        m_selectorTrack == m_trackId && m_selectorClip == m_clipId && m_selectorFont == m_clipSelector->font()) return;
+    m_selectorRevision = m_controller->projectRevision();
+    m_selectorGeneration = m_controller->projectGeneration();
+    m_selectorGeometry = m_controller->clipGeometryRevision();
+    m_selectorTrack = m_trackId; m_selectorClip = m_clipId; m_selectorFont = m_clipSelector->font();
     struct Entry { QString label, trackId, clipId; };
     std::vector<Entry> entries;
     const auto& project = m_controller->project();
@@ -8047,9 +8120,8 @@ void PianoRollWindow::refresh() {
     // Geometry/id/ghost indexes validate themselves by source, count and the
     // controller's monotonic MIDI revision. Generic project refreshes include
     // mixer, loop and unrelated-track changes, so clearing those large caches
-    // here would force needless full-note rebuilds. Only the playhead keyboard
-    // state needs a cheap dirty bit for external mute/undo changes.
-    if (m_view) m_view->invalidateSoundingPitchIndex();
+    // here would force needless full-note rebuilds. The sounding-pitch index
+    // checks the same MIDI revision for external mute/undo changes.
     refreshPatternGhosts();
     updateTitle();
     refreshClipSelector();
@@ -8061,9 +8133,7 @@ void PianoRollWindow::refresh() {
     // rebuilt rather than trusted.
     refreshLaneSelector();
     updateActionState();
-    if (m_view) {
-        m_view->update();
-    }
+    if (m_view) m_view->ui::FrameWidget::update();
 }
 
 void PianoRollWindow::refreshPlayhead() {
@@ -8547,7 +8617,7 @@ void PianoRollWindow::updateTitle() {
                      ? tr("  ·  no instrument")
                      : QString("  ·  %1").arg(
                            QString::fromStdString(track->instrument.name));
-        const auto links = m_controller->linkedClips({track->id, c.id}).size();
+        const auto links = m_controller->linkedClipCount({track->id, c.id});
         if (links > 1) label += tr(" · Linked: %1").arg(links);
         setWindowTitle(tr("Piano Roll — %1").arg(label));
         return;

@@ -116,12 +116,16 @@ void ModulationPanel::refresh() {
     for (const auto& info : parameters()) {
         const auto value = m_controller->insertParameter(m_channel, m_insert, info.id);
         values.append(value); current[QString::fromStdString(info.id)] = value;
-        params.append(QVariantMap{{"id", QString::fromStdString(info.id)}, {"name", QString::fromStdString(info.name)},
+        if (!m_previous.contains("params")) params.append(QVariantMap{{"id", QString::fromStdString(info.id)}, {"name", QString::fromStdString(info.name)},
             {"unit", QString::fromStdString(info.unit)}, {"min", info.minValue}, {"max", info.maxValue}, {"default", info.defaultValue}, {"stepped", info.isStepped}, {"automatable", info.isAutomatable}});
     }
     if (m_rack) for (auto m : Rack::decodeOrder(unsigned(m_controller->insertParameter(m_channel, m_insert, parameters()[Rack::orderParameter].id)))) order.append(int(m));
     else order.append(*m_kind == mod::Kind::DoublerPro ? 4 : *m_kind == mod::Kind::Doubler ? 1 : *m_kind == mod::Kind::Chorus ? 0 : int(*m_kind));
-    if (m_kind) {
+    if (m_previous.contains("params")) params = m_previous.value("params").toList();
+    const bool changedValues = values != m_previous.value("values").toList() ||
+        m_presets.toVariantList() != m_previous.value("presets").toList();
+    if (!changedValues) factories = m_previous.value("factories").toList();
+    else if (m_kind) {
         for (const auto& preset : mod::factoryPresets(*m_kind)) {
             const auto name = QString::fromUtf8(preset.name.data(), qsizetype(preset.name.size()));
             factories.append(name); bool matches = true;
@@ -134,7 +138,7 @@ void ModulationPanel::refresh() {
         for (const auto& info : parameters()) initial &= values[info.index].toDouble() == info.defaultValue;
         if (initial) { m_presetName = tr("Init"); m_presetValues = current; }
     }
-    for (const auto& v : m_presets) {
+    if (changedValues) for (const auto& v : m_presets) {
         const auto preset = v.toObject();
         if (preset["params"].toObject() == current) { m_presetName = preset["name"].toString(); m_presetValues = current; break; }
     }

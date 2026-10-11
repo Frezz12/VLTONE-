@@ -1,4 +1,6 @@
 #include "RackBuiltinView.hpp"
+#include "UtilityPanel.hpp"
+#include "Internal/UtilityInstance.hpp"
 #include "Audio/SampleBuffer.hpp"
 #include "Controls.hpp"
 #include "Internal/CompressorInstance.hpp"
@@ -8,10 +10,12 @@
 #include "RackParameterBinding.hpp"
 #include "Theme.hpp"
 #include <QComboBox>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QLabel>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -21,6 +25,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <cmath>
+#include <array>
+#include <tuple>
 #include <functional>
 
 namespace eq = daw::plugins::equalizer;
@@ -55,6 +61,10 @@ class RackPlot final : public QWidget {
     std::vector<double> responseKey;
     QString sourceName;
     bool dragging = false;
+    bool haveDisplay = false;
+    std::array<double, 3> compressorCurve{};
+    std::vector<double> displayParameters;
+    QPointF dragOffset;
     QString dragParameter;
     int sliceDrag = -1;
     std::shared_ptr<daw::plugins::slicer::SliceTable> dragTable;
@@ -70,13 +80,18 @@ class RackPlot final : public QWidget {
     QPointF bandPoint(const eq::BandState& state) const {
         const auto r = area();
         return {r.left() +
-                    std::log(std::clamp(state.frequency, 20., 20000.) / 20.) / std::log(1000.) * r.width(),
+                    std::log(std::clamp(state.frequency, 10., 30000.) / 10.) / std::log(3000.) * r.width(),
                 r.center().y() - state.gainDb / 24. * r.height() / 2.};
     }
     void refresh() {
         if (!binding->available())
             return;
         auto* c = binding->controller();
+        const auto previousAudio = audio;
+        const auto previousSlices = slices;
+        const auto previousName = sourceName;
+        bool changed = !haveDisplay;
+        const auto oldMeter = meter;
         if (kind == Equalizer) {
             equalizer = c->equalizerSnapshot(binding->channel(), binding->slot());
             std::vector<double> key;
@@ -85,6 +100,7 @@ class RackPlot final : public QWidget {
                     key.insert(key.end(), {double(b.enabled), double(b.type), b.frequency, b.gainDb, b.q,
                                            double(b.slope), double(b.placement)});
             if (key != responseKey) {
+                changed = true;
                 responseKey = std::move(key);
                 response = c->equalizerResponse(binding->channel(), binding->slot());
             }
@@ -122,7 +138,24 @@ class RackPlot final : public QWidget {
             }
         } else if (kind != Modulation)
             meter = c->effectMeterSnapshot(binding->channel(), binding->slot());
-        update();
+        changed |= audio != previousAudio || slices != previousSlices || sourceName != previousName;
+        const auto meterKey = [](const auto& m) { return std::tuple(m.available, m.input, m.output, m.reduction,
+            m.wet, m.inputHz, m.targetHz, m.correctionCents, m.latencySamples, m.quality, m.qualityPending); };
+        changed |= meterKey(oldMeter) != meterKey(meter);
+        if (kind == Compressor) {
+            const std::array next{binding->value("threshold"), binding->value("ratio"), binding->value("knee")};
+            changed |= next != compressorCurve; compressorCurve = next;
+        }
+        std::vector<double> parameters;
+        const auto read = [&](const char* id) { parameters.push_back(binding->info(id) ? binding->value(id) : 0.); };
+        if (kind == Waveform && uid == "daw.sampler") { read("startoffset"); read("endoffset"); }
+        if (kind == Gravity) read("gravity");
+        if (kind == Delay) { read("lowCut"); read("highCut"); }
+        if (kind == Modulation) { read("rate"); read("depth"); }
+        changed |= parameters != displayParameters;
+        displayParameters = std::move(parameters);
+        if (changed) update();
+        haveDisplay = true;
     }
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
@@ -131,9 +164,10 @@ class RackPlot final : public QWidget {
         const auto r = area();
         if (r.width() < 1 || r.height() < 1)
             return;
-        p.fillRect(rect(), t.well());
+        p.setBrush(t.well());
         p.setPen(QPen(t.separator(), 1));
-        p.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), 3, 3);
+        p.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), 6, 6);
+        p.setBrush(Qt::NoBrush);
         p.setPen(QPen(t.separator(), 1));
         if (kind != Meter && kind != Pitch)
             for (int i = 1; i < 4; ++i)
@@ -163,10 +197,13 @@ class RackPlot final : public QWidget {
                 }
         } else if (kind == Compressor) {
             QPainterPath path;
+            const auto threshold = binding->value("threshold");
+            const auto ratio = binding->value("ratio");
+            const auto knee = binding->value("knee");
             for (int i = 0; i <= 100; ++i) {
                 const double input = -60 + .6 * i;
                 const auto reduction = daw::plugins::compressor::reductionDb(
-                    input, binding->value("threshold"), binding->value("ratio"), binding->value("knee"));
+                    input, threshold, ratio, knee);
                 const QPointF point(r.left() + r.width() * i / 100.,
                                     r.bottom() - (input - reduction + 60) / 60. * r.height());
                 if (!i)
@@ -289,9 +326,9 @@ class RackPlot final : public QWidget {
         p.setFont(f);
         if (kind == Equalizer) {
             const QRectF labels(r.left(), height() - 13, r.width(), 12);
-            p.drawText(labels, Qt::AlignBottom | Qt::AlignLeft, QStringLiteral("20 Hz"));
-            p.drawText(labels, Qt::AlignBottom | Qt::AlignRight, QStringLiteral("20 kHz"));
-            const double middle = r.left() + std::log(1000. / 20.) / std::log(1000.) * r.width();
+            p.drawText(labels, Qt::AlignBottom | Qt::AlignLeft, QStringLiteral("10 Hz"));
+            p.drawText(labels, Qt::AlignBottom | Qt::AlignRight, QStringLiteral("30 kHz"));
+            const double middle = r.left() + std::log(1000. / 10.) / std::log(3000.) * r.width();
             p.drawText(QRectF(middle - 28, labels.top(), 56, labels.height()),
                        Qt::AlignBottom | Qt::AlignHCenter, QStringLiteral("1 kHz"));
         }
@@ -303,6 +340,8 @@ class RackPlot final : public QWidget {
         if (e->button() != Qt::LeftButton)
             return QWidget::mousePressEvent(e);
         if (kind == Equalizer && equalizer) {
+            if (!area().contains(e->position()))
+                return;
             int chosen = -1;
             double closest = 100;
             for (int i = 0; i < int(equalizer->bands.size()); ++i)
@@ -314,7 +353,8 @@ class RackPlot final : public QWidget {
                         chosen = i;
                     }
                 }
-            if (chosen < 0)
+            const bool creating = chosen < 0;
+            if (creating)
                 for (int i = 0; i < int(equalizer->bands.size()); ++i)
                     if (!equalizer->bands[i].enabled) {
                         chosen = i;
@@ -325,6 +365,11 @@ class RackPlot final : public QWidget {
             band = chosen;
             if (bandSelected)
                 bandSelected(band);
+            dragOffset = creating ? QPointF{} : e->position() - bandPoint(equalizer->bands[band]);
+            if (creating) {
+                const double x = std::clamp((e->position().x() - area().left()) / area().width(), 0., 1.);
+                binding->write(bandId(eq::BandParam::Type), double(eq::filterTypeForNewBand(10. * std::pow(3000., x))));
+            }
             binding->write(bandId(eq::BandParam::Enabled), 1);
             dragging = true;
             move(e->position());
@@ -358,11 +403,15 @@ class RackPlot final : public QWidget {
     }
     void move(QPointF point) {
         const auto r = area();
+        if (kind == Equalizer)
+            point -= dragOffset;
         const double x = std::clamp((point.x() - r.left()) / r.width(), 0., 1.);
         if (kind == Equalizer) {
-            binding->write(bandId(eq::BandParam::Frequency), 20. * std::pow(1000., x));
+            binding->write(bandId(eq::BandParam::Frequency), 10. * std::pow(3000., x));
+            const auto type = eq::FilterType(int(binding->value(bandId(eq::BandParam::Type))));
+            const bool cut = type == eq::FilterType::LowCut || type == eq::FilterType::HighCut;
             binding->write(bandId(eq::BandParam::Gain),
-                           std::clamp((r.center().y() - point.y()) * 48. / r.height(), -24., 24.));
+                           cut ? 0. : std::clamp((r.center().y() - point.y()) * 48. / r.height(), -24., 24.));
         } else if (uid == "daw.slicer" && dragTable && sliceDrag > 0) {
             auto& slice = dragTable->slices[unsigned(sliceDrag)];
             auto& previous = dragTable->slices[unsigned(sliceDrag - 1)];
@@ -423,6 +472,7 @@ QWidget* knobs(RackParameterBinding* binding, const QStringList& ids, int column
 
 class RackBuiltinView::Impl {
   public:
+    UtilityPanel* utility = nullptr;
     RackPlot* plot = nullptr;
     std::vector<RackPlot*> plots;
     QWidget* bandControls = nullptr;
@@ -433,6 +483,8 @@ class RackBuiltinView::Impl {
     mod::ModulationRackInstance::Order order{};
 };
 int RackBuiltinView::preferredWidth(const QString& uid) {
+    if (uid == "daw.gain") return 184;
+    if (uid == "daw.stereo-utility" || uid == "daw.reverse") return 360;
     if (uid == "daw.equalizer")
         return 420;
     if (uid == "daw.sampler" || uid == "daw.slicer")
@@ -448,6 +500,7 @@ int RackBuiltinView::preferredWidth(const QString& uid) {
     return 360;
 }
 bool RackBuiltinView::supports(const QString& uid) {
+    if (daw::plugins::utility::isUtilityUid(uid.toStdString())) return true;
     return QStringList{"daw.equalizer",       "daw.compressor",  "daw.cla2a",  "daw.delay",
                        "daw.pitch-corrector", "daw.sampler",     "daw.slicer", "daw.modulation",
                        "daw.doubler",         "daw.doubler-pro", "daw.chorus", "daw.flanger",
@@ -478,7 +531,11 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
             row->addWidget(second);
         root->addLayout(row);
     };
-    if (m_uid == "daw.equalizer") {
+    if (daw::plugins::utility::isUtilityUid(m_uid.toStdString())) {
+        root->setContentsMargins(2, 2, 2, 2);
+        m_impl->utility = new UtilityPanel(binding, m_uid, this, true);
+        root->addWidget(m_impl->utility);
+    } else if (m_uid == "daw.equalizer") {
         auto* graph = plot(RackPlot::Equalizer, 90);
         const auto rebuild = [this, graph, binding](int band) {
             binding->finishAll();
@@ -687,6 +744,7 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
 void RackBuiltinView::refresh() {
     if (!isVisible())
         return;
+    if (m_impl->utility) m_impl->utility->refresh();
     for (auto* plot : m_impl->plots)
         plot->refresh();
     for (int i = 0; i < m_impl->notes.size(); ++i) {
@@ -705,4 +763,64 @@ void RackBuiltinView::refresh() {
             }
         }
     }
+}
+
+bool RackBuiltinView::checkEqualizerForTest(QString* error) {
+    auto* graph = m_impl->plots.front();
+    const auto fail = [&](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    const auto settle = [&] {
+        m_binding->controller()->pumpPreviewPluginEvents();
+        graph->refresh();
+    };
+    const auto pointer = [&](QEvent::Type type, QPointF point) {
+        QMouseEvent event(type, point, graph->mapToGlobal(point),
+                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(graph, &event);
+        settle();
+    };
+    const auto create = [&](double frequency, double gain) {
+        const auto r = graph->area();
+        const QPointF point(r.left() + std::log(frequency / 10.) / std::log(3000.) * r.width(),
+                            r.center().y() - gain * r.height() / 48.);
+        pointer(QEvent::MouseButtonPress, point);
+        pointer(QEvent::MouseButtonRelease, point);
+        return graph->equalizer->bands[graph->band];
+    };
+    settle();
+    const auto bell = create(180., 12.);
+    if (bell.type != eq::FilterType::Bell || std::abs(bell.frequency - 180.) > .1)
+        return fail("rack EQ creates a bell at the pointer frequency");
+    const auto& curve = graph->response->combined;
+    const auto peak = std::max_element(curve.begin(), curve.end()) - curve.begin();
+    const double peakX = graph->area().left() + graph->area().width() * peak / (curve.size() - 1);
+    const auto handle = graph->bandPoint(bell);
+    if (std::abs(handle.x() - peakX) > 2.)
+        return fail("rack EQ handle is centered on the response peak");
+    const QPointF grab = handle + QPointF(3., 2.);
+    pointer(QEvent::MouseButtonPress, grab);
+    if (std::abs(graph->equalizer->bands[graph->band].frequency - bell.frequency) > .1)
+        return fail("rack EQ handle jumps on grab");
+    pointer(QEvent::MouseMove, grab + QPointF(15., -4.));
+    pointer(QEvent::MouseButtonRelease, grab + QPointF(15., -4.));
+    if (QLineF(graph->bandPoint(graph->equalizer->bands[graph->band]), handle + QPointF(15., -4.)).length() > .2)
+        return fail("rack EQ drag does not track the pointer");
+    const auto low = create(75., -8.);
+    const auto high = create(18000., 8.);
+    if (low.type != eq::FilterType::LowCut || high.type != eq::FilterType::HighCut ||
+        low.gainDb != 0. || high.gainDb != 0.)
+        return fail("rack EQ edge bands must be cuts with zero gain");
+    const auto cutHandle = graph->bandPoint(high);
+    pointer(QEvent::MouseButtonPress, cutHandle);
+    pointer(QEvent::MouseMove, cutHandle - QPointF(24., 0.));
+    pointer(QEvent::MouseButtonRelease, cutHandle - QPointF(24., 0.));
+    if (graph->equalizer->bands[graph->band].type != eq::FilterType::HighCut)
+        return fail("rack EQ changed an existing cut into a bell");
+    static_assert(eq::filterTypeForNewBand(100.) == eq::FilterType::Bell);
+    static_assert(eq::filterTypeForNewBand(15000.) == eq::FilterType::Bell);
+    return true;
 }

@@ -100,6 +100,17 @@ Points splice(Points points, const Range& range, const Points& replacement);
 Points dragPoint(const Points& points, std::size_t index, double beats,
                  double value);
 
+enum class RegionShape { Lift, Tilt, Arch };
+
+/// Sculpt a time region, pinning its outside edges to the original curve.
+/// Lift limits the common offset to available headroom, preserving the drawing.
+/// Softness (0..1) feathers the edges; zero produces a rectangular step.
+/// Always pass the pickup snapshot during a drag, never the previous result.
+Points sculptRegion(const Points& points, const Range& range, double amount,
+                    RegionShape shape = RegionShape::Lift,
+                    double softness = 0.0, double fallback = 0.5,
+                    double* appliedAmount = nullptr);
+
 // ── Transforms ──────────────────────────────────────────────────────────────
 
 /// Mirror the values about 0.5 — a rise becomes a fall. Bends are left alone

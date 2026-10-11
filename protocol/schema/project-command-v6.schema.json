@@ -692,6 +692,9 @@
                     "properties": {
                       "uid": {
                         "enum": [
+                          "daw.gain",
+                          "daw.stereo-utility",
+                          "daw.reverse",
                           "daw.delay",
                           "daw.compressor",
                           "daw.equalizer",
@@ -923,6 +926,9 @@
                     "properties": {
                       "uid": {
                         "enum": [
+                          "daw.gain",
+                          "daw.stereo-utility",
+                          "daw.reverse",
                           "daw.delay",
                           "daw.compressor",
                           "daw.equalizer",
@@ -2546,6 +2552,9 @@
         },
         "uid": {
           "enum": [
+            "daw.gain",
+            "daw.stereo-utility",
+            "daw.reverse",
             "daw.sampler",
             "daw.delay",
             "daw.compressor",

@@ -17,6 +17,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 using namespace daw::engine;
 namespace fs = std::filesystem;
 namespace ap = audio::platform;
@@ -132,6 +136,93 @@ struct Fixture {
 };
 
 static void engineChecks() {
+    // Stop is expressed in each node's input time, including when the last
+    // source block and successive latency domains have different boundaries.
+    struct StopGate : Node {
+        std::string_view name() const noexcept override { return "transport-sensitive processor"; }
+        OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
+        MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
+        void process(const ProcessContext& c) override {
+            for (unsigned i = 0; i < c.frames; ++i) {
+                require(c.playing == (c.timelinePosition + i < 150), "stop does not match aligned input time");
+                for (unsigned ch = 0; ch < c.output.numChannels(); ++ch)
+                    c.output.data(ch)[i] = c.playing ? (c.inputs.empty()
+                        ? float(c.timelinePosition + i + 1) / 300.f : c.inputs[0].data(ch)[i]) : 0.f;
+            }
+        }
+    };
+    for (bool pipeline : {false, true}) for (unsigned block : {17u, 64u, 512u}) {
+        RealtimeEngine engine(4);
+        auto& g = engine.graph();
+        auto head = g.addNode(std::make_unique<StopGate>());
+        for (unsigned delay : {37u, 64u}) {
+            const auto latency = g.addNode(std::make_unique<LatencyNode>("delay", delay));
+            const auto stop = g.addNode(std::make_unique<StopGate>());
+            require(bool(g.connect(head, latency)) && bool(g.connect(latency, stop)), "wire stop test");
+            head = stop;
+        }
+        g.setSink(head);
+        require(bool(engine.prepare(48000, block, 2, true)), "prepare stop test");
+        std::vector<float> audio;
+        require(bool(engine.renderOffline(0, 1300, block, [&](const AudioBlock& out, auto frames) {
+            audio.insert(audio.end(), out.data(0), out.data(0) + frames); return true;
+        }, OfflineOptions{.sourcesEndSample = 150, .pipeline = pipeline, .forcePipeline = true})), "render stop test");
+        require(engine.lastOfflineUsedPipeline() == pipeline, "stop test exercises both schedulers");
+        for (unsigned i = 0; i < audio.size(); ++i) {
+            const float expected = i >= 101 && i < 251 ? float(i - 101 + 1) / 300.f : 0.f;
+            require(audio[i] == expected, "PDC lost or duplicated the end of the source");
+        }
+    }
+#if defined(_WIN32)
+    // No editor or GUI event loop: a native callback must run before the first
+    // DSP block and after each block, on the control thread with DSP parked.
+    struct MessageNode : Node {
+        HWND window = nullptr;
+        DWORD owner = GetCurrentThreadId();
+        bool ready = false, wrongThread = false;
+        std::atomic<bool> active{false};
+        unsigned messages = 0, blocks = 0;
+        std::string_view name() const noexcept override { return "native callback processor"; }
+        static LRESULT CALLBACK receive(HWND window, UINT msg, WPARAM w, LPARAM l) {
+            auto* self = reinterpret_cast<MessageNode*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+            if (msg == WM_NCCREATE) {
+                self = static_cast<MessageNode*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams);
+                SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            }
+            if (self && msg == WM_APP + 17) {
+                self->wrongThread |= GetCurrentThreadId() != self->owner || self->active.load();
+                self->ready = true; ++self->messages; return 0;
+            }
+            return DefWindowProcW(window, msg, w, l);
+        }
+        void prepare(const PrepareInfo&) override {
+            WNDCLASSW type{}; type.lpfnWndProc = receive; type.lpszClassName = L"DawOfflineMessageTest";
+            type.hInstance = GetModuleHandleW(nullptr); RegisterClassW(&type);
+            window = CreateWindowExW(0, type.lpszClassName, L"", 0, 0, 0, 0, 0,
+                                     HWND_MESSAGE, nullptr, type.hInstance, this);
+            require(window != nullptr && PostMessageW(window, WM_APP + 17, 0, 0), "post initial native callback");
+        }
+        ~MessageNode() override { if (window) DestroyWindow(window); }
+        void process(const ProcessContext& c) override {
+            require(ready && !wrongThread, "native callback was not serviced between blocks");
+            active = true; ready = false; ++blocks;
+            for (unsigned ch = 0; ch < c.output.numChannels(); ++ch) std::fill_n(c.output.data(ch), c.frames, 0.25f);
+            require(PostMessageW(window, WM_APP + 17, 0, 0), "post DSP native callback");
+            active = false;
+        }
+    };
+    {
+        RealtimeEngine engine(4);
+        auto node = std::make_shared<MessageNode>();
+        engine.graph().setSink(engine.graph().adoptNode(node));
+        require(bool(engine.prepare(48000, 64, 2, true)), "prepare native callback test");
+        require(bool(engine.renderOffline(0, 1024, 64, [](const AudioBlock& out, auto frames) {
+            return std::all_of(out.data(0), out.data(0) + frames, [](float value) { return value == 0.25f; });
+        })), "render native callback test");
+        require(node->blocks == 16 && node->messages == 17 && !node->wrongThread,
+                "all native callbacks finish on the owning thread");
+    }
+#endif
     for (const auto block : {17u, 64u, 512u}) for (const double rate : {48000., 96000.}) {
         Fixture reference(4, block, false, rate), pipeline(4, block, false, rate);
         require(bool(reference.render(false, block)) && bool(pipeline.render(true, block)), "render graph");

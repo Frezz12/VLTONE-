@@ -501,13 +501,20 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     m_analysisTimer = new QTimer(this); m_analysisTimer->setInterval(60);
     connect(m_analysisTimer, &QTimer::timeout, this, &WarpEditorWidget::pollAnalysis);
     m_frameTimer = new ui::FrameTimer(this);
-    connect(m_frameTimer, &ui::FrameTimer::timeout, this, [this] {
+    const auto refreshPlayhead = [this] {
         const auto* c = clip(); if (!c) return;
         const double position = m_controller->positionSeconds();
         if (position == m_lastPosition) return;
         const double old = m_canvas->x(daw::secondsToBeats(m_lastPosition - c->startSeconds, m_controller->tempo()));
         const double now = m_canvas->x(daw::secondsToBeats(position - c->startSeconds, m_controller->tempo())); m_lastPosition = position;
         m_canvas->update(QRegion(QRect(int(old) - 3, 0, 7, m_canvas->height())) | QRegion(QRect(int(now) - 3, 0, 7, m_canvas->height())));
+    };
+    connect(m_frameTimer, &ui::FrameTimer::timeout, this, refreshPlayhead);
+    m_transportPoll = new QTimer(this);
+    m_transportPoll->setInterval(33);
+    connect(m_transportPoll, &QTimer::timeout, this, [this, refreshPlayhead] {
+        if (m_controller->isPlaying() || m_controller->isRecording()) m_frameTimer->start();
+        else { m_frameTimer->stop(); refreshPlayhead(); }
     });
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] { updateStyle(); redraw(); });
     connect(&ThemeManager::instance(), &ThemeManager::fontChanged, this, [this] { redraw(); });
@@ -687,10 +694,10 @@ void WarpEditorWidget::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event); arrangeInspector();
 }
 void WarpEditorWidget::showEvent(QShowEvent* event) {
-    QWidget::showEvent(event); refresh(); m_frameTimer->start(); arrangeInspector();
+    QWidget::showEvent(event); refresh(); m_transportPoll->start(); arrangeInspector();
 }
 void WarpEditorWidget::hideEvent(QHideEvent* event) {
-    m_frameTimer->stop(); cancelPreview(); QWidget::hideEvent(event);
+    m_transportPoll->stop(); m_frameTimer->stop(); cancelPreview(); QWidget::hideEvent(event);
 }
 void WarpEditorWidget::setRange(double begin, double end) {
     const auto* c = clip(); if (!c || c->warp.empty()) return;

@@ -47,6 +47,32 @@ inline void click(QWidget &w, const char *name) {
   events();
 }
 
+inline void checkRubberKnob() {
+  bool anchored = true, feedback = true;
+  for (int size : {26, 34, 60, 118}) {
+    for (int dpr : {1, 2}) {
+      const auto render = [&](bool pressed) {
+        QImage image(size * dpr, size * dpr, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(pluginStyle::shell());
+        QPainter p(&image);
+        pluginStyle::knob(p, QRectF(0, 0, size, size), .37, pressed, true, false);
+        return image;
+      };
+      const auto idle = render(false), pressed = render(true);
+      feedback &= idle != pressed;
+      // Press may light the inlay, but must not move the dome or its shadow.
+      const double center = size * dpr / 2., radius = size * dpr * .30;
+      for (int y = 0; y < idle.height(); ++y)
+        for (int x = 0; x < idle.width(); ++x)
+          if (std::hypot(x + .5 - center, y + .5 - center) > radius)
+            anchored &= idle.pixel(x, y) == pressed.pixel(x, y);
+    }
+  }
+  check(anchored, "rubber knob body and shadow stay anchored on press at 1x/2x");
+  check(feedback, "rubber knob inlay gives press feedback at every size");
+}
+
 template <class Panel, class Extra>
 int run(int argc, char **argv, const daw::plugins::PluginDescriptor &descriptor,
         const char *parameter, QSize minimum, QSize normal, Extra extra) {
@@ -234,6 +260,7 @@ int run(int argc, char **argv, const daw::plugins::PluginDescriptor &descriptor,
         continue;
       ThemeManager::instance().setThemeId(candidate.id, false);
       events();
+      checkRubberKnob();
       check(view->palette().color(QPalette::Window) == pluginStyle::shell() &&
                 view->palette().color(QPalette::Text) == th().textPrimary,
             "open native editor follows light and dark theme changes");

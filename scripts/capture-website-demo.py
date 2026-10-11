@@ -18,6 +18,7 @@ VIEWS = {
     "midi": ({"DAW_SHOT_PIANOROLL": "maximized", "DAW_SHOT_PIANOROLL_FIT": "1"}, ["showcase-midi"]),
     "mix": ({"DAW_SHOT_SIZE": "1800x1125", "DAW_SHOT_MIXER": "760", "DAW_SHOT_MIXER_WIDTH": "94", "DAW_SHOT_METERS": "1"}, ["showcase-mix", "mixer"]),
     "eq": ({"DAW_SHOT_EQUALIZER": "project"}, ["showcase-eq", "equalizer"]),
+    "rack": ({"DAW_SHOT_MIXER": "420"}, ["showcase-rack"]),
     "plugins": ({"DAW_SHOT_PLUGIN_SEARCH": "open", "DAW_SHOT_PLUGIN_SEARCH_QUERY": "Delay"}, ["plugins"]),
     "ai": ({"DAW_SHOT_AI": "complete", "DAW_SHOT_AI_PROJECT": "1", "DAW_SHOT_SCROLL": "100"}, ["ai"]),
     "recovery": ({"DAW_SHOT_RECOVERY": "1"}, ["recovery"]),
@@ -51,7 +52,7 @@ def main() -> None:
             preferences = captures / "prefs" / locale / view
             settings = preferences / "VLT Studio" / "VLT Studio Pro.ini"
             settings.parent.mkdir(parents=True, exist_ok=True)
-            settings.write_text("[browser]\nvisible=false\n\n[ai]\nvisible=false\nwidth=520\n\n[contextPanel]\nfollowSelection=false\n", encoding="utf-8")
+            settings.write_text("[browser]\nvisible=false\n\n[ai]\nvisible=false\nwidth=520\n\n[contextPanel]\nfollowSelection=false\n\n[ui]\nrackMode=" + ("true" if view == "rack" else "false") + "\n", encoding="utf-8")
             environment = {key: value for key, value in os.environ.items() if not key.startswith("DAW_SHOT_")}
             environment.update({
                 "QT_QPA_PLATFORM": "offscreen:configfile=" + os.path.relpath(ROOT / "scripts/screenshot-screen.json", executable.parent),

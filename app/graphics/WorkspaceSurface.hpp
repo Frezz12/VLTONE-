@@ -46,7 +46,8 @@ private:
     void requestCapture();
     void capture();
     void present(std::shared_ptr<const SceneSnapshot>);
-    void visit(QWidget*, std::shared_ptr<SceneSnapshot>&, QSet<quintptr>&);
+    void visit(QWidget*, std::shared_ptr<SceneSnapshot>&, QSet<quintptr>&,
+               QPoint parentOrigin, QRect parentClip, const QRegion& parentMask);
     bool forwardInput(QEvent*);
     void updateHover(QWidget* target, const QPointF& globalPosition,
                      Qt::KeyboardModifiers modifiers = Qt::NoModifier,
@@ -67,11 +68,12 @@ private:
     std::unordered_map<quint64, VisualItem> m_visuals;
     QSet<QWidget*> m_dirty;
     bool m_geometryExposure = false;
-    bool m_collectedGeometryUpdates = false;
+    bool m_collectedWidgetUpdates = false;
     struct CachedLayer {
         QPointer<QWidget> widget;
         std::shared_ptr<const SceneLayer> layer;
         std::shared_ptr<SceneRecordingCache> recording;
+        QPoint viewportOffset;
     };
     std::unordered_map<quintptr, CachedLayer> m_layers;
     // Written on the GUI thread, sampled only while it is blocked for sync.

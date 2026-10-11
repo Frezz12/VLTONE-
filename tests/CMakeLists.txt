@@ -57,6 +57,9 @@ if(DAW_ENABLE_CLAP)
     add_dependencies(render_bench daw_test_clap)
 endif()
 
+add_executable(project_playback_bench EXCLUDE_FROM_ALL project_playback_bench.cpp)
+target_link_libraries(project_playback_bench PRIVATE daw_controller)
+
 # Phase-1: the portable device/decode paths (libsndfile + PortAudio).
 add_executable(platform_test platform_test.cpp)
 target_link_libraries(platform_test PRIVATE daw_core daw_engine)
@@ -344,6 +347,10 @@ set_tests_properties(channel_color_integration_test PROPERTIES TIMEOUT 180)
 add_executable(channel_color_audition EXCLUDE_FROM_ALL channel_color_audition.cpp)
 target_link_libraries(channel_color_audition PRIVATE daw_pluginhost daw_core)
 add_executable(delay_test delay_test.cpp)
+add_executable(utility_test utility_test.cpp)
+target_link_libraries(utility_test PRIVATE daw_controller)
+add_test(NAME utility_test COMMAND utility_test)
+set_tests_properties(utility_test PROPERTIES TIMEOUT 120)
 target_link_libraries(delay_test PRIVATE daw_pluginhost)
 add_test(NAME delay_test COMMAND delay_test)
 set_tests_properties(delay_test PROPERTIES TIMEOUT 120)
@@ -454,6 +461,15 @@ set_tests_properties(midifile_test PROPERTIES
 # loop over it. Scripted JSON only — no provider is contacted.
 add_executable(ai_tools_test ai_tools_test.cpp)
 target_link_libraries(ai_tools_test PRIVATE daw_controller)
+
+add_executable(ai_studio_test ai_studio_test.cpp)
+target_link_libraries(ai_studio_test PRIVATE daw_controller)
+if(DAW_ENABLE_VST3)
+    target_compile_definitions(ai_studio_test PRIVATE DAW_TEST_VST3_PATH="${DAW_TEST_VST3_PATH}")
+    add_dependencies(ai_studio_test daw_test_vst3)
+endif()
+add_test(NAME ai_studio_test COMMAND ai_studio_test)
+set_tests_properties(ai_studio_test PROPERTIES FAIL_REGULAR_EXPRESSION "FAIL")
 
 add_test(NAME ai_tools_test COMMAND ai_tools_test)
 set_tests_properties(ai_tools_test PROPERTIES
@@ -580,7 +596,8 @@ if(DAW_ENABLE_CLAP)
     add_dependencies(render_integrity_test daw_test_clap daw_test_render_clap)
     add_test(NAME render_integrity_test COMMAND render_integrity_test)
 
-    set_tests_properties(render_integrity_test PROPERTIES TIMEOUT 60)
+    # Includes independent worker launches, failed exports and replacement passes.
+    set_tests_properties(render_integrity_test PROPERTIES TIMEOUT 120)
 
 
     add_executable(track_creation_test track_creation_test.cpp)

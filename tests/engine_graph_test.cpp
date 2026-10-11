@@ -20,6 +20,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <limits>
 #include <numbers>
@@ -271,7 +273,7 @@ int main() {
             std::array<std::atomic<unsigned>, 64> seen{};
             std::atomic<bool> invalidWorker{false};
             unsigned limit = 8;
-            static void execute(void* opaque, std::uint32_t item, unsigned worker) {
+            static std::uint32_t execute(void* opaque, std::uint32_t item, unsigned worker) {
                 auto& self = *static_cast<Probe*>(opaque);
                 if (worker >= self.limit) self.invalidWorker.store(true);
                 self.seen[item].fetch_add(1);
@@ -279,17 +281,21 @@ int main() {
                     for (unsigned i = 1; i < self.seen.size(); ++i) self.jobs->submit(worker, i);
                     self.jobs->wakeHelpers(63);
                 }
+                if (item == 1) std::this_thread::sleep_for(std::chrono::microseconds(200));
                 std::this_thread::yield();
+                return 1;
             }
         } probe{&jobs};
         jobs.setSink({&Probe::execute, &probe});
         bool correct = true;
-        for (unsigned limit : {1u, 4u, 2u, 8u, 1u, 0u, 50u, 1u}) {
+        for (const bool realtime : {false, true}) for (unsigned limit : {1u, 4u, 2u, 8u, 1u, 0u, 50u, 1u}) {
             daw::rt::AudioWorkerConfig config;
+            config.active = realtime;
+            config.blockFrames = 512;
             config.maxParallelThreads = limit;
             jobs.configureAudioWorkers(config);
             probe.limit = limit ? std::min(limit, 8u) : 8u;
-            correct &= jobs.workerCount() == probe.limit && jobs.realtimeWorkerCount() == 0;
+            correct &= jobs.workerCount() == probe.limit && (realtime || jobs.realtimeWorkerCount() == 0);
             for (int pass = 0; pass < 40; ++pass) {
                 for (auto& count : probe.seen) count.store(0);
                 jobs.beginPass(64, 0);
@@ -298,9 +304,14 @@ int main() {
                 for (auto& count : probe.seen) correct &= count.load() == 1;
             }
         }
+        jobs.configureAudioWorkers({});
+        correct &= jobs.workerCount() == 8 && jobs.realtimeWorkerCount() == 0;
         check(correct && !probe.invalidWorker.load(),
               "device worker limits include caller, preserve every job/fan-out and restore full offline capacity");
-        // Destruction below wakes the seven configuration-only sleepers.
+        // Leave excluded helpers parked on configuration changes at shutdown.
+        daw::rt::AudioWorkerConfig stopped;
+        stopped.maxParallelThreads = 1;
+        jobs.configureAudioWorkers(stopped);
     }
     {
         bool rampMatches = true;
@@ -514,6 +525,62 @@ int main() {
             if (again.storage[i] != parallel.storage[i]) stable = false;
         }
         check(stable, "repeated parallel runs are deterministic");
+    }
+
+    // Stateful (non-fusible) chains keep their contexts and run each task once,
+    // including across parked passes. A continuation must not be stolen between
+    // two nodes or disappear from the pass completion count.
+    {
+        struct Chain {
+            std::thread::id worker;
+            std::array<unsigned, 4> calls{};
+            bool sameWorker = true;
+        };
+        struct Stage final : Node {
+            Chain& chain; unsigned index;
+            Stage(Chain& c, unsigned i) : chain(c), index(i) {}
+            std::string_view name() const noexcept override { return "stateful chain"; }
+            FrameCount latencySamples() const noexcept override { return 3; }
+            void process(const ProcessContext& c) override {
+                if (index == 0) chain.worker = std::this_thread::get_id();
+                else chain.sameWorker &= chain.worker == std::this_thread::get_id();
+                ++chain.calls[index];
+                for (ChannelCount ch = 0; ch < c.output.numChannels(); ++ch)
+                    for (FrameCount f = 0; f < c.frames; ++f)
+                        c.output.data(ch)[f] = 1.f + (c.inputs.empty() ? 0.f : c.inputs[0].data(ch)[f]);
+            }
+        };
+        std::array<Chain, 24> chains{};
+        AudioGraph graph;
+        const auto sink = graph.addNode(std::make_unique<SumNode>());
+        graph.setSink(sink);
+        for (auto& chain : chains) {
+            NodeId previous = kInvalidNode;
+            for (unsigned i = 0; i < chain.calls.size(); ++i) {
+                const auto node = graph.addNode(std::make_unique<Stage>(chain, i));
+                if (previous != kInvalidNode) (void)graph.connect(previous, node);
+                previous = node;
+            }
+            (void)graph.connect(previous, sink);
+        }
+        auto compiled = graph.compile(info);
+        check(bool(compiled), "stateful continuation graph compiles");
+        if (compiled) {
+            GraphProcessor processor(8); processor.setGraph(*compiled);
+            OutputBuffer output(2, kBlock);
+            bool correct = true;
+            for (unsigned pass = 0; pass < 200; ++pass) {
+                if (pass % 20 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                processor.setTaskFusion((pass & 1) != 0);
+                correct &= bool(processor.process(output.block(), kBlock, pass * kBlock, true));
+                correct &= output.storage.front() == 96.f;
+                for (const auto& chain : chains) {
+                    correct &= chain.sameWorker;
+                    for (const auto calls : chain.calls) correct &= calls == pass + 1;
+                }
+            }
+            check(correct, "stateful chains continue on one worker and complete every task once across passes");
+        }
     }
 
     // ── Compact expensive graph: slow root → wide successor frontier ──
@@ -780,8 +847,111 @@ int main() {
         ClipPlacement tape;
         tape.tapeStartSamples = frames;
         const float wound = render(tape);
-        check(wound > 0.05f && wound < 0.08f && wound < linear * 0.4f,
-              "Tape Start integrates a 0x-to-1x speed ramp without a source jump");
+        check(std::abs(wound - 0.3125f) < 0.001f,
+              "Tape Start integrates a 0x-to-1x ramp anchored to the end of the fade");
+    }
+
+    // Editing a speed fade must not shift the unaffected part of the clip.
+    // Check both source-region paths, seeks, both fades and live/offline DSP.
+    for (bool offline : {false, true}) for (bool edited : {false, true}) {
+        constexpr unsigned rate = 48000, frames = rate * 10, block = 256;
+        auto ramp = std::make_shared<SampleBuffer>(1, frames, rate);
+        for (unsigned i = 0; i < frames; ++i) ramp->writableChannel(0)[i] = float(i) / frames;
+        ClipPlayerNode player;
+        player.prepare({rate, block, 1, offline});
+        OutputBuffer output(1, block);
+        ProcessContext c;
+        c.output = output.block(); c.frames = block; c.sampleRate = rate;
+        c.playing = true; c.offline = offline;
+        for (unsigned fade : {rate / 2, rate, rate * 2}) {
+            ClipPlacement clip;
+            clip.audio = ramp; clip.lengthSamples = frames;
+            clip.fadeInSamples = clip.tapeStartSamples = fade;
+            clip.fadeOutSamples = clip.tapeStopSamples = fade;
+            if (edited) { clip.sourceStartFrame = 0; clip.sourceEndFrame = frames; }
+            player.setClips(std::make_shared<ClipPlayerNode::ClipList>(1, clip));
+            player.reset(); c.timelinePosition = 3 * rate;
+            player.process(c);
+            check(std::abs(output.storage[0] - 0.3f) < 1e-6f,
+                  "editing speed fades preserves the original source position after restart");
+            // Start just before the head joins normal speed, then cross it.
+            player.reset(); c.timelinePosition = fade - 128;
+            player.process(c);
+            check(std::abs(output.storage[128] - float(fade) / frames) < 1e-6f &&
+                  std::abs(output.storage[127] - output.storage[128]) < 1e-4f,
+                  "speed fade joins the unshifted clip without a source discontinuity");
+        }
+    }
+
+    // Disk-backed PCM uses the same speed curve when warming a seek. Each
+    // mapping has a fresh cache ID so another run cannot hide a cold page.
+    {
+        constexpr unsigned rate = 48000, frames = rate * 10, block = 256;
+        const auto path = std::filesystem::temp_directory_path() /
+            ("daw-tape-cache-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".f32");
+        struct Cleanup { std::filesystem::path path; ~Cleanup() {
+            std::error_code ec; std::filesystem::remove(path, ec);
+        } } cleanup{path};
+        { std::ofstream file(path, std::ios::binary);
+          const std::vector<float> data(frames, 0.5f);
+          file.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(float)); }
+        for (bool edited : {false, true}) for (bool tail : {false, true}) for (bool warped : {false, true}) {
+            ClipPlacement clip;
+            clip.audio = SampleBuffer::mapReadOnly(path, 1, frames, rate);
+            clip.lengthSamples = frames;
+            if (edited) { clip.sourceStartFrame = 0; clip.sourceEndFrame = frames; }
+            if (warped) {
+                daw::ClipWarpModel map;
+                map.enabled = true; map.preservePitch = false; map.baselineDurationSeconds = 10;
+                map.markers = {{"start", 0, 0, true}, {"end", 10, 20, true}};
+                clip.warp = std::make_shared<const daw::ClipWarpModel>(map); clip.warpTempo = 120;
+            }
+            if (tail) clip.fadeOutSamples = clip.tapeStopSamples = 2 * rate;
+            else clip.fadeInSamples = clip.tapeStartSamples = 2 * rate;
+            ClipPlayerNode player;
+            player.prepare({rate, block, 1});
+            player.setClips(std::make_shared<ClipPlayerNode::ClipList>(1, clip));
+            player.reset();
+            OutputBuffer output(1, block);
+            ProcessContext c;
+            c.output = output.block(); c.frames = block; c.sampleRate = rate; c.playing = true;
+            c.timelinePosition = tail ? SamplePos(rate * 9.75) : rate / 2;
+            player.preparePlayback(c.timelinePosition);
+            const auto before = PcmReadCache::instance().counters().misses;
+            { PcmReadScope read(true); player.process(c); }
+            check(PcmReadCache::instance().counters().misses == before &&
+                  std::all_of(output.storage.begin(), output.storage.end(), [](float v) { return v > 0.0f; }),
+                  "seeking inside a speed fade warms the actual PCM pages with no silent first block");
+        }
+    }
+
+    // Export and playback use the same edge correction, independent of block
+    // boundaries. Include a gap and a source offset that starts above zero.
+    {
+        auto samples = std::make_shared<SampleBuffer>(1, 2048, 48000);
+        std::fill_n(samples->writableChannel(0), 2048, 0.5f);
+        std::vector<float> reference;
+        for (bool offline : {false, true}) for (unsigned block : {17u, 256u, 1024u}) {
+            ClipPlayerNode player;
+            player.prepare({48000, block, 1, offline});
+            ClipPlacement clip;
+            clip.audio = samples; clip.startSample = 32; clip.lengthSamples = 640; clip.offsetSamples = 10;
+            player.setClips(std::make_shared<ClipPlayerNode::ClipList>(1, clip)); player.reset();
+            OutputBuffer output(1, block);
+            ProcessContext c; c.output = output.block(); c.sampleRate = 48000; c.playing = true; c.offline = offline;
+            std::vector<float> audio;
+            for (unsigned pos = 0; pos < 1200; pos += c.frames) {
+                c.timelinePosition = pos; c.frames = std::min(block, 1200 - pos);
+                player.process(c);
+                audio.insert(audio.end(), output.storage.begin(), output.storage.begin() + c.frames);
+            }
+            float jump = 0;
+            for (unsigned i = 1; i < audio.size(); ++i) jump = std::max(jump, std::abs(audio[i] - audio[i - 1]));
+            check(jump < 0.004f && audio[500] == 0.5f && audio.back() == 0.0f,
+                  "clip starts and ends are de-clicked in playback and export");
+            if (reference.empty()) reference = audio;
+            check(reference == audio, "de-click output is identical across modes and buffer sizes");
+        }
     }
 
     // ── Master spectrum for the transport display ──

@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <functional>
+#include <optional>
 
 class QMenu;
 class QAction;
@@ -39,11 +40,11 @@ bool checkPluginPickerForTest(QString* error = nullptr,
                               const QString& screenshotPath = {});
 
 /// A compact menu of scanned plugins, grouped by category/vendor, filtered to instruments or to
-/// effects. Shared by the insert slots and the instrument slot so the two can
+/// effects (nullopt includes both). Shared by the insert slots and the instrument slot so the two can
 /// never present different lists. This eager form is for callers which are
 /// already responding to a click and will show the returned menu immediately.
 QMenu* buildPluginMenu(QWidget* parent, daw::EngineController* controller,
-                       bool instruments,
+                       std::optional<bool> instruments,
                        std::function<void(const daw::plugins::PluginDescriptor&)> onPick,
                        PluginPickerTarget target = {});
 

@@ -133,8 +133,8 @@ button, a, summary { -webkit-tap-highlight-color: transparent; touch-action: man
 .workflow-visual .product-shot[data-shot="showcase-audio"] img { position: absolute; width: 138.462%; height: auto; max-width: none; left: -19.231%; top: -22.642%; }
 .workflow-visual .product-shot[data-shot="showcase-midi"] { aspect-ratio: 1320 / 760; }
 .workflow-visual .product-shot[data-shot="showcase-midi"] img { position: absolute; width: 109.091%; height: auto; max-width: none; left: -9.091%; top: -15.263%; }
-.workflow-visual .product-shot[data-shot="showcase-eq"] { aspect-ratio: 1040 / 698; }
-.workflow-visual .product-shot[data-shot="showcase-eq"] img { position: absolute; width: 138.462%; height: auto; max-width: none; left: -34.615%; top: -23.926%; }
+.workflow-visual .product-shot[data-shot="showcase-rack"] { aspect-ratio: 1320 / 420; }
+.workflow-visual .product-shot[data-shot="showcase-rack"] img { position: absolute; width: 109.091%; height: auto; max-width: none; left: -9.091%; top: -108.333%; }
 .sound-glyph { width: 210px; height: 55px; margin-bottom: 32px; color: currentColor; }
 .sound-glyph svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .signal-bars { display: flex; align-items: center; justify-content: space-between; gap: 3px; width: 100%; height: 100%; }

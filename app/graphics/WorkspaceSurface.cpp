@@ -82,9 +82,9 @@ void clearPressedPointer(QPointer<QWidget>& pressed) {
         QCoreApplication::sendEvent(previous, &ungrab);
     }
 }
-bool isScrollViewport(QWidget* widget) {
+QAbstractScrollArea* scrollForViewport(QWidget* widget) {
     auto* scroll = widget ? qobject_cast<QAbstractScrollArea*>(widget->parentWidget()) : nullptr;
-    return scroll && scroll->viewport() == widget;
+    return scroll && scroll->viewport() == widget ? scroll : nullptr;
 }
 QWidget* clickFocusTarget(QWidget* source, QWidget* target) {
     // Mouse delivery through Quick bypasses QWidget's native focus walk. A
@@ -208,8 +208,8 @@ bool WorkspaceSurface::checkPointerRoutingForTest() {
     const bool pixelsRouted = routeWheelThroughWidgets(&scroll, leaf, &pixelWheel);
     const bool wheelClimbsToScroller = angleRouted && pixelsRouted &&
         afterAngle > 0 && scroll.verticalScrollBar()->value() > afterAngle;
-    const bool scrollViewportRecognized = isScrollViewport(scroll.viewport()) &&
-        !isScrollViewport(page);
+    const bool scrollViewportRecognized = scrollForViewport(scroll.viewport()) == &scroll &&
+        !scrollForViewport(page);
 
     QWidget composer;
     QPlainTextEdit input(&composer);
@@ -463,7 +463,8 @@ void WorkspaceSurface::resizeSurface() {
     m_dirty.insert(m_source);
     requestCapture();
 }
-void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& snapshot, QSet<quintptr>& wanted) {
+void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& snapshot, QSet<quintptr>& wanted,
+                             QPoint parentOrigin, QRect parentClip, const QRegion& parentMask) {
     if (m_stopping || !widget || widget == m_container || !widget->isVisible() ||
         (widget != m_source && widget->isWindow())) return;
     // Foreign plugin pixels stay in their native child hierarchy. The frame
@@ -481,27 +482,25 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         return;
     }
     const auto id = reinterpret_cast<quintptr>(widget);
-    const QPoint origin = widget->mapTo(m_source, QPoint());
-    QRect visible(origin, widget->size());
-    for (auto* ancestor = widget == m_source ? nullptr : widget->parentWidget(); ancestor && ancestor != m_source;
-         ancestor = ancestor->parentWidget())
-        visible &= QRect(ancestor->mapTo(m_source, QPoint()), ancestor->size());
-    visible &= m_source->rect();
+    const QPoint origin = widget == m_source ? QPoint() : parentOrigin + widget->pos();
+    const QRect visible = QRect(origin, widget->size()).intersected(parentClip);
     if (visible.isEmpty()) return;
-    wanted.insert(id);
     auto found = m_layers.find(id);
     const QRectF clip = visible.translated(-origin);
     QRegion mask(visible);
-    for (auto* ancestor = widget; ancestor; ancestor = ancestor->parentWidget()) {
-        if (!ancestor->mask().isEmpty())
-            mask &= ancestor->mask().translated(ancestor->mapTo(m_source, QPoint()));
-        if (ancestor == m_source) break;
-    }
+    if (!parentMask.isEmpty()) mask &= parentMask;
+    if (!widget->mask().isEmpty()) mask &= widget->mask().translated(origin);
     if (mask.isEmpty()) return;
+    wanted.insert(id);
+    const QRegion childMask = mask == QRegion(visible) ? QRegion{} : mask;
     // Ordinary rectangular widgets keep the cheap scissor/batching path.
     if (mask == QRegion(visible)) mask = {};
     else mask.translate(-origin);
-    const bool rebuild = found == m_layers.end() || !found->second.widget || m_dirty.contains(widget);
+    const auto* scroll = scrollForViewport(widget);
+    const QPoint viewportOffset = scroll ? QPoint(scroll->horizontalScrollBar()->value(),
+                                                  scroll->verticalScrollBar()->value()) : QPoint();
+    const bool rebuild = found == m_layers.end() || !found->second.widget || m_dirty.contains(widget) ||
+                         found->second.viewportOffset != viewportOffset;
     if (rebuild) {
         ui::perf::Scope layerCost(nativeControlAsset(widget) && !dynamic_cast<ScenePaintSource*>(widget)
             ? "gpu.scene.native.control.ms" : "gpu.scene.vector.layer.ms");
@@ -553,7 +552,12 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
             layer->meshes = recorder.takeMeshes();
         }
         layer->clipRequired = requiresLayerClip(*layer);
-        m_layers[id] = {widget, layer, std::move(recording)};
+        for (const auto& mesh : layer->meshes) {
+            layer->geometryBytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
+            if (mesh.group) layer->geometryBytes += mesh.group->bytes;
+            if (mesh.clip) layer->geometryBytes += qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex);
+        }
+        m_layers[id] = {widget, layer, std::move(recording), viewportOffset};
     } else if (found->second.layer->origin != origin || found->second.layer->clip != clip ||
                found->second.layer->mask != mask) {
         auto moved = std::make_shared<SceneLayer>(*found->second.layer);
@@ -569,7 +573,8 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
     }
     snapshot->layers.push_back(m_layers[id].layer);
     const auto children = widget->children();
-    for (auto* child : children) if (auto* childWidget = qobject_cast<QWidget*>(child)) visit(childWidget, snapshot, wanted);
+    for (auto* child : children) if (auto* childWidget = qobject_cast<QWidget*>(child))
+        visit(childWidget, snapshot, wanted, origin, visible, childMask);
 }
 void WorkspaceSurface::capture() {
     if (!m_source || !m_source->isVisible() || m_stopping) return;
@@ -581,7 +586,9 @@ void WorkspaceSurface::capture() {
     snapshot->revision = ++m_revision; snapshot->viewport = m_source->size();
     if (m_projectRevision) snapshot->projectRevision = m_projectRevision();
     QSet<quintptr> wanted;
-    visit(m_source, snapshot, wanted);
+    const auto previousRevision = m_revision;
+    visit(m_source, snapshot, wanted, {}, m_source->rect(), {});
+    ui::perf::sample("gpu.scene.layers.rebuilt", double(m_revision - previousRevision));
     if (m_stopping) { m_capturing = false; return; }
     for (auto it = m_layers.begin(); it != m_layers.end();) {
         if (!wanted.contains(it->first)) it = m_layers.erase(it); else ++it;
@@ -593,11 +600,7 @@ void WorkspaceSurface::capture() {
     qint64 geometryBytes = 0;
     for (const auto& layer : snapshot->layers) {
         meshCount += int(layer->meshes.size());
-        for (const auto& mesh : layer->meshes) {
-            geometryBytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
-            if (mesh.group) geometryBytes += mesh.group->bytes;
-            if (mesh.clip) geometryBytes += qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex);
-        }
+        geometryBytes += layer->geometryBytes;
     }
     if (geometryBytes > 64 * 1024 * 1024) {
         fail(tr("The visible scene exceeds the experimental geometry budget."));
@@ -993,11 +996,10 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         // Collect explicit changes even when an opaque editor covers them.
         // Qt can omit their Paint events; exposure later must still reveal
         // current model pixels, rather than the old retained layer.
-        const bool collected = collectWidgetUpdates(m_source, m_dirty);
-        m_collectedGeometryUpdates = m_geometryExposure && collected;
+        m_collectedWidgetUpdates = collectWidgetUpdates(m_source, m_dirty, m_geometryExposure);
         if (!m_dirty.isEmpty()) requestCapture();
-        // Geometry damage belongs to Qt's next backing-store update, not the
-        // next Quick frame. Quick can capture before that queued update arrives.
+        // Keep pending geometry exposure until Qt's backing-store update,
+        // even if Quick captured an earlier frame in the meantime.
         m_geometryExposure = false;
     }
     if ((object == m_window || object == m_source) && event->type() == QEvent::DevicePixelRatioChange)
@@ -1023,7 +1025,7 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
          event->type() == QEvent::Show || event->type() == QEvent::Hide ||
          event->type() == QEvent::ZOrderChange)) {
         m_geometryExposure = true;
-        m_collectedGeometryUpdates = false;
+        m_collectedWidgetUpdates = false;
     }
     // These widgets paint and receive input through their real native child
     // view. Consuming Paint here would leave the embedded plugin transparent.
@@ -1039,11 +1041,16 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         GraphicsPreferences::instance().reportFrame(inactive);
     }
     if (event->type() == QEvent::Paint) {
-        // Item views paint their labels into the viewport but move embedded
-        // editors as child widgets. A scroll therefore changes both pixels and
-        // geometry, so never discard the viewport's paint as geometry-only.
-        if (!m_collectedGeometryUpdates || isScrollViewport(widget)) m_dirty.insert(widget);
-        requestCapture();
+        // Qt also paints transparent controls' unchanged ancestors into its
+        // backing store. Explicit damage was collected before that expansion;
+        // keep the retained parent layers for ordinary hover/value edits too.
+        // Item views can scroll their labels and child editors together. Their
+        // scroll offset is checked in visit(); exposure from a floating window
+        // must not rerecord an unchanged mixer or item-view viewport.
+        if (!m_collectedWidgetUpdates) m_dirty.insert(widget);
+        // Pure backing-store exposure needs no new scene snapshot. Viewports
+        // still schedule a capture so visit() can check their scroll offset.
+        if (!m_dirty.isEmpty() || scrollForViewport(widget)) requestCapture();
         return true; // vector recording occurs outside QWidget's active paint stack
     }
     if (event->type() == QEvent::Destroy) {

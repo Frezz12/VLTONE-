@@ -4,6 +4,7 @@
 #include "PluginReadout.hpp"
 
 #include <QHash>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -27,6 +28,7 @@ class QComboBox;
 class QLabel;
 class QPushButton;
 class QSlider;
+class QScrollArea;
 class QToolButton;
 class QShowEvent;
 namespace ui {
@@ -95,6 +97,7 @@ public:
     /// produce — so these open it, pump it, and read back what it is showing.
     void setParameterDockVisibleForTest(bool visible);
     void pollForTest();
+    static bool checkGenericVirtualizationForTest();
     static bool checkIdleForTest(daw::EngineController& controller,
                                 const std::string& fixturePath);
     QStringList parameterDockOrderForTest() const;
@@ -142,7 +145,9 @@ private:
     std::unique_ptr<PluginEditorNativeKeyboard> m_nativeKeyboard;
     std::optional<daw::PluginEditorSnapshot> editorSnapshot() const;
     /// Build the fallback panel of sliders for a plugin with no GUI.
-    void buildGenericEditor();
+    void buildGenericEditor(std::vector<daw::plugins::ParameterInfo> parameters = {});
+    void syncGenericRows();
+    void buildGenericRow(int index);
     void refreshGenericEditor();
     void pollEditorState();
     void syncPollTimer();
@@ -227,13 +232,20 @@ private:
     std::vector<DockControl> m_dockControls;
     std::vector<daw::PluginParameterReadout> m_dockValues;
     struct GenericControl {
+        QWidget* row = nullptr;
+        ui::IconButton* automate = nullptr;
         QSlider* slider = nullptr;
         QLabel* value = nullptr;
         double minimum = 0.0;
         double maximum = 0.0;
         double lastPlain = std::numeric_limits<double>::quiet_NaN();
     };
-    std::vector<GenericControl> m_genericControls;
+    QMap<int, GenericControl> m_genericControls;
+    std::vector<daw::plugins::ParameterInfo> m_genericParameters;
+    QScrollArea* m_genericScroll = nullptr;
+    QWidget* m_genericRows = nullptr;
+    int m_genericRowHeight = 30;
+    bool m_syncingGeneric = false;
     std::vector<daw::PluginParameterReadout> m_genericValues;
     /// Which parameter the plugin last moved by itself.
     QString m_dockActive;
