@@ -6409,6 +6409,9 @@ Release to keep this clip in the project</source><translation>Сохранить
 </context>
 <context>
     <name>MainWindow</name>
+    <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
+    <message><source>The clip changed during analysis. Try Auto Warp again.</source><translation>Клип изменился во время анализа. Запустите авто-варпинг ещё раз.</translation></message>
+    <message><source>Auto Warp could not be applied. Open Warp Editor to adjust the clip manually.</source><translation>Не удалось применить авто-варпинг. Откройте Warp Editor, чтобы подогнать клип вручную.</translation></message>
     <message>
         <source>Switch Mixer / Rack</source>
         <translation>Переключить микшер / рэк</translation>
@@ -15318,6 +15321,8 @@ Reassign it to &quot;%3&quot;?</source>
 </context>
 <context>
     <name>TimelineWidget</name>
+    <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
+    <message><source>Fit this clip to the project tempo</source><translation>Подогнать этот клип под темп проекта</translation></message>
     <message><source>Audio clip</source><translation>Аудиоклип</translation></message>
     <message><source>MIDI clip with Sampler</source><translation>MIDI-клип с Sampler</translation></message>
     <message><source>MIDI view</source><translation>Вид MIDI</translation></message>
@@ -16658,6 +16663,7 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 </context>
 <context>
     <name>UndoCommands</name>
+    <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
     <message><source>Resize Sequence</source><translation>Изменение длины секвенции</translation></message>
     <message><source>Create Linked Copies</source><translation>Создать связанные копии</translation></message>
     <message><source>Link Clip Content</source><translation>Связать содержимое клипов</translation></message>

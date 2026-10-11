@@ -30,8 +30,11 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
       release = { ...release, screenshots: [screenshot] };
       return route.fulfill({ status: 201, json: screenshot });
     }
-    const artifact = { id: "20000000-0000-4000-8000-000000000001", kind: "windows-exe", platform: "windows", label: "Windows Setup", file_name: "VLT-Setup.exe", bytes: 12, sha256: "a".repeat(64), download_url: "/v1/releases/0.1.2/download/windows-exe", updated_at: "2026-08-29T10:05:00Z" };
-    release = { ...release, artifacts: [artifact] };
+    const kind = new URL(route.request().url()).pathname.split("/").pop();
+    expect(["windows-exe", "macos-dmg", "macos-pkg"]).toContain(kind);
+    const fileName = kind === "macos-pkg" ? "VLT.pkg" : kind === "macos-dmg" ? "VLT.dmg" : "VLT-Setup.exe";
+    const artifact = { id: `artifact-${kind}`, kind, platform: kind === "windows-exe" ? "windows" : "macos", label: kind === "macos-pkg" ? "macOS PKG" : kind === "macos-dmg" ? "macOS DMG" : "Windows Setup", file_name: fileName, bytes: 12, sha256: "a".repeat(64), download_url: `/v1/releases/0.1.2/download/${kind}`, updated_at: "2026-08-29T10:05:00Z" };
+    release = { ...release, artifacts: [...(release?.artifacts as unknown[] ?? []), artifact] };
     await route.fulfill({ json: artifact });
   });
 
@@ -50,6 +53,13 @@ test("admin saves a draft, uploads an installer, and publishes it", async ({ pag
   // Choosing a file on a new release must create its draft automatically.
   await page.getByLabel("Загрузить").first().setInputFiles({ name: "VLT-Setup.exe", mimeType: "application/octet-stream", buffer: Buffer.from("installer") });
   await expect(page.getByText("VLT-Setup.exe · 1 КиБ")).toBeVisible();
+  for (const format of ["DMG", "PKG"]) {
+    const card = page.locator(".artifact-card").filter({ hasText: `macOS ${format}` });
+    await expect(card.locator('input[type="file"]')).toHaveAttribute("accept", `.${format.toLowerCase()}`);
+    await card.getByLabel("Загрузить").setInputFiles({ name: `VLT.${format.toLowerCase()}`, mimeType: "application/octet-stream", buffer: Buffer.from("mac-installer") });
+    await expect(card.getByText(`VLT.${format.toLowerCase()} · 1 КиБ`)).toBeVisible();
+  }
+  expect((release?.artifacts as Array<{ kind: string }>).map(item => item.kind)).toEqual(["windows-exe", "macos-dmg", "macos-pkg"]);
   await page.getByLabel("Изображение").setInputFiles({ name: "mixer.png", mimeType: "image/png", buffer: Buffer.from("png") });
   await page.getByLabel("Подпись RU").fill("Микшер");
   await page.getByLabel("Caption EN").fill("Mixer");

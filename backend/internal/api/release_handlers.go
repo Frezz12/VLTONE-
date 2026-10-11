@@ -51,6 +51,7 @@ var artifactKinds = map[string]struct {
 }{
 	"windows-exe":    {"windows", "Windows Setup", []string{".exe"}, "application/vnd.microsoft.portable-executable"},
 	"macos-dmg":      {"macos", "macOS DMG", []string{".dmg"}, "application/x-apple-diskimage"},
+	"macos-pkg":      {"macos", "macOS PKG", []string{".pkg"}, "application/octet-stream"},
 	"linux-appimage": {"linux", "Linux AppImage", []string{".appimage"}, "application/octet-stream"},
 	"linux-deb":      {"linux", "Linux DEB", []string{".deb"}, "application/vnd.debian.binary-package"},
 	"linux-rpm":      {"linux", "Linux RPM", []string{".rpm"}, "application/x-rpm"},
@@ -602,7 +603,7 @@ func (s *Server) latestRelease(w http.ResponseWriter, r *http.Request) {
 	case "windows":
 		kinds = []string{"windows-exe"}
 	case "macos":
-		kinds = []string{"macos-dmg"}
+		kinds = []string{"macos-dmg", "macos-pkg"}
 	case "linux":
 		kinds = []string{"linux-appimage", "linux-deb", "linux-rpm", "linux-tar-gz", "linux-tar-xz"}
 	default:

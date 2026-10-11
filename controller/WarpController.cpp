@@ -43,6 +43,34 @@ bool EngineController::initializeClipWarp(const std::string& trackId, const std:
     return setClipWarp(trackId, clipId, warp, "Enable Warp");
 }
 
+bool EngineController::autoWarpClip(const std::string& trackId, const std::string& clipId,
+                                    const ClipMusicalAnalysisModel& sourceAnalysis) {
+    if (!warpUnavailableReason(trackId, clipId).empty()) return false;
+    const auto* clip = audioClip(trackId, clipId);
+    const auto& estimate = sourceAnalysis.tempo;
+    const int sourceTempo = analysis::roundedBpm(estimate.bpm);
+    if (estimate.status != MusicalAnalysisStatus::Available || estimate.variable ||
+        !std::isfinite(estimate.stability) || estimate.stability < .75 ||
+        sourceTempo < 1 || sourceTempo > 999 || clip->channels < 1 ||
+        !std::isfinite(clip->durationSeconds) || clip->durationSeconds <= 0)
+        return false;
+
+    // Use source coordinates, including trims and any existing Warp range.
+    // Repeating Auto Warp must not stretch an already fitted duration again.
+    const double begin = clip->warp.empty() ? clip->offsetSeconds
+                                           : clip->warp.markers.front().sourceSeconds;
+    const double end = clip->warp.empty()
+        ? begin + clip->durationSeconds / clip->sampleEdit.stretchTime
+        : clip->warp.markers.back().sourceSeconds;
+    ClipWarpModel warp;
+    warp.enabled = true;
+    warp.baselineDurationSeconds = clip->warp.empty()
+        ? clip->durationSeconds : clip->warp.baselineDurationSeconds;
+    warp.markers = {{newUuid(), begin, 0, true},
+                    {newUuid(), end, secondsToBeats(end - begin, sourceTempo), true}};
+    return setClipWarp(trackId, clipId, warp, "Auto Warp");
+}
+
 bool EngineController::setClipWarp(const std::string& trackId, const std::string& clipId,
                                   const ClipWarpModel& warp, const std::string& label) {
     if (!sharedGestureAllowed("clip:" + clipId)) return false;

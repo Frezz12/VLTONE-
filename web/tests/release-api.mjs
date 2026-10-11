@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64");
 const artifacts = [
+  { id: "10000000-0000-4000-8000-000000000005", kind: "macos-pkg", platform: "macos", label: "macOS PKG", file_name: "VLT.pkg", bytes: 125829120, sha256: "f".repeat(64), download_url: "/v1/releases/0.1.2/download/macos-pkg", updated_at: "2026-08-29T10:00:00Z" },
   { id: "10000000-0000-4000-8000-000000000001", kind: "windows-exe", platform: "windows", label: "Windows Setup", file_name: "VLT-Setup.exe", bytes: 104857600, sha256: "a".repeat(64), download_url: "/v1/releases/0.1.2/download/windows-exe", updated_at: "2026-08-29T10:00:00Z" },
   { id: "10000000-0000-4000-8000-000000000002", kind: "macos-dmg", platform: "macos", label: "macOS DMG", file_name: "VLT.dmg", bytes: 125829120, sha256: "b".repeat(64), download_url: "/v1/releases/0.1.2/download/macos-dmg", updated_at: "2026-08-29T10:00:00Z" },
   { id: "10000000-0000-4000-8000-000000000003", kind: "linux-deb", platform: "linux", label: "Linux DEB", file_name: "vlt.deb", bytes: 94371840, sha256: "c".repeat(64), download_url: "/v1/releases/0.1.2/download/linux-deb", updated_at: "2026-08-29T10:00:00Z" },

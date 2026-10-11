@@ -16,6 +16,7 @@ export function ReleaseDownloads({ artifacts, locale }: { artifacts: ReleaseArti
   const [macArtifact, setMacArtifact] = useState<ReleaseArtifact>();
   const [copied, setCopied] = useState(false);
   const ru = locale === "ru";
+  const macFormat = macArtifact?.kind === "macos-pkg" ? "PKG" : "DMG";
 
   function warnMac(item: ReleaseArtifact) {
     setMacArtifact(item); setCopied(false); dialog.current?.showModal();
@@ -37,9 +38,11 @@ export function ReleaseDownloads({ artifacts, locale }: { artifacts: ReleaseArti
     </div>
     <dialog className="mac-download-dialog" ref={dialog} aria-labelledby="mac-warning-title" aria-describedby="mac-warning-copy" onClose={() => setMacArtifact(undefined)}>
       <div className="mac-dialog-head"><Apple size={22} aria-hidden /><h2 id="mac-warning-title">{ru ? "Перед запуском на macOS" : "Before launching on macOS"}</h2><button type="button" onClick={() => dialog.current?.close()} aria-label={ru ? "Закрыть" : "Close"}><X size={19} aria-hidden /></button></div>
-      <p id="mac-warning-copy">{ru ? "Сборка пока не нотарифицирована Apple. Загружайте её только с официального сайта, перенесите приложение в папку Applications, затем выполните в Terminal:" : "This build is not yet notarized by Apple. Download it only from the official site, move the app to Applications, then run this command in Terminal:"}</p>
+      <p id="mac-warning-copy">{macFormat === "PKG"
+        ? (ru ? "Сборка пока не нотарифицирована Apple. Загружайте её только с официального сайта. Откройте PKG и следуйте шагам установщика. Если после установки macOS блокирует запуск VLTONE, выполните в Terminal:" : "This build is not yet notarized by Apple. Download it only from the official site. Open the PKG and follow the installer steps. If macOS blocks VLTONE from launching after installation, run this command in Terminal:")
+        : (ru ? "Сборка пока не нотарифицирована Apple. Загружайте её только с официального сайта, перенесите приложение в папку Applications, затем выполните в Terminal:" : "This build is not yet notarized by Apple. Download it only from the official site, move the app to Applications, then run this command in Terminal:")}</p>
       <div className="mac-command"><code>{quarantineCommand}</code><button className="vlt-button vlt-button-secondary" type="button" onClick={() => void copyCommand()}>{copied ? <Check size={16} aria-hidden /> : <Clipboard size={16} aria-hidden />}{copied ? (ru ? "Скопировано" : "Copied") : (ru ? "Копировать" : "Copy")}</button></div>
-      <div className="mac-dialog-actions"><button className="vlt-button vlt-button-secondary" type="button" onClick={() => dialog.current?.close()}>{ru ? "Отмена" : "Cancel"}</button>{macArtifact && <a className="vlt-button" href={`/api${macArtifact.download_url}`} onClick={() => dialog.current?.close()}><Download size={16} aria-hidden />{ru ? "Скачать DMG" : "Download DMG"}</a>}</div>
+      <div className="mac-dialog-actions"><button className="vlt-button vlt-button-secondary" type="button" onClick={() => dialog.current?.close()}>{ru ? "Отмена" : "Cancel"}</button>{macArtifact && <a className="vlt-button" href={`/api${macArtifact.download_url}`} onClick={() => dialog.current?.close()}><Download size={16} aria-hidden />{ru ? `Скачать ${macFormat}` : `Download ${macFormat}`}</a>}</div>
     </dialog>
   </>;
 }

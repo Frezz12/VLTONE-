@@ -149,8 +149,8 @@ bool MainWindow::checkWarpForTest() {
     m_controller.removeClip(track.id, first.id); syncViews();
     check(!m_controller.audioClip(track.id, first.id), "deleting the edited clip refreshes safely");
 
-    // Exercise the real file-drop preparation and import, including its worker
-    // tempo analysis, rather than handing the controller an invented estimate.
+    // Import must leave timing untouched; only the explicit context-menu
+    // command may analyze and fit the source to the project tempo.
     setWarpVisible(false);
     audio::AudioBuffer loop(2, 576000);
     for (int i = 0; i < 576000; ++i) {
@@ -182,12 +182,47 @@ bool MainWindow::checkWarpForTest() {
           "dropping an audio file imports it through background preparation");
     if (importedTrack && importedTrack->clips.size() == 2) {
         const auto imported = importedTrack->clips.back();
-        std::fprintf(stderr, "Auto Warp source %.2f BPM, status %d, duration %.5f\n",
-                     imported.musicalAnalysis.tempo.bpm, int(imported.musicalAnalysis.tempo.status), imported.durationSeconds);
-        check(imported.warp.enabled && std::abs(imported.durationSeconds - 9.6) < .001 &&
-              std::abs(imported.warp.baselineDurationSeconds - 12) < .001 && m_controller.tempo() == 150,
-              "a dropped 120 BPM loop automatically matches 150 BPM without changing project tempo");
+        check(imported.warp.empty() && imported.musicalAnalysis.empty() &&
+              std::abs(imported.durationSeconds - 12) < .001 && m_controller.tempo() == 150,
+              "a dropped 120 BPM loop keeps its original duration in a 150 BPM project");
         const auto importedId = QString::fromStdString(imported.id);
+        const auto sibling = *m_controller.audioClip(track.id, second.id);
+        m_timeline->selectClips({{trackId, importedId}, {trackId, QString::fromStdString(second.id)}});
+        const auto beforeAutoWarp = m_controller.undoDepth();
+        bool choseAutoWarp = false;
+        QTimer::singleShot(0, this, [&] {
+            if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+                for (auto* action : menu->actions()) if (action->objectName() == "AutoWarpAudioAction") {
+                    choseAutoWarp = action->isEnabled() && action->text() == TimelineWidget::tr("Auto Warp");
+                    menu->setActiveAction(action);
+                    if (const auto path = qEnvironmentVariable("DAW_AUTO_WARP_SCREENSHOT"); !path.isEmpty())
+                        menu->grab().save(path);
+                    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                    QApplication::sendEvent(menu, &enter); return;
+                }
+                menu->close();
+            }
+        });
+        const QPoint autoWarpAt(int((imported.startSeconds + .4 - m_timeline->horizontalScrollForTest()) *
+                                     m_timeline->pixelsPerSecondForTest()), m_timeline->laneCentreForTest(0));
+        QContextMenuEvent autoWarpMenu(QContextMenuEvent::Mouse, autoWarpAt, m_timeline->mapToGlobal(autoWarpAt));
+        QApplication::sendEvent(m_timeline, &autoWarpMenu);
+        const auto* fitted = m_controller.audioClip(track.id, imported.id);
+        check(choseAutoWarp && fitted && fitted->warp.enabled &&
+              std::abs(fitted->durationSeconds - 9.6) < .001 &&
+              std::abs(fitted->warp.baselineDurationSeconds - 12) < .001 &&
+              fitted->startSeconds == imported.startSeconds && m_controller.tempo() == 150,
+              "context-menu Auto Warp fits the clicked clip to the project tempo without moving it");
+        const auto* other = m_controller.audioClip(track.id, second.id);
+        check(other && other->warp == sibling.warp && other->durationSeconds == sibling.durationSeconds &&
+              m_warpPanel->isHidden(),
+              "Auto Warp leaves other selected clips and the closed Warp Editor untouched");
+        check(m_controller.undoDepth() == beforeAutoWarp + 1, "context-menu Auto Warp creates one Undo entry");
+        m_controller.undo();
+        const auto* undone = m_controller.audioClip(track.id, imported.id);
+        check(undone && undone->warp.empty() && undone->durationSeconds == imported.durationSeconds,
+              "Undo reverses Auto Warp while retaining the imported clip");
+        m_controller.redo();
         openWarpEditor(trackId, importedId);
         auto* enabled = m_warpEditor->findChild<QCheckBox*>("WarpEnabled");
         if (enabled) enabled->click();

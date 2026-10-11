@@ -816,6 +816,7 @@ private:
     /// result on that clip, and optionally apply a user-confirmed BPM.
     void analyzeAudioClip(const QString& trackId, const QString& clipId,
                           bool detectTempo, bool detectKey);
+    void autoWarpAudioClip(const QString& trackId, const QString& clipId);
     /// Show or hide the AI assistant, remembering the choice. Off by default —
     /// it is opt-in, and it spends the user's money. `persist` is false for the
     /// headless hooks: a screenshot run must not rewrite the user's settings.

@@ -10625,29 +10625,6 @@ bool EngineController::pumpPluginEvents() {
 
 // ── Clips ──────────────────────────────────────────────────────────────────
 
-namespace {
-void applyImportWarp(ClipModel& clip, double projectTempo) {
-    const auto& tempo = clip.musicalAnalysis.tempo;
-    const int sourceTempo = analysis::roundedBpm(tempo.bpm);
-    if (tempo.status != MusicalAnalysisStatus::Available || tempo.variable ||
-        !std::isfinite(tempo.stability) || tempo.stability < .75 ||
-        sourceTempo < 1 || sourceTempo > 999 || clip.channels < 1 || clip.channels > 2 ||
-        !std::isfinite(projectTempo) || projectTempo <= 0 ||
-        !std::isfinite(clip.durationSeconds) || clip.durationSeconds <= 0)
-        return;
-
-    ClipWarpModel warp;
-    warp.enabled = true;
-    warp.baselineDurationSeconds = clip.durationSeconds;
-    warp.markers = {{newUuid(), 0, 0, true},
-                    {newUuid(), clip.durationSeconds,
-                     secondsToBeats(clip.durationSeconds, sourceTempo), true}};
-    if (!validWarp(warp)) return;
-    clip.durationSeconds = beatsToSeconds(warp.markers.back().targetBeats, projectTempo);
-    clip.warp = std::move(warp);
-}
-} // namespace
-
 std::string EngineController::importSampleToMidiTrack(
     const std::string& filePath, double startSeconds) {
     if (!std::isfinite(startSeconds)) return {};
@@ -10704,7 +10681,7 @@ std::string EngineController::importSampleToMidiTrack(
 std::string EngineController::importAudioToNewTrack(
     const std::string& filePath, double startSeconds,
     const std::string& trackName,
-    const ClipMusicalAnalysisModel& analysis, bool autoWarp) {
+    const ClipMusicalAnalysisModel& analysis) {
     if (filePath.empty()) return {};
 
     if (cloudProjectBound()) {
@@ -10734,7 +10711,6 @@ std::string EngineController::importAudioToNewTrack(
         clip.channels = int(request->channels);
         clip.color = track.color;
         clip.musicalAnalysis = analysis;
-        if (autoWarp) applyImportWarp(clip, m_project.tempo);
         // Empty on purpose: the track and its clip go out now, the verified
         // asset follows. See submitOptimisticSharedAudioTrack.
         clip.asset = {};
@@ -10755,7 +10731,7 @@ std::string EngineController::importAudioToNewTrack(
 
     const std::string trackId = addTrack(TrackKind::Audio, name);
     if (trackId.empty()) return {};
-    if (importAudio(filePath, trackId, startSeconds, analysis, autoWarp).empty()) {
+    if (importAudio(filePath, trackId, startSeconds, analysis).empty()) {
         // Roll back the half-finished operation without adding a compensating
         // Remove Track entry. The caller should see exactly what it saw before
         // the failed import, including the undo label/depth.
@@ -10774,8 +10750,7 @@ std::string EngineController::importAudioToNewTrack(
 std::string EngineController::importAudio(const std::string& filePath,
                                           const std::string& trackId,
                                           double startSeconds,
-                                          const ClipMusicalAnalysisModel& analysis,
-                                          bool autoWarp) {
+                                          const ClipMusicalAnalysisModel& analysis) {
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Audio)) return {};
 
@@ -10794,7 +10769,6 @@ std::string EngineController::importAudio(const std::string& filePath,
         clip.channels = int(request->channels);
         clip.color = track->color;
         clip.musicalAnalysis = analysis;
-        if (autoWarp) applyImportWarp(clip, m_project.tempo);
         // Deliberately left empty: appendSharedClip omits clip.setAsset for an
         // empty ref, which is what makes the clip submittable before its bytes
         // exist anywhere. The asset arrives as its own operation below.
@@ -10825,7 +10799,6 @@ std::string EngineController::importAudio(const std::string& filePath,
     clip.channels = int(samples->channels());
     clip.color = track->color;
     clip.musicalAnalysis = analysis;
-    if (autoWarp) applyImportWarp(clip, m_project.tempo);
     track->clips.push_back(clip);
 
     syncTrackClips(*track);

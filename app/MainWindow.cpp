@@ -11208,6 +11208,7 @@ void MainWindow::buildLayout() {
     connect(m_timeline, &TimelineWidget::openPatternClipRequested, this,
             &MainWindow::openPatternClip);
     connect(m_timeline, &TimelineWidget::openWarpEditorRequested, this, &MainWindow::openWarpEditor);
+    connect(m_timeline, &TimelineWidget::autoWarpRequested, this, &MainWindow::autoWarpAudioClip);
     connect(m_timeline, &TimelineWidget::openSampleEditorRequested, this,
             &MainWindow::openSampleEditor);
     connect(m_timeline, &TimelineWidget::openAutomationEditorRequested, this,
@@ -18920,6 +18921,48 @@ void MainWindow::onTracksChanged(bool localFileDirty) {
 
 // ── Import / export ──
 
+void MainWindow::autoWarpAudioClip(const QString& trackId, const QString& clipId) {
+    const auto track = trackId.toStdString(), id = clipId.toStdString();
+    if (!m_controller.warpUnavailableReason(track, id).empty()) return;
+    const auto* clip = m_controller.audioClip(track, id);
+    const auto path = QString::fromStdString(clip->filePath);
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        QMessageBox::warning(this, tr("Auto Warp"),
+                             tr("The source audio file could not be found."));
+        return;
+    }
+    daw::analysis::MusicalAnalysisRequest request;
+    request.detectKey = false;
+    request.offsetSeconds = clip->warp.empty() ? clip->offsetSeconds
+                                              : clip->warp.markers.front().sourceSeconds;
+    const double sourceDuration = clip->warp.empty()
+        ? clip->durationSeconds / clip->sampleEdit.stretchTime
+        : clip->warp.markers.back().sourceSeconds - request.offsetSeconds;
+    if (!std::isfinite(sourceDuration) || sourceDuration <= 0) return;
+    request.durationSeconds = std::min(90.0, sourceDuration);
+    const auto revision = m_controller.projectRevision();
+    daw::analysis::MusicalAnalysisResult analysis;
+    QString error;
+    bool cancelled = false;
+    if (!runMusicalAnalysis(this, path, request, analysis, error, cancelled)) {
+        if (!cancelled)
+            QMessageBox::warning(this, tr("Audio analysis failed"),
+                error.isEmpty() ? tr("The clip could not be analyzed.") : error);
+        return;
+    }
+    if (cancelled) return;
+    if (m_controller.projectRevision() != revision) {
+        statusBar()->showMessage(tr("The clip changed during analysis. Try Auto Warp again."), 6000);
+        return;
+    }
+    if (!m_controller.autoWarpClip(track, id, daw::analysis::toClipAnalysisModel(analysis, request))) {
+        statusBar()->showMessage(tr("Auto Warp could not be applied. Open Warp Editor to adjust the clip manually."), 6000);
+        return;
+    }
+    syncViews();
+    markDirty();
+}
+
 void MainWindow::analyzeAudioClip(const QString& trackId, const QString& clipId,
                                   bool detectTempo, bool detectKey) {
     const daw::TrackModel* track =
@@ -19791,8 +19834,7 @@ void MainWindow::onImportAudio() {
         this, tr("Import Audio"), QString(), ui::audioNameFilter());
     if (path.isEmpty()) return;
 
-    daw::ClipMusicalAnalysisModel analysis;
-    if (!ui::prepareAudioImport(this, m_controller, path, &analysis)) return;
+    if (!ui::prepareAudioImport(this, m_controller, path)) return;
 
     QString targetId = m_selectedTrackId;
     if (targetId.isEmpty()) {
@@ -19809,8 +19851,7 @@ void MainWindow::onImportAudio() {
     }
 
     const std::string clip = m_controller.importAudio(
-        path.toStdString(), targetId.toStdString(), m_controller.positionSeconds(),
-        analysis, true);
+        path.toStdString(), targetId.toStdString(), m_controller.positionSeconds());
     if (clip.empty()) {
         QMessageBox::warning(this, tr("Import failed"),
                              tr("Could not read %1").arg(path));

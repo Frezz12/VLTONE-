@@ -23,6 +23,9 @@ func TestReleaseVersionAndArtifactValidation(t *testing.T) {
 		valid      bool
 	}{
 		{"windows-exe", "Setup.EXE", true}, {"macos-dmg", "VLT.dmg", true},
+		{"macos-pkg", "VLT.pkg", true}, {"macos-pkg", "VLT.PKG", true},
+		{"macos-pkg", "VLT.dmg", false}, {"macos-dmg", "VLT.pkg", false},
+		{"macos-pkg", "VLT.pkg.exe", false},
 		{"linux-tar-gz", "vlt.tar.gz", true}, {"linux-tar-gz", "vlt.gz", false},
 		{"windows-exe", "setup.dmg", false}, {"unknown", "setup.exe", false},
 	}

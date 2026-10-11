@@ -573,6 +573,30 @@ func TestPostgresAccountFlow(t *testing.T) {
 	if lastArtifact.Status != http.StatusConflict || lastArtifact.Body["code"] != "last_artifact_required" {
 		t.Fatalf("last published artifact was deleted: %d %v", lastArtifact.Status, lastArtifact.Body)
 	}
+	pkgPath := "/v1/admin/releases/" + releaseID + "/artifacts/macos-pkg"
+	for _, filename := range []string{"VLT.pkg", "VLT-replaced.PKG"} {
+		pkg := performMultipart(router, http.MethodPut, pkgPath, "file", filename, []byte("pkg-installer"), "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+		if pkg.Status != http.StatusOK || pkg.Body["kind"] != "macos-pkg" || pkg.Body["platform"] != "macos" || pkg.Body["file_name"] != filename {
+			t.Fatalf("PKG upload failed: %d %v", pkg.Status, pkg.Body)
+		}
+	}
+	latestMac = performJSON(router, http.MethodGet, "/v1/releases/latest?platform=macos&locale=ru", nil, "203.0.113.41:1234", nil, nil)
+	if latestMac.Status != http.StatusOK || latestMac.Body["version"] != "0.1.2" {
+		t.Fatalf("PKG-only macOS release missing: %d %v", latestMac.Status, latestMac.Body)
+	}
+	publicRelease = performJSON(router, http.MethodGet, "/v1/releases/"+url.PathEscape("0.1.2 Alpha 1")+"?locale=ru", nil, "203.0.113.41:1234", nil, nil)
+	if artifacts, ok := publicRelease.Body["artifacts"].([]any); !ok || len(artifacts) != 2 {
+		t.Fatalf("PKG replacement must preserve the Windows installer: %v", publicRelease.Body)
+	}
+	pkgDownload := httptest.NewRecorder()
+	router.ServeHTTP(pkgDownload, httptest.NewRequest(http.MethodGet, "/v1/releases/"+url.PathEscape("0.1.2 Alpha 1")+"/download/macos-pkg", nil))
+	if pkgDownload.Code != http.StatusOK || pkgDownload.Body.String() != "pkg-installer" || pkgDownload.Header().Get("Content-Disposition") != `attachment; filename=VLT-replaced.PKG` {
+		t.Fatalf("PKG download failed: %d %s %v", pkgDownload.Code, pkgDownload.Body.String(), pkgDownload.Header())
+	}
+	deletedPKG := performJSON(router, http.MethodDelete, pkgPath, nil, "203.0.113.40:1234", adminLogin.Cookies, adminHeaders)
+	if deletedPKG.Status != http.StatusNoContent {
+		t.Fatalf("PKG delete failed: %d %v", deletedPKG.Status, deletedPKG.Body)
+	}
 	badReset := performJSON(router, http.MethodPost, "/v1/admin/users/"+user.ID.String()+"/tokens/reset", map[string]string{"password": ""}, "203.0.113.40:1234", adminLogin.Cookies,
 		map[string]string{"Origin": cfg.AdminOrigin, "X-CSRF-Token": adminCSRF})
 	if badReset.Status != http.StatusUnauthorized || badReset.Body["code"] != "reauthentication_failed" {

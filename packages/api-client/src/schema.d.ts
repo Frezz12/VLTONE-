@@ -2793,7 +2793,7 @@ export interface components {
             expires_at: string;
         };
         /** @enum {string} */
-        ArtifactKind: "windows-exe" | "macos-dmg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
+        ArtifactKind: "windows-exe" | "macos-dmg" | "macos-pkg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
         ReleaseArtifact: {
             /** Format: uuid */
             id: string;

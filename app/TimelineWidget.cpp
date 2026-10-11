@@ -7723,6 +7723,7 @@ void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
     QAction* openRoll = nullptr;
     QAction* openPattern = nullptr;
     QAction* warpAudio = nullptr;
+    QAction* autoWarp = nullptr;
     QAction* detectBpm = nullptr;
     QAction* detectKey = nullptr;
     QAction* detectBoth = nullptr;
@@ -7734,10 +7735,15 @@ void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
         openPattern = menu.addAction(tr("Open Pattern Editor"));
         menu.addSeparator();
     } else if (hit.kind == daw::ClipKind::Audio) {
+        autoWarp = menu.addAction(tr("Auto Warp"));
+        autoWarp->setObjectName("AutoWarpAudioAction");
         warpAudio = menu.addAction(tr("Warp Editor"));
         warpAudio->setObjectName("WarpAudioAction");
         menu.setToolTipsVisible(true);
         const auto reason = m_controller->warpUnavailableReason(hit.trackId.toStdString(), hit.clipId.toStdString());
+        autoWarp->setEnabled(reason.empty());
+        autoWarp->setToolTip(reason.empty() ? tr("Fit this clip to the project tempo")
+                                           : QString::fromStdString(reason));
         warpAudio->setEnabled(reason.empty());
         warpAudio->setToolTip(QString::fromStdString(reason));
         detectBpm = menu.addAction(tr("Detect BPM…"));
@@ -7917,6 +7923,8 @@ void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
                 emit projectEdited();
                 update();
             }
+        } else if (chosen == autoWarp && autoWarp) {
+            emit autoWarpRequested(hit.trackId, hit.clipId);
         } else if (chosen == warpAudio && warpAudio) {
             emit openWarpEditorRequested(hit.trackId, hit.clipId);
         } else if (chosen == openRoll && openRoll) {
@@ -8643,10 +8651,7 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
     bool firstUsedLane = false;
     for (const QString& file : files) {
         const bool isMidi = ui::isMidiFile(file);
-        daw::ClipMusicalAnalysisModel analysis;
-        const bool autoWarp = laneKind != daw::TrackKind::Pattern;
-        if (!isMidi && !ui::prepareAudioImport(this, *m_controller, file,
-                                              autoWarp ? &analysis : nullptr)) continue;
+        if (!isMidi && !ui::prepareAudioImport(this, *m_controller, file)) continue;
         if (!isMidi && laneModel && laneKind == daw::TrackKind::Pattern) {
             imported |= !m_controller
                               ->addPatternSample(laneTrack.toStdString(),
@@ -8682,7 +8687,7 @@ void TimelineWidget::dropEvent(QDropEvent* ev) {
             }
         } else if (!m_controller
                         ->importAudio(file.toStdString(), trackId.toStdString(),
-                                      start, analysis, autoWarp)
+                                      start)
                         .empty()) {
             imported = true;
         }

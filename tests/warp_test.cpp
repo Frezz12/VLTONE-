@@ -134,16 +134,22 @@ int main() {
         analysis.tempo.stability = 1;
         analysis.analyzedDurationSeconds = 2;
         const auto beforeImport = controller.undoDepth();
-        const auto imported = controller.importAudio(file, importedTrack, 3.25, analysis, true);
+        const auto imported = controller.importAudio(file, importedTrack, 3.25, analysis);
         const auto current = [&] { return controller.audioClip(importedTrack, imported); };
+        check(current() && current()->warp.empty() && near(current()->durationSeconds, 2) &&
+              controller.undoDepth() == beforeImport + 1,
+              "import keeps source duration even when a confident tempo estimate is supplied");
+        check(controller.autoWarpClip(importedTrack, imported, analysis),
+              "explicit Auto Warp applies to an imported clip");
         check(!imported.empty() && current()->warp.enabled && validWarp(current()->warp) &&
               current()->warp.preservePitch && current()->warp.mode == 4 &&
               near(current()->durationSeconds, 8.0 / 3) && near(current()->startSeconds, 3.25) &&
               near(current()->warp.baselineDurationSeconds, 2),
               "Auto Warp fits the source tempo to the project without moving the clip or changing pitch");
         const auto fitted = current()->warp;
-        check(controller.undoDepth() == beforeImport + 1, "auto-fit and import share one Undo entry");
-        controller.undo(); check(!current(), "Undo removes the automatically fitted clip");
+        check(controller.undoDepth() == beforeImport + 2, "Auto Warp is a separate Undo entry after import");
+        controller.undo(); check(current() && current()->warp.empty() && near(current()->durationSeconds, 2),
+                                  "Undo restores original timing without removing the imported clip");
         controller.redo(); check(current() && current()->warp == fitted, "Redo restores the exact fitted map and stable ids");
         auto off = fitted; off.enabled = false;
         controller.setClipWarp(importedTrack, imported, off);
@@ -167,7 +173,7 @@ int main() {
 
         const auto plain = controller.importAudio(file, importedTrack, 0, analysis);
         check(controller.audioClip(importedTrack, plain)->warp.empty(),
-              "imports that did not request Auto Warp retain their existing behavior");
+              "another import remains unwarped after explicit Auto Warp");
         for (int invalid = 0; invalid < 5; ++invalid) {
             auto uncertain = analysis;
             if (invalid == 0) uncertain.tempo.status = MusicalAnalysisStatus::Unavailable;
@@ -175,16 +181,38 @@ int main() {
             if (invalid == 2) uncertain.tempo.variable = true;
             if (invalid == 3) uncertain.tempo.bpm = std::numeric_limits<double>::quiet_NaN();
             if (invalid == 4) uncertain.tempo.stability = 0;
-            const auto id = controller.importAudio(file, importedTrack, 7, uncertain, true);
+            const auto id = controller.importAudio(file, importedTrack, 7, uncertain);
+            const auto depth = controller.undoDepth();
+            check(!controller.autoWarpClip(importedTrack, id, uncertain) && controller.undoDepth() == depth,
+                  "unreliable tempo cannot create a Warp map or an Undo entry");
             const auto* unwarped = controller.audioClip(importedTrack, id);
             check(unwarped && unwarped->warp.empty() && near(unwarped->durationSeconds, 2),
                   "unreliable or missing tempo imports at its original duration");
         }
         const auto beforeTrack = controller.undoDepth();
-        const auto newTrack = controller.importAudioToNewTrack(file, 5, "Fitted track", analysis, true);
-        check(!newTrack.empty() && controller.project().findTrack(newTrack)->clips.front().warp.enabled &&
-              controller.undoDepth() == beforeTrack + 1, "new-track auto-fit is one complete import transaction");
-        controller.undo(); check(!controller.project().findTrack(newTrack), "Undo removes the new fitted track atomically");
+        const auto newTrack = controller.importAudioToNewTrack(file, 5, "Original track", analysis);
+        check(!newTrack.empty() && controller.project().findTrack(newTrack)->clips.front().warp.empty() &&
+              near(controller.project().findTrack(newTrack)->clips.front().durationSeconds, 2) &&
+              controller.undoDepth() == beforeTrack + 1, "new-track import keeps original timing in one transaction");
+        controller.undo(); check(!controller.project().findTrack(newTrack), "Undo removes the new audio track atomically");
+
+        controller.setTempo(120);
+        controller.setClipSampleParameter(importedTrack, plain, "startoffset", .25);
+        controller.setClipSampleParameter(importedTrack, plain, "endoffset", .75);
+        controller.setClipSampleParameter(importedTrack, plain, "stretch.time", 1.5);
+        const auto trimmed = [&] { return controller.audioClip(importedTrack, plain); };
+        check(controller.autoWarpClip(importedTrack, plain, analysis) &&
+              near(trimmed()->warp.markers.front().sourceSeconds, .5) &&
+              near(trimmed()->warp.markers.back().sourceSeconds, 1.5) &&
+              near(trimmed()->durationSeconds, 4.0 / 3) &&
+              near(trimmed()->warp.baselineDurationSeconds, 1.5) && current()->warp == fitted,
+              "Auto Warp fits only the trimmed source range and leaves sibling clips untouched");
+        check(controller.autoWarpClip(importedTrack, plain, analysis) && near(trimmed()->durationSeconds, 4.0 / 3),
+              "repeating Auto Warp does not compound the stretch");
+        auto trimmedOff = trimmed()->warp; trimmedOff.enabled = false;
+        controller.setClipWarp(importedTrack, plain, trimmedOff);
+        check(near(trimmed()->durationSeconds, 1.5) && near(trimmed()->offsetSeconds, .5),
+              "Warp Off restores the trimmed clip's previous duration and offset");
     }
     ProjectModel project; project.tempo = 120;
     TrackModel track; track.id = newUuid(); track.name = "Drums"; track.kind = TrackKind::Audio;

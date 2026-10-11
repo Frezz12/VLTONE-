@@ -369,6 +369,7 @@ signals:
     /// A plain audio clip wants the shared Sample/Clip Editor.
     void openSampleEditorRequested(const QString& trackId, const QString& clipId);
     void openWarpEditorRequested(const QString& trackId, const QString& clipId);
+    void autoWarpRequested(const QString& trackId, const QString& clipId);
     void openAutomationEditorRequested(const QString& trackId,
                                        const QString& clipId);
     /// Analyze exactly the audible range of an audio clip. The shell owns the

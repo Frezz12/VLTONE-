@@ -10,7 +10,7 @@ import { canAdmin } from "./admin-permissions";
 import { useAdmin } from "./use-admin";
 import { ReleaseHighlightEditor, type ReleaseHighlight } from "./release-highlight-editor";
 
-type ArtifactKind = "windows-exe" | "macos-dmg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
+type ArtifactKind = "windows-exe" | "macos-dmg" | "macos-pkg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
 type Artifact = { id: string; kind: ArtifactKind; platform: string; label: string; file_name: string; bytes: number; sha256: string; download_url: string; updated_at: string };
 type Screenshot = { id: string; caption_ru: string; caption_en: string; sort_order: number; width: number; height: number; sha256: string; url: string };
 type Release = {
@@ -24,6 +24,7 @@ type ListField = "features_ru" | "features_en" | "changes_ru" | "changes_en" | "
 const artifactDefinitions: Array<{ kind: ArtifactKind; title: string; help: string; accept: string }> = [
   { kind: "windows-exe", title: "Windows Setup", help: "Один установщик EXE", accept: ".exe" },
   { kind: "macos-dmg", title: "macOS DMG", help: "Один образ DMG", accept: ".dmg" },
+  { kind: "macos-pkg", title: "macOS PKG", help: "Установочный пакет PKG", accept: ".pkg" },
   { kind: "linux-appimage", title: "Linux AppImage", help: "Переносимый AppImage", accept: ".AppImage,.appimage" },
   { kind: "linux-deb", title: "Linux DEB", help: "Пакет Debian/Ubuntu", accept: ".deb" },
   { kind: "linux-rpm", title: "Linux RPM", help: "Пакет Fedora/RHEL", accept: ".rpm" },

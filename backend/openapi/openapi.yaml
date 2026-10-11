@@ -2419,7 +2419,7 @@ components:
         expires_at: { type: string, format: date-time }
     ArtifactKind:
       type: string
-      enum: [windows-exe, macos-dmg, linux-appimage, linux-deb, linux-rpm, linux-tar-gz, linux-tar-xz]
+      enum: [windows-exe, macos-dmg, macos-pkg, linux-appimage, linux-deb, linux-rpm, linux-tar-gz, linux-tar-xz]
     ReleaseArtifact:
       type: object
       required: [id, kind, platform, label, file_name, bytes, sha256, download_url, updated_at]

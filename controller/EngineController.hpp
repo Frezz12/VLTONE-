@@ -1173,6 +1173,9 @@ public:
                                const std::string& clipId) const;
     std::string warpUnavailableReason(const std::string& trackId, const std::string& clipId);
     bool initializeClipWarp(const std::string& trackId, const std::string& clipId);
+    /// Fit one clip to the project tempo using an explicitly requested source analysis.
+    bool autoWarpClip(const std::string& trackId, const std::string& clipId,
+                      const ClipMusicalAnalysisModel& sourceAnalysis);
     bool setClipWarp(const std::string& trackId, const std::string& clipId,
                      const ClipWarpModel& warp, const std::string& label = "Edit Warp");
     void beginWarpEdit(const std::string& trackId, const std::string& clipId);
@@ -1311,15 +1314,12 @@ public:
     std::string importAudioToNewTrack(const std::string& filePath,
                                       double startSeconds,
                                       const std::string& trackName = {},
-                                      const ClipMusicalAnalysisModel& analysis = {},
-                                      bool autoWarp = false);
-    /// Auto Warp uses a prepared source-tempo estimate. No analysis runs here;
-    /// the original duration and fitted map belong to the same import undo.
+                                      const ClipMusicalAnalysisModel& analysis = {});
+    /// Import at the original duration. Tempo fitting is an explicit clip edit.
     std::string importAudio(const std::string& filePath,
                             const std::string& trackId,
                             double startSeconds,
-                            const ClipMusicalAnalysisModel& analysis = {},
-                            bool autoWarp = false);
+                            const ClipMusicalAnalysisModel& analysis = {});
     struct ClipStartChange {
         std::string trackId;
         std::string clipId;

@@ -3,7 +3,7 @@ export type ReleaseHighlight = components["schemas"]["ReleaseHighlight"];
 
 export type ReleaseArtifact = {
   id: string;
-  kind: "windows-exe" | "macos-dmg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
+  kind: "windows-exe" | "macos-dmg" | "macos-pkg" | "linux-appimage" | "linux-deb" | "linux-rpm" | "linux-tar-gz" | "linux-tar-xz";
   platform: "windows" | "macos" | "linux";
   label: string;
   file_name: string;
