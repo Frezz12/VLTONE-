@@ -3,6 +3,7 @@
 #include "Host/PluginTypes.hpp"
 #include "Internal/EqualizerParams.hpp"
 #include "Internal/GravityParams.hpp"
+#include "Internal/MorphProgram.hpp"
 #include "Internal/SlicerParams.hpp"
 
 #include <bitset>
@@ -13,6 +14,8 @@
 #include <utility>
 
 namespace daw {
+
+using MorphSnapshot = plugins::morph::MorphSnapshot;
 
 namespace plugins::sampler { struct SampleData; }
 

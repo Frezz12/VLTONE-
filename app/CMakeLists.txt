@@ -23,6 +23,11 @@ else()
     find_package(Qt6 ${DAW_QT_VERSION} REQUIRED COMPONENTS
         ${DAW_QT_COMPONENTS})
 endif()
+if(NOT TARGET Qt6::QWebpPlugin)
+    message(FATAL_ERROR
+        "Morph Canvas requires WebP support. Install the Qt Image Formats "
+        "module (aqt: --modules qtimageformats; Homebrew: qtimageformats).")
+endif()
 if(NOT TARGET Qt6::GuiPrivate)
     # Qt 6.8 exports this target with Gui; newer installations split it into
     # a separate package. Only the transitional path triangulator needs it.
@@ -310,6 +315,23 @@ if(DAW_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
+    qt_add_executable(morph_ui_test
+        ../tests/morph_ui_test.cpp MorphPanel.cpp MorphPanel.hpp
+        Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(morph_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(morph_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
+    if(APPLE)
+        target_link_libraries(morph_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME morph_ui_test COMMAND morph_ui_test)
+    set_tests_properties(morph_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 180)
+    if(WIN32)
+        set_tests_properties(morph_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     qt_add_executable(cla2a_ui_test
         ../tests/cla2a_ui_test.cpp Cla2aPanel.cpp Cla2aPanel.hpp
         Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp
@@ -415,6 +437,19 @@ list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/ScrollMotion.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ScrollMotion.hpp")
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+if(WIN32)
+    # QImageReader discovers this at runtime; linking QtGui alone does not
+    # deploy the optional image codec beside a development executable.
+    add_custom_target(vlt_image_formats
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/imageformats"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:Qt6::QWebpPlugin>" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/imageformats/"
+        VERBATIM)
+    add_dependencies(daw vlt_image_formats)
+    if(TARGET morph_ui_test)
+        add_dependencies(morph_ui_test vlt_image_formats)
+    endif()
+endif()
 # A targeted app build must not leave an older scanner beside the new host.
 # They share a wire protocol and the plugin compatibility checks.
 add_dependencies(daw daw_scan creator_tools)
@@ -467,7 +502,7 @@ if(TARGET browser_navigation_test)
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
 endif()
 
-foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test)
+foreach(native_target morph_ui_test modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test)
     if(TARGET ${native_target})
         # Test captures must use the same Latin/Cyrillic faces as the app.
         qt_add_resources(${native_target} "${native_target}_fonts"
@@ -830,7 +865,7 @@ if(DAW_PACKAGE)
 qt6_deploy_runtime_dependencies(
     EXECUTABLE \"$<TARGET_FILE:daw>\"
     GENERATE_QT_CONF
-    DEPLOY_TOOL_OPTIONS --include-plugins qoffscreen --qmldir \"${CMAKE_CURRENT_SOURCE_DIR}/graphics/qml\"
+    DEPLOY_TOOL_OPTIONS --include-plugins qoffscreen,qwebp --qmldir \"${CMAKE_CURRENT_SOURCE_DIR}/graphics/qml\"
 )")
     else()
         set(DAW_QT_DEPLOY_OPTIONS "-qmldir=${CMAKE_CURRENT_SOURCE_DIR}/graphics/qml")

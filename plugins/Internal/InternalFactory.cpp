@@ -10,6 +10,7 @@
 #include "Internal/GraphitInstance.hpp"
 #include "Internal/ModulationInstance.hpp"
 #include "Internal/ModulationRackInstance.hpp"
+#include "Internal/MorphInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
@@ -95,6 +96,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
     }
     if (descriptor.uid == mini::kUid) return std::make_unique<mini::MiniModuleInstance>();
     if (descriptor.uid == "daw.modulation") return std::make_unique<modulation::ModulationRackInstance>();
+    if (descriptor.uid == "daw.morph") return std::make_unique<morph::MorphInstance>();
     if (descriptor.uid == "daw.doubler") return std::make_unique<modulation::DoublerInstance>();
     if (descriptor.uid == "daw.doubler-pro") return std::make_unique<modulation::DoublerProInstance>();
     if (descriptor.uid == "daw.chorus") return std::make_unique<modulation::ChorusInstance>();
@@ -128,7 +130,8 @@ std::vector<PluginDescriptor> builtinPlugins() {
             modulation::descriptorFor(modulation::Kind::Chorus),
             modulation::descriptorFor(modulation::Kind::Flanger),
             modulation::descriptorFor(modulation::Kind::Phaser),
-            modulation::ModulationRackInstance::staticDescriptor()};
+            modulation::ModulationRackInstance::staticDescriptor(),
+            morph::MorphInstance::staticDescriptor()};
 }
 
 } // namespace daw::plugins

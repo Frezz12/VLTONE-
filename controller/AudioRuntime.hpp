@@ -184,6 +184,9 @@ public:
     std::optional<EqualizerResponse> equalizerResponse(const AudioPluginAddress& address) const;
     std::optional<std::array<double, 180>> modulationResponse(const AudioPluginAddress& address) const;
     std::optional<GravitySnapshot> gravitySnapshot(const AudioPluginAddress& address);
+    std::optional<MorphSnapshot> morphSnapshot(const AudioPluginAddress& address) const;
+    bool setMorphCanvas(const AudioPluginAddress& address, const plugins::morph::MorphCanvasProgram& program,
+        const std::string& category);
     bool setInsertPresetReference(const AudioPluginAddress& address, std::string kind, std::string name);
     bool setEqualizerAnalyzer(const AudioPluginAddress& address, const plugins::equalizer::AnalyzerConfig& config);
     bool auditionEqualizerBand(const AudioPluginAddress& address, int band);

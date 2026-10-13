@@ -7,6 +7,7 @@
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/GravityInstance.hpp"
 #include "Internal/ModulationRackInstance.hpp"
+#include "Internal/MorphInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SlicerInstance.hpp"
@@ -349,6 +350,8 @@ bool AudioRuntime::setInsertPresetReference(const AudioPluginAddress& address, s
         plugin->setPresetReference(std::move(kind), std::move(name));
     else if (auto* plugin = dynamic_cast<plugins::modulation::ModulationInstance*>(instance))
         plugin->setPresetReference(std::move(kind), std::move(name));
+    else if (auto* plugin = dynamic_cast<plugins::morph::MorphInstance*>(instance))
+        plugin->setPresetReference(std::move(kind), std::move(name));
     else return false;
     return true;
 }
@@ -374,6 +377,16 @@ bool AudioRuntime::copyEqualizerComparison(const AudioPluginAddress& address) {
     plugin->captureComparison(source);
     plugin->copyComparison(source, source == 'A' ? 'B' : 'A');
     return true;
+}
+
+std::optional<MorphSnapshot> AudioRuntime::morphSnapshot(const AudioPluginAddress& address) const {
+    const auto* plugin=dynamic_cast<const plugins::morph::MorphInstance*>(pluginInstance(address));
+    if(!plugin)return std::nullopt;
+    return MorphSnapshot{plugin->state(),plugin->telemetry()};
+}
+bool AudioRuntime::setMorphCanvas(const AudioPluginAddress& address,const plugins::morph::MorphCanvasProgram& program,const std::string& category) {
+    auto* plugin=dynamic_cast<plugins::morph::MorphInstance*>(pluginInstance(address));
+    return plugin&&plugin->setCanvas(program,&category);
 }
 
 bool AudioRuntime::setGravityFrozen(const AudioPluginAddress& address, bool frozen) {

@@ -1005,6 +1005,10 @@ public:
     bool switchEqualizerComparison(const std::string& channelId, const std::string& insertId, char slot);
     bool copyEqualizerComparison(const std::string& channelId, const std::string& insertId);
     bool setGravityFrozen(const std::string& channelId, const std::string& insertId, bool frozen);
+    std::optional<MorphSnapshot> morphSnapshot(const std::string& channelId, const std::string& insertId) const;
+    bool applyMorphState(const std::string& channelId, const std::string& insertId,
+        const plugins::morph::State& state, const std::string& label = "Change Morph", bool history = true,
+        const plugins::morph::State* previous = nullptr);
     bool clearGravityTail(const std::string& channelId, const std::string& insertId);
 
     /// Project-wide VLT Pitch edits, including Clip FX, sampler FX and master.

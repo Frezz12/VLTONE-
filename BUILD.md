@@ -113,7 +113,7 @@ vulnerable versions.
 Dependencies via Homebrew:
 
 ```bash
-brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
+brew install cmake ninja qt qtmultimedia qtwebengine qtserialport qtimageformats portaudio rtmidi libsndfile nlohmann-json
 ```
 
 Avoid **Qt 6.11.0 and 6.11.1 on macOS**: native image conversion releases its
@@ -227,8 +227,9 @@ The release toolchain is deliberately narrow and reproducible:
 - Windows SDK **10.0.26100.0**;
 - CMake ≥ 3.24 and Ninja;
 - Qt **6.8.3** `msvc2022_64`, with the mandatory **Qt Multimedia**,
-  **Qt WebEngine**, **Qt WebChannel**, **Qt Positioning**, **Qt SerialPort**
-  and **Qt WebSockets** modules, plus Qt SVG and Linguist tools;
+  **Qt WebEngine**, **Qt WebChannel**, **Qt Positioning**, **Qt SerialPort**,
+  **Qt WebSockets** and **Qt Image Formats** modules, plus Qt SVG and Linguist tools;
+  Image Formats supplies the WebP decoder used by Morph Canvas (`qtimageformats` in aqt);
 - Inno Setup **6.7.1** for the production installer;
 - Git (the build script checks out the pinned vcpkg revision itself).
 

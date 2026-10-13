@@ -12,6 +12,7 @@
 #include "GraphitPanel.hpp"
 #include "PitchCorrectorPanel.hpp"
 #include "ModulationPanel.hpp"
+#include "MorphPanel.hpp"
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
@@ -872,7 +873,18 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (trustedInternal && daw::plugins::utility::isUtilityUid(descriptorUid)) {
+    if (trustedInternal && descriptorUid == "daw.morph") {
+        auto* panel = new MorphPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &MorphPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &MorphPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("morph"));
+        setMinimumSize(800, 579);
+        m_fallbackContentSize = QSize(1152, 807);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && daw::plugins::utility::isUtilityUid(descriptorUid)) {
         auto* binding = new RackParameterBinding(m_controller, m_channelId, m_insertId, this);
         auto* panel = new UtilityPanel(binding, QString::fromStdString(descriptorUid), this);
         binding->setParent(panel);

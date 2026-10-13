@@ -403,6 +403,10 @@ set_tests_properties(graphit_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "FAIL;FAILURES PRESENT")
 
 add_executable(modulation_test modulation_test.cpp)
+add_executable(morph_test morph_test.cpp)
+target_link_libraries(morph_test PRIVATE daw_pluginhost)
+add_test(NAME morph_test COMMAND morph_test)
+set_tests_properties(morph_test PROPERTIES TIMEOUT 180)
 target_link_libraries(modulation_test PRIVATE daw_pluginhost)
 add_test(NAME modulation_test COMMAND modulation_test)
 set_tests_properties(modulation_test PROPERTIES TIMEOUT 120)
