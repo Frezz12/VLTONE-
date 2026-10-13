@@ -16,7 +16,7 @@ for tool in pg_restore psql aws sha256sum systemctl awk; do
 done
 [[ -d "$backup" && -r "$backup/MANIFEST" && -r "$backup/SHA256SUMS" &&
    -r "$backup/postgresql.dump" ]] || die "backup is incomplete"
-for unit in vlt-account-api vlt-account-web vlt-account-admin; do
+for unit in vlt-account-api vlt-account-web vlt-account-admin vlt-account-forum vlt-forum-media; do
     systemctl is-active --quiet "$unit" && die "$unit must be stopped"
 done
 
@@ -33,6 +33,14 @@ manifest_value() { awk -F= -v key="$1" '$1 == key {sub(/^[^=]*=/, ""); print; ex
 [[ "$COLLAB_OBJECT_BUCKET" == "$expected_bucket" ]] || die "configured bucket does not match"
 actual_database="$(psql "$DATABASE_URL" -XAtc 'SELECT current_database()')"
 [[ "$actual_database" == "$expected_database" ]] || die "connected database does not match"
+forum_bucket="$(manifest_value forum_bucket)"
+if [[ -n "$forum_bucket" ]]; then
+    [[ "$forum_bucket" == "${FORUM_OBJECT_BUCKET:-}" && "$forum_bucket" != "$expected_bucket" ]] || die "configured forum bucket does not match backup or overlaps collaboration"
+    [[ -d "$backup/forum/objects" && -d "$backup/forum/media" && -d "$backup/forum/staging" ]] || die "forum backup is incomplete"
+    : "${FORUM_OBJECT_ENDPOINT:?FORUM_OBJECT_ENDPOINT is required}"
+    : "${FORUM_OBJECT_ACCESS_KEY_ID:?FORUM_OBJECT_ACCESS_KEY_ID is required}"
+    : "${FORUM_OBJECT_SECRET_ACCESS_KEY:?FORUM_OBJECT_SECRET_ACCESS_KEY is required}"
+fi
 (cd "$backup" && sha256sum -c SHA256SUMS)
 
 export AWS_ACCESS_KEY_ID="$COLLAB_OBJECT_ACCESS_KEY_ID"
@@ -51,4 +59,13 @@ aws "${endpoint[@]}" s3 rm "s3://$expected_bucket/uploads/" --recursive --only-s
 aws "${endpoint[@]}" s3 rm "s3://$expected_bucket/blobs/" --recursive --only-show-errors
 aws "${endpoint[@]}" s3 sync "$backup/s3/uploads/" "s3://$expected_bucket/uploads/" --only-show-errors
 aws "${endpoint[@]}" s3 sync "$backup/s3/blobs/" "s3://$expected_bucket/blobs/" --only-show-errors
+if [[ -n "$forum_bucket" ]]; then
+    export AWS_ACCESS_KEY_ID="$FORUM_OBJECT_ACCESS_KEY_ID"
+    export AWS_SECRET_ACCESS_KEY="$FORUM_OBJECT_SECRET_ACCESS_KEY"
+    export AWS_DEFAULT_REGION="${FORUM_OBJECT_REGION:-us-east-1}"
+    export AWS_SESSION_TOKEN="${FORUM_OBJECT_SESSION_TOKEN:-}"
+    for prefix in objects media staging; do
+        aws --endpoint-url "$FORUM_OBJECT_ENDPOINT" s3 sync "$backup/forum/$prefix/" "s3://$forum_bucket/$prefix/" --delete --only-show-errors
+    done
+fi
 echo "Restore completed. Run migrations and smoke tests before starting services."

@@ -7,8 +7,8 @@
     "pnpm": "11.3.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @vlt/web --filter @vlt/admin dev",
-    "build": "pnpm --filter @vlt/api-client build && pnpm --filter @vlt/web build && pnpm --filter @vlt/admin build",
+    "dev": "pnpm --parallel --filter @vlt/web --filter @vlt/admin --filter @vlt/forum dev",
+    "build": "pnpm --filter @vlt/api-client build && pnpm --filter @vlt/web build && pnpm --filter @vlt/admin build && pnpm --filter @vlt/forum build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "generate:api": "pnpm --filter @vlt/api-client generate",

@@ -17,6 +17,14 @@ done
 release="$(readlink -e -- "$release")" || die "release does not exist"
 [[ -x "$release/bin/vlt-api" && -x "$release/bin/vlt-migrate" ]] || die "release binaries are incomplete"
 [[ -x "$release/web/start" && -x "$release/admin/start" ]] || die "standalone web bundles are incomplete"
+forum_release=false
+if [[ -d "$release/forum" || -e "$release/bin/vlt-forum-media" ]]; then
+    forum_release=true
+    [[ -x "$release/forum/start" && -x "$release/bin/vlt-forum-media" ]] || die "forum bundle is incomplete"
+    for tool in ffmpeg ffprobe; do command -v "$tool" >/dev/null || die "missing tool: $tool"; done
+    ffmpeg -hide_banner -encoders 2>/dev/null | grep libvpx-vp9 >/dev/null || die "FFmpeg requires libvpx-vp9"
+    ffmpeg -hide_banner -encoders 2>/dev/null | grep libx264 >/dev/null || die "FFmpeg requires libx264"
+fi
 (cd "$release" && sha256sum -c SHA256SUMS >/dev/null)
 
 [[ -r "$ENV_FILE" ]] || die "missing $ENV_FILE"
@@ -49,6 +57,11 @@ positive AI_GLOBAL_MONTHLY_TOKEN_LIMIT
 if [[ "${AI_ENABLED:-true}" == true ]]; then
     require AI_CREDENTIALS_KEY
     [[ "$AI_CREDENTIALS_KEY" != *CHANGE_ME* ]] || die "AI_CREDENTIALS_KEY still contains CHANGE_ME"
+fi
+if [[ "$forum_release" == true ]]; then
+    for name in FORUM_ORIGIN FORUM_OBJECT_ENDPOINT FORUM_OBJECT_REGION FORUM_OBJECT_BUCKET FORUM_OBJECT_ACCESS_KEY_ID FORUM_OBJECT_SECRET_ACCESS_KEY; do require "$name"; [[ "${!name}" != *CHANGE_ME* ]] || die "$name still contains CHANGE_ME"; done
+    [[ "$FORUM_ORIGIN" == https://* && "$FORUM_OBJECT_ENDPOINT" == https://* ]] || die "forum origins must use HTTPS"
+    [[ "$FORUM_OBJECT_BUCKET" != "${COLLAB_OBJECT_BUCKET:-}" ]] || die "forum and collaboration require separate buckets"
 fi
 pg_isready -d "$DATABASE_URL" >/dev/null || die "PostgreSQL is not ready"
 [[ -d "$STORAGE_ROOT" ]] || die "STORAGE_ROOT does not exist: $STORAGE_ROOT"

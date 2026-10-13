@@ -452,7 +452,8 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
     tab->view->setProperty("dawWebInput", true);
 
     auto* page = tab->view->page();
-    page->navigationRejected = [this](const QUrl& rejected) {
+    page->navigationRejected = [this, tab](const QUrl& rejected) {
+        if (rejected.scheme() == QLatin1String("vltone")) { emit externalNavigationRequested(rejected,tab->view->url()); return; }
         emit statusMessage(
             tr("Blocked unsupported web address: %1").arg(rejected.toDisplayString()));
     };
@@ -1164,6 +1165,7 @@ QWidget* WebBrowserPanel::buildDownloadBar() {
     m_cancelDownload->setFocusPolicy(Qt::StrongFocus);
     connect(m_cancelDownload, &QAbstractButton::clicked, this, [this] {
         if (m_visibleDownload) m_visibleDownload->cancel();
+        else m_downloadBar->hide();
     });
 
     row->addWidget(mark);
@@ -1614,6 +1616,10 @@ void WebBrowserPanel::showBrowserMenu() {
         QApplication::clipboard()->setText(currentPageUrl());
     });
     menu.addSeparator();
+    if (contentDownloadCompleted) {
+        auto* package = menu.addAction(tr("Package saved project for forum…"));
+        connect(package, &QAction::triggered, this, &WebBrowserPanel::exportForumPackageRequested);
+    }
     QAction* settings = menu.addAction(tr("Browser settings…"));
     connect(settings, &QAction::triggered, this,
             &WebBrowserPanel::settingsRequested);
@@ -1769,7 +1775,8 @@ bool WebBrowserPanel::handleUndoRedo(bool redo) {
 
 void WebBrowserPanel::acceptDownload(QWebEngineDownloadRequest* request) {
     if (!request) return;
-    const QString directory = ui::webprefs::downloadDirectory();
+    QString directory = contentDownloadDirectory ? contentDownloadDirectory(request) : QString();
+    if (directory.isEmpty()) directory = ui::webprefs::downloadDirectory();
     if (!QDir().mkpath(directory)) {
         request->cancel();
         emit statusMessage(tr("Could not create the Downloads folder"));
@@ -1809,11 +1816,15 @@ void WebBrowserPanel::finishDownload(QWebEngineDownloadRequest* request) {
                              .filePath(request->downloadFileName());
     const QString mime = request->mimeType();
     emit statusMessage(tr("Downloaded %1").arg(QFileInfo(path).fileName()));
-    if (!request->isSavePageDownload()) probeCompletedDownload(path, mime);
+    if (!request->isSavePageDownload() && !(contentDownloadCompleted && contentDownloadCompleted(request,path))) probeCompletedDownload(path, mime);
     removeDownload(request);
 }
 
 void WebBrowserPanel::removeDownload(QWebEngineDownloadRequest* request) {
+    if (request->state() != QWebEngineDownloadRequest::DownloadCompleted) {
+        const auto staging = request->property("vltForumStaging").toString();
+        if (!staging.isEmpty()) QDir(staging).removeRecursively();
+    }
     m_downloads.removeAll(request);
     if (m_visibleDownload == request) {
         m_visibleDownload.clear();
@@ -2009,4 +2020,13 @@ QPushButton#WebBookmarksButton:hover, QPushButton#WebBookmarkChip:hover,
 QPushButton#WebBookmarksMore:hover { color: #f5f5f7; background: #252630; }
 )"));
     update();
+}
+
+void WebBrowserPanel::refreshSite(const QUrl& origin) {
+    for (auto* tab:m_tabs) {const auto url=tab->view->url();if(url.scheme()==origin.scheme()&&url.host()==origin.host()&&url.port()==origin.port())tab->view->reload();}
+}
+void WebBrowserPanel::showContentResult(const QString& message) {
+    m_downloadName->setText(message);m_downloadName->setToolTip(message);
+    m_downloadProgress->setRange(0,1000);m_downloadProgress->setValue(1000);
+    m_downloadBar->show();
 }

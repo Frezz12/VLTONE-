@@ -1,0 +1,33 @@
+[Unit]
+Description=VLT forum video processing and storage cleanup
+After=network-online.target vlt-account-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vltaccount
+Group=vltaccount
+WorkingDirectory=/opt/vlt-account-platform/current
+EnvironmentFile=/etc/vlt-account/api.env
+ExecStart=/opt/vlt-account-platform/current/bin/vlt-forum-media
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+Nice=10
+CPUQuota=200%
+MemoryMax=2G
+TasksMax=64
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

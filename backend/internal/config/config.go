@@ -17,6 +17,7 @@ import (
 )
 
 type Config struct {
+	ForumConfig
 	LegalProfile         legal.Profile
 	Environment          string
 	HTTPAddr             string
@@ -81,6 +82,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
+		ForumConfig:          loadForumConfig(),
 		LegalProfile:         legal.Current,
 		Environment:          env("APP_ENV", "development"),
 		HTTPAddr:             env("HTTP_ADDR", ":8080"),
@@ -150,6 +152,10 @@ func Load() (Config, error) {
 		c.CollabAllowedUserIDs = append(c.CollabAllowedUserIDs, id)
 	}
 	root, err := filepath.Abs(c.StorageRoot)
+	if err := c.ForumConfig.validate(c.Environment == "production"); err != nil {
+		return Config{}, err
+	}
+
 	if err != nil {
 		return Config{}, fmt.Errorf("storage root: %w", err)
 	}

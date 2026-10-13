@@ -81,3 +81,5 @@ export class VltApiClient {
 }
 
 export const api = new VltApiClient();
+
+export type { ForumAttachment, ForumAuthor, ForumContent, ForumArticle, ForumTopic, ForumReply, ForumSection, ForumProfile, ForumNotification, ForumConfig, ForumUpload } from "./forum";

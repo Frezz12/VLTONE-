@@ -85,6 +85,9 @@ func (s *Server) revokeOwnDevice(w http.ResponseWriter, r *http.Request) {
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
+		if e := tx.Model(&model.WebSession{}).Where("device_id = ? AND revoked_at IS NULL", deviceID).Update("revoked_at", now).Error; e != nil {
+			return e
+		}
 		return tx.Model(&model.DesktopSession{}).
 			Where("device_id = ? AND revoked_at IS NULL", deviceID).
 			Update("revoked_at", now).Error

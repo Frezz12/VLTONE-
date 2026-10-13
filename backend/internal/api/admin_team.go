@@ -22,7 +22,7 @@ var adminPermissionCatalog = []string{
 	"dashboard.read", "users.read", "users.write", "bugs.read", "bugs.write", "crashes.read",
 	"releases.read", "releases.write", "backgrounds.read", "backgrounds.write",
 	"models.read", "models.write", "prompts.read", "prompts.write", "audit.read",
-	"tasks.read", "tasks.write",
+	"tasks.read", "tasks.write", "forum.read", "forum.write",
 }
 
 func (s *Server) resolveAdminIdentity(admin *model.AdminUser) bool {

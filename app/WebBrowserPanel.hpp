@@ -45,6 +45,13 @@ public:
                              QWebEngineProfile* profile = nullptr);
     ~WebBrowserPanel() override;
 
+    // Optional application integration keeps standalone browser/audio tests
+    // independent of account and content-library services.
+    std::function<QString(QWebEngineDownloadRequest*)> contentDownloadDirectory;
+    std::function<bool(QWebEngineDownloadRequest*,const QString&)> contentDownloadCompleted;
+    ui::graphics::BrowserProfile* browserProfile() const { return m_profile; }
+    void refreshSite(const QUrl& origin);
+    void showContentResult(const QString& message);
     void reloadSettings();
     bool ownsFocus() const;
     bool handleEditCommand(EditCommand command);
@@ -66,6 +73,8 @@ public:
     void reopenClosedTabForTest();
 
 signals:
+    void exportForumPackageRequested();
+    void externalNavigationRequested(const QUrl& target, const QUrl& source);
     void statusMessage(const QString& text);
     void settingsRequested();
     void audioDownloadReady(

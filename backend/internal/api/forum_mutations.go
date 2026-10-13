@@ -14,24 +14,30 @@ import (
 )
 
 type forumTopicInput struct {
-	SectionID uuid.UUID `json:"section_id"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
+	AttachmentIDs []uuid.UUID `json:"attachment_ids"`
+	SectionID     uuid.UUID   `json:"section_id"`
+	Title         string      `json:"title"`
+	Body          string      `json:"body"`
 }
 
 type forumPostInput struct {
-	Body string `json:"body"`
+	AttachmentIDs []uuid.UUID `json:"attachment_ids"`
+	Body          string      `json:"body"`
 }
 
 type forumArticleInput struct {
-	Title   string `json:"title"`
-	Excerpt string `json:"excerpt"`
-	Body    string `json:"body"`
-	Status  string `json:"status"`
+	Kind          string      `json:"kind"`
+	AttachmentIDs []uuid.UUID `json:"attachment_ids"`
+	Title         string      `json:"title"`
+	Excerpt       string      `json:"excerpt"`
+	Body          string      `json:"body"`
+	Status        string      `json:"status"`
 }
 
 type forumCommentInput struct {
-	Body string `json:"body"`
+	ParentID      *uuid.UUID  `json:"parent_id"`
+	AttachmentIDs []uuid.UUID `json:"attachment_ids"`
+	Body          string      `json:"body"`
 }
 
 type forumReactionInput struct {
@@ -40,6 +46,7 @@ type forumReactionInput struct {
 }
 
 type forumProfileInput struct {
+	AvatarID        *uuid.UUID  `json:"avatar_id"`
 	About           string      `json:"about"`
 	Location        string      `json:"location"`
 	FamilyStatus    string      `json:"family_status"`
@@ -93,8 +100,7 @@ func (s *Server) forumCreateTopic(w http.ResponseWriter, r *http.Request) {
 		Title: input.Title, Body: input.Body, Status: model.ForumStatusPublished,
 		LastPostAt: time.Now().UTC(),
 	}
-	if err := s.DB.Create(&topic).Error; err != nil {
-		writeError(w, r, http.StatusInternalServerError, "topic_create_failed", "Topic could not be created.", nil)
+	if err := s.saveForumContent(r, &topic, "topic", topic.ID, input.AttachmentIDs, false); forumFailure(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -128,8 +134,7 @@ func (s *Server) forumUpdateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	topic.Title, topic.Body = input.Title, input.Body
-	if err := s.DB.Save(&topic).Error; err != nil {
-		writeError(w, r, http.StatusInternalServerError, "topic_update_failed", "Topic could not be updated.", nil)
+	if err := s.saveForumContent(r, &topic, "topic", topic.ID, input.AttachmentIDs, true); forumFailure(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -195,7 +200,16 @@ func (s *Server) forumCreatePost(w http.ResponseWriter, r *http.Request) {
 		Body: input.Body, Status: model.ForumStatusPublished,
 	}
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&topic, "id = ? AND status = ? AND locked = false", topic.ID, "published").Error; err != nil {
+			return err
+		}
 		if err := tx.Create(&post).Error; err != nil {
+			return err
+		}
+		if err := bindForumAttachments(tx, user.ID, "post", post.ID, input.AttachmentIDs); err != nil {
+			return err
+		}
+		if err := forumNotify(tx, topic.AuthorID, user.ID, "reply", "topic", topic.ID); err != nil {
 			return err
 		}
 		return tx.Model(&model.ForumTopic{}).Where("id = ?", topic.ID).Updates(map[string]any{
@@ -236,8 +250,7 @@ func (s *Server) forumUpdatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	post.Body = input.Body
-	if err := s.DB.Save(&post).Error; err != nil {
-		writeError(w, r, http.StatusInternalServerError, "post_update_failed", "Reply could not be updated.", nil)
+	if err := s.saveForumContent(r, &post, "post", post.ID, input.AttachmentIDs, true); forumFailure(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -258,12 +271,22 @@ func (s *Server) forumDeletePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var parent model.ForumTopic
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&parent, "id = ?", post.TopicID).Error; e != nil {
+			return e
+		}
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, "id = ? AND author_id = ?", postID, user.ID).Error; e != nil {
+			return e
+		}
 		if err := tx.Delete(&post).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("target_type = ? AND target_id = ?", model.ForumTargetPost, postID).
 			Delete(&model.ForumReaction{}).Error; err != nil {
 			return err
+		}
+		if post.Status != "published" {
+			return nil
 		}
 		return tx.Model(&model.ForumTopic{}).Where("id = ?", post.TopicID).
 			UpdateColumn("reply_count", gorm.Expr("GREATEST(reply_count - 1, 0)")).Error
@@ -289,9 +312,19 @@ func (s *Server) forumCreateArticle(w http.ResponseWriter, r *http.Request) {
 	input.Excerpt = strings.TrimSpace(input.Excerpt)
 	input.Body = strings.TrimSpace(input.Body)
 	fields := map[string]string{}
-	forumLengthError(fields, "title", input.Title, 3, 200)
+	if input.Kind == "" {
+		input.Kind = "article"
+	}
+	if input.Kind != "post" && input.Kind != "article" {
+		fields["kind"] = "Invalid publication kind"
+	}
+	minimumTitle := 3
+	if input.Kind == "post" {
+		minimumTitle = 0
+	}
+	forumLengthError(fields, "title", input.Title, minimumTitle, 200)
 	forumLengthError(fields, "excerpt", input.Excerpt, 0, 500)
-	forumLengthError(fields, "body", input.Body, 1, 200_000)
+	forumLengthError(fields, "body", input.Body, 0, 200_000)
 	if len(fields) > 0 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", "Check the highlighted fields.", fields)
 		return
@@ -302,14 +335,13 @@ func (s *Server) forumCreateArticle(w http.ResponseWriter, r *http.Request) {
 	}
 	article := model.ForumArticle{
 		ID: uuid.New(), AuthorID: user.ID, Title: input.Title,
-		Excerpt: input.Excerpt, Body: input.Body, Status: status,
+		Excerpt: input.Excerpt, Body: input.Body, Status: status, Kind: input.Kind,
 	}
 	if status == model.ForumStatusPublished {
 		now := time.Now().UTC()
 		article.PublishedAt = &now
 	}
-	if err := s.DB.Create(&article).Error; err != nil {
-		writeError(w, r, http.StatusInternalServerError, "article_create_failed", "Article could not be created.", nil)
+	if err := s.saveForumContent(r, &article, "article", article.ID, input.AttachmentIDs, false); forumFailure(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -332,9 +364,19 @@ func (s *Server) forumUpdateArticle(w http.ResponseWriter, r *http.Request) {
 	input.Excerpt = strings.TrimSpace(input.Excerpt)
 	input.Body = strings.TrimSpace(input.Body)
 	fields := map[string]string{}
-	forumLengthError(fields, "title", input.Title, 3, 200)
+	if input.Kind == "" {
+		input.Kind = "article"
+	}
+	if input.Kind != "post" && input.Kind != "article" {
+		fields["kind"] = "Invalid publication kind"
+	}
+	minimumTitle := 3
+	if input.Kind == "post" {
+		minimumTitle = 0
+	}
+	forumLengthError(fields, "title", input.Title, minimumTitle, 200)
 	forumLengthError(fields, "excerpt", input.Excerpt, 0, 500)
-	forumLengthError(fields, "body", input.Body, 1, 200_000)
+	forumLengthError(fields, "body", input.Body, 0, 200_000)
 	if len(fields) > 0 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_failed", "Check the highlighted fields.", fields)
 		return
@@ -344,6 +386,11 @@ func (s *Server) forumUpdateArticle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "article_not_found", "Article was not found.", nil)
 		return
 	}
+	if article.Status == "hidden" {
+		writeError(w, r, 403, "publication_hidden", "This publication was hidden by a moderator.", nil)
+		return
+	}
+	article.Kind = input.Kind
 	article.Title, article.Excerpt, article.Body = input.Title, input.Excerpt, input.Body
 	if input.Status == model.ForumStatusDraft || input.Status == model.ForumStatusPublished {
 		if article.Status != model.ForumStatusPublished && input.Status == model.ForumStatusPublished {
@@ -352,8 +399,7 @@ func (s *Server) forumUpdateArticle(w http.ResponseWriter, r *http.Request) {
 		}
 		article.Status = input.Status
 	}
-	if err := s.DB.Save(&article).Error; err != nil {
-		writeError(w, r, http.StatusInternalServerError, "article_update_failed", "Article could not be updated.", nil)
+	if err := s.saveForumContent(r, &article, "article", article.ID, input.AttachmentIDs, true); forumFailure(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -413,15 +459,34 @@ func (s *Server) forumCreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comment := model.ForumComment{
-		ID: uuid.New(), ArticleID: article.ID, AuthorID: user.ID,
+		ID: uuid.New(), ArticleID: article.ID, AuthorID: user.ID, ParentID: input.ParentID,
 		Body: input.Body, Status: model.ForumStatusPublished,
 	}
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&article, "id = ? AND status = 'published'", article.ID).Error; err != nil {
+			return err
+		}
+		if input.ParentID != nil {
+			var parent model.ForumComment
+			if e := tx.First(&parent, "id = ? AND article_id = ? AND status = 'published'", *input.ParentID, article.ID).Error; e != nil {
+				return e
+			}
+			if parent.AuthorID != article.AuthorID {
+				if e := forumNotify(tx, parent.AuthorID, user.ID, "comment_reply", "article", article.ID); e != nil {
+					return e
+				}
+			}
+		}
 		if err := tx.Create(&comment).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.ForumArticle{}).Where("id = ?", article.ID).
-			UpdateColumn("comment_count", gorm.Expr("comment_count + 1")).Error
+		if e := bindForumAttachments(tx, user.ID, "comment", comment.ID, input.AttachmentIDs); e != nil {
+			return e
+		}
+		if e := forumNotify(tx, article.AuthorID, user.ID, "comment", "article", article.ID); e != nil {
+			return e
+		}
+		return tx.Model(&model.ForumArticle{}).Where("id = ?", article.ID).UpdateColumn("comment_count", gorm.Expr("comment_count + 1")).Error
 	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "comment_create_failed", "Comment could not be created.", nil)
@@ -445,12 +510,22 @@ func (s *Server) forumDeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var parent model.ForumArticle
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&parent, "id = ?", comment.ArticleID).Error; e != nil {
+			return e
+		}
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&comment, "id = ? AND author_id = ?", commentID, user.ID).Error; e != nil {
+			return e
+		}
 		if err := tx.Delete(&comment).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("target_type = ? AND target_id = ?", model.ForumTargetComment, commentID).
 			Delete(&model.ForumReaction{}).Error; err != nil {
 			return err
+		}
+		if comment.Status != "published" {
+			return nil
 		}
 		return tx.Model(&model.ForumArticle{}).Where("id = ?", comment.ArticleID).
 			UpdateColumn("comment_count", gorm.Expr("GREATEST(comment_count - 1, 0)")).Error
@@ -495,6 +570,9 @@ func (s *Server) forumToggleReaction(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	liked := false
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if _, e := forumTarget(tx, input.TargetType, input.TargetID, user.ID, true); e != nil {
+			return e
+		}
 		reaction := model.ForumReaction{
 			ID: uuid.New(), UserID: user.ID,
 			TargetType: input.TargetType, TargetID: input.TargetID, CreatedAt: now,
@@ -557,7 +635,7 @@ func (s *Server) forumUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		fields["links"] = "Add no more than eight links."
 	}
 	for _, link := range input.Links {
-		if len([]rune(link.Label)) > 80 || len([]rune(link.URL)) > 500 {
+		if !validForumLink(link.URL) || len([]rune(link.Label)) > 80 || len([]rune(link.URL)) > 500 {
 			fields["links"] = "Each link needs a label and URL within the allowed length."
 			break
 		}
@@ -578,6 +656,13 @@ func (s *Server) forumUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "profile_unavailable", "Profile is unavailable.", nil)
 		return
 	}
+	if input.AvatarID != nil {
+		var a model.ForumAttachment
+		if e := s.DB.First(&a, "id = ? AND owner_id = ? AND kind = ? AND status = ?", *input.AvatarID, user.ID, "image", "ready").Error; forumFailure(w, r, e) {
+			return
+		}
+	}
+	profile.AvatarID = input.AvatarID
 	profile.About = input.About
 	profile.Location = input.Location
 	profile.FamilyStatus = input.FamilyStatus

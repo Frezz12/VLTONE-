@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Verify the three local services and the externally routed HTTPS endpoints.
+# Verify the local services and the externally routed HTTPS endpoints.
 set -euo pipefail
 
 ENV_FILE="${VLT_ENV_FILE:-/etc/vlt-account/api.env}"
-SERVICES=(vlt-account-api vlt-account-web vlt-account-admin)
+SERVICES=(vlt-account-api vlt-account-web vlt-account-admin vlt-forum-media vlt-account-forum)
 [[ -r "$ENV_FILE" ]] || { echo "smoke: missing $ENV_FILE" >&2; exit 1; }
 set -a
 # shellcheck disable=SC1090
@@ -59,4 +59,10 @@ retry_get http://127.0.0.1:3101/login "$tmp/admin.html"
 retry_get "${PUBLIC_ORIGIN%/}/api/v1/meta" "$tmp/public-meta.json"
 retry_get "${PUBLIC_ORIGIN%/}/ru/join" "$tmp/public-join.html"
 retry_get "${ADMIN_ORIGIN%/}/login" "$tmp/public-admin.html"
+retry_get http://127.0.0.1:3102/ "$tmp/forum.html"
+retry_get "${FORUM_ORIGIN%/}/api/v1/forum/config" "$tmp/forum-config.json"
+retry_get "${FORUM_ORIGIN%/}/api/v1/forum/sections" "$tmp/forum-sections.json"
+retry_get "${FORUM_ORIGIN%/}/api/v1/forum/feed?limit=1" "$tmp/forum-feed.json"
+grep -Eq '"video_max_seconds"[[:space:]]*:[[:space:]]*300' "$tmp/forum-config.json"
+grep -q 'creator' "$tmp/forum-sections.json"
 echo "Smoke tests passed"

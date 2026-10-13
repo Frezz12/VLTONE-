@@ -1,0 +1,1 @@
+{"Rules":[{"ID":"forum-incomplete-multipart","Status":"Enabled","Filter":{"Prefix":"staging/"},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":2}},{"ID":"forum-staging-expiry","Status":"Enabled","Filter":{"Prefix":"staging/"},"Expiration":{"Days":3}}]}

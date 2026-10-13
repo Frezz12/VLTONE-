@@ -27,6 +27,7 @@ import (
 	"vltstudio/backend/internal/auth"
 	"vltstudio/backend/internal/collab"
 	"vltstudio/backend/internal/config"
+	"vltstudio/backend/internal/forumfiles"
 	"vltstudio/backend/internal/model"
 	"vltstudio/backend/internal/objectstore"
 	"vltstudio/backend/internal/quota"
@@ -42,6 +43,7 @@ const (
 var defaultAIHTTPClient = &http.Client{Timeout: 4 * time.Minute}
 
 type Server struct {
+	ForumFiles           *forumfiles.Storage
 	telemetryPartitionMu sync.Mutex
 	telemetryPartitions  map[string]bool
 	AIHTTPClient         *http.Client
@@ -112,8 +114,13 @@ func New(cfg config.Config, db *gorm.DB) (*Server, error) {
 	for _, userID := range cfg.CollabAllowedUserIDs {
 		allowedUsers[userID] = true
 	}
+	forumStorage, err := forumfiles.New(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
-		Config: cfg, DB: db, Signer: auth.NewSigner(cfg.SigningSeed),
+		ForumFiles: forumStorage,
+		Config:     cfg, DB: db, Signer: auth.NewSigner(cfg.SigningSeed),
 		AIHTTPClient: defaultAIHTTPClient,
 		Quota:        quota.Service{DB: db, GlobalMonthlyLimit: cfg.AIGlobalMonthlyLimit}, limiter: newRateLimiter(),
 		Collab:             newCollabStore(db, cfg),
@@ -134,6 +141,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(s.requestTimeout)
 	r.Use(s.securityHeaders)
+	r.Use(s.observeForum)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
@@ -168,9 +176,21 @@ func (s *Server) Router() http.Handler {
 
 	// Forum. Reads resolve the session when present so signed-in visitors see
 	// their own reactions; writes always require the web session and CSRF.
+	r.With(s.webAuth, s.webCSRF).Post("/v1/forum/auth/authorize", s.forumSSOAuthorize)
+	r.Post("/v1/forum/auth/exchange", s.forumSSOExchange)
+	r.With(s.desktopAuth).Post("/v1/desktop/forum-session", s.desktopForumSession)
+	r.Get("/v1/forum/config", s.forumConfig)
+	r.Put("/v1/forum/uploads/{attachmentID}/data/{part}", s.forumUploadData)
+	r.Options("/v1/forum/uploads/{attachmentID}/data/{part}", s.forumUploadData)
 	r.Route("/v1/forum", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(s.webAuthOptional)
+			r.Get("/feed", s.forumFeed)
+			r.Get("/search", s.forumSearch)
+			r.Get("/users/{userID}/social", s.forumSocialProfile)
+			r.Get("/attachments/{attachmentID}", s.forumAttachment)
+			r.Get("/attachments/{attachmentID}/download", s.forumAttachment)
+			r.Get("/attachments/{attachmentID}/media/{variant}", s.forumAttachment)
 			r.Get("/sections", s.forumSections)
 			r.Get("/sections/{slug}/topics", s.forumSectionTopics)
 			r.Get("/topics/{topicID}", s.forumTopic)
@@ -182,6 +202,23 @@ func (s *Server) Router() http.Handler {
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(s.webAuth)
+			r.Get("/bookmarks", s.forumBookmarks)
+			r.Get("/notifications", s.forumNotifications)
+			r.With(s.webCSRF).Put("/notifications/read", s.forumNotifications)
+			r.With(s.webCSRF).Put("/users/{userID}/follow", s.forumFollow)
+			r.With(s.webCSRF).Delete("/users/{userID}/follow", s.forumFollow)
+			r.With(s.webCSRF).Put("/reactions/{targetType}/{targetID}", s.forumSetReaction)
+			r.With(s.webCSRF).Delete("/reactions/{targetType}/{targetID}", s.forumSetReaction)
+			r.With(s.webCSRF).Put("/bookmarks/{targetType}/{targetID}", s.forumBookmark)
+			r.With(s.webCSRF).Delete("/bookmarks/{targetType}/{targetID}", s.forumBookmark)
+			r.With(s.webCSRF).Post("/reports", s.forumReport)
+			r.With(s.webCSRF).Put("/topics/{topicID}/answer", s.forumAcceptAnswer)
+			r.With(s.webCSRF).Put("/comments/{commentID}", s.forumUpdateComment)
+			r.With(s.webCSRF).Post("/uploads", s.forumUploadCreate)
+			r.With(s.webCSRF).Post("/uploads/{attachmentID}/resume", s.forumUploadResume)
+			r.With(s.webCSRF).Post("/uploads/{attachmentID}/complete", s.forumUploadComplete)
+			r.With(s.webCSRF).Delete("/uploads/{attachmentID}", s.forumUploadCancel)
+			r.With(s.webCSRF).Delete("/attachments/{attachmentID}", s.forumAttachmentDelete)
 			r.Get("/me/profile", s.forumMyProfile)
 			r.With(s.webCSRF).Put("/me/profile", s.forumUpdateProfile)
 			r.With(s.webCSRF).Post("/topics", s.forumCreateTopic)
@@ -279,6 +316,11 @@ func (s *Server) Router() http.Handler {
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.adminAuth, s.adminPermissions)
+		r.Get("/v1/admin/forum", s.adminForum)
+		r.Get("/v1/admin/forum/content/{targetType}/{targetID}", s.adminForumReadContent)
+		r.With(s.adminCSRF).Put("/v1/admin/forum/content/{targetType}/{targetID}", s.adminForumContent)
+		r.With(s.adminCSRF).Put("/v1/admin/forum/sections", s.adminForumSection)
+		r.With(s.adminCSRF).Put("/v1/admin/forum/reports/{reportID}", s.adminForumReport)
 		r.Get("/v1/admin/me", s.adminMe)
 		r.Get("/v1/admin/team", s.adminTeam)
 		r.With(s.adminCSRF).Put("/v1/admin/team", s.adminSaveMember)
@@ -356,6 +398,10 @@ func (s *Server) requestTimeout(next http.Handler) http.Handler {
 			return
 		}
 		duration := 4 * time.Minute
+		if (r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/forum/uploads/") && strings.HasSuffix(r.URL.Path, "/complete")) ||
+			(r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/forum/attachments/") && (strings.HasSuffix(r.URL.Path, "/download") || strings.Contains(r.URL.Path, "/media/"))) {
+			duration = 30 * time.Minute
+		}
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/desktop/projects/") &&
 			(strings.Contains(r.URL.Path, "/asset-uploads/") || strings.Contains(r.URL.Path, "/snapshot-uploads/")) &&
 			strings.HasSuffix(r.URL.Path, "/complete") {

@@ -1,0 +1,1 @@
+{"CORSRules":[{"AllowedOrigins":["https://forum.vltstudio.ru"],"AllowedMethods":["PUT"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":900}]}

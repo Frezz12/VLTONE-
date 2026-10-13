@@ -15,6 +15,8 @@ VLTONE is a cross-platform (Windows + macOS) digital audio workstation.
 - **Account platform** — a single Go/PostgreSQL API, a public Next.js account
   site, a separate Next.js admin console, and a network-isolated diagnostics
   reporter process for the DAW.
+- **Community forum** — an independent Next.js / TypeScript app in [`forum/`](forum/README.md),
+  using shared accounts and the Go API, with posts, discussions, video and native VLT installation.
 
 This is a cross-platform rewrite of a former macOS-only Swift/SwiftUI app; the
 portable C++ engine was reused, its Apple-specific I/O replaced, and the UI
@@ -26,7 +28,7 @@ See **[BUILD.md](BUILD.md)** for macOS and Windows instructions. Quick start on
 macOS:
 
 ```bash
-brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json
+brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json libarchive
 cmake --preset macos
 cmake --build build
 ./build/bin/VLTONE

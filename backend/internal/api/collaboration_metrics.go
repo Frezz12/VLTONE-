@@ -12,6 +12,8 @@ import (
 )
 
 type collaborationMetrics struct {
+	forumAuthFailures         atomic.Uint64
+	forumUploadFailures       atomic.Uint64
 	operations                atomic.Uint64
 	rejections                atomic.Uint64
 	resyncs                   atomic.Uint64
@@ -46,7 +48,7 @@ func (s *Server) collaborationMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, s.metricsText(rooms))
+	_, _ = fmt.Fprint(w, s.metricsText(rooms), s.forumMetricsText(r))
 }
 
 func (s *Server) metricsText(rooms collab.RoomBusStats) string {

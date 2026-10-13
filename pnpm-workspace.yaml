@@ -1,6 +1,7 @@
 packages:
   - web
   - admin
+  - forum
   - packages/*
 
 allowBuilds:

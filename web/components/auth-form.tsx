@@ -36,7 +36,9 @@ function PasswordField({ label, name, autoComplete, showLabel, hideLabel }: {
   </div>;
 }
 
-export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "register" }) {
+export function AuthForm({ locale, mode, returnTo }: { locale: string; mode: "login" | "register"; returnTo?: string }) {
+  const destination = returnTo?.startsWith("/forum-login?") && !returnTo.includes("\\") ? returnTo : "/account";
+  const authSuffix = destination === "/account" ? "" : `?returnTo=${encodeURIComponent(destination)}&lang=${locale}`;
   const t = useTranslations("Auth");
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -79,7 +81,7 @@ export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "re
       }
       await api.json<AccountSession>(`/v1/web/auth/${mode === "login" ? "login" : "register"}`, "POST", payload);
       document.cookie = `vlt-locale=${locale}; max-age=31536000; path=/; samesite=lax`;
-      router.push("/account"); router.refresh();
+      router.push(destination); router.refresh();
     } catch (reason) {
       const failure = reason as APIError;
       const legalFailure = failure.code === "legal_documents_pending" || Object.keys(failure.field_errors ?? {}).some(key => ["consent_accepted", "terms_accepted", "diagnostics_accepted"].includes(key));
@@ -112,7 +114,7 @@ export function AuthForm({ locale, mode }: { locale: string; mode: "login" | "re
       {error && <div className="vlt-error" role="alert">{error}</div>}
       <button className="vlt-button auth-submit" disabled={busy || (register && (legalState !== "ready" || (captcha?.required !== false && !captchaToken)))}>{busy ? t("working") : t(register ? "register" : "login")}<ArrowRight size={18} aria-hidden /></button>
     </form>
-    <div className="auth-foot">{t(register ? "hasAccount" : "noAccount")} <Link className="vlt-link" href={register ? "/login" : "/register"}>{t(register ? "login" : "register")}</Link></div>
+    <div className="auth-foot">{t(register ? "hasAccount" : "noAccount")} <Link className="vlt-link" href={(register ? "/login" : "/register") + authSuffix}>{t(register ? "login" : "register")}</Link></div>
     <footer className="auth-trust"><ShieldCheck size={16} aria-hidden /><span>{t("accountHint")}</span></footer>
   </div></section></main>;
 }

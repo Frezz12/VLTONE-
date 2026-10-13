@@ -2043,10 +2043,901 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/forum/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getForumConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/sections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listForumSections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/sections/{slug}/topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listForumTopics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Newest publication first, ordered by (published_at,id). The cursor is opaque. Following requires a signed-in account. */
+        get: operations["getForumFeed"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/articles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listForumArticles"];
+        put?: never;
+        /** @description Publishes immediately. Media processing never delays text or other attachments. Existing long articles remain supported. */
+        post: operations["createForumArticle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/articles/{articleID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getForumArticle"];
+        put: operations["updateForumArticle"];
+        post?: never;
+        delete: operations["deleteForumArticle"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/articles/{articleID}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listForumComments"];
+        put?: never;
+        post: operations["createForumComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/comments/{commentID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putForumComment"];
+        post?: never;
+        delete: operations["deleteForumComment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Publishes immediately. Media processing never delays text or other attachments. Existing long articles remain supported. */
+        post: operations["createForumTopic"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/topics/{topicID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getForumTopic"];
+        put: operations["updateForumTopic"];
+        post?: never;
+        delete: operations["deleteForumTopic"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/topics/{topicID}/posts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listForumPosts"];
+        put?: never;
+        post: operations["createForumPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/posts/{postID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putForumPost"];
+        post?: never;
+        delete: operations["deleteForumPost"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/topics/{topicID}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Topic author accepts a published reply in the help section. Null clears the accepted answer. */
+        put: operations["acceptForumAnswer"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/users/{nickname}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getForumProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/me/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getOwnForumProfile"];
+        put: operations["updateForumProfile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/users/{userID}/social": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getForumSocialProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/users/{userID}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Idempotent. Self-follow is rejected. */
+        put: operations["putForumFollow"];
+        post?: never;
+        /** @description Idempotent. Self-follow is rejected. */
+        delete: operations["deleteForumFollow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/reactions/{targetType}/{targetID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Idempotent under concurrent requests; parent visibility is enforced. */
+        put: operations["putForumReaction"];
+        post?: never;
+        /** @description Idempotent under concurrent requests; parent visibility is enforced. */
+        delete: operations["deleteForumReaction"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/bookmarks/{targetType}/{targetID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Idempotent; only topic and article targets are supported. Saved items are private. */
+        put: operations["putForumBookmark"];
+        post?: never;
+        /** @description Idempotent; only topic and article targets are supported. Saved items are private. */
+        delete: operations["deleteForumBookmark"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/reactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Legacy toggle retained for compatibility. New clients use PUT/DELETE. */
+        post: operations["toggleForumReaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/bookmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listForumBookmarks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Refresh on page open and every 30 seconds in a visible tab. */
+        get: operations["listForumNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["readForumNotifications"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["searchForum"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reportForumContent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Decimal byte limits from /config. Maximum 10 attachments and one video per publication. Video <=250 MB; images <=10 MB; VLT <=1 GB. Direct S3 multipart or signed local-development part URLs. Never send large bytes through Next.js. */
+        post: operations["createForumUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/uploads/{attachmentID}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resumeForumUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/uploads/{attachmentID}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Idempotent completion validates byte count, SHA-256 and ownership. No content approval or scanning. Video jobs are queued in PostgreSQL. */
+        post: operations["completeForumUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/uploads/{attachmentID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["cancelForumUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/uploads/{attachmentID}/data/{part}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Local-development data plane only, authorized by a short-lived capability from the upload response. Exact part size required; CORS restricted to FORUM_ORIGIN. */
+        put: operations["putLocalForumPart"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/attachments/{attachmentID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getForumAttachment"];
+        put?: never;
+        post?: never;
+        delete: operations["removeForumAttachment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/attachments/{attachmentID}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Stable authenticated route; rechecks parent visibility. Hidden content is unavailable to other viewers; rejected videos cannot be downloaded. Native installation obtains metadata from the attachment route first. Local destination paths are never transmitted. */
+        get: operations["downloadForumAttachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/attachments/{attachmentID}/media/{variant}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Stable authenticated route; rechecks parent visibility. Hidden content is unavailable to other viewers; rejected videos cannot be downloaded. Native installation obtains metadata from the attachment route first. Local destination paths are never transmitted. */
+        get: operations["getForumMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/auth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Main-site Origin only, CSRF protected. 60-second one-use code bound to PKCE S256, state, exact configured forum callback, user and source session. */
+        post: operations["authorizeForumSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/forum/auth/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Forum Origin only. Consumes code atomically and sets a separate host-only HttpOnly SameSite=Lax cookie. Source session must remain valid. */
+        post: operations["exchangeForumSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/desktop/forum-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Native client only. Installs its own device-bound HttpOnly web-session cookie through the Qt cookie store, never through JS. Replaces prior device web session. Ordinary desktop refresh preserves it; logout or device revocation invalidates it. */
+        post: operations["createDesktopForumSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/forum": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Requires forum.read. Lists raw moderator-visible records, including hidden content. */
+        get: operations["listAdminForum"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/forum/content/{targetType}/{targetID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminForumContent"];
+        /** @description Requires forum.write. Recorded in the existing audit log. Pin, lock and answer apply to topics. */
+        put: operations["moderateForumContent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/forum/sections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Requires forum.write; preserves the ID when editing a section. Omit ID to create. */
+        put: operations["saveForumSection"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/forum/reports/{reportID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["resolveForumReport"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ForumAuthor: {
+            /** Format: uuid */
+            id: string;
+            nickname: string;
+            /** Format: uuid */
+            avatar_id?: string;
+        };
+        ForumAttachment: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: int64 */
+            bytes: number;
+            sha256: string;
+            content_type: string;
+            /** @enum {unknown} */
+            kind: "image" | "video" | "vlt";
+            /** @description mini, node, creator, strip, offline-strip, morph, slicer, theme, language, project, project-package or template. The native installer selects the local destination. */
+            resource_type: string;
+            minimum_version: string;
+            /** @enum {unknown} */
+            status: "uploading" | "ready" | "cancelled";
+            /** @enum {unknown} */
+            media_status: "none" | "pending" | "processing" | "ready" | "failed" | "rejected";
+            media_error: string;
+            /** Format: uuid */
+            article_id?: string;
+            /** Format: uuid */
+            topic_id?: string;
+            /** Format: uuid */
+            post_id?: string;
+            /** Format: uuid */
+            comment_id?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        ForumSection: {
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            title_ru: string;
+            title_en: string;
+            description_ru: string;
+            description_en: string;
+            sort_order: number;
+            topic_count?: number;
+            /** Format: date-time */
+            last_post_at?: string;
+        };
+        ForumProfile: {
+            /** Format: uuid */
+            user_id: string;
+            avatar_id: string | null;
+            about: string;
+            location: string;
+            interests: string;
+            family_status: string;
+            signature: string;
+            links: {
+                label: string;
+                /** Format: uri */
+                url: string;
+            }[];
+        };
+        ForumConfig: {
+            /** Format: uri */
+            public_origin: string;
+            /** Format: uri */
+            forum_origin: string;
+            /** @default 250000000 */
+            video_max_bytes: number;
+            /** @constant */
+            video_max_seconds: 300;
+            /** @default 1000000000 */
+            file_max_bytes: number;
+            /** @default 10000000 */
+            image_max_bytes: number;
+            /** @constant */
+            max_attachments: 10;
+        };
+        ForumNotification: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            actor_id: string;
+            actor: components["schemas"]["ForumAuthor"];
+            /** @enum {unknown} */
+            kind: "reply" | "comment" | "comment_reply" | "follow";
+            /** @enum {unknown} */
+            target_type: "topic" | "article" | "user";
+            /** Format: uuid */
+            target_id: string;
+            read_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ForumReport: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            user_id: string;
+            /** @enum {unknown} */
+            target_type: "topic" | "article" | "post" | "comment";
+            /** Format: uuid */
+            target_id: string;
+            reason: string;
+            /** @enum {unknown} */
+            status: "open" | "resolved";
+            /** Format: date-time */
+            created_at: string;
+        };
+        ForumArticle: {
+            /** Format: uuid */
+            id: string;
+            author: components["schemas"]["ForumAuthor"];
+            body?: string;
+            /** Format: date-time */
+            created_at: string;
+            like_count: number;
+            liked: boolean;
+            attachments: components["schemas"]["ForumAttachment"][];
+            /** @enum {unknown} */
+            kind: "article" | "post";
+            title: string;
+            excerpt?: string;
+            /** @enum {unknown} */
+            status: "draft" | "published" | "hidden";
+            comment_count: number;
+            published_at: string | null;
+            saved: boolean;
+        };
+        ForumTopic: {
+            /** Format: uuid */
+            id: string;
+            author: components["schemas"]["ForumAuthor"];
+            body?: string;
+            /** Format: date-time */
+            created_at: string;
+            like_count: number;
+            liked: boolean;
+            attachments: components["schemas"]["ForumAttachment"][];
+            /** Format: uuid */
+            section_id: string;
+            section?: components["schemas"]["ForumSection"];
+            title: string;
+            excerpt?: string;
+            /** @enum {unknown} */
+            status: "published" | "hidden";
+            pinned: boolean;
+            locked: boolean;
+            reply_count: number;
+            view_count: number;
+            /** Format: date-time */
+            last_post_at: string;
+            accepted_post_id: string | null;
+            saved: boolean;
+        };
+        ForumReply: {
+            /** Format: uuid */
+            id: string;
+            author: components["schemas"]["ForumAuthor"];
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+            like_count: number;
+            liked: boolean;
+            attachments: components["schemas"]["ForumAttachment"][];
+            /** Format: uuid */
+            topic_id?: string;
+            /** Format: uuid */
+            article_id?: string;
+            parent_id?: string | null;
+            can_edit: boolean;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        ForumUpload: {
+            attachment: components["schemas"]["ForumAttachment"];
+            parts: {
+                number: number;
+                bytes: number;
+                done: boolean;
+                request?: {
+                    /** @constant */
+                    method: "PUT";
+                    /** Format: uri */
+                    url: string;
+                    headers: {
+                        [key: string]: string;
+                    };
+                    /** Format: date-time */
+                    expiresAt: string;
+                };
+            }[];
+        };
+        ForumArticleWrite: {
+            /**
+             * @default article
+             * @enum {unknown}
+             */
+            kind: "article" | "post";
+            /** @description Optional for kind=post; at least 3 characters for articles. */
+            title?: string;
+            excerpt?: string;
+            /** @description Markdown without user HTML. Empty only when the post has attachments. */
+            body: string;
+            /** @enum {unknown} */
+            status?: "draft" | "published";
+            attachment_ids?: string[];
+        };
+        ForumTopicWrite: {
+            title: string;
+            body: string;
+            /** Format: uuid */
+            section_id: string;
+            attachment_ids?: string[];
+        };
+        ForumReplyWrite: {
+            body: string;
+            attachment_ids?: string[];
+        };
+        ForumCommentWrite: {
+            body: string;
+            attachment_ids?: string[];
+            parent_id?: string | null;
+        };
         AdminIdentity: {
             /** Format: uuid */
             id: string;
@@ -7735,7 +8626,7 @@ export interface components {
             /** @constant */
             format: "internal";
             /** @enum {unknown} */
-            uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
+            uid: "daw.gain" | "daw.stereo-utility" | "daw.reverse" | "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
             vendor: string;
             pluginVersion: string;
             stateSchemaVersion: number;
@@ -9011,7 +9902,7 @@ export interface components {
                     /** @constant */
                     format: "internal";
                     /** @enum {unknown} */
-                    uid: "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
+                    uid: "daw.gain" | "daw.stereo-utility" | "daw.reverse" | "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
                     vendor: string;
                     pluginVersion: string;
                     stateSchemaVersion: number;
@@ -12672,6 +13563,1502 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+        };
+    };
+    getForumConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForumConfig"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumSections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        sections: components["schemas"]["ForumSection"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumTopics: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        section: components["schemas"]["ForumSection"];
+                        topics: components["schemas"]["ForumTopic"][];
+                        total: number;
+                        limit: number;
+                        offset: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumFeed: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                following?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        articles: components["schemas"]["ForumArticle"][];
+                        next_cursor: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumArticles: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        articles: components["schemas"]["ForumArticle"][];
+                        total: number;
+                        limit: number;
+                        offset: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createForumArticle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumArticleWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        article: components["schemas"]["ForumArticle"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumArticle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        article: components["schemas"]["ForumArticle"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateForumArticle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumArticleWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        article: components["schemas"]["ForumArticle"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumArticle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumComments: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                articleID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        comments: components["schemas"]["ForumReply"][];
+                        total: number;
+                        limit: number;
+                        offset: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createForumComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumCommentWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        comment: components["schemas"]["ForumReply"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putForumComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumCommentWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        comment: components["schemas"]["ForumReply"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createForumTopic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumTopicWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        topic: components["schemas"]["ForumTopic"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumTopic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        topic: components["schemas"]["ForumTopic"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateForumTopic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumTopicWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        topic: components["schemas"]["ForumTopic"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumTopic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumPosts: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                topicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        posts: components["schemas"]["ForumReply"][];
+                        total: number;
+                        limit: number;
+                        offset: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createForumPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumReplyWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        post: components["schemas"]["ForumReply"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putForumPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForumReplyWrite"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        post: components["schemas"]["ForumReply"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    acceptForumAnswer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topicID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    post_id: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nickname: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        profile: {
+                            user: {
+                                /** Format: uuid */
+                                id: string;
+                                nickname: string;
+                                /** Format: date-time */
+                                created_at: string;
+                            };
+                            profile: components["schemas"]["ForumProfile"];
+                            stats: {
+                                topics: number;
+                                posts: number;
+                                articles: number;
+                            };
+                            recent_topics: components["schemas"]["ForumTopic"][];
+                            recent_articles: components["schemas"]["ForumArticle"][];
+                        };
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getOwnForumProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        profile: components["schemas"]["ForumProfile"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateForumProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    avatar_id?: string | null;
+                    about?: string;
+                    location?: string;
+                    interests?: string;
+                    family_status?: string;
+                    signature?: string;
+                    links?: {
+                        label: string;
+                        /** Format: uri */
+                        url: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        profile: components["schemas"]["ForumProfile"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumSocialProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        followers: number;
+                        following: number;
+                        followed: boolean;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putForumFollow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumFollow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putForumReaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                targetType: "article" | "topic" | "post" | "comment";
+                targetID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        liked: boolean;
+                        like_count: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumReaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                targetType: "article" | "topic" | "post" | "comment";
+                targetID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        liked: boolean;
+                        like_count: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putForumBookmark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                targetType: "article" | "topic" | "post" | "comment";
+                targetID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteForumBookmark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                targetType: "article" | "topic" | "post" | "comment";
+                targetID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    toggleForumReaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {unknown} */
+                    target_type: "topic" | "article" | "post" | "comment";
+                    /** Format: uuid */
+                    target_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        liked: boolean;
+                        like_count: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumBookmarks: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        articles: components["schemas"]["ForumArticle"][];
+                        topics: components["schemas"]["ForumTopic"][];
+                        has_more: boolean;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listForumNotifications: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        notifications: components["schemas"]["ForumNotification"][];
+                        unread: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    readForumNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    searchForum: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        articles: components["schemas"]["ForumArticle"][];
+                        topics: components["schemas"]["ForumTopic"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    reportForumContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {unknown} */
+                    target_type: "topic" | "article" | "post" | "comment";
+                    /** Format: uuid */
+                    target_id: string;
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        report: components["schemas"]["ForumReport"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createForumUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    bytes: number;
+                    sha256: string;
+                    resource_type?: string;
+                    minimum_version?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForumUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeForumUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForumUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeForumUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        attachment: components["schemas"]["ForumAttachment"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelForumUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putLocalForumPart: {
+        parameters: {
+            query?: {
+                token?: string;
+            };
+            header?: never;
+            path: {
+                attachmentID: string;
+                part: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        attachment: components["schemas"]["ForumAttachment"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeForumAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    downloadForumAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial content for media range request */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getForumMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentID: string;
+                variant: "original" | "poster.jpg" | "video.mp4" | "video.webm";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial content for media range request */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    authorizeForumSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    challenge: string;
+                    state: string;
+                    /** Format: uri */
+                    redirect_uri: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code: string;
+                        state: string;
+                        redirect_uri: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exchangeForumSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                    verifier: string;
+                    state: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        csrf_token: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createDesktopForumSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        cookie: string;
+                        /** @constant */
+                        cookie_name: "vlt_web_session";
+                        /** Format: uri */
+                        origin: string;
+                        /** Format: date-time */
+                        expires_at: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAdminForum: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        reports: components["schemas"]["ForumReport"][];
+                        topics: Record<string, never>[];
+                        articles: Record<string, never>[];
+                        posts: Record<string, never>[];
+                        comments: Record<string, never>[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAdminForumContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                targetType: "article" | "topic" | "post" | "comment";
+                targetID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        content: Record<string, never>;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    moderateForumContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                targetType: "article" | "topic" | "post" | "comment";
+                targetID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {unknown} */
+                    status?: "published" | "hidden";
+                    pinned?: boolean;
+                    locked?: boolean;
+                    accepted_post_id?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    saveForumSection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    id?: string;
+                    slug: string;
+                    title_ru: string;
+                    title_en: string;
+                    description_ru?: string;
+                    description_en?: string;
+                    sort_order?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        section: components["schemas"]["ForumSection"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resolveForumReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
         };
     };
 }

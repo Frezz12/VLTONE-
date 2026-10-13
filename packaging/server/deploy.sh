@@ -5,7 +5,7 @@ set -euo pipefail
 APP_ROOT="${VLT_APP_ROOT:-/opt/vlt-account-platform}"
 SYSTEM_USER="${VLT_SYSTEM_USER:-vltaccount}"
 ENV_FILE="${VLT_ENV_FILE:-/etc/vlt-account/api.env}"
-SERVICES=(vlt-account-api vlt-account-web vlt-account-admin)
+SERVICES=(vlt-account-api vlt-forum-media vlt-account-web vlt-account-admin vlt-account-forum)
 
 die() { echo "deploy: $*" >&2; exit 1; }
 [[ ${EUID} -eq 0 ]] || die "run as root (or through sudo)"
@@ -68,7 +68,10 @@ if [[ -n "$previous" ]]; then
     replace_link previous "$release"
     install -m 0644 "$previous/ops/systemd/"*.service /etc/systemd/system/
     systemctl daemon-reload
-    systemctl restart "${SERVICES[@]}"
+    systemctl stop vlt-forum-media vlt-account-forum || true
+    restore_services=(vlt-account-api vlt-account-web vlt-account-admin)
+    if [[ -x "$previous/forum/start" ]]; then restore_services+=(vlt-forum-media vlt-account-forum); fi
+    systemctl restart "${restore_services[@]}"
     if ! "$previous/ops/smoke.sh"; then
         echo "Previous release was restored but its smoke test also failed." >&2
     fi

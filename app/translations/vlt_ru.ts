@@ -17573,6 +17573,10 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <source>Add bookmark</source>
         <translation>Добавить закладку</translation>
     </message>
+    <message>
+        <source>Package saved project for forum…</source>
+        <translation>Упаковать сохранённый проект для форума…</translation>
+    </message>
 </context>
 <context>
     <name>account::Service</name>
@@ -22023,5 +22027,163 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
     <message><source>The difference between channels. The shared center is removed.</source><translation>Разность каналов. Общий центр стереосигнала убран.</translation></message>
     <message><source>Left channel, sent equally to both outputs.</source><translation>Левый канал на обоих выходах.</translation></message>
     <message><source>Right channel, sent equally to both outputs.</source><translation>Правый канал на обоих выходах.</translation></message>
+</context>
+<context>
+    <name>ui::ForumBrowserBridge</name>
+    <message>
+        <source>Sign in to your VLTONE account in the application first.</source>
+        <translation>Сначала войдите в аккаунт VLTONE в программе.</translation>
+    </message>
+    <message>
+        <source>Could not sign in to the forum. Try again when online.</source>
+        <translation>Не удалось войти на форум. Повторите попытку при подключении к сети.</translation>
+    </message>
+    <message>
+        <source>This forum attachment is no longer available.</source>
+        <translation>Это вложение форума больше недоступно.</translation>
+    </message>
+    <message>
+        <source>Installing %1…</source>
+        <translation>Установка %1…</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Language pack already installed</source>
+        <translation>Языковой пакет уже установлен</translation>
+    </message>
+    <message>
+        <source>Replace the existing language pack with this download?</source>
+        <translation>Заменить существующий языковой пакет скачанным?</translation>
+    </message>
+    <message>
+        <source>Already installed: %1</source>
+        <translation>Уже установлено: %1</translation>
+    </message>
+    <message>
+        <source>Installed: %1</source>
+        <translation>Установлено: %1</translation>
+    </message>
+    <message>
+        <source>Installation failed: %1</source>
+        <translation>Ошибка установки: %1</translation>
+    </message>
+    <message>
+        <source>Installed in your VLTONE library: %1</source>
+        <translation>Добавлено в библиотеку VLTONE: %1</translation>
+    </message>
+    <message>
+        <source>Choose a saved project or template</source>
+        <translation>Выберите сохранённый проект или шаблон</translation>
+    </message>
+    <message>
+        <source>Package for forum</source>
+        <translation>Пакет для форума</translation>
+    </message>
+    <message>
+        <source>VLT package (*%1)</source>
+        <translation>Пакет VLT (*%1)</translation>
+    </message>
+    <message>
+        <source>Packing saved project…</source>
+        <translation>Упаковка сохранённого проекта…</translation>
+    </message>
+    <message>
+        <source>Ready to attach to your forum post: %1</source>
+        <translation>Готово для публикации на форуме: %1</translation>
+    </message>
+    <message>
+        <source>Replace package?</source>
+        <translation>Заменить пакет?</translation>
+    </message>
+    <message>
+        <source>A package with this name already exists. Replace it?</source>
+        <translation>Пакет с таким именем уже существует. Заменить его?</translation>
+    </message>
+</context>
+<context>
+    <name>VltContentInstaller</name>
+    <message>
+        <source>Unsupported VLT content metadata</source>
+        <translation>Неподдерживаемые метаданные материала VLT</translation>
+    </message>
+    <message>
+        <source>Download size or metadata is invalid</source>
+        <translation>Неверный размер или метаданные загрузки</translation>
+    </message>
+    <message>
+        <source>This file requires a newer VLTONE version</source>
+        <translation>Для этого файла нужна более новая версия VLTONE</translation>
+    </message>
+    <message>
+        <source>Language pack exceeds 5 MiB</source>
+        <translation>Языковой пакет превышает 5 МиБ</translation>
+    </message>
+    <message>
+        <source>Download is damaged or was cancelled (SHA-256 mismatch)</source>
+        <translation>Файл повреждён или загрузка отменена: SHA-256 не совпадает</translation>
+    </message>
+    <message>
+        <source>Another installation is running. Retry this download when it finishes</source>
+        <translation>Выполняется другая установка. Повторите скачивание после её завершения</translation>
+    </message>
+    <message>
+        <source>Installation cancelled</source>
+        <translation>Установка отменена</translation>
+    </message>
+    <message>
+        <source>Could not create the content library</source>
+        <translation>Не удалось создать библиотеку материалов</translation>
+    </message>
+    <message>
+        <source>Not enough free disk space</source>
+        <translation>Недостаточно свободного места на диске</translation>
+    </message>
+    <message>
+        <source>Could not create installation staging directory</source>
+        <translation>Не удалось создать временный каталог установки</translation>
+    </message>
+    <message>
+        <source>Cannot read Creator node</source>
+        <translation>Не удалось прочитать узел Creator</translation>
+    </message>
+    <message>
+        <source>Unsupported Creator node version</source>
+        <translation>Неподдерживаемая версия узла Creator</translation>
+    </message>
+    <message>
+        <source>Missing Creator root graph</source>
+        <translation>Отсутствует корневой граф Creator</translation>
+    </message>
+    <message>
+        <source>Damaged Creator node</source>
+        <translation>Узел Creator повреждён</translation>
+    </message>
+    <message>
+        <source>Channel Strip preset exceeds 64 MiB</source>
+        <translation>Пресет Channel Strip превышает 64 МиБ</translation>
+    </message>
+    <message>
+        <source>Invalid Morph preset</source>
+        <translation>Неверный пресет Morph</translation>
+    </message>
+    <message>
+        <source>Invalid or unsupported Morph preset</source>
+        <translation>Повреждённый или неподдерживаемый пресет Morph</translation>
+    </message>
+    <message>
+        <source>An installation with this name already exists</source>
+        <translation>Материал с таким именем уже существует</translation>
+    </message>
+    <message>
+        <source>Could not atomically install the project package</source>
+        <translation>Не удалось завершить установку пакета проекта</translation>
+    </message>
+    <message>
+        <source>Could not save Morph user library</source>
+        <translation>Не удалось сохранить пользовательскую библиотеку Morph</translation>
+    </message>
 </context>
 </TS>

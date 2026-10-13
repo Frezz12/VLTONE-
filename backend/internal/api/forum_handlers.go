@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"vltstudio/backend/internal/auth"
 	"vltstudio/backend/internal/model"
@@ -18,8 +19,9 @@ import (
 // forumAuthor is the only user projection the forum exposes. Emails and other
 // account details never leave the API through forum responses.
 type forumAuthor struct {
-	ID       uuid.UUID `json:"id"`
-	Nickname string    `json:"nickname"`
+	AvatarID *uuid.UUID `json:"avatar_id,omitempty"`
+	ID       uuid.UUID  `json:"id"`
+	Nickname string     `json:"nickname"`
 }
 
 type forumSectionResponse struct {
@@ -29,22 +31,25 @@ type forumSectionResponse struct {
 }
 
 type forumTopicResponse struct {
-	ID         uuid.UUID   `json:"id"`
-	SectionID  uuid.UUID   `json:"section_id"`
-	Title      string      `json:"title"`
-	Excerpt    string      `json:"excerpt"`
-	Pinned     bool        `json:"pinned"`
-	Locked     bool        `json:"locked"`
-	Status     string      `json:"status"`
-	ReplyCount int         `json:"reply_count"`
-	LikeCount  int         `json:"like_count"`
-	ViewCount  int64       `json:"view_count"`
-	LastPostAt time.Time   `json:"last_post_at"`
-	CreatedAt  time.Time   `json:"created_at"`
-	Author     forumAuthor `json:"author"`
-	Liked      bool        `json:"liked"`
-	Body       string      `json:"body,omitempty"`
-	Section    *struct {
+	Saved          bool                    `json:"saved"`
+	AcceptedPostID *uuid.UUID              `json:"accepted_post_id"`
+	Attachments    []model.ForumAttachment `json:"attachments"`
+	ID             uuid.UUID               `json:"id"`
+	SectionID      uuid.UUID               `json:"section_id"`
+	Title          string                  `json:"title"`
+	Excerpt        string                  `json:"excerpt"`
+	Pinned         bool                    `json:"pinned"`
+	Locked         bool                    `json:"locked"`
+	Status         string                  `json:"status"`
+	ReplyCount     int                     `json:"reply_count"`
+	LikeCount      int                     `json:"like_count"`
+	ViewCount      int64                   `json:"view_count"`
+	LastPostAt     time.Time               `json:"last_post_at"`
+	CreatedAt      time.Time               `json:"created_at"`
+	Author         forumAuthor             `json:"author"`
+	Liked          bool                    `json:"liked"`
+	Body           string                  `json:"body,omitempty"`
+	Section        *struct {
 		ID      uuid.UUID `json:"id"`
 		Slug    string    `json:"slug"`
 		TitleRU string    `json:"title_ru"`
@@ -53,41 +58,47 @@ type forumTopicResponse struct {
 }
 
 type forumPostResponse struct {
-	ID        uuid.UUID   `json:"id"`
-	TopicID   uuid.UUID   `json:"topic_id"`
-	Body      string      `json:"body"`
-	Status    string      `json:"status"`
-	LikeCount int         `json:"like_count"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
-	Author    forumAuthor `json:"author"`
-	Liked     bool        `json:"liked"`
-	CanEdit   bool        `json:"can_edit"`
+	Attachments []model.ForumAttachment `json:"attachments"`
+	ID          uuid.UUID               `json:"id"`
+	TopicID     uuid.UUID               `json:"topic_id"`
+	Body        string                  `json:"body"`
+	Status      string                  `json:"status"`
+	LikeCount   int                     `json:"like_count"`
+	CreatedAt   time.Time               `json:"created_at"`
+	UpdatedAt   time.Time               `json:"updated_at"`
+	Author      forumAuthor             `json:"author"`
+	Liked       bool                    `json:"liked"`
+	CanEdit     bool                    `json:"can_edit"`
 }
 
 type forumArticleResponse struct {
-	ID           uuid.UUID   `json:"id"`
-	Title        string      `json:"title"`
-	Excerpt      string      `json:"excerpt"`
-	Status       string      `json:"status"`
-	LikeCount    int         `json:"like_count"`
-	CommentCount int         `json:"comment_count"`
-	PublishedAt  *time.Time  `json:"published_at"`
-	CreatedAt    time.Time   `json:"created_at"`
-	Author       forumAuthor `json:"author"`
-	Liked        bool        `json:"liked"`
-	Body         string      `json:"body,omitempty"`
+	Saved        bool                    `json:"saved"`
+	Kind         string                  `json:"kind"`
+	Attachments  []model.ForumAttachment `json:"attachments"`
+	ID           uuid.UUID               `json:"id"`
+	Title        string                  `json:"title"`
+	Excerpt      string                  `json:"excerpt"`
+	Status       string                  `json:"status"`
+	LikeCount    int                     `json:"like_count"`
+	CommentCount int                     `json:"comment_count"`
+	PublishedAt  *time.Time              `json:"published_at"`
+	CreatedAt    time.Time               `json:"created_at"`
+	Author       forumAuthor             `json:"author"`
+	Liked        bool                    `json:"liked"`
+	Body         string                  `json:"body,omitempty"`
 }
 
 type forumCommentResponse struct {
-	ID        uuid.UUID   `json:"id"`
-	ArticleID uuid.UUID   `json:"article_id"`
-	Body      string      `json:"body"`
-	LikeCount int         `json:"like_count"`
-	CreatedAt time.Time   `json:"created_at"`
-	Author    forumAuthor `json:"author"`
-	Liked     bool        `json:"liked"`
-	CanEdit   bool        `json:"can_edit"`
+	ParentID    *uuid.UUID              `json:"parent_id"`
+	Attachments []model.ForumAttachment `json:"attachments"`
+	ID          uuid.UUID               `json:"id"`
+	ArticleID   uuid.UUID               `json:"article_id"`
+	Body        string                  `json:"body"`
+	LikeCount   int                     `json:"like_count"`
+	CreatedAt   time.Time               `json:"created_at"`
+	Author      forumAuthor             `json:"author"`
+	Liked       bool                    `json:"liked"`
+	CanEdit     bool                    `json:"can_edit"`
 }
 
 type forumProfileResponse struct {
@@ -151,6 +162,13 @@ func (s *Server) forumAuthors(ids []uuid.UUID) map[uuid.UUID]forumAuthor {
 	}
 	for _, user := range users {
 		authors[user.ID] = forumAuthor{ID: user.ID, Nickname: user.Nickname}
+	}
+	var profiles []model.ForumProfile
+	s.DB.Where("user_id IN ?", unique).Find(&profiles)
+	for _, p := range profiles {
+		a := authors[p.UserID]
+		a.AvatarID = p.AvatarID
+		authors[p.UserID] = a
 	}
 	return authors
 }
@@ -300,6 +318,7 @@ func (s *Server) forumTopicPosts(w http.ResponseWriter, r *http.Request) {
 	response := make([]forumPostResponse, 0, len(posts))
 	for _, post := range posts {
 		view := forumPostView(post, authors[post.AuthorID], liked[post.ID])
+		view.Attachments = s.forumContentAttachments("post", post.ID)
 		if viewer != nil && viewer.ID == post.AuthorID {
 			view.CanEdit = true
 		}
@@ -331,7 +350,7 @@ func (s *Server) forumArticles(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"articles": s.forumArticleViews(r, articles, false),
-		"total": total, "limit": limit, "offset": offset,
+		"total":    total, "limit": limit, "offset": offset,
 	})
 }
 
@@ -377,6 +396,7 @@ func (s *Server) forumArticleComments(w http.ResponseWriter, r *http.Request) {
 	response := make([]forumCommentResponse, 0, len(comments))
 	for _, comment := range comments {
 		view := forumCommentView(comment, authors[comment.AuthorID], liked[comment.ID])
+		view.Attachments = s.forumContentAttachments("comment", comment.ID)
 		if viewer != nil && viewer.ID == comment.AuthorID {
 			view.CanEdit = true
 		}
@@ -435,7 +455,10 @@ func (s *Server) forumMyProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) forumEnsureProfile(userID uuid.UUID) (model.ForumProfile, error) {
 	profile := model.ForumProfile{UserID: userID}
-	err := s.DB.FirstOrCreate(&profile, model.ForumProfile{UserID: userID}).Error
+	err := s.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&profile).Error
+	if err == nil {
+		err = s.DB.First(&profile, "user_id=?", userID).Error
+	}
 	return profile, err
 }
 
@@ -447,13 +470,14 @@ func (s *Server) forumTopicViews(r *http.Request, topics []model.ForumTopic, wit
 	response := make([]forumTopicResponse, 0, len(topics))
 	for _, topic := range topics {
 		view := forumTopicResponse{
-			ID: topic.ID, SectionID: topic.SectionID, Title: topic.Title,
+			AcceptedPostID: topic.AcceptedPostID, ID: topic.ID, SectionID: topic.SectionID, Title: topic.Title,
 			Excerpt: forumExcerpt(topic.Body, 240), Pinned: topic.Pinned,
 			Locked: topic.Locked, Status: topic.Status, ReplyCount: topic.ReplyCount,
 			LikeCount: topic.LikeCount, ViewCount: topic.ViewCount,
 			LastPostAt: topic.LastPostAt, CreatedAt: topic.CreatedAt,
-			Author: authors[topic.AuthorID], Liked: liked[topic.ID],
+			Author: authors[topic.AuthorID], Liked: liked[topic.ID], Saved: s.forumIsSaved(r, "topic", topic.ID),
 		}
+		view.Attachments = s.forumContentAttachments("topic", topic.ID)
 		if withBody {
 			view.Body = topic.Body
 		}
@@ -468,15 +492,16 @@ func (s *Server) forumArticleViews(r *http.Request, articles []model.ForumArticl
 	response := make([]forumArticleResponse, 0, len(articles))
 	for _, article := range articles {
 		view := forumArticleResponse{
-			ID: article.ID, Title: article.Title, Excerpt: article.Excerpt,
+			Kind: article.Kind, ID: article.ID, Title: article.Title, Excerpt: article.Excerpt,
 			Status: article.Status, LikeCount: article.LikeCount,
 			CommentCount: article.CommentCount, PublishedAt: article.PublishedAt,
 			CreatedAt: article.CreatedAt, Author: authors[article.AuthorID],
-			Liked: liked[article.ID],
+			Liked: liked[article.ID], Saved: s.forumIsSaved(r, "article", article.ID),
 		}
 		if view.Excerpt == "" {
 			view.Excerpt = forumExcerpt(article.Body, 240)
 		}
+		view.Attachments = s.forumContentAttachments("article", article.ID)
 		if withBody {
 			view.Body = article.Body
 		}
@@ -487,7 +512,7 @@ func (s *Server) forumArticleViews(r *http.Request, articles []model.ForumArticl
 
 func forumTopicView(topic model.ForumTopic, author forumAuthor, liked bool) forumTopicResponse {
 	return forumTopicResponse{
-		ID: topic.ID, SectionID: topic.SectionID, Title: topic.Title,
+		AcceptedPostID: topic.AcceptedPostID, ID: topic.ID, SectionID: topic.SectionID, Title: topic.Title,
 		Excerpt: forumExcerpt(topic.Body, 240), Pinned: topic.Pinned,
 		Locked: topic.Locked, Status: topic.Status, ReplyCount: topic.ReplyCount,
 		LikeCount: topic.LikeCount, ViewCount: topic.ViewCount,
@@ -506,7 +531,7 @@ func forumPostView(post model.ForumPost, author forumAuthor, liked bool) forumPo
 
 func forumArticleView(article model.ForumArticle, author forumAuthor, liked bool) forumArticleResponse {
 	view := forumArticleResponse{
-		ID: article.ID, Title: article.Title, Excerpt: article.Excerpt,
+		Kind: article.Kind, ID: article.ID, Title: article.Title, Excerpt: article.Excerpt,
 		Status: article.Status, LikeCount: article.LikeCount,
 		CommentCount: article.CommentCount, PublishedAt: article.PublishedAt,
 		CreatedAt: article.CreatedAt, Author: author, Liked: liked,
@@ -519,7 +544,7 @@ func forumArticleView(article model.ForumArticle, author forumAuthor, liked bool
 
 func forumCommentView(comment model.ForumComment, author forumAuthor, liked bool) forumCommentResponse {
 	return forumCommentResponse{
-		ID: comment.ID, ArticleID: comment.ArticleID, Body: comment.Body,
+		ParentID: comment.ParentID, ID: comment.ID, ArticleID: comment.ArticleID, Body: comment.Body,
 		LikeCount: comment.LikeCount, CreatedAt: comment.CreatedAt,
 		Author: author, Liked: liked,
 	}
@@ -596,4 +621,14 @@ func forumLengthError(fields map[string]string, name, value string, min, max int
 	if count < min || count > max {
 		fields[name] = fmt.Sprintf("Must contain between %d and %d characters.", min, max)
 	}
+}
+
+func (s *Server) forumIsSaved(r *http.Request, kind string, id uuid.UUID) bool {
+	uid := viewerID(r)
+	if uid == uuid.Nil {
+		return false
+	}
+	var n int64
+	s.DB.Model(&model.ForumBookmark{}).Where("user_id = ? AND target_type = ? AND target_id = ?", uid, kind, id).Count(&n)
+	return n > 0
 }

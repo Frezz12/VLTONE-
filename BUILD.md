@@ -113,7 +113,7 @@ vulnerable versions.
 Dependencies via Homebrew:
 
 ```bash
-brew install cmake ninja qt qtmultimedia qtwebengine qtserialport qtimageformats portaudio rtmidi libsndfile nlohmann-json
+brew install cmake ninja qt qtmultimedia qtwebengine qtserialport qtimageformats portaudio rtmidi libsndfile nlohmann-json libarchive
 ```
 
 Avoid **Qt 6.11.0 and 6.11.1 on macOS**: native image conversion releases its

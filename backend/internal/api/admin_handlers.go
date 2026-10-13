@@ -511,6 +511,9 @@ func (s *Server) adminRevokeDevice(w http.ResponseWriter, r *http.Request) {
 		if result.Error != nil || result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
+		if err := tx.Model(&model.WebSession{}).Where("device_id = ? AND revoked_at IS NULL", deviceID).Update("revoked_at", now).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&model.DesktopSession{}).
 			Where("device_id = ? AND revoked_at IS NULL", deviceID).
 			Update("revoked_at", now).Error; err != nil {

@@ -15,6 +15,7 @@
     { "name": "libsndfile", "features": ["external-libs", "mpeg"] },
     "rtmidi",
     "nlohmann-json",
-    "openssl"
+    "openssl",
+    "libarchive"
   ]
 }

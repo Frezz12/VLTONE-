@@ -31,7 +31,7 @@ func (s *Server) webAuth(next http.Handler) http.Handler {
 		var session model.WebSession
 		now := time.Now().UTC()
 		err = s.DB.Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?", auth.HashToken(cookie.Value), now).First(&session).Error
-		if err != nil || now.Sub(session.LastSeenAt) > 7*24*time.Hour {
+		if err != nil || now.Sub(session.LastSeenAt) > 7*24*time.Hour || !s.forumSessionDeviceValid(s.DB, session) {
 			writeError(w, r, http.StatusUnauthorized, "session_expired", "Your session has expired.", nil)
 			return
 		}
@@ -72,7 +72,7 @@ func (s *Server) webAuthOptional(next http.Handler) http.Handler {
 			var session model.WebSession
 			err := s.DB.Where("token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
 				auth.HashToken(cookie.Value), now).First(&session).Error
-			if err == nil && now.Sub(session.LastSeenAt) <= 7*24*time.Hour {
+			if err == nil && now.Sub(session.LastSeenAt) <= 7*24*time.Hour && s.forumSessionDeviceValid(s.DB, session) {
 				var user model.User
 				if err := s.DB.First(&user, "id = ?", session.UserID).Error; err == nil &&
 					user.Status == model.UserActive {

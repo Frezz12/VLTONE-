@@ -1,0 +1,18 @@
+DROP TRIGGER forum_attachment_deleted ON forum_attachments;
+DROP FUNCTION forum_queue_object_deletion();
+DROP TABLE forum_object_deletions;
+DROP INDEX forum_articles_feed_idx;
+DELETE FROM forum_sections WHERE id IN ('a0000000-0000-4000-8000-000000000006','a0000000-0000-4000-8000-000000000007') AND NOT EXISTS(SELECT 1 FROM forum_topics WHERE section_id=forum_sections.id);
+DROP TABLE forum_sso_codes;
+DROP TABLE forum_media_jobs;
+ALTER TABLE forum_profiles DROP CONSTRAINT forum_avatar_fk;
+DROP TABLE forum_attachments;
+DROP TABLE forum_reports;
+DROP TABLE forum_notifications;
+DROP TABLE forum_bookmarks;
+DROP TABLE forum_follows;
+ALTER TABLE web_sessions DROP COLUMN device_id;
+ALTER TABLE forum_profiles DROP COLUMN avatar_id;
+ALTER TABLE forum_comments DROP COLUMN parent_id;
+ALTER TABLE forum_topics DROP COLUMN accepted_post_id;
+ALTER TABLE forum_articles DROP COLUMN kind;

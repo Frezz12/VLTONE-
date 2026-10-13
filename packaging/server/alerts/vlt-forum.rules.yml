@@ -1,0 +1,32 @@
+groups:
+  - name: vlt-forum
+    rules:
+      - alert: VltForumLoginFailures
+        expr: increase(vlt_forum_auth_failures_total[10m]) > 20
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "Forum sign-in failures increased; inspect API request IDs and origin configuration"}
+      - alert: VltForumUploadFailures
+        expr: increase(vlt_forum_upload_failures_total[10m]) > 10
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "Forum uploads are failing; inspect S3, quota and checksum errors"}
+      - alert: VltForumVideoQueueStalled
+        expr: vlt_forum_media_oldest_seconds > 1800
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "Oldest forum video job exceeds 30 minutes; check worker service and FFmpeg"}
+      - alert: VltForumVideoLeaseExpired
+        expr: vlt_forum_media_expired_leases > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "Forum video leases are not being reclaimed"}
+      - alert: VltForumVideoFailed
+        expr: delta(vlt_forum_media_failed[15m]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "Forum videos exhausted their processing retries"}
+      - alert: VltForumMetricsUnavailable
+        expr: vlt_forum_metrics_database_error > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "Forum metrics cannot query PostgreSQL"}

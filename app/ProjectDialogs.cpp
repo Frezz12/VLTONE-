@@ -1,4 +1,5 @@
 #include "ProjectDialogs.hpp"
+#include "VltContentInstaller.hpp"
 
 #include "Icons.hpp"
 #include "ProjectTemplates.hpp"
@@ -761,7 +762,12 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     m_projectList->setMouseTracking(true);
     m_projectList->setItemDelegate(new ProjectCardDelegate(m_projectList));
 
-    for (const auto& path : projectPaths) {
+    QStringList availableProjects=projectPaths;
+    const QDir downloaded(VltContentInstaller::libraryDirectory("project"));
+    for(const auto& entry:downloaded.entryInfoList({"*.vlt"},QDir::Dirs|QDir::Files,QDir::Name)) {
+        if(!availableProjects.contains(entry.absoluteFilePath()))availableProjects.push_back(entry.absoluteFilePath());
+    }
+    for (const auto& path : availableProjects) {
         const auto summary = readSummary(path);
         auto* item = new QListWidgetItem(summary.name, m_projectList);
         item->setData(Qt::UserRole, summary.path);
@@ -786,7 +792,7 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
             .arg(summary.name.toHtmlEscaped(), escaped.join(QStringLiteral("<br>"))));
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
     }
-    if (projectPaths.isEmpty()) {
+    if (availableProjects.isEmpty()) {
         auto* empty = new QLabel(tr("No recent projects yet. Open one from disk and it will appear here."), m_projectList);
         empty->setObjectName(QStringLiteral("ProjectEmptyState"));
         empty->setAlignment(Qt::AlignCenter);

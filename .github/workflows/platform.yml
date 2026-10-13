@@ -26,6 +26,11 @@ jobs:
     env:
       VLT_TEST_DATABASE_URL: postgres://vlt_test:vlt_test@127.0.0.1:5432/vlt_test?sslmode=disable
       VLT_COLLAB_TEST_DATABASE_URL: postgres://vlt_test:vlt_test@127.0.0.1:5432/vlt_collab_test?sslmode=disable
+      FORUM_TEST_OBJECT_ENDPOINT: http://127.0.0.1:9000
+      FORUM_TEST_OBJECT_BUCKET: vlt-forum-ci
+      FORUM_TEST_OBJECT_REGION: us-east-1
+      FORUM_TEST_OBJECT_ACCESS_KEY_ID: vlt_minio_ci
+      FORUM_TEST_OBJECT_SECRET_ACCESS_KEY: vlt_minio_ci_secret
       COLLAB_OBJECT_ENDPOINT: http://127.0.0.1:9000
       COLLAB_OBJECT_REGION: us-east-1
       COLLAB_OBJECT_BUCKET: vlt-collaboration-ci
@@ -43,7 +48,7 @@ jobs:
           . /etc/os-release
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install --yes postgresql-18
+          sudo apt-get install --yes postgresql-18 ffmpeg
           sudo systemctl start postgresql
           sudo -u postgres psql --set=ON_ERROR_STOP=1 <<'SQL'
           CREATE USER vlt_test WITH PASSWORD 'vlt_test';
@@ -84,6 +89,7 @@ jobs:
           done
           aws --endpoint-url "$COLLAB_OBJECT_ENDPOINT" s3api create-bucket \
             --bucket "$COLLAB_OBJECT_BUCKET"
+          aws --endpoint-url "$FORUM_TEST_OBJECT_ENDPOINT" s3api create-bucket --bucket "$FORUM_TEST_OBJECT_BUCKET"
           # This pinned MinIO does not implement the S3 multipart-abort
           # lifecycle action. Exercise its supported expiration rule here;
           # retain the full policy for the production S3 provider.
@@ -149,6 +155,12 @@ jobs:
           pnpm --filter @vlt/web test
           pnpm --filter @vlt/admin test
 
+      - name: Run forum account and browser integration
+        working-directory: backend
+        env:
+          VLT_TEST_PLAYWRIGHT: "1"
+        run: go test ./internal/api -run TestPostgresForumCommunity -count=1 -timeout=10m
+
       - name: Build immutable server bundle
         if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_server_bundle)
         run: |
@@ -177,6 +189,7 @@ jobs:
           path: |
             web/test-results/**
             admin/test-results/**
+            forum/test-results/**
           if-no-files-found: ignore
 
   release-attestation:

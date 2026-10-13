@@ -384,6 +384,9 @@ func (s *Server) revokeDesktopSessionsAfterRefreshReuse(userID uuid.UUID,
 			Update("revoked_at", now).Error; err != nil {
 			return err
 		}
+		if e := tx.Model(&model.WebSession{}).Where("user_id = ? AND device_id IS NOT NULL AND revoked_at IS NULL", userID).Update("revoked_at", now).Error; e != nil {
+			return e
+		}
 		if s.Collab != nil {
 			return s.Collab.EvictUserSessionsTx(tx, userID, now)
 		}
@@ -452,6 +455,18 @@ func (s *Server) desktopLogout(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value(ctxDesktopClaims).(auth.Claims)
 	now := time.Now().UTC()
 	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var actor model.User
+		if e := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&actor, "id = ?", claims.Subject).Error; e != nil {
+			return e
+		}
+		var device model.Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&device, "id = ?", claims.DeviceID).Error; err != nil {
+			return err
+		}
+
+		if e := tx.Model(&model.WebSession{}).Where("device_id = ? AND revoked_at IS NULL", claims.DeviceID).Update("revoked_at", now).Error; e != nil {
+			return e
+		}
 		if err := tx.Model(&model.DesktopSession{}).
 			Where("id = ? AND user_id = ?", claims.SessionID, claims.Subject).
 			Update("revoked_at", now).Error; err != nil {

@@ -39,6 +39,7 @@ git diff --exit-code -- packages/api-client/src/schema.d.ts
 
 (cd backend &&
     go build -trimpath -ldflags='-s -w' -o "$stage/bin/vlt-api" ./cmd/api &&
+    go build -trimpath -ldflags='-s -w' -o "$stage/bin/vlt-forum-media" ./cmd/forum-media &&
     go build -trimpath -ldflags='-s -w' -o "$stage/bin/vlt-migrate" ./cmd/migrate &&
     go build -trimpath -ldflags='-s -w' -o "$stage/bin/vlt-adminctl" ./cmd/adminctl)
 
@@ -93,6 +94,7 @@ EOF
 
 copy_next_app web
 copy_next_app admin
+copy_next_app forum
 cp backend/migrations/*.sql "$stage/migrations/"
 cp -aL packaging/server/. "$stage/ops/"
 chmod 0755 "$stage/ops/"*.sh

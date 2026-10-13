@@ -89,6 +89,10 @@ bool validLanguageName(const QString& value) {
 }
 
 QString customBaseDirectory() {
+    if (auto* app=QCoreApplication::instance()) {
+        const auto root=app->property("dawHeadlessDataRoot").toString();
+        if(!root.isEmpty())return root;
+    }
     QString base = QStandardPaths::writableLocation(
         QStandardPaths::AppLocalDataLocation);
     if (base.isEmpty()) {

@@ -59,7 +59,7 @@ install -m 0644 "$release/ops/systemd/"*.service /etc/systemd/system/
 install -m 0644 "$release/ops/tmpfiles.d/vlt-account.conf" /etc/tmpfiles.d/
 systemd-tmpfiles --create /etc/tmpfiles.d/vlt-account.conf
 systemctl daemon-reload
-systemctl enable vlt-account-api vlt-account-web vlt-account-admin
+systemctl enable vlt-account-api vlt-account-web vlt-account-admin vlt-forum-media vlt-account-forum
 
 echo "Installed $release"
 if [[ ${2:-} == "--no-deploy" ]]; then

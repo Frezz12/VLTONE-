@@ -127,3 +127,15 @@ stuck session endings and storage failures, and warn on repeated snapshot
 retries or a cleanup backlog. Scrape `/metrics` directly over loopback; the
 handler intentionally rejects non-loopback clients and contains no user or
 project labels.
+
+## Forum and media worker
+
+The bundle now includes `forum/` and `bin/vlt-forum-media`. Set `FORUM_ORIGIN=https://forum.vltstudio.ru`, configure DNS/TLS for the new Apache virtual host, and install both `vlt-account-forum.service` (127.0.0.1:3102) and `vlt-forum-media.service`. The API remains common to all three websites. The worker requires FFprobe/FFmpeg with H.264/AAC, VP9/Opus and JPEG encoders; preflight verifies them. It runs with CPU/memory/task limits. Choose a private **separate forum S3 bucket and credentials**, not the collaboration bucket. Apply `forum-s3-cors.example.json` with your exact forum origin and `forum-s3-lifecycle.example.json` (incomplete multipart/staging only; never expire published `objects/` or `media/`). No bucket public-read policy is needed; authorized downloads stream through Go with Range support.
+
+Launch order: migrate → API and worker → forum → compatible desktop client. The existing install/deploy/smoke/rollback scripts include the new services. For the initial rollout, install the new unit files and Apache configuration before deployment; provision the TLS certificate before enabling the HTTPS host. Test login on both origins, a two-user discussion, direct upload and hide/restore before releasing the desktop build. Keep the previous release and a database/object snapshot; code rollback does not automatically reverse data migrations.
+
+`/metrics` remains loopback-only and now exposes `vlt_forum_auth_failures_total`, `vlt_forum_upload_failures_total`, queue depth/age, active and expired leases, failed videos and DB collection errors. Import `alerts/vlt-forum.rules.yml` into Prometheus. API logs retain request IDs; worker logs are available with `journalctl -u vlt-forum-media`. Desktop installation errors are logged as `forum installation failed:` and shown in the browser; inspect them with the existing native diagnostic logs. Check both MP4 and WebM in browsers and deployed Qt builds, since Qt codec availability varies by build.
+
+Backups include PostgreSQL and the forum `objects/`, `media/`, `staging/` prefixes. Stop API/media writes before running `backup.sh` to make the database and object snapshot consistent; the script verifies this. Restore with the services stopped, then migrate/start/smoke. Enable bucket versioning and keep off-server copies of both database and objects. Exercise restore into an isolated environment; a DB-only restore cannot recover attachments.
+
+Implementation and local test commands: [forum/README.md](../../forum/README.md).

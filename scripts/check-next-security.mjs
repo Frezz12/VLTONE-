@@ -7,7 +7,7 @@ if (!release) {
 }
 
 const blocked = new Set(["16.2.11"]);
-for (const project of ["web", "admin"]) {
+for (const project of ["web", "admin", "forum"]) {
   const manifest = JSON.parse(await readFile(new URL(`../${project}/package.json`, import.meta.url), "utf8"));
   const version = manifest.dependencies?.next;
   if (!version || blocked.has(version)) {

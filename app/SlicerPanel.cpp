@@ -1,6 +1,7 @@
 #include "PluginStyle.hpp"
 #include "ScrollMotion.hpp"
 #include "SlicerPanel.hpp"
+#include "VltContentInstaller.hpp"
 #include "AudioImportPreparation.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
@@ -1389,7 +1390,7 @@ void SlicerPanel::randomizeSelection(bool newSeed) {
 }
 void SlicerPanel::preset(bool load) {
     if (!slicer()) return;
-    const auto path = load ? QFileDialog::getOpenFileName(this, tr("Load portable Slicer preset"), {}, "Slicer (*.vltslicer)") : QFileDialog::getSaveFileName(this, tr("Save portable Slicer preset"), {}, "Slicer (*.vltslicer)");
+    const auto path = load ? QFileDialog::getOpenFileName(this, tr("Load portable Slicer preset"), ui::VltContentInstaller::libraryDirectory("slicer"), "Slicer (*.vltslicer)") : QFileDialog::getSaveFileName(this, tr("Save portable Slicer preset"), {}, "Slicer (*.vltslicer)");
     const auto snapshot = slicer();
     if (path.isEmpty() || !snapshot) return; const auto state = snapshot->state; const auto cache = mediaCache();
     const QString destination = load || path.endsWith(".vltslicer", Qt::CaseInsensitive) ? path : path + ".vltslicer";

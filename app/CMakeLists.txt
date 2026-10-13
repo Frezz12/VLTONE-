@@ -45,6 +45,15 @@ if(APPLE AND Qt6Gui_VERSION VERSION_GREATER_EQUAL "6.11.0" AND
         "For Homebrew: brew upgrade qt")
 endif()
 find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+# Homebrew keeps libarchive keg-only; vcpkg supplies the same CMake target on Windows.
+if(APPLE)
+    foreach(archive_prefix IN ITEMS "/opt/homebrew/opt/libarchive" "/usr/local/opt/libarchive")
+        if(EXISTS "${archive_prefix}")
+            list(APPEND CMAKE_PREFIX_PATH "${archive_prefix}")
+        endif()
+    endforeach()
+endif()
+find_package(LibArchive REQUIRED)
 if(NOT APPLE)
     find_package(RtMidi CONFIG REQUIRED)
 endif()
@@ -226,6 +235,7 @@ if(DAW_BUILD_TESTS)
         WebPrefs.cpp TimelineBackgroundPrefs.cpp ThemeMediaBackground.cpp ThemeMediaBackground.hpp
         Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp Theme.cpp Typography.cpp)
     target_include_directories(browser_navigation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(browser_navigation_test PRIVATE DAW_FORUM_TEST_VIDEO="${CMAKE_SOURCE_DIR}/tests/fixtures/video/forum.webm")
     target_link_libraries(browser_navigation_test PRIVATE
         daw_controller vlt_browser_surface vlt_gpu_scene vlt_graphics_preferences vlt_ui_frame_clock Qt6::Widgets Qt6::WebEngineWidgets Qt6::Multimedia Qt6::Network Qt6::Svg)
     add_test(NAME browser_navigation_test COMMAND browser_navigation_test)
@@ -573,7 +583,7 @@ target_link_libraries(daw PRIVATE daw_controller vlt_browser_surface vlt_gpu_sce
                                   Qt6::Multimedia Qt6::MultimediaWidgets Qt6::WebChannel
                                   Qt6::WebEngineWidgets
                                   Qt6::SerialPort Qt6::Svg
-                                  OpenSSL::Crypto RtMidi::rtmidi)
+                                  OpenSSL::Crypto RtMidi::rtmidi LibArchive::LibArchive)
 if(DAW_BUILD_TESTS)
     add_test(NAME timeline_clip_undo_drag_ui_test COMMAND $<TARGET_FILE:daw> --timelineclipcheck)
     add_test(NAME recording_stop_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
@@ -889,4 +899,19 @@ qt6_deploy_runtime_dependencies(
             NO_UNSUPPORTED_PLATFORM_ERROR)
     endif()
     install(SCRIPT ${DAW_DEPLOY_SCRIPT})
+endif()
+
+if(DAW_BUILD_TESTS)
+    qt_add_executable(forum_content_installer_test
+        ../tests/forum_content_installer_test.cpp
+        VltContentInstaller.cpp VltPackageArchive.cpp MiniModuleLibrary.cpp CreatorProject.cpp CreatorSubgraphs.cpp
+        ChannelStripPresets.cpp ProjectTemplates.cpp LocalizationManager.cpp LocalizationManager.hpp
+        ThemePackage.cpp ThemePackage.hpp Theme.cpp Theme.hpp Typography.cpp TrackIcons.cpp TrackIcons.hpp
+        NotebookPrefs.cpp NotebookPrefs.hpp TimelineBackgroundPrefs.cpp TimelineBackgroundPrefs.hpp
+        UiConstants.cpp UiConstants.hpp)
+    target_include_directories(forum_content_installer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(forum_content_installer_test PRIVATE daw_controller LibArchive::LibArchive
+        Qt6::Widgets Qt6::Svg Qt6::WebEngineCore Qt6::WebEngineQuick)
+    add_test(NAME forum_content_installer_test COMMAND forum_content_installer_test)
+    set_tests_properties(forum_content_installer_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 endif()

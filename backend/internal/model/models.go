@@ -73,12 +73,13 @@ type Subscription struct {
 }
 
 type WebSession struct {
-	ID         uuid.UUID `gorm:"type:uuid;primaryKey"`
-	UserID     uuid.UUID `gorm:"type:uuid;index;not null"`
-	TokenHash  string    `gorm:"uniqueIndex;not null"`
-	CSRFToken  string    `gorm:"not null"`
-	LastSeenAt time.Time `gorm:"not null"`
-	ExpiresAt  time.Time `gorm:"index;not null"`
+	DeviceID   *uuid.UUID `gorm:"type:uuid"`
+	ID         uuid.UUID  `gorm:"type:uuid;primaryKey"`
+	UserID     uuid.UUID  `gorm:"type:uuid;index;not null"`
+	TokenHash  string     `gorm:"uniqueIndex;not null"`
+	CSRFToken  string     `gorm:"not null"`
+	LastSeenAt time.Time  `gorm:"not null"`
+	ExpiresAt  time.Time  `gorm:"index;not null"`
 	CreatedAt  time.Time
 	RevokedAt  *time.Time
 }

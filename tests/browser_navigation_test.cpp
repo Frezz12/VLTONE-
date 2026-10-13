@@ -4,6 +4,8 @@
 #include "WebPrefs.hpp"
 #include <QApplication>
 #include <QBuffer>
+#include <QDataStream>
+#include <QWebEngineDownloadRequest>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
@@ -79,6 +81,8 @@ class Server : public QTcpServer {
                             proxyReceived = true;
                             body = "<title>Proxy works</title>";
                         }
+                        if(path=="/forum.webm") {QFile f(QStringLiteral(DAW_FORUM_TEST_VIDEO));f.open(QIODevice::ReadOnly);body=f.readAll();mime="video/webm";}
+                        if(path=="/forum-player")body="<title>Forum player</title><video id='v' muted autoplay loop playsinline src='/forum.webm'></video>";
                         if (path == "/slow") {
                             slowRequested = true;
                             return;
@@ -224,6 +228,24 @@ int main(int argc, char** argv) {
             check(waitFor([&] { return *done; }), "start page JavaScript callback");
             return *result;
         };
+        // Both profiles must still deliver ordinary audio, while allowing a
+        // trusted VLT download to be routed through the optional installer hook.
+        QByteArray wav;QDataStream audioStream(&wav,QIODevice::WriteOnly);audioStream.setByteOrder(QDataStream::LittleEndian);
+        audioStream.writeRawData("RIFF",4);audioStream<<quint32(996);audioStream.writeRawData("WAVEfmt ",8);audioStream<<quint32(16)<<quint16(1)<<quint16(1)<<quint32(48000)<<quint32(96000)<<quint16(2)<<quint16(16);audioStream.writeRawData("data",4);audioStream<<quint32(960);for(int i=0;i<480;++i)audioStream<<qint16(0);
+        const auto wavPath=settings.path()+"/browser-audio.wav";{QFile f(wavPath);f.open(QIODevice::WriteOnly);f.write(wav);}
+        bool audioReady=false;int downloadHooks=0;
+        QObject::connect(&panel,&WebBrowserPanel::audioDownloadReady,&panel,[&](const QString&,const audio::platform::AudioFileInfo&){audioReady=true;});
+        panel.contentDownloadCompleted=[&](QWebEngineDownloadRequest*,const QString&){++downloadHooks;return false;};
+        panel.downloadAudioForTest(wavPath);
+        check(waitFor([&]{return audioReady;}),"audio download still reaches DAW after content hook");
+        check(downloadHooks==1,"Widgets/Quick use the same download hook");
+        audioReady=false;downloadHooks=0;
+        panel.contentDownloadCompleted=[&](QWebEngineDownloadRequest*,const QString&){++downloadHooks;return true;};
+        panel.downloadAudioForTest(wavPath);check(waitFor([&]{return downloadHooks==1;}),"installer completion hook receives downloaded file");
+        check(!audioReady,"handled content does not import audio into the project");
+        panel.contentDownloadCompleted={};
+        panel.openUrlForTest(server.url("/forum-player").toString());
+        check(waitFor([&]{return js("!!document.getElementById('v') && document.getElementById('v').currentTime>0").toBool();}),"forum WebM plays in this browser mode");
         panel.openUrlForTest(ui::webprefs::kStartUrl);
         if (!check(waitFor([&] { return panel.startPageReadyForTest(); }), "new start page loads offline"))
             return 1;

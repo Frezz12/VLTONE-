@@ -1,4 +1,5 @@
 #include "CreatorWindow.hpp"
+#include "VltContentInstaller.hpp"
 #include "CreatorCommands.hpp"
 #include "CreatorAiPanel.hpp"
 #include "Creator/CodeUtilities.hpp"
@@ -834,7 +835,7 @@ bool CreatorWindow::openProject(const QString &requested) {
     return false;
   const auto path =
       requested.isEmpty()
-          ? QFileDialog::getOpenFileName(this, tr("Open Creator project"), {},
+          ? QFileDialog::getOpenFileName(this, tr("Open Creator project"), VltContentInstaller::libraryDirectory("creator"),
                                          tr("Creator projects (*.vltcreator)"))
           : requested;
   if (path.isEmpty())

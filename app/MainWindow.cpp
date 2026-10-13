@@ -119,6 +119,7 @@
 #include "TypingKeyboard.hpp"
 #include "UiConstants.hpp"
 #include "WebBrowserPanel.hpp"
+#include "ForumBrowserBridge.hpp"
 #include "WebPrefs.hpp"
 
 #include <array>
@@ -11956,6 +11957,7 @@ void MainWindow::setBrowserVisible(bool visible) {
 void MainWindow::ensureWebBrowser() {
     if (m_webPanel || !m_webContainer) return;
     m_webPanel = new WebBrowserPanel(m_webContainer);
+    new ui::ForumBrowserBridge(m_webPanel, account::Service::instance());
     m_webContainer->layout()->addWidget(m_webPanel);
     connect(m_webPanel, &WebBrowserPanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 4000); });

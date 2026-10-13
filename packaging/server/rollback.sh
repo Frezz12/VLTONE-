@@ -26,17 +26,21 @@ replace_link() {
     ln -s -- "$value" "$temporary"
     mv -Tf -- "$temporary" "$APP_ROOT/$name"
 }
+systemctl stop vlt-account-forum vlt-forum-media || true
+if [[ -x "$target/forum/start" ]]; then SERVICES+=(vlt-forum-media vlt-account-forum); fi
 replace_link current "$target"
 replace_link previous "$current"
 install -m 0644 "$target/ops/systemd/"*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl restart "${SERVICES[@]}"
-if "$current/ops/smoke.sh"; then
+if "$target/ops/smoke.sh"; then
     echo "Rolled back application to $target (database migrations were retained)."
     exit 0
 fi
 
 echo "Rollback smoke test failed; restoring $current" >&2
+SERVICES=(vlt-account-api vlt-account-web vlt-account-admin)
+if [[ -x "$current/forum/start" ]]; then SERVICES+=(vlt-forum-media vlt-account-forum); fi
 replace_link current "$current"
 replace_link previous "$target"
 install -m 0644 "$current/ops/systemd/"*.service /etc/systemd/system/
