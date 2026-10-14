@@ -273,6 +273,30 @@ int main(int argc, char** argv) {
     if (ui::graphics::requiresLayerClip(clipLayer)) return 1;
     clipLayer.meshes.front().transform.translate(1, 0);
     if (!ui::graphics::requiresLayerClip(clipLayer)) return 1;
+    // Geometry remains immutable while a mixer scrolls through different
+    // clips. The cached bounds must preserve both containment and exposure.
+    ui::graphics::cacheLayerBounds(clipLayer);
+    for (int x = -30; x <= 30; ++x) {
+        clipLayer.clip = QRectF(x, 0, 30, 30);
+        auto uncached = clipLayer;
+        uncached.contentBounds.reset();
+        if (ui::graphics::requiresLayerClip(clipLayer) != ui::graphics::requiresLayerClip(uncached)) {
+            std::cerr << "Cached mixer geometry changed scrolling containment\n"; return 1;
+        }
+    }
+    clipLayer.clip = QRectF(0, 0, 100, 100);
+    clipLayer.mask = QRegion(0, 0, 5, 5);
+    if (!ui::graphics::requiresLayerClip(clipLayer)) return 1;
+    clipLayer.mask = {};
+    auto innerClip = std::make_shared<ui::graphics::SceneClip>();
+    innerClip->bounds = QRectF(12, 12, 5, 5);
+    clipLayer.meshes.front().clip = innerClip;
+    ui::graphics::cacheLayerBounds(clipLayer);
+    clipLayer.clip = innerClip->bounds;
+    if (ui::graphics::requiresLayerClip(clipLayer)) return 1;
+    clipLayer.meshes.front().group = std::make_shared<ui::graphics::SceneMeshGroup>();
+    ui::graphics::cacheLayerBounds(clipLayer);
+    if (clipLayer.contentBounds) return 1;
     ui::graphics::SceneRecorder gradientPass(QSize(320, 140), 2);
     {
         QPainter p(&gradientPass);
@@ -527,6 +551,7 @@ int main(int argc, char** argv) {
     scroll.setGeometry(10, 10, 200, 100);
     scroll.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* page = new PlainControl;
+    page->setProperty("vlt.retainOffscreen", true);
     page->color = QColor("#203040");
     page->setFixedSize(180, 240);
     auto* tile = new PlainControl(page);
@@ -575,6 +600,29 @@ int main(int argc, char** argv) {
     if (tile->paints || clipped.pixelColor(int(top.x()*dpr), int(top.y()*dpr)) != QColor(Qt::green) ||
         clipped.pixelColor(int(top.x()*dpr), int((top.y()-3)*dpr)) == QColor(Qt::green)) {
         std::cerr << "A retained layer escaped its new viewport clip\n"; return 1;
+    }
+
+    // A console returning to a recent column reuses its recording, while
+    // edits made beyond the viewport must still invalidate that recording.
+    scroll.verticalScrollBar()->setValue(140);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    tile->paints = 0;
+    scroll.verticalScrollBar()->setValue(80);
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (tile->paints) {
+        std::cerr << "Returning to a recent mixer column rerecorded unchanged controls\n"; return 1;
+    }
+    for (const bool parentUpdate : {false, true}) {
+        scroll.verticalScrollBar()->setValue(140);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        tile->color = parentUpdate ? Qt::cyan : Qt::yellow;
+        if (parentUpdate) page->update(); else tile->update();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        scroll.verticalScrollBar()->setValue(80);
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        if (surface->quickWindow()->grabWindow().pixelColor(int(top.x()*dpr), int(top.y()*dpr)) != tile->color) {
+            std::cerr << "An offscreen mixer edit exposed a stale cached control\n"; return 1;
+        }
     }
 
     // Wheel navigation must update hover even without a new mouse movement.

@@ -19,6 +19,9 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
+
+namespace ui::graphics { class RetainedScene; }
 
 class QLabel;
 class QMenu;
@@ -319,12 +322,14 @@ private:
 /// Vertical in the mixer, horizontal in the track headers — same feel and the
 /// same unity detent in both. The scale only appears where there is width for
 /// it (`setScaleVisible`), so the header's short fader is just slot and cap.
-class FaderWidget : public QWidget {
+class FaderWidget : public QWidget, public graphics::ScenePaintSource {
     Q_OBJECT
 public:
     explicit FaderWidget(QWidget* parent = nullptr)
         : FaderWidget(Qt::Vertical, parent) {}
     FaderWidget(Qt::Orientation orientation, QWidget* parent = nullptr);
+    ~FaderWidget() override;
+    void paintScene(QPainter& painter, const QRegion& damage) override;
 
     double gain() const { return m_gain; }
     void setGain(double gain);
@@ -385,6 +390,10 @@ private:
     void showBubble();
     void paintScale(QPainter& p) const;
     void paintCap(QPainter& p, const QRectF& cap) const;
+
+    std::unique_ptr<graphics::RetainedScene> m_capScene;
+    QSizeF m_cachedCapSize;
+    bool m_staticSceneDirty = true;
 
     Qt::Orientation m_orientation = Qt::Vertical;
     bool m_scale = false;

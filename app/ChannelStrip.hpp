@@ -122,6 +122,7 @@ protected:
     void contextMenuEvent(QContextMenuEvent*) override;
 
 private:
+    float m_displayedPeak = -1.0f;
     double m_displayedGain = -1.0;
     double m_displayedPan = -2.0;
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(
@@ -220,6 +221,7 @@ QWidget* buildColor();
     void populateAddSendMenu(QMenu* menu);
     void applyTheme();
     void updateReadouts();
+    void refreshLevelAutomationValues();
     void updateResponsiveLayout();
     void resetPeakHold();
     void updateHeader(const QString& name, std::uint32_t color);

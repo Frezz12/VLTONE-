@@ -20,6 +20,9 @@ struct RecoverySnapshot {
 
     ProjectModel project;
     std::vector<PluginState> pluginStates;
+    // Recovery may retain older checkpoints, but an explicit Save must not
+    // report success when a live plugin refused to capture its current state.
+    std::string captureError;
     // Optional immutable parts. The journal worker materializes these for the
     // serializer; it never reads the live model or a mutable cache.
     bool fragmented = false;

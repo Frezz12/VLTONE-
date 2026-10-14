@@ -1,6 +1,7 @@
 #include "BrowserBackgroundDialog.hpp"
 #include "Typography.hpp"
 #include "WebBrowserPanel.hpp"
+#include "Theme.hpp"
 #include "WebPrefs.hpp"
 #include <QApplication>
 #include <QBuffer>
@@ -22,6 +23,11 @@
 #include <QNetworkProxyFactory>
 #include <QPushButton>
 #include <QSettings>
+#include <QShortcut>
+#include <QKeyEvent>
+#include <QTranslator>
+#include <QAbstractButton>
+#include <QWebEngineDownloadRequest>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -74,7 +80,7 @@ class Server : public QTcpServer {
                         if (!input->contains("\r\n\r\n"))
                             return;
                         const auto path = input->split(' ').value(1);
-                        QByteArray body = "<title>Ready</title><h1>Ready</h1>",
+                        QByteArray body = "<title>Ready</title><h1>Ready</h1><p>alpha alpha alpha</p>",
                                    mime = "text/html", status = "200 OK",
                                    headers;
                         if (path.startsWith("http://proxy-check.invalid/")) {
@@ -85,6 +91,21 @@ class Server : public QTcpServer {
                         if(path=="/forum-player")body="<title>Forum player</title><video id='v' muted autoplay loop playsinline src='/forum.webm'></video>";
                         if (path == "/slow") {
                             slowRequested = true;
+                            return;
+                        }
+                        if (path == "/download") {
+                            body = QByteArray(4096, 'a');
+                            mime = "application/octet-stream";
+                            headers = "Content-Disposition: attachment; filename=browser-fixture.txt\r\n";
+                        }
+                        if (path == "/download-slow") {
+                            socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                                          "Content-Disposition: attachment; filename=slow-fixture.bin\r\n"
+                                          "Content-Length: 1048576\r\n\r\n");
+                            auto* timer = new QTimer(socket);
+                            timer->setInterval(100);
+                            QObject::connect(timer, &QTimer::timeout, socket, [socket] { socket->write(QByteArray(4096, 'a')); });
+                            timer->start();
                             return;
                         }
                         if (path == "/redirect") {
@@ -217,6 +238,14 @@ int main(int argc, char** argv) {
         panel.show();
         auto* stack = panel.findChild<QStackedWidget*>("WebViewStack");
         auto* surface = qobject_cast<ui::graphics::BrowserSurface*>(stack->currentWidget());
+        const auto shortcut = [&](const QString& sequence) {
+            for (auto* action : panel.findChildren<QShortcut*>()) if (action->key() == QKeySequence(sequence)) {
+                QMetaObject::invokeMethod(action, "activated", Qt::DirectConnection);
+                return true;
+            }
+            check(false, "browser keyboard command is registered");
+            return false;
+        };
         check(surface->page()->isQuick() == quick, "requested browser backend is active");
         auto js = [&](const QString& source) {
             auto result = std::make_shared<QVariant>();
@@ -270,14 +299,18 @@ int main(int argc, char** argv) {
             check(rail->property("railRole").toString() != "samples", "sample sidebar button removed");
         for (const int width : {900, 520, 320}) {
             panel.resize(width, 760);
+            // Chromium rounds CSS pixels after Qt's fractional device scaling.
+            // Permit the one-pixel rounding difference, not a stale viewport.
             check(waitFor([&] {
-                return js("innerWidth").toInt() == surface->width();
+                return qAbs(js("innerWidth").toInt() - surface->width()) <= 1;
             }), "browser viewport follows panel resize");
             check(js("document.documentElement.scrollWidth <= innerWidth").toBool(),
                   "start page fits without horizontal scrolling");
             check(js("[...document.querySelectorAll('.shortcut,.search')].every(e => "
                      "e.getBoundingClientRect().right <= innerWidth && e.getBoundingClientRect().left >= 0)").toBool(),
                   "search and pinned sites fit at every panel width");
+            check(panel.width() == width && panel.findChild<QLineEdit*>("WebAddress")->width() >= 50,
+                  "native browser chrome respects the narrow panel width");
             if (app.arguments().contains("--capture")) {
                 const auto folder = qEnvironmentVariable("VLT_BROWSER_CAPTURE_DIR", QDir::tempPath());
                 QDir().mkpath(folder);
@@ -314,27 +347,40 @@ int main(int argc, char** argv) {
             buttons->button(QDialogButtonBox::Save)->click();
         });
         dialogDriver.start(25);
-        QTimer::singleShot(0, &panel, [&] {
-            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
-            if (!menu) return;
-            auto* add = menu->findChild<QAction*>("WebAddBookmark");
-            menu->close();
-            if (add) add->trigger();
-        });
         for (auto* rail : panel.findChildren<QPushButton*>())
             if (rail->property("railRole").toString() == "bookmarks") rail->click();
-        check(waitFor([&] { return shortcutDialog; }), "bookmarks menu opens the native editor");
+        panel.findChild<QPushButton*>("WebLibraryAction")->click();
+        check(waitFor([&] { return shortcutDialog; }), "bookmarks library opens the native editor");
         dialogDriver.stop();
         check(invalidAddressRejected, "shortcut editor rejects executable addresses");
         check(ui::webprefs::isBookmarked(server.url("/ready").toString()), "shortcut persists as a real bookmark");
+        auto* libraryList = panel.findChild<QListWidget*>("WebLibraryList");
+        auto* librarySearch = panel.findChild<QLineEdit*>("WebLibrarySearch");
+        check(libraryList->count() == 1, "new bookmark appears in the library immediately");
+        librarySearch->setText("not-a-bookmark");
+        check(libraryList->count() == 0 && panel.findChild<QLabel*>("WebLibraryEmpty")->isVisible(), "bookmark search has an explicit empty state");
+        librarySearch->setText("LOCAL");
+        check(libraryList->count() == 1, "bookmark search matches titles case-insensitively");
+        panel.findChild<QAbstractButton*>("WebLibraryClose")->click();
         check(waitFor([&] { return panel.startPageReadyForTest(); }), "start page refreshes after saving shortcut");
         check(js("document.querySelectorAll('.shortcut').length === 4 && "
                  "document.querySelector('.shortcut .name').textContent === 'YouTube'").toBool(),
               "saved bookmarks do not replace the four pinned sites");
+        check(js("document.querySelector('.saved-link strong').textContent === 'Local & <sample>'").toBool(),
+              "start page displays saved bookmarks with escaped titles");
+        const QString darkBackground = th().background.name();
+        check(js("getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()").toString() == darkBackground,
+              "start page uses the application palette");
+        ThemeManager::instance().setThemeId("light", false);
+        check(waitFor([&] { return panel.startPageReadyForTest() && js("getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()").toString() == th().background.name(); }),
+              "start page updates when the application theme changes");
+        check(panel.palette().color(QPalette::Window) == th().background, "native browser chrome follows the light theme");
+        ThemeManager::instance().setThemeId("dark", false);
+        check(waitFor([&] { return panel.startPageReadyForTest() && js("getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()").toString() == th().background.name(); }), "start page reloads after restoring the dark theme");
         bool searchSubmitted = false;
         const auto navigationPolicy = surface->page()->navigationPolicy;
         surface->page()->navigationPolicy = [&](const QUrl& url, bool) {
-            searchSubmitted = url.host() == "duckduckgo.com" && url.query().contains("q=ambient");
+            searchSubmitted |= url.host() == "duckduckgo.com" && url.query().contains("q=ambient");
             return false; // Inspect the real form submission without reaching the internet.
         };
         js("document.getElementById('web-query').value='ambient';document.querySelector('.search').requestSubmit()");
@@ -344,6 +390,80 @@ int main(int argc, char** argv) {
         auto* view = surface;
         check(waitFor([&] { return view->title() == "Ready"; }),
               "ordinary page loads");
+        shortcut("Ctrl+F");
+        auto* findText = panel.findChild<QLineEdit*>("WebFindText");
+        auto* findResult = panel.findChild<QLabel*>("WebFindResult");
+        findText->setText("alpha");
+        if (!check(waitFor([&] { return findResult->text() == "1 of 3"; }), "find in page reports actual Chromium match counts"))
+            std::fprintf(stderr, "find result: %s\n", findResult->text().toUtf8().constData());
+        shortcut("F3");
+        check(waitFor([&] { return findResult->text() == "2 of 3"; }), "next match advances the find count");
+        shortcut("Shift+F3");
+        check(waitFor([&] { return findResult->text() == "1 of 3"; }), "previous match reverses the find count");
+        findText->setText("no-such-word");
+        check(waitFor([&] { return findResult->text() == "No matches"; }), "find reports a query with no matches");
+        shortcut("Escape");
+        shortcut("Ctrl+=");
+        check(qAbs(view->zoomFactor() - 1.1) < .001 && panel.findChild<QPushButton*>("WebZoom")->isVisible(), "zoom has a visible per-tab reset control");
+        panel.findChild<QPushButton*>("WebZoom")->click();
+        check(qFuzzyCompare(view->zoomFactor(), 1.0), "zoom resets to actual size");
+        shortcut("Ctrl+H");
+        librarySearch->setText("127.0.0.1");
+        check(libraryList->count() >= 1, "history can be searched by host");
+        shortcut("Escape");
+        auto* tabBar = panel.findChild<QTabBar*>("WebTabBar");
+        QTimer::singleShot(0, &panel, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) return;
+            auto* mute = menu->findChild<QAction*>("WebMuteTab");
+            menu->close();
+            if (mute) mute->trigger();
+        });
+        tabBar->customContextMenuRequested(tabBar->tabRect(tabBar->currentIndex()).center());
+        check(js("true").toBool() && (quick ? surface->page()->quickItem()->property("audioMuted").toBool()
+                                          : surface->page()->legacy()->isAudioMuted()), "mute tab reaches the active browser backend");
+        shortcut("Ctrl+Shift+A");
+        librarySearch->setText("Muted");
+        check(libraryList->count() == 1, "tab search exposes muted state");
+        QMetaObject::invokeMethod(librarySearch, "returnPressed", Qt::DirectConnection);
+        check(!panel.findChild<QWidget*>("WebLibrary")->isVisible() && stack->currentWidget() == surface, "tab search activates its result and returns to the page");
+        auto* addressEdit = panel.findChild<QLineEdit*>("WebAddress");
+        addressEdit->setText(server.url("/ready").toString());
+        QKeyEvent newTabKey(QEvent::KeyPress, Qt::Key_Return, Qt::AltModifier);
+        QApplication::sendEvent(addressEdit, &newTabKey);
+        check(panel.tabCountForTest() == 3, "Alt+Enter opens the typed address in a new tab");
+        panel.closeCurrentTabForTest();
+
+        surface->page()->download(server.url("/download"), "browser-fixture.txt");
+        check(waitFor([&] { return QFileInfo::exists(QDir(ui::webprefs::downloadDirectory()).filePath("browser-fixture.txt")); }), "genuine browser download writes to isolated Downloads");
+        shortcut("Ctrl+J");
+        check(waitFor([&] { return libraryList->count() >= 1 && libraryList->item(0)->data(Qt::UserRole + 1).toString().contains("Completed"); }),
+              "download library retains completed files after the request is destroyed");
+        const int completedDownloads = libraryList->count();
+        shortcut("Escape");
+        surface->page()->download(server.url("/download-slow"), "slow-fixture.bin");
+        shortcut("Ctrl+J");
+        check(waitFor([&] { return libraryList->count() == completedDownloads + 1; }), "concurrent download enters the download library");
+        const auto downloadAction = [&](const QString& name) {
+            QTimer::singleShot(0, &panel, [name] {
+                auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if (!menu) return;
+                auto* action = menu->findChild<QAction*>(name);
+                menu->close();
+                if (action) action->trigger();
+            });
+            libraryList->setCurrentRow(0);
+            libraryList->customContextMenuRequested(libraryList->visualItemRect(libraryList->item(0)).center());
+        };
+        if (libraryList->count() == completedDownloads + 1) {
+            downloadAction("WebPauseDownload");
+            check(waitFor([&] { return libraryList->item(0)->data(Qt::UserRole + 1).toString().contains("Paused"); }), "download can be paused from its library row");
+            downloadAction("WebPauseDownload");
+            check(waitFor([&] { return libraryList->item(0)->data(Qt::UserRole + 1).toString().contains("Downloading"); }), "paused download resumes from the same row");
+            downloadAction("WebCancelDownload");
+            check(waitFor([&] { return libraryList->item(0)->data(Qt::UserRole + 1).toString() == "Cancelled"; }), "cancelled download remains visible with its result");
+        }
+        shortcut("Escape");
         panel.openUrlForTest(server.url("/slow").toString());
         check(waitFor([&] { return server.slowRequested; }),
               "slow navigation begins");
@@ -436,6 +556,53 @@ int main(int argc, char** argv) {
                                   ui::webprefs::sessionTabs().first() == ui::webprefs::kStudioUrl &&
                                   ui::webprefs::sessionActiveTab() == 1; }),
               "session saves one pinned site and the selected ordinary tab");
+    }
+    // Exercise a close immediately after a tab edit, before the save debounce.
+    {
+        WebBrowserPanel panel(nullptr, quick ? nullptr : &profile);
+        panel.openTabForTest(ui::webprefs::kStartUrl);
+        check(panel.tabCountForTest() == 4, "new tab added before immediate shutdown");
+    }
+    check(ui::webprefs::sessionTabs().size() == 4 && ui::webprefs::sessionActiveTab() == 3,
+          "shutdown flushes pending session changes");
+
+    if (app.arguments().contains("--capture")) {
+        const QString folder = qEnvironmentVariable("VLT_BROWSER_CAPTURE_DIR", QDir::tempPath());
+        QTranslator translator;
+        const bool russian = translator.load(qEnvironmentVariable("VLT_BROWSER_RU_QM"));
+        if (russian) app.installTranslator(&translator);
+        ui::webprefs::setSessionTabs({ui::webprefs::kStartUrl});
+        ui::webprefs::setSessionActiveTab(0);
+        ui::webprefs::addBookmark("Freesound · Field recordings", "https://freesound.org/");
+        ui::webprefs::addBookmark("Bandcamp · New releases", "https://bandcamp.com/");
+        ui::webprefs::addHistoryEntry("Mixing reference", "https://example.com/reference");
+        for (const QString& theme : {QStringLiteral("dark"), QStringLiteral("light"), QStringLiteral("studio-gray")}) {
+            ThemeManager::instance().setThemeId(theme, false);
+            WebBrowserPanel panel(nullptr, quick ? nullptr : &profile);
+            panel.show();
+            panel.openUrlForTest(ui::webprefs::kStartUrl);
+            check(waitFor([&] { return panel.startPageReadyForTest(); }), "localized themed start page ready");
+            for (const int width : {900, 520, 320}) {
+                panel.resize(width, 820);
+                QElapsedTimer paint;
+                paint.start();
+                waitFor([&] { return paint.elapsed() > 200; });
+                check(panel.width() == width, "localized chrome fits each supported width");
+                const QString prefix = QString("%1-%2-%3").arg(theme, russian ? "ru" : "en").arg(width);
+                check(panel.grab().save(QDir(folder).filePath(prefix + "-start.png")), "themed start screenshot saved");
+                for (auto* rail : panel.findChildren<QPushButton*>())
+                    if (rail->property("railRole").toString() == "bookmarks") rail->click();
+                QApplication::processEvents();
+                check(panel.grab().save(QDir(folder).filePath(prefix + "-bookmarks.png")), "themed library screenshot saved");
+                panel.findChild<QAbstractButton*>("WebLibraryClose")->click();
+                panel.findChild<QAbstractButton*>("WebTabSearch")->click();
+                QApplication::processEvents();
+                check(panel.width() == width, "localized tab library does not expand the panel");
+                check(panel.grab().save(QDir(folder).filePath(prefix + "-tabs.png")), "themed tabs screenshot saved");
+                panel.findChild<QAbstractButton*>("WebLibraryClose")->click();
+            }
+        }
+        if (russian) app.removeTranslator(&translator);
     }
     {
         BrowserBackgroundDialog dialog(server.url("/v1"));

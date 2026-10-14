@@ -157,7 +157,7 @@ if(DAW_BUILD_TESTS)
     qt_add_executable(gpu_scene_test ../tests/gpu_scene_test.cpp)
     target_link_libraries(gpu_scene_test PRIVATE vlt_gpu_scene)
     qt_add_executable(text_rendering_test ../tests/text_rendering_test.cpp)
-    target_link_libraries(text_rendering_test PRIVATE vlt_gpu_scene)
+    target_link_libraries(text_rendering_test PRIVATE vlt_gpu_scene Qt6::GuiPrivate)
     target_compile_definitions(text_rendering_test PRIVATE
         DAW_TEST_FONT_PATH="${CMAKE_SOURCE_DIR}/fonts/Inter-Regular.ttf")
     add_test(NAME text_rendering_test COMMAND text_rendering_test)
@@ -726,10 +726,10 @@ if(DAW_BUILD_TESTS)
     set_tests_properties(warp_panel_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60 RUN_SERIAL TRUE)
     set_tests_properties(track_mixer_sync_ui_test PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DAW_SELFTEST_TRACK_MIXER_ONLY=1"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_TRACK_MIXER_ONLY=1"
         TIMEOUT 90 RUN_SERIAL TRUE)
     set_tests_properties(mixer_fader_input_test PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
     set_tests_properties(tempo_scrub_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     set_tests_properties(plugin_batch_ui_test PROPERTIES

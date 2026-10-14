@@ -25,6 +25,7 @@
 #include <QPlainTextEdit>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -34,6 +35,7 @@
 #include <QWidget>
 #include <QWindow>
 #include <functional>
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <mutex>
@@ -46,6 +48,18 @@
 
 namespace ui::graphics {
 namespace {
+// Recording changes Quick items. Do it during polish, when Quick folds those
+// changes into the upcoming sync instead of requesting another identical frame.
+class FramePreparationItem final : public QQuickItem {
+public:
+    FramePreparationItem(QQuickItem* parent, std::function<void()> prepare)
+        : QQuickItem(parent), m_prepare(std::move(prepare)) {}
+protected:
+    void updatePolish() override { m_prepare(); }
+private:
+    std::function<void()> m_prepare;
+};
+
 double threadCpuMs() {
 #ifdef Q_OS_WIN
     FILETIME created, exited, kernel, user;
@@ -69,6 +83,22 @@ bool nativeControlAsset(const QWidget* widget) {
            widget->inherits("QComboBox") || widget->inherits("QAbstractSpinBox") ||
            widget->inherits("QSlider") || widget->inherits("QDial") ||
            widget->inherits("QProgressBar") || widget->inherits("QSizeGrip");
+}
+bool retainsOffscreenLayers(const QWidget* widget) {
+    for (auto* current = widget; current; current = current->parentWidget()) {
+        if (current->property("vlt.retainOffscreen").toBool()) return true;
+        if (current->isWindow()) break;
+    }
+    return false;
+}
+qint64 recordingBytes(const std::vector<SceneMesh>& meshes) {
+    qint64 bytes = 0;
+    for (const auto& mesh : meshes) {
+        bytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex) + mesh.texture.sizeInBytes();
+        if (mesh.clip) bytes += qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex);
+        if (mesh.group) bytes += recordingBytes(mesh.group->meshes);
+    }
+    return bytes;
 }
 bool startsFreshPointerRoute(QEvent::Type type, Qt::MouseButtons buttons) {
     return type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick ||
@@ -276,7 +306,7 @@ WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(
     m_presentationTimer.setSingleShot(true);
     connect(&m_presentationTimer, &QTimer::timeout, this, &WorkspaceSurface::refreshPresentationMode);
     FrameClock::instance().setPresenter(source, this, m_window,
-        [this] { if (!m_stopping) m_window->update(); },
+        [this] { requestFrame(); },
         [this](QWidget* widget, const QRegion&) {
             if (m_stopping || !m_source || (widget != m_source && !m_source->isAncestorOf(widget))) return false;
             // Native plugin chrome/controls use the QWidget backing store.
@@ -287,12 +317,13 @@ WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(
             m_capturePending = true;
             return true;
         });
-    connect(m_window, &QQuickWindow::afterAnimating, this, [this] {
+    m_framePreparation = new FramePreparationItem(m_window->contentItem(), [this] {
         if (m_stopping) return;
-        // GUI thread, immediately before Quick sync. One cadence supplies
-        // timers, the latest input state and recording for this same frame.
+        QScopedValueRollback preparing(m_preparingFrame, true);
+        // GUI thread, before Quick sync. The latest input, timers and captured
+        // scene all belong to this frame; no afterAnimating update round trip.
         const daw::engine::PresentationFrameTime frameTime;
-        FrameClock::instance().presentationFrame(m_source, this);
+        if (!FrameClock::instance().presentationFrame(m_source, this)) return;
         if (m_capturePending) capture();
         else {
             m_preparedFrame.preparationMs = 0;
@@ -300,6 +331,9 @@ WorkspaceSurface::WorkspaceSurface(QWidget* source) : QObject(source), m_source(
             if (m_frameContext) m_frameContext(m_preparedFrame);
             m_preparedFrame.frameBudgetMs = FrameClock::instance().periodSeconds(m_source) * 1000.;
         }
+        // Creating/updating a native Quick visual can publish more damage
+        // after capture completed. Preserve that work for the next frame.
+        if (m_capturePending) FrameClock::instance().requestPresentation(m_source, this);
     });
     connect(m_window, &QQuickWindow::sceneGraphError, this, [this](QQuickWindow::SceneGraphError, const QString& reason) {
         fail(reason);
@@ -434,12 +468,32 @@ WorkspaceSurface::~WorkspaceSurface() {
 void WorkspaceSurface::invalidate() {
     if (!m_source || m_stopping) return;
     m_layers.clear();
+    m_offscreenLayers.clear(); m_offscreenBytes = 0;
     requestCapture();
 }
-void WorkspaceSurface::requestCapture() {
+void WorkspaceSurface::discardOffscreenLayer(quintptr id) {
+    const auto found = m_offscreenLayers.find(id);
+    if (found == m_offscreenLayers.end()) return;
+    m_offscreenBytes -= found->second.bytes;
+    m_offscreenLayers.erase(found);
+}
+void WorkspaceSurface::requestFrame() {
+    // Geometry damage from a timer is already included by the capture below
+    // that timer. Do not re-enter polish and erase this frame's preparation stats.
+    if (m_stopping || m_preparingFrame || !m_framePreparation) return;
+    // polish() already schedules the sync. Quick owns presentation; we only
+    // need to register preparation of the latest widget state here.
+    m_framePreparation->polish();
+}
+void WorkspaceSurface::requestCapture(bool hierarchyChanged) {
+    // QWidget exposure, layout and scrolling may change descendant clips or
+    // order. Explicit FrameClock/Qt content damage can reuse the traversal.
+    m_hierarchyDirty |= hierarchyChanged;
     if (m_stopping || m_capturePending) return;
     m_capturePending = true;
-    m_window->update();
+    // Scrollbar/layout/backing-store events must share the canvas deadline.
+    // Otherwise they can submit another frame between two capped input frames.
+    if (!m_preparingFrame) FrameClock::instance().requestPresentation(m_source, this);
 }
 void WorkspaceSurface::resizeSurface() {
     if (!m_source || !m_container) return;
@@ -464,7 +518,8 @@ void WorkspaceSurface::resizeSurface() {
     requestCapture();
 }
 void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& snapshot, QSet<quintptr>& wanted,
-                             QPoint parentOrigin, QRect parentClip, const QRegion& parentMask) {
+                             QPoint parentOrigin, QRect parentClip, const QRegion& parentMask, bool descendants) {
+    ++m_visitedWidgets;
     if (m_stopping || !widget || widget == m_container || !widget->isVisible() ||
         (widget != m_source && widget->isWindow())) return;
     // Foreign plugin pixels stay in their native child hierarchy. The frame
@@ -486,6 +541,18 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
     const QRect visible = QRect(origin, widget->size()).intersected(parentClip);
     if (visible.isEmpty()) return;
     auto found = m_layers.find(id);
+    if (found == m_layers.end()) {
+        const auto parked = m_offscreenLayers.find(id);
+        if (parked != m_offscreenLayers.end()) {
+            const auto& cached = parked->second.cached;
+            if (cached.widget == widget && !m_dirty.contains(widget) && cached.recording &&
+                cached.recording->size == widget->size() && cached.recording->dpr == m_window->devicePixelRatio()) {
+                found = m_layers.emplace(id, std::move(parked->second.cached)).first;
+                ui::perf::sample("gpu.scene.offscreen.hit", 1);
+            }
+            discardOffscreenLayer(id);
+        }
+    }
     const QRectF clip = visible.translated(-origin);
     QRegion mask(visible);
     if (!parentMask.isEmpty()) mask &= parentMask;
@@ -551,13 +618,15 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
             }
             layer->meshes = recorder.takeMeshes();
         }
+        cacheLayerBounds(*layer);
         layer->clipRequired = requiresLayerClip(*layer);
         for (const auto& mesh : layer->meshes) {
             layer->geometryBytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
             if (mesh.group) layer->geometryBytes += mesh.group->bytes;
             if (mesh.clip) layer->geometryBytes += qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex);
         }
-        m_layers[id] = {widget, layer, std::move(recording), viewportOffset};
+        m_layers[id] = {widget, layer, std::move(recording), viewportOffset,
+                        parentOrigin, parentClip, parentMask};
     } else if (found->second.layer->origin != origin || found->second.layer->clip != clip ||
                found->second.layer->mask != mask) {
         auto moved = std::make_shared<SceneLayer>(*found->second.layer);
@@ -571,7 +640,12 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         }
         found->second.layer = std::move(moved);
     }
-    snapshot->layers.push_back(m_layers[id].layer);
+    auto& cached = m_layers[id];
+    cached.parentOrigin = parentOrigin;
+    cached.parentClip = parentClip;
+    cached.parentMask = parentMask;
+    snapshot->layers.push_back(cached.layer);
+    if (!descendants) return;
     const auto children = widget->children();
     for (auto* child : children) if (auto* childWidget = qobject_cast<QWidget*>(child))
         visit(childWidget, snapshot, wanted, origin, visible, childMask);
@@ -581,21 +655,87 @@ void WorkspaceSurface::capture() {
     ui::perf::Scope captureCost("gpu.scene.capture.ms");
     m_capturePending = false;
     m_capturing = true;
+    // Qt publishes update() damage even when a logical widget lies outside
+    // its scroll viewport. Forget those recordings before clearing damage so
+    // edits, theme changes and resizes can never expose old cached pixels.
+    for (auto* widget : std::as_const(m_dirty))
+        discardOffscreenLayer(reinterpret_cast<quintptr>(widget));
     QElapsedTimer prepare; prepare.start();
     auto snapshot = std::make_shared<SceneSnapshot>();
     snapshot->revision = ++m_revision; snapshot->viewport = m_source->size();
     if (m_projectRevision) snapshot->projectRevision = m_projectRevision();
     QSet<quintptr> wanted;
     const auto previousRevision = m_revision;
-    visit(m_source, snapshot, wanted, {}, m_source->rect(), {});
+    m_visitedWidgets = 0;
+    bool reuseTraversal = !m_hierarchyDirty && m_lastSnapshot &&
+        m_lastSnapshot->viewport == snapshot->viewport && m_lastSnapshot->layers.size() == m_layers.size();
+    if (reuseTraversal) {
+        for (const auto& [id, cached] : m_layers)
+            if (!cached.widget) { reuseTraversal = false; break; }
+        for (auto* widget : m_dirty) {
+            if (!reuseTraversal) break;
+            const auto found = m_layers.find(reinterpret_cast<quintptr>(widget));
+            if (found == m_layers.end() || !widget->isVisible()) { reuseTraversal = false; break; }
+            const auto& cached = found->second;
+            const QPoint origin = widget == m_source ? QPoint() : cached.parentOrigin + widget->pos();
+            const QRect visible = QRect(origin, widget->size()).intersected(cached.parentClip);
+            QRegion mask(visible);
+            if (!cached.parentMask.isEmpty()) mask &= cached.parentMask;
+            if (!widget->mask().isEmpty()) mask &= widget->mask().translated(origin);
+            if (mask == QRegion(visible)) mask = {};
+            else mask.translate(-origin);
+            // setMask/clearMask can arrive as ordinary content damage without
+            // a move/resize. Descendants must inherit the new clip together.
+            if (cached.layer->origin != origin || cached.layer->clip != QRectF(visible.translated(-origin)) ||
+                cached.layer->mask != mask) { reuseTraversal = false; break; }
+        }
+    }
+    if (reuseTraversal) {
+        snapshot->layers.reserve(m_lastSnapshot->layers.size());
+        for (const auto& previous : m_lastSnapshot->layers) {
+            const auto& cached = m_layers.at(previous->id);
+            if (m_dirty.contains(cached.widget)) {
+                // visit replaces the cache entry; keep its inherited geometry
+                // alive without copying every unchanged widget's metadata.
+                const auto geometry = cached;
+                visit(geometry.widget, snapshot, wanted, geometry.parentOrigin, geometry.parentClip, geometry.parentMask, false);
+            } else snapshot->layers.push_back(cached.layer);
+            if (m_stopping) break;
+        }
+    } else {
+        visit(m_source, snapshot, wanted, {}, m_source->rect(), {});
+    }
+    m_hierarchyDirty = false;
+    ui::perf::sample("gpu.scene.widgets.visited", m_visitedWidgets);
+    ui::perf::sample("gpu.scene.traversal.reused", reuseTraversal ? 1 : 0);
     ui::perf::sample("gpu.scene.layers.rebuilt", double(m_revision - previousRevision));
     if (m_stopping) { m_capturing = false; return; }
     for (auto it = m_layers.begin(); it != m_layers.end();) {
-        if (!wanted.contains(it->first)) it = m_layers.erase(it); else ++it;
+        if (reuseTraversal || wanted.contains(it->first)) { ++it; continue; }
+        const auto* widget = it->second.widget.data();
+        if (widget && widget->isVisible() && !m_dirty.contains(it->second.widget) && retainsOffscreenLayers(widget)) {
+            // Only opted-in scrolling content is retained. Bound CPU geometry
+            // and image storage independently of the GPU texture budget.
+            constexpr qint64 budget = 16 * 1024 * 1024;
+            const qint64 bytes = recordingBytes(it->second.layer->meshes);
+            if (bytes <= budget) {
+                while (!m_offscreenLayers.empty() &&
+                       (m_offscreenBytes + bytes > budget || m_offscreenLayers.size() >= 4096)) {
+                    const auto oldest = std::min_element(m_offscreenLayers.begin(), m_offscreenLayers.end(),
+                        [](const auto& a, const auto& b) { return a.second.used < b.second.used; });
+                    discardOffscreenLayer(oldest->first);
+                }
+                m_offscreenLayers.emplace(it->first, OffscreenLayer{std::move(it->second), bytes, m_revision});
+                m_offscreenBytes += bytes;
+            }
+        }
+        it = m_layers.erase(it);
     }
+    ui::perf::sample("gpu.scene.offscreen.bytes", double(m_offscreenBytes));
     m_dirty.clear();
     m_capturing = false;
     m_window->setProperty("vlt.sceneLayers", int(snapshot->layers.size()));
+    m_window->setProperty("vlt.sceneVisitedWidgets", m_visitedWidgets);
     int meshCount = 0;
     qint64 geometryBytes = 0;
     for (const auto& layer : snapshot->layers) {
@@ -615,6 +755,7 @@ void WorkspaceSurface::capture() {
     frame.frameBudgetMs = FrameClock::instance().periodSeconds(m_source) * 1000.;
     m_preparedFrame = frame;
     m_preparedRevision = snapshot->revision;
+    m_lastSnapshot = snapshot;
     present(std::move(snapshot));
 }
 void WorkspaceSurface::present(std::shared_ptr<const SceneSnapshot> snapshot) {
@@ -997,7 +1138,7 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         // Qt can omit their Paint events; exposure later must still reveal
         // current model pixels, rather than the old retained layer.
         m_collectedWidgetUpdates = collectWidgetUpdates(m_source, m_dirty, m_geometryExposure);
-        if (!m_dirty.isEmpty()) requestCapture();
+        if (!m_dirty.isEmpty()) requestCapture(m_geometryExposure || !m_collectedWidgetUpdates);
         // Keep pending geometry exposure until Qt's backing-store update,
         // even if Quick captured an earlier frame in the meantime.
         m_geometryExposure = false;
@@ -1050,11 +1191,19 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         if (!m_collectedWidgetUpdates) m_dirty.insert(widget);
         // Pure backing-store exposure needs no new scene snapshot. Viewports
         // still schedule a capture so visit() can check their scroll offset.
-        if (!m_dirty.isEmpty() || scrollForViewport(widget)) requestCapture();
+        bool viewportMoved = false;
+        if (const auto* scroll = scrollForViewport(widget)) {
+            const auto cached = m_layers.find(reinterpret_cast<quintptr>(widget));
+            const QPoint offset(scroll->horizontalScrollBar()->value(), scroll->verticalScrollBar()->value());
+            viewportMoved = cached == m_layers.end() || cached->second.viewportOffset != offset;
+        }
+        if (!m_dirty.isEmpty() || viewportMoved)
+            requestCapture(viewportMoved || !m_collectedWidgetUpdates);
         return true; // vector recording occurs outside QWidget's active paint stack
     }
     if (event->type() == QEvent::Destroy) {
         m_dirty.remove(widget);
+        discardOffscreenLayer(reinterpret_cast<quintptr>(widget));
         m_layers.erase(reinterpret_cast<quintptr>(widget));
     }
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) {

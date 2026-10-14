@@ -21,9 +21,11 @@ public:
                const std::function<void(QPainter&)>& draw) {
         auto* sink = sceneGeometrySink(painter);
         if (!sink) return false;
+        const qreal dpr = painter.device()->devicePixelRatioF();
+        if (m_dpr != dpr) { clear(); m_dpr = dpr; }
         auto found = m_entries.find(key);
         if (found == m_entries.end()) {
-            SceneRecorder recorder(size, painter.device()->devicePixelRatioF());
+            SceneRecorder recorder(size, dpr);
             QPainter local(&recorder);
             local.setFont(painter.font());
             draw(local);
@@ -59,6 +61,7 @@ private:
     struct Entry { std::shared_ptr<const SceneMeshGroup> group; quint64 used; };
     std::unordered_map<quint64, Entry> m_entries;
     qint64 m_bytes = 0;
+    qreal m_dpr = 0;
     quint64 m_clock = 0, m_builds = 0;
 };
 }

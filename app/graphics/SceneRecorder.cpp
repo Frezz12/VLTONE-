@@ -7,7 +7,9 @@
 #include <QPainterPathStroker>
 #include <QPixmap>
 #include <private/qtriangulator_p.h>
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace ui::graphics {
 namespace {
@@ -45,13 +47,10 @@ public:
         if (cache && !invalidated) {
             const auto found = cache->sections.find(id);
             if (found != cache->sections.end()) {
-                for (const auto& mesh : found->second) {
-                    const qint64 cost = qint64(mesh.vertices.size()) * sizeof(SceneVertex) +
-                        (mesh.group ? mesh.group->bytes : 0) +
-                        (mesh.clip ? qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex) : 0);
-                    if (!admit(cost)) return false;
-                }
-                meshes.insert(meshes.end(), found->second.begin(), found->second.end());
+                if (!admit(found->second->bytes)) return false;
+                SceneMesh mesh;
+                mesh.group = found->second;
+                meshes.push_back(std::move(mesh));
                 mergeBarrier = meshes.size();
                 return false;
             }
@@ -61,7 +60,27 @@ public:
     }
     void endRetainedSection() override {
         Q_ASSERT(sectionOpen);
-        if (cache) cache->sections[sectionId] = {meshes.begin() + sectionStart, meshes.end()};
+        // Quick video/web items are presentation boundaries. Keep them at the
+        // layer level so WorkspaceSurface can preserve their painter order.
+        const bool containsVisual = std::any_of(meshes.begin() + sectionStart, meshes.end(),
+            [](const SceneMesh& mesh) { return mesh.visualId != 0; });
+        if (cache && allSupported && !containsVisual) {
+            auto group = std::make_shared<SceneMeshGroup>();
+            group->meshes.assign(std::make_move_iterator(meshes.begin() + sectionStart),
+                                 std::make_move_iterator(meshes.end()));
+            for (const auto& mesh : group->meshes) {
+                group->bytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
+                if (mesh.group) group->bytes += mesh.group->bytes;
+                if (mesh.clip) group->bytes += qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex);
+            }
+            meshes.resize(sectionStart);
+            // Coordinates, clips and opacity are already recorded in the
+            // children. Applying the painter state here would apply it twice.
+            SceneMesh mesh;
+            mesh.group = group;
+            meshes.push_back(std::move(mesh));
+            cache->sections[sectionId] = std::move(group);
+        } else if (cache) cache->sections.erase(sectionId);
         mergeBarrier = meshes.size();
         sectionOpen = false;
     }
@@ -306,6 +325,46 @@ public:
     void drawRects(const QRect* rects, int count) override {
         for (int i = 0; i < count; ++i) { const QRectF r(rects[i]); drawRects(&r, 1); }
     }
+    void drawLines(const QLineF* lines, int count) override {
+        const auto pen = painter()->pen();
+        if (pen.style() == Qt::NoPen) return;
+        const auto transform = painter()->worldTransform();
+        const auto clip = currentClip();
+        if (pen.style() != Qt::SolidLine || pen.brush().style() != Qt::SolidPattern ||
+            pen.isCosmetic() || pen.capStyle() == Qt::RoundCap || transform.type() > QTransform::TxScale ||
+            (clip && !clip->rectangular)) {
+            QPaintEngine::drawLines(lines, count);
+            return;
+        }
+        const qreal thickness = pen.widthF() > 0 ? pen.widthF() : 1. / dpr;
+        const qreal half = thickness / 2;
+        const qreal cap = pen.capStyle() == Qt::SquareCap ? half : 0;
+        for (int i = 0; i < count; ++i) {
+            const auto& line = lines[i];
+            if (line.isNull() || (line.dx() != 0 && line.dy() != 0)) {
+                QPaintEngine::drawLines(&line, 1);
+                continue;
+            }
+            // Grid, rulers and separators are rectangles. Avoid constructing,
+            // stroking, intersecting and tessellating a path for every line.
+            const QRectF stroke = line.dy() == 0
+                ? QRectF(std::min(line.x1(), line.x2()) - cap, line.y1() - half,
+                         std::abs(line.dx()) + 2 * cap, thickness)
+                : QRectF(line.x1() - half, std::min(line.y1(), line.y2()) - cap,
+                         thickness, std::abs(line.dy()) + 2 * cap);
+            auto visible = transform.mapRect(stroke);
+            if (clip) visible &= clip->bounds;
+            if (visible.isEmpty()) continue;
+            SceneMesh mesh;
+            mesh.vertices = rectangleTriangles(visible);
+            mesh.color = pen.color();
+            mesh.opacity = float(painter()->opacity());
+            appendMesh(std::move(mesh));
+        }
+    }
+    void drawLines(const QLine* lines, int count) override {
+        for (int i = 0; i < count; ++i) { const QLineF line(lines[i]); drawLines(&line, 1); }
+    }
     void drawPolygon(const QPointF* points, int count, PolygonDrawMode mode) override {
         if (!count) return;
         QPainterPath path(points[0]);
@@ -354,10 +413,16 @@ public:
     }
     void drawTextItem(const QPointF& baseline, const QTextItem& item) override {
         const auto color = painter()->pen().color();
+        const auto transform = painter()->worldTransform();
+        const qreal deviceX = transform.map(baseline).x() * dpr;
+        // Preserve the horizontal phase of shaped runs (e.g. Latin followed
+        // by Cyrillic) while placing the texture itself on whole device pixels.
+        const qreal phaseX = transform.type() <= QTransform::TxTranslate
+            ? (deviceX - std::floor(deviceX)) / dpr : 0;
         QByteArray key;
         QDataStream stream(&key, QIODevice::WriteOnly);
         stream << quint8(2) << item.text() << item.font() << color << dpr << int(item.renderFlags());
-        stream << item.width() << item.ascent() << item.descent();
+        stream << item.width() << item.ascent() << item.descent() << phaseX;
         QRectF bounds;
         QImage glyphs;
         if (auto* cached = glyphAssets.object(key)) { glyphs = cached->image; bounds = cached->bounds; }
@@ -365,13 +430,21 @@ public:
             const QFontMetricsF metrics(item.font());
             bounds = metrics.boundingRect(item.text()).united(QRectF(0, -item.ascent(), item.width(),
                                         item.ascent() + item.descent())).adjusted(-2, -2, 2, 2);
+            // Align the vertical baseline to a device pixel. A fractional font
+            // ascent must not introduce subpixel blur inside the cached image.
+            bounds = QRectF(QPointF(std::floor((bounds.left() + phaseX) * dpr) / dpr - phaseX,
+                                   std::floor(bounds.top() * dpr) / dpr),
+                            QPointF(std::ceil((bounds.right() + phaseX) * dpr) / dpr - phaseX,
+                                    std::ceil(bounds.bottom() * dpr) / dpr));
             glyphs = QImage(QSize(std::max(1, int(std::ceil(bounds.width() * dpr))),
                                   std::max(1, int(std::ceil(bounds.height() * dpr)))), QImage::Format_ARGB32_Premultiplied);
             glyphs.setDevicePixelRatio(dpr);
             glyphs.fill(Qt::transparent);
             QPainter p(&glyphs);
             p.setFont(item.font()); p.setPen(color);
-            p.drawText(-bounds.topLeft(), item.text()); p.end();
+            p.translate(-bounds.topLeft());
+            // Keep Qt's shaped glyph positions instead of laying out the text again.
+            p.drawTextItem(QPointF(), item); p.end();
             glyphAssets.insert(key, new GlyphAsset{glyphs, bounds}, int(glyphs.sizeInBytes() / 1024 + 1));
         }
         // The glyphs already contain antialiased coverage at the target DPR.
@@ -417,6 +490,8 @@ int SceneRecorder::metric(PaintDeviceMetric metric) const {
     case PdmNumColors: return 0;
     case PdmDevicePixelRatio: return int(m_dpr);
     case PdmDevicePixelRatioScaled: return int(m_dpr * devicePixelRatioFScale());
+    case PdmDevicePixelRatioF_EncodedA: case PdmDevicePixelRatioF_EncodedB:
+        return encodeMetricF(metric, m_dpr);
     default: return QPaintDevice::metric(metric);
     }
 }

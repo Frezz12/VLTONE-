@@ -77,6 +77,7 @@ public:
     Q_INVOKABLE void notifyIcon();
     Q_INVOKABLE void notifyNewWindow(QWebEngineNewWindowRequest* request);
     Q_INVOKABLE void notifyTerminated(int status, int code);
+    Q_INVOKABLE void notifyFindText(int activeMatch, int numberOfMatches);
     Q_INVOKABLE void completeJavaScript(quint32 requestId, const QJSValue& result);
     Q_INVOKABLE void attachWebChannel(QWebChannel*);
 signals:
@@ -89,6 +90,7 @@ signals:
     void loadingChanged(const QWebEngineLoadingInfo&);
     void renderProcessTerminated(QWebEnginePage::RenderProcessTerminationStatus, int);
     void newWindowRequested(QWebEngineNewWindowRequest&);
+    void findTextFinished(int activeMatch, int numberOfMatches);
 private:
     void call(const char* method, QVariant a = {}, QVariant b = {});
     BrowserProfile* m_profile;

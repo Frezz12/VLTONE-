@@ -686,6 +686,280 @@ bool TimelineWidget::checkFileDropPreviewForTest() {
     return !timeline.m_dropActive && !timeline.m_dropSingleAudio && timeline.m_dropFile.isEmpty();
 }
 
+bool TimelineWidget::checkClipEdgesForTest() {
+    daw::EngineController controller{}, emptyController{};
+    if (!controller.initialize(48000, 512, false) ||
+        !emptyController.initialize(48000, 512, false)) return false;
+    auto& project = const_cast<daw::ProjectModel&>(controller.project());
+    project.tracks.clear();
+    daw::WaveformPeaks peaks;
+    peaks.durationSeconds = 8; peaks.bucketsPerSecond = 100; peaks.channels = 2;
+    for (int i = 0; i < 800; ++i) {
+        const float amplitude = 0.4f + 0.5f * std::abs(std::sin(i * 0.13f));
+        peaks.minima.push_back(-amplitude); peaks.maxima.push_back(amplitude);
+    }
+    controller.waveforms().storePrepared("clip-edge-check.wav", std::move(peaks));
+    const daw::TrackKind kinds[] = {daw::TrackKind::Audio, daw::TrackKind::Midi,
+        daw::TrackKind::Midi, daw::TrackKind::Pattern, daw::TrackKind::Automation,
+        daw::TrackKind::Audio, daw::TrackKind::Audio};
+    for (int row = 0; row < 7; ++row) {
+        daw::TrackModel track;
+        track.id = "clip-edge-" + std::to_string(row); track.kind = kinds[row];
+        track.height = row == 5 ? 24 : 72; track.expanded = false;
+        track.color = row == 3 ? 0xAC7548 : row == 4 ? 0x65AF88 : 0x548EB8;
+        double start = 0.231;
+        for (int i = 0; i < 5; ++i) {
+            daw::ClipModel clip;
+            clip.id = track.id + "-" + std::to_string(i);
+            clip.kind = row == 3 ? daw::ClipKind::Pattern : row == 4 ? daw::ClipKind::Automation
+                : row == 1 || row == 2 ? daw::ClipKind::Midi : daw::ClipKind::Audio;
+            clip.name = row == 2 ? "Sequence steps at the boundary" : "Long clip title at the boundary";
+            if (i == 4) start -= 0.27; // Real overlap, following the abutting/narrow clips.
+            clip.startSeconds = start; clip.durationSeconds = i == 2 ? 0.025 : 1.713;
+            clip.filePath = "clip-edge-check.wav"; clip.channels = 2; clip.color = track.color;
+            clip.muted = i == 3; clip.midiView.sequence = row == 2;
+            if (row == 0 && i == 0) { clip.fadeInSeconds = 0.12; clip.fadeOutSeconds = 0.18; }
+            for (int n = 0; n < 10; ++n) {
+                daw::NoteModel note;
+                note.id = clip.id + "-note-" + std::to_string(n);
+                note.startBeats = n * 0.375; note.lengthBeats = 0.8;
+                note.pitch = 60 + n % 7; clip.notes.push_back(note);
+            }
+            clip.automation.points = {{0, 0}, {1, 1}, {2, 0.2}, {4, 1}};
+            if (row == 6) {
+                daw::TakeModel take;
+                take.id = clip.id + "-take"; take.filePath = clip.filePath;
+                take.lengthSeconds = clip.durationSeconds; take.channels = 2;
+                clip.takes.push_back(take);
+                clip.comp.push_back({take.id, 0, clip.durationSeconds});
+            }
+            start += clip.durationSeconds;
+            track.clips.push_back(std::move(clip));
+        }
+        project.tracks.push_back(std::move(track));
+    }
+    daw::TrackModel source;
+    source.id = "pattern-source"; source.kind = daw::TrackKind::Midi;
+    source.parentId = project.tracks[3].id;
+    source.clips = project.tracks[1].clips;
+    for (int i = 0; i < int(source.clips.size()); ++i) {
+        source.clips[i].id += "-source";
+        source.clips[i].patternClipId = project.tracks[3].clips[i].id;
+    }
+    project.tracks.insert(project.tracks.begin() + 4, std::move(source));
+    project.invalidateTrackIndex();
+    auto& emptyProject = const_cast<daw::ProjectModel&>(emptyController.project());
+    emptyProject.tracks = project.tracks;
+    for (auto& track : emptyProject.tracks) track.clips.clear();
+    emptyProject.invalidateTrackIndex();
+    QWidget gpuHost;
+    QVBoxLayout layout(&gpuHost);
+    layout.setContentsMargins(0, 0, 0, 0);
+    TimelineWidget timeline(&controller, &gpuHost), empty(&emptyController);
+    layout.addWidget(&timeline);
+    gpuHost.resize(940, 510);
+    timeline.resize(940, 510); empty.resize(timeline.size());
+    const Theme savedTheme = th();
+    const bool savedRounded = ui::roundedClipCorners();
+    const auto restore = qScopeGuard([&] {
+        if (savedTheme.id == QLatin1String("custom"))
+            ThemeManager::instance().applyCustomTheme(savedTheme, false);
+        else ThemeManager::instance().setThemeId(savedTheme.id, false);
+        ui::setRoundedClipCorners(savedRounded);
+    });
+    const QString output = qEnvironmentVariable("VLT_CLIP_EDGE_SCREENSHOTS");
+    if (!output.isEmpty()) QDir().mkpath(output);
+    bool ok = true;
+
+    // An empty MIDI clip isolates the contour from notes and text. Its corner
+    // should be the same screen-space circle from a narrow clip to sample zoom,
+    // with no brighter body-colour fringe around the dark header.
+    {
+        const int opacity = ui::gridOpacity();
+        const auto restoreGrid = qScopeGuard([&] { ui::setGridOpacity(opacity); });
+        ui::setGridOpacity(0);
+        ThemeManager::instance().setThemeId(QStringLiteral("dark"), false);
+        ui::setRoundedClipCorners(true);
+        auto& track = emptyProject.tracks[1];
+        daw::ClipModel clip;
+        clip.id = "corner-quality"; clip.kind = daw::ClipKind::Midi;
+        clip.startSeconds = 1000; clip.durationSeconds = 1;
+        track.clips.push_back(clip);
+        const QColor base = colorFromRgb(track.color);
+        const QColor header = QColor::fromRgbF(base.redF() * 105. / 255.,
+            base.greenF() * 105. / 255., base.blueF() * 105. / 255.);
+        const QColor border = mixColors(base, Qt::black, .55);
+        const QColor background = mixColors(th().background, th().surface, .34);
+        for (qreal dpr : {1., 1.5, 2.})
+        for (double zoom : {4., 24., 240., 2400., 24000., ui::kMaxTimelineZoom})
+        for (bool right : {false, true}) {
+            empty.m_pixelsPerSecond = zoom;
+            empty.m_scrollSeconds = right ? 1001 - (empty.width() - 17.) / zoom : 1000 - 17. / zoom;
+            const QRectF body = empty.clipRect(1, clip);
+            const auto outline = ui::pixelAlignedRect(body, dpr);
+            QImage actual(empty.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+            actual.setDevicePixelRatio(dpr); actual.fill(th().background);
+            {
+                QPainter painter(&actual); painter.setClipRect(empty.rect());
+                empty.drawLanes(painter);
+            }
+            for (bool bottom : {false, true}) {
+                QImage expected(actual.size(), actual.format());
+                expected.setDevicePixelRatio(dpr); expected.fill(background);
+                {
+                    // A single solid rounded rectangle is the coverage oracle
+                    // at either end of the two-colour clip, independent of how
+                    // the application partitions its body/header drawing.
+                    QPainter p(&expected); p.setRenderHint(QPainter::Antialiasing);
+                    p.setPen(Qt::NoPen); p.setBrush(bottom ? base : header);
+                    const qreal radius = std::min({5., outline.width() / 2, outline.height() / 2});
+                    p.drawRoundedRect(outline, radius, radius);
+                    const qreal stroke = std::min({std::round(dpr) / dpr, outline.width(), outline.height()});
+                    const qreal inset = stroke / 2;
+                    const qreal innerRadius = std::max(0., std::min({5., outline.width() / 2, outline.height() / 2}) - inset);
+                    p.setBrush(Qt::NoBrush); p.setPen(QPen(border, stroke));
+                    p.drawRoundedRect(outline.adjusted(inset, inset, -inset, -inset), innerRadius, innerRadius);
+                }
+                const int reach = std::max(1, int(std::min(6., outline.width() / 2) * dpr));
+                const int x = right ? int(std::round(outline.right() * dpr)) - reach : int(std::round(outline.left() * dpr));
+                const int y = bottom ? int(std::round(outline.bottom() * dpr)) - int(6 * dpr) : int(std::round(outline.top() * dpr));
+                bool equal = true, antialiased = false;
+                for (int dy = 0; dy < int(6 * dpr); ++dy)
+                    for (int dx = 0; dx < reach; ++dx) {
+                        const auto a = actual.pixelColor(x + dx, y + dy);
+                        const auto b = expected.pixelColor(x + dx, y + dy);
+                        equal &= std::abs(a.red() - b.red()) <= 2 && std::abs(a.green() - b.green()) <= 2 &&
+                                 std::abs(a.blue() - b.blue()) <= 2;
+                        antialiased |= a != background && a != border && a != (bottom ? base : header);
+                    }
+                if (!equal || !antialiased)
+                    std::fprintf(stderr, "clip corner DPR=%.1f zoom=%.0f right=%d bottom=%d: coverage=%d AA=%d\n",
+                        double(dpr), zoom, right, bottom, equal, antialiased);
+                ok &= equal && antialiased;
+                if (!output.isEmpty() && zoom == 240 && !right && !bottom) {
+                    actual.copy(x, y, int(16 * dpr), int(16 * dpr)).save(output + QString("/corner-%1.png").arg(dpr));
+                }
+            }
+        }
+        track.clips.clear();
+    }
+    for (const QString& theme : {QStringLiteral("dark"), QStringLiteral("light")})
+    for (bool rounded : {false, true}) for (qreal dpr : {1.0, 1.5, 2.0})
+    for (double scale : {37.5, 127.3}) for (double scroll : {0.137, 0.8}) {
+        ThemeManager::instance().setThemeId(theme, false);
+        ui::setRoundedClipCorners(rounded);
+        timeline.m_pixelsPerSecond = empty.m_pixelsPerSecond = scale;
+        timeline.m_scrollSeconds = empty.m_scrollSeconds = scroll;
+        timeline.m_selection.clear();
+        for (const auto& track : project.tracks) if (!track.clips.empty())
+            timeline.m_selection.push_back({QString::fromStdString(track.id),
+                                           QString::fromStdString(track.clips.front().id)});
+        const auto render = [&](TimelineWidget& view) {
+            QImage image(view.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(dpr); image.fill(th().background);
+            QPainter p(&image); p.setRenderHint(QPainter::Antialiasing);
+            p.setClipRect(view.rect()); view.drawLanes(p);
+            return image;
+        };
+        const QImage image = render(timeline), background = render(empty);
+        bool bounded = true, aligned = true, separated = true;
+        for (int lane = 0; lane < int(timeline.visibleRows().size()); ++lane) {
+            const auto& track = project.tracks[timeline.visibleRows()[lane].index];
+            if (track.clips.empty()) continue;
+            QRegion occupied;
+            for (int i = 0; i < int(track.clips.size()); ++i) {
+                const auto body = timeline.clipRect(lane, track.clips[i]);
+                occupied += QRect(int(std::floor(body.left() * dpr)), int(std::floor(body.top() * dpr)),
+                    int(std::ceil(body.right() * dpr)) - int(std::floor(body.left() * dpr)),
+                    int(std::ceil(body.bottom() * dpr)) - int(std::floor(body.top() * dpr)));
+                if (body.width() > 2)
+                    aligned &= body.right() == timeline.secondsToX(track.clips[i].startSeconds +
+                        controller.clipDisplayDuration(track.clips[i]));
+                if (i + 1 < int(track.clips.size()))
+                    aligned &= timeline.clipHeaderRect(track, track.clips[i], body).right() <=
+                        timeline.clipRect(lane, track.clips[i + 1]).left();
+            }
+            for (int y = int(timeline.laneTop(lane) * dpr);
+                 y < std::min(image.height(), int((timeline.laneTop(lane) + timeline.laneHeightAt(lane)) * dpr)); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (!occupied.contains(QPoint(x, y))) bounded &= image.pixel(x, y) == background.pixel(x, y);
+            const auto first = timeline.clipRect(lane, track.clips.front());
+            const int edge = int(std::round(first.right() * dpr));
+            const int y = int((first.bottom() - 8) * dpr);
+            separated &= image.pixel(edge, y) != image.pixel(edge + int(4 * dpr), y);
+        }
+        ok &= bounded && aligned && separated;
+        if (!bounded || !aligned || !separated)
+            std::fprintf(stderr, "clip edges %s rounded=%d DPR=%.1f zoom=%.1f: bounds=%d alignment=%d seam=%d\n",
+                qPrintable(theme), rounded, double(dpr), scale, bounded, aligned, separated);
+        if (!output.isEmpty() && scale == 127.3 && scroll == 0.137)
+            ok &= image.save(output + QString("/%1-%2-%3.png").arg(theme).arg(rounded ? "round" : "square").arg(dpr));
+    }
+    if (!output.isEmpty() && qEnvironmentVariableIsSet("VLT_CLIP_EDGE_GPU")) {
+        ui::FrameClock::instance().setPreference(ui::FrameMode::Display, 60);
+        ThemeManager::instance().setThemeId(QStringLiteral("dark"), false);
+        ui::setRoundedClipCorners(true);
+        timeline.m_pixelsPerSecond = 127.3; timeline.m_scrollSeconds = 0.137;
+        const auto settle = [](int ms = 250) {
+            QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
+        };
+        gpuHost.show(); settle();
+        ui::graphics::WorkspaceSurface surface(&gpuHost);
+        QObject::connect(&surface, &ui::graphics::WorkspaceSurface::failed, &timeline,
+                         [&](const QString&) { ok = false; });
+        gpuHost.raise(); gpuHost.activateWindow();
+        surface.quickWindow()->requestActivate();
+        timeline.update(); surface.invalidate(); settle(1800);
+        const QImage gpu = surface.quickWindow()->grabWindow();
+        const qreal captureDpr = surface.quickWindow()->devicePixelRatio();
+        const bool visible = !gpu.isNull() && gpu.pixelColor(int(60 * captureDpr), int(60 * captureDpr)) !=
+            gpu.pixelColor(gpu.width() - int(20 * captureDpr), int(60 * captureDpr));
+        if (!visible)
+            std::fprintf(stderr, "clip GPU capture: exposed=%d layers=%d timeline=%dx%d visible=%d\n",
+                surface.quickWindow()->isExposed(), surface.quickWindow()->property("vlt.sceneLayers").toInt(),
+                timeline.width(), timeline.height(), timeline.isVisible());
+        ok &= visible;
+        ok &= gpu.save(output + "/gpu.png");
+        const int gridOpacity = ui::gridOpacity();
+        const auto restoreGrid = qScopeGuard([&] { ui::setGridOpacity(gridOpacity); });
+        ui::setGridOpacity(0);
+        // Keep the transport cursor out of the corner sample at low zoom.
+        controller.seekSeconds(30.0);
+        QImage reference;
+        const auto& midiClip = project.tracks[1].clips.front();
+        for (double zoom : {24., 240., 24000., ui::kMaxTimelineZoom}) {
+            timeline.m_pixelsPerSecond = zoom;
+            timeline.m_scrollSeconds = midiClip.startSeconds - 5. / zoom;
+            timeline.update(); surface.invalidate(); settle();
+            const QImage frame = surface.quickWindow()->grabWindow();
+            const qreal dpr = surface.quickWindow()->devicePixelRatio();
+            const QRectF body = timeline.clipRect(1, midiClip);
+            // Each tile and its scroll transform snap to device pixels. Locate
+            // the displayed straight edge before comparing the corner shape;
+            // a one-pixel change in its position is not a change in radius.
+            const int row = int((body.top() + 10) * dpr);
+            const auto background = frame.pixelColor(0, row);
+            int left = 0;
+            while (left < int(16 * dpr) && frame.pixelColor(left, row) == background) ++left;
+            const QImage corner = frame.copy(left, int(std::round(body.top() * dpr)),
+                                             int(6 * dpr), int(6 * dpr));
+            if (reference.isNull()) reference = corner;
+            bool stable = !frame.isNull() && corner.size() == reference.size();
+            for (int y = 0; stable && y < corner.height(); ++y)
+                for (int x = 0; x < corner.width(); ++x) {
+                    const auto a = corner.pixelColor(x, y), b = reference.pixelColor(x, y);
+                    stable &= std::abs(a.red() - b.red()) <= 3 && std::abs(a.green() - b.green()) <= 3 &&
+                              std::abs(a.blue() - b.blue()) <= 3;
+                }
+            if (!stable) std::fprintf(stderr, "GPU clip corner changes with zoom=%.0f DPR=%.1f\n", zoom, double(dpr));
+            ok &= stable;
+            corner.save(output + QString("/gpu-corner-%1.png").arg(zoom));
+        }
+    }
+    std::printf("%s  clip edges: adjacent spans, no overflow, smooth circular corners without header halos; 2 themes, 3 DPRs, zoom up to sample level, both corner styles\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 bool TimelineWidget::checkClipTrimPreviewForTest() {
     daw::EngineController controller{};
     if (!controller.initialize(48000.0, 512, false)) return false;
@@ -1020,7 +1294,9 @@ bool checkMixerPerformance() {
     // Real mixer controls with deterministic slots; no device or vendor DSP.
     auto& project = const_cast<daw::ProjectModel&>(controller.project());
     project.tracks.clear(); project.invalidateTrackIndex();
-    for (int i = 0; i < 12; ++i) {
+    const int channels = qEnvironmentVariableIsSet("VLT_MIXER_CHANNELS")
+        ? std::clamp(qEnvironmentVariableIntValue("VLT_MIXER_CHANNELS"), 12, 1000) : 12;
+    for (int i = 0; i < channels; ++i) {
         daw::TrackModel track;
         track.id = "mixer-perf-" + std::to_string(i);
         track.name = "Channel " + std::to_string(i + 1);
@@ -1057,10 +1333,13 @@ bool checkMixerPerformance() {
     const QString gesture = qEnvironmentVariable("VLT_MIXER_GESTURE", QStringLiteral("scroll"));
     const bool hover = gesture == QStringLiteral("hover");
     const bool drag = gesture == QStringLiteral("fader");
-    if (gesture != QStringLiteral("scroll") && !hover && !drag) return false;
+    const bool meters = gesture == QStringLiteral("meters");
+    const bool idle = gesture == QStringLiteral("idle");
+    const bool horizontal = gesture == QStringLiteral("horizontal");
+    if (gesture != QStringLiteral("scroll") && !hover && !drag && !meters && !idle && !horizontal) return false;
     ui::FaderWidget* fader = nullptr;
     QPointF pointerStart, pointerPosition;
-    if (hover || drag) {
+    if (hover || drag || meters || idle) {
         scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
         settle(600);
         for (auto* candidate : scroll->findChildren<ui::FaderWidget*>()) {
@@ -1095,9 +1374,22 @@ bool checkMixerPerformance() {
     const QPointF position = scroll->viewport()->mapTo(&mixer, QPoint(2, 100));
     int inputs = 0, scrollChanges = 0;
     QElapsedTimer elapsed; elapsed.start();
+    const auto levelMeters = mixer.findChildren<ui::LevelMeter*>();
     QTimer timer;
     timer.setTimerType(Qt::PreciseTimer);
     QObject::connect(&timer, &QTimer::timeout, &mixer, [&] {
+        if (idle) return;
+        if (meters) {
+            perf::Scope cost("mixer.meter.feed.ms");
+            int channel = 0;
+            for (auto* meter : levelMeters) {
+                const double phase = elapsed.elapsed() * .006 + channel++ * .7;
+                meter->setPeaks(float(.35 + .3 * std::sin(phase)),
+                                float(.25 + .2 * std::sin(phase + .5)));
+            }
+            ++inputs; ++scrollChanges;
+            return;
+        }
         if (hover || drag) {
             const double wave = std::sin(elapsed.elapsed() * 2.0 * M_PI / 1600.0);
             pointerPosition = pointerStart + (drag ? QPointF(0, wave * 60.0)
@@ -1109,11 +1401,15 @@ bool checkMixerPerformance() {
             ++inputs;
             return;
         }
-        auto* bar = scroll->verticalScrollBar();
+        auto* bar = horizontal ? scroll->horizontalScrollBar() : scroll->verticalScrollBar();
         const int before = bar->value();
         const double phase = std::fmod(elapsed.elapsed() / 1600., 1.);
-        const int wanted = int((phase < .5 ? phase * 2 : 2 - phase * 2) * bar->maximum());
-        QWheelEvent wheel(position, mixer.mapToGlobal(position), QPoint(0, bar->value() - wanted), {},
+        // Cover several viewport boundaries without jumping across an entire
+        // large project in one frame. Reversals revisit materialized channels.
+        const int extent = horizontal ? std::min(bar->maximum(), scroll->viewport()->width() * 3) : bar->maximum();
+        const int wanted = int((phase < .5 ? phase * 2 : 2 - phase * 2) * extent);
+        const int delta = bar->value() - wanted;
+        QWheelEvent wheel(position, mixer.mapToGlobal(position), horizontal ? QPoint(delta, 0) : QPoint(0, delta), {},
             Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
         perf::Scope inputCost("mixer.wheel.ms");
         if (surface) QCoreApplication::sendEvent(surface->quickWindow(), &wheel);
@@ -1133,15 +1429,15 @@ bool checkMixerPerformance() {
     settle(4800);
     timer.stop();
     perf::flush();
-    std::printf("MIXER_INTERACTION gesture=%s backend=%s viewport=%dx%d DPR=%.1f inputs=%d changes=%d frames=%d elapsed_ms=%lld\n",
+    std::printf("MIXER_INTERACTION gesture=%s backend=%s viewport=%dx%d DPR=%.1f inputs=%d changes=%d frames=%d elapsed_ms=%lld channels=%d\n",
         qPrintable(gesture), surface ? "gpu" : "widgets", mixer.width(), mixer.height(), mixer.devicePixelRatioF(),
-        inputs - warmupInputs, scrollChanges - warmupChanges, frames, static_cast<long long>(measured.elapsed()));
+        inputs - warmupInputs, scrollChanges - warmupChanges, frames, static_cast<long long>(measured.elapsed()), channels);
     if (drag) sendPointer(QEvent::MouseButtonRelease, pointerPosition);
     if (const auto shot = qEnvironmentVariable("VLT_SCROLL_SCREENSHOT"); !shot.isEmpty()) {
         if (surface) surface->quickWindow()->grabWindow().save(shot);
         else mixer.grab().save(shot);
     }
-    return !failed && scrollChanges - warmupChanges > 30 && (!surface || frames > 30);
+    return !failed && (idle || (scrollChanges - warmupChanges > 30 && (!surface || frames > 30)));
 }
 
 bool checkViewScrubInput() {
@@ -1333,6 +1629,8 @@ bool checkViewScrubInput() {
 }
 
 bool checkUiScaling() {
+    if (qEnvironmentVariableIsSet("VLT_CLIP_EDGE_CHECK_ONLY"))
+        return TimelineWidget::checkClipEdgesForTest();
     if (qEnvironmentVariableIsSet("VLT_VIEW_SCRUB_CHECK_ONLY"))
         return checkViewScrubInput();
     if (qEnvironmentVariableIsSet("VLT_TRACK_PRESENTATION_CHECK_ONLY"))
@@ -1494,14 +1792,14 @@ bool checkUiScaling() {
                               Qt::ScrollUpdate, false);
             QApplication::sendEvent(panControl, &event);
         }
-        check(panControl->pan() > beforeWheel && panWheelFinishes == 0,
-              "mixer pan applies high-resolution wheel samples without committing each one");
+        check(panControl->pan() == beforeWheel && panWheelFinishes == 0,
+              "scrolling over the mixer pan leaves its value unchanged");
     }
     settle(180);
     check(wheelFinishes == 0,
           "scrolling over the mixer fader creates no edit");
-    check(panWheelFinishes == 1,
-          "mixer pan wheel burst commits as one gesture");
+    check(panWheelFinishes == 0,
+          "scrolling over the mixer pan creates no edit");
     check(tracks.findChildren<FaderWidget*>().size() < 64, "500 track headers create only viewport controls");
     check(mixer.findChildren<FaderWidget*>().size() < 64, "500 mixer channels create only viewport controls");
     tracks.setSelectedTracks({first, QString::fromStdString(project.tracks[1].id)}, first);

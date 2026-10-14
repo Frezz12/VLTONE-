@@ -20,7 +20,7 @@ class QToolButton;
 namespace ui { class FrameTimer; }
 
 /// The mixer console: a scrolling row of channel strips with the master strip
-/// independently scrollable and collapsible on the right, under a command bar. It lives in
+/// pinned on the right and sharing the row's vertical scroll, under a command bar. It lives in
 /// the centre column below the timeline.
 class MixerWidget : public QWidget {
     Q_OBJECT
@@ -96,6 +96,7 @@ private:
     QStringList m_channels;
     std::vector<ChannelStrip*> m_slots;
     bool m_syncingStrips = false;
+    bool m_stripLayoutDirty = true;
     bool m_deferredRackChange = false;
     ui::FrameTimer* m_materializeTimer = nullptr;
     ui::FrameTimer* m_meterTimer = nullptr;

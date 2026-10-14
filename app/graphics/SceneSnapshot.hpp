@@ -7,7 +7,9 @@
 #include <QVector>
 #include <QTransform>
 #include <memory>
+#include <optional>
 #include <vector>
+#include <algorithm>
 
 namespace ui::graphics {
 struct SceneMeshGroup;
@@ -44,12 +46,39 @@ struct SceneLayer {
     bool clipRequired = true;
     qint64 geometryBytes = 0;
     std::vector<SceneMesh> meshes;
+    // Recorded once with the geometry; viewport scrolling only changes clip.
+    std::optional<QRectF> contentBounds;
 };
+
+inline void cacheLayerBounds(SceneLayer& layer) {
+    layer.contentBounds.reset();
+    // Retained canvases already have their own clipping. Do not walk large
+    // timeline tile groups on every recording of a moving playhead.
+    for (const auto& mesh : layer.meshes) if (mesh.group) return;
+    QRectF content;
+    for (const auto& mesh : layer.meshes) {
+        if (mesh.vertices.isEmpty()) continue;
+        const auto first = mesh.transform.map(QPointF(mesh.vertices.front().x, mesh.vertices.front().y));
+        QRectF bounds(first, QSizeF());
+        for (const auto& vertex : mesh.vertices) {
+            const auto point = mesh.transform.map(QPointF(vertex.x, vertex.y));
+            bounds.setLeft(std::min(bounds.left(), point.x()));
+            bounds.setRight(std::max(bounds.right(), point.x()));
+            bounds.setTop(std::min(bounds.top(), point.y()));
+            bounds.setBottom(std::max(bounds.bottom(), point.y()));
+        }
+        if (mesh.clip) bounds &= mesh.clip->bounds;
+        content |= bounds;
+    }
+    layer.contentBounds = content;
+}
 // A rectangular clip cannot affect triangles wholly inside it. Omitting that
 // redundant clip lets Qt batch adjacent controls instead of switching scissor
 // state for every widget. Mesh clips are already in layer coordinates.
 inline bool requiresLayerClip(const SceneLayer& layer) {
     if (!layer.mask.isEmpty()) return true;
+    if (layer.contentBounds)
+        return !layer.contentBounds->isEmpty() && !layer.clip.contains(*layer.contentBounds);
     for (const auto& mesh : layer.meshes) {
         if (mesh.clip && layer.clip.contains(mesh.clip->bounds)) continue;
         if (mesh.group) return true;

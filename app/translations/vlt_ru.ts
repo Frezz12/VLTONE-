@@ -17158,6 +17158,10 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 <context>
     <name>WebBrowserPanel</name>
     <message>
+        <source>Page could not be loaded</source>
+        <translation>Не удалось загрузить страницу</translation>
+    </message>
+    <message>
         <source>Page loading progress</source>
         <translation>Загрузка страницы</translation>
     </message>
@@ -17215,19 +17219,19 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     </message>
     <message>
         <source>Reopen closed tab</source>
-        <translation>Повторно открыть закрытую вкладку</translation>
+        <translation>Вернуть закрытую вкладку</translation>
     </message>
     <message>
         <source>Back (Alt+Left)</source>
-        <translation>Назад (Alt+Лево)</translation>
+        <translation>Назад (Alt+Left)</translation>
     </message>
     <message>
         <source>Forward (Alt+Right)</source>
-        <translation>Вперед (Alt+Право)</translation>
+        <translation>Вперёд (Alt+Right)</translation>
     </message>
     <message>
         <source>Home (Alt+Home)</source>
-        <translation>На главную (Alt+Дом)</translation>
+        <translation>Домой (Alt+Home)</translation>
     </message>
     <message>
         <source>Bookmark this page (Ctrl+D)</source>
@@ -17239,7 +17243,7 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     </message>
     <message>
         <source>Search or enter address</source>
-        <translation>Поиск или ввести адрес</translation>
+        <translation>Поиск или адрес сайта</translation>
     </message>
     <message>
         <source>Web address</source>
@@ -17355,7 +17359,7 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     </message>
     <message>
         <source>Name</source>
-        <translation>Имя</translation>
+        <translation>Название</translation>
     </message>
     <message>
         <source>Renamed to %1</source>
@@ -17576,6 +17580,182 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Package saved project for forum…</source>
         <translation>Упаковать сохранённый проект для форума…</translation>
+    </message>
+    <message>
+        <source> · Muted</source>
+        <translation> · Без звука</translation>
+    </message>
+    <message>
+        <source>%1 of %2</source>
+        <translation>%1 из %2</translation>
+    </message>
+    <message>
+        <source>A space for your next idea.</source>
+        <translation>Пространство для новых идей.</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Адрес</translation>
+    </message>
+    <message>
+        <source>Back to page</source>
+        <translation>Вернуться к странице</translation>
+    </message>
+    <message>
+        <source>Back to page (Esc)</source>
+        <translation>Вернуться к странице (Esc)</translation>
+    </message>
+    <message>
+        <source>Browser</source>
+        <translation>Браузер</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Отменено</translation>
+    </message>
+    <message>
+        <source>Clear the list of visited pages? Your bookmarks and downloads will be kept.</source>
+        <translation>Очистить список посещённых страниц? Закладки и загруженные файлы сохранятся.</translation>
+    </message>
+    <message>
+        <source>Close tabs to the right</source>
+        <translation>Закрыть вкладки справа</translation>
+    </message>
+    <message>
+        <source>Completed</source>
+        <translation>Завершено</translation>
+    </message>
+    <message>
+        <source>Connection is not encrypted</source>
+        <translation>Соединение не зашифровано</translation>
+    </message>
+    <message>
+        <source>Connection uses HTTPS</source>
+        <translation>Соединение использует HTTPS</translation>
+    </message>
+    <message>
+        <source>Copy file path</source>
+        <translation>Копировать путь к файлу</translation>
+    </message>
+    <message>
+        <source>Downloading</source>
+        <translation>Загружается</translation>
+    </message>
+    <message>
+        <source>Downloads</source>
+        <translation>Загрузки</translation>
+    </message>
+    <message>
+        <source>Downloads (Ctrl+J)</source>
+        <translation>Загрузки (Ctrl+J)</translation>
+    </message>
+    <message>
+        <source>Downloads from this session appear here. Audio files are offered for import into your project.</source>
+        <translation>Здесь появятся загрузки текущего сеанса. Загруженное аудио можно добавить в проект.</translation>
+    </message>
+    <message>
+        <source>Failed: %1</source>
+        <translation>Ошибка: %1</translation>
+    </message>
+    <message>
+        <source>Filter browser library</source>
+        <translation>Поиск в библиотеке браузера</translation>
+    </message>
+    <message>
+        <source>Find sounds, explore music and keep your references close.</source>
+        <translation>Ищите звуки, слушайте музыку и храните референсы рядом с проектом.</translation>
+    </message>
+    <message>
+        <source>From the web to your track</source>
+        <translation>Из браузера — в ваш трек</translation>
+    </message>
+    <message>
+        <source>History</source>
+        <translation>История</translation>
+    </message>
+    <message>
+        <source>Import audio into project</source>
+        <translation>Добавить аудио в проект</translation>
+    </message>
+    <message>
+        <source>Music &amp; inspiration</source>
+        <translation>Музыка и вдохновение</translation>
+    </message>
+    <message>
+        <source>Mute other tabs</source>
+        <translation>Выключить звук других вкладок</translation>
+    </message>
+    <message>
+        <source>Mute tab</source>
+        <translation>Выключить звук вкладки</translation>
+    </message>
+    <message>
+        <source>No matches</source>
+        <translation>Не найдено</translation>
+    </message>
+    <message>
+        <source>No matching tabs</source>
+        <translation>Подходящих вкладок нет</translation>
+    </message>
+    <message>
+        <source>No results. Try another name or address.</source>
+        <translation>Ничего не найдено. Попробуйте другое название или адрес.</translation>
+    </message>
+    <message>
+        <source>Open tabs</source>
+        <translation>Открытые вкладки</translation>
+    </message>
+    <message>
+        <source>Pause download</source>
+        <translation>Приостановить загрузку</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>На паузе</translation>
+    </message>
+    <message>
+        <source>Recently visited</source>
+        <translation>Недавно открывали</translation>
+    </message>
+    <message>
+        <source>Reset page zoom</source>
+        <translation>Сбросить масштаб страницы</translation>
+    </message>
+    <message>
+        <source>Reset page zoom (Ctrl+0)</source>
+        <translation>Сбросить масштаб страницы (Ctrl+0)</translation>
+    </message>
+    <message>
+        <source>Resume download</source>
+        <translation>Продолжить загрузку</translation>
+    </message>
+    <message>
+        <source>Save a page with Ctrl+D, or add a bookmark here.</source>
+        <translation>Сохраните страницу сочетанием Ctrl+D или добавьте закладку здесь.</translation>
+    </message>
+    <message>
+        <source>Search by name or address</source>
+        <translation>Поиск по названию или адресу</translation>
+    </message>
+    <message>
+        <source>Search tabs</source>
+        <translation>Поиск по вкладкам</translation>
+    </message>
+    <message>
+        <source>Search tabs (Ctrl+Shift+A)</source>
+        <translation>Поиск по вкладкам (Ctrl+Shift+A)</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>Поиск…</translation>
+    </message>
+    <message>
+        <source>Unmute tab</source>
+        <translation>Включить звук вкладки</translation>
+    </message>
+    <message>
+        <source>YOUR WORKSPACE</source>
+        <translation>ВАШЕ ПРОСТРАНСТВО</translation>
     </message>
 </context>
 <context>

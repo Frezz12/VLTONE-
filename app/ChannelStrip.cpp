@@ -15,6 +15,7 @@
 #include "Theme.hpp"
 #include "UiConstants.hpp"
 #include "graphics/WorkspaceSurface.hpp"
+#include "graphics/SceneRecorder.hpp"
 
 #include "EngineController.hpp"
 #include "AutomationEditorWindow.hpp"
@@ -767,6 +768,31 @@ bool ChannelStrip::checkFaderInputForTest() {
         controller.undo();
         strip.syncFromModel();
         check(volume() == initial && fader->gain() == initial, "Undo restores the manually edited gain");
+
+        auto recording = std::make_shared<ui::graphics::SceneRecordingCache>();
+        std::shared_ptr<const ui::graphics::SceneMeshGroup> plate, cap;
+        QPointF firstOrigin;
+        bool reused = true, moved = false;
+        for (int frame = 0; frame < 20; ++frame) {
+            fader->setGain(.2 + frame * .04);
+            ui::graphics::SceneRecorder recorder(fader->size(), 1, recording);
+            {
+                QPainter painter(&recorder);
+                painter.setFont(fader->font());
+                fader->paintScene(painter, fader->rect());
+            }
+            const auto meshes = recorder.takeMeshes();
+            if (!recorder.supported() || meshes.size() < 2) { reused = false; break; }
+            if (!frame) {
+                plate = meshes.front().group; cap = meshes.back().group;
+                firstOrigin = meshes.back().transform.map(QPointF());
+            } else {
+                reused &= plate && cap && plate == meshes.front().group && cap == meshes.back().group;
+                moved |= firstOrigin != meshes.back().transform.map(QPointF());
+            }
+        }
+        check(reused && moved, "moving gain reuses the scale and handle geometry");
+        strip.syncFromModel();
     }
     // Read actual device blocks through two views of the same channel. The
     // peak survives silence and opening an inspector; resetting either view
@@ -803,6 +829,43 @@ bool ChannelStrip::checkFaderInputForTest() {
           "clicking the inspector resets both views without changing Undo");
     master.m_peakLabel->click();
     check(controller.meterSnapshot(daw::EngineController::kMasterChannelId).hold == 0, "master maximum resets independently");
+
+    daw::AutomationTarget target;
+    target.kind = daw::AutomationTargetKind::TrackVolume;
+    target.channelId = trackId;
+    const auto lane = controller.addAutomationLane(trackId, target);
+    const auto clip = controller.addAutomationClip(lane, target, 0, 4);
+    daw::AutomationPoint start, end;
+    start.beats = 0; start.value = .25;
+    end.beats = 8; end.value = .85;
+    controller.setAutomationPoints(lane, clip, {start, end});
+    mixer.setAttribute(Qt::WA_DontShowOnScreen);
+    mixer.resize(mixer.width(), mixer.minimumHeight());
+    mixer.show();
+    QApplication::processEvents();
+    controller.play();
+    const auto automationUndo = controller.undoDepth();
+    bool follows = true;
+    for (int frame = 0; frame < 8; ++frame) {
+        controller.seekSeconds(.1 + frame / 120.0);
+        mixer.refreshMeter(); // no slow shell/automation poll between frames
+        const auto expected = controller.automationValueAtPlayhead(target);
+        follows &= expected && std::abs(mixer.m_fader->gain() - *expected) < 1e-5;
+    }
+    check(follows && controller.undoDepth() == automationUndo,
+          "meter frames follow gain automation without a model edit or slow poll");
+    const QPointF at(mixer.m_fader->rect().center());
+    QMouseEvent press(QEvent::MouseButtonPress, at, mixer.m_fader->mapToGlobal(at),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mixer.m_fader, &press);
+    const double heldGain = mixer.m_fader->gain();
+    controller.seekSeconds(1.5);
+    mixer.refreshMeter();
+    check(mixer.m_fader->gain() == heldGain, "frame automation never overrides a held fader");
+    QMouseEvent release(QEvent::MouseButtonRelease, at, mixer.m_fader->mapToGlobal(at),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(mixer.m_fader, &release);
+    controller.stop();
     return ok;
 }
 
@@ -2489,9 +2552,9 @@ void ChannelStrip::setRackHeights(const RackHeights& heights) {
     bool changed = false;
     for (std::size_t i = 0; i < m_rackSections.size(); ++i) {
         auto* row = m_rackSections[i];
-        // Master has no aux sends: give that height to its fader/meter instead
-        // of keeping an empty well below the final processing stage.
-        const int height = m_master && i == 4 ? 0 : std::max(heights[i], m_rackNaturalHeights[i]);
+        // Empty sections reserve their row height too, so the pinned Master
+        // fader and the ordinary channels share the same ruler and baseline.
+        const int height = std::max(heights[i], m_rackNaturalHeights[i]);
         if (i == 1) if (auto* rack = qobject_cast<ui::MiniModuleRack*>(m_colorWell)) rack->setRackHeight(height);
         if (row->height() == height && row->isHidden() == (height == 0)) continue;
         if (i == 4 && !m_master) {
@@ -2821,6 +2884,10 @@ void ChannelStrip::syncFromModel() {
 
 void ChannelStrip::refreshAutomationValues() {
     syncColor(true);
+    refreshLevelAutomationValues();
+}
+
+void ChannelStrip::refreshLevelAutomationValues() {
     if (!m_controller) return;
     const auto* track =
         m_controller->project().findTrack(m_trackId.toStdString());
@@ -2874,13 +2941,29 @@ double ChannelStrip::faderGainForTest() const {
 }
 
 void ChannelStrip::refreshMeter() {
-    if (!m_meter) return;
-    if (m_master && m_loudness) m_loudness->setLevels(m_controller->masterLoudness());
+    if (!m_controller) return;
+    // Meter ticks follow the display clock. Automated faders and pan controls
+    // must follow it too, instead of stepping with the shell's slow control
+    // poll. Keep module/model synchronization outside this hot path.
+    if (m_controller->isPlaying() &&
+        (ui::isVisibleInViewport(m_fader) || ui::isVisibleInViewport(m_pan)))
+        refreshLevelAutomationValues();
+    // Prime a new view (and explicit resets) before its first exposure. Normal
+    // frame ticks only touch the visible part of a vertically scrolled strip.
+    const bool initialize = m_displayedPeak < 0.0f;
+    if (m_master && m_loudness && (initialize || ui::isVisibleInViewport(m_loudness)))
+        m_loudness->setLevels(m_controller->masterLoudness());
+    const bool meterVisible = m_meter && (initialize || ui::isVisibleInViewport(m_meter));
+    const bool peakVisible = m_peakLabel && (initialize || ui::isVisibleInViewport(m_peakLabel));
+    if (!meterVisible && !peakVisible) return;
     const auto levels = m_controller->meterSnapshot(channelId().toStdString());
-    m_meter->setPeaks(levels.left, levels.right);
+    if (meterVisible) {
+        m_meter->setPeaks(levels.left, levels.right);
+        m_meter->setPeakHold(levels.hold);
+    }
     const float peak = levels.hold;
-    m_meter->setPeakHold(peak);
-    if (m_peakLabel) {
+    if (peakVisible && m_displayedPeak != peak) {
+        m_displayedPeak = peak;
         const QString value = peak > 0
             ? QString::number(20.0 * std::log10(peak), 'f', 1)
             : QStringLiteral("−∞");
@@ -2910,6 +2993,7 @@ void ChannelStrip::resetPeakHold() {
         if (!strip || strip->m_controller != m_controller || strip->m_master != m_master ||
             strip->m_trackId != m_trackId || !strip->m_meter) continue;
         strip->m_meter->clearClip();
+        strip->m_displayedPeak = -1.0f;
         strip->refreshMeter();
     }
 }

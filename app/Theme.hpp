@@ -153,3 +153,6 @@ QColor colorFromRgb(quint32 rgb);
 
 /// QColor blended towards `other` by `t` (0…1).
 QColor mixColors(const QColor& a, const QColor& b, double t);
+
+/// Light or dark text with sufficient contrast on an opaque colour.
+QColor contrastingTextColor(const QColor& background);

@@ -1,5 +1,51 @@
 # Browser navigation and background collection
 
+## Browser workspace
+
+The browser chrome and offline start page use the active VLTONE theme, including
+the light and custom palettes, shared Inter font, eight-pixel corners and native
+glyphs. The start page keeps the four music shortcuts and adds the user's saved
+bookmarks and recent pages. Local image/video backgrounds and reduced motion
+preferences still apply. Website content keeps its own styling.
+
+The rail opens searchable bookmarks, history and this session's downloads in
+the existing browser area. The tab-strip chevron opens searchable tabs. These
+views replace the viewport temporarily, preserving each page and its navigation
+state; Escape or the close button returns to it. The same views fit a 320-pixel
+panel. Bookmark titles and addresses are escaped in the offline page.
+
+Tab context menus include duplicate, mute/unmute, mute other tabs, close others,
+close to the right and reopen. The built-in VLT Studio tab remains fixed. Pending
+addresses are retained before Chromium commits a page, and closing the panel's
+owner flushes the session save timer so a quick exit does not lose new tabs.
+
+Downloads show their size and status, remain listed after completion, and offer
+pause/resume/cancel, opening the downloads folder and copying the path. Downloaded
+audio retains the existing project-import flow and can be imported again from
+its completed row. Files are never launched automatically. The download list is
+session-only; downloaded files remain on disk.
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+L / F6 | Focus address field |
+| Alt+Enter in address field | Open entered address or search in a new tab |
+| Ctrl+T / Ctrl+W / Ctrl+Shift+T | New / close / reopen tab |
+| Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+1…9 | Select tab |
+| Ctrl+Shift+A | Search open tabs |
+| Ctrl+H / Ctrl+J | History / downloads |
+| Ctrl+D / Ctrl+Shift+B | Bookmark page / toggle bookmarks bar |
+| Ctrl+F / F3 / Shift+F3 | Find / next / previous match, with match count |
+| Ctrl++ or Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
+| F5 / Ctrl+R | Reload page (F5 stops an active load) |
+| Escape | Close library/find or cancel address editing; otherwise stop loading |
+
+`browser_navigation_test`, `browser_quick_navigation_test` and
+`browser_proxy_test` cover both rendering backends, actual local HTTP navigation,
+find results, download pause/resume/cancel, library filtering, theme switching,
+pending session saves and the existing popup/POST/proxy/background flows. Pass
+`--capture`, `VLT_BROWSER_CAPTURE_DIR` and optionally `VLT_BROWSER_RU_QM` to capture
+the real controls at 320/520/900 pixels in dark, light and Studio Gray themes.
+
 The embedded browser keeps Chromium's own network error pages. A cancelled,
 superseded or download navigation is not treated as a new error-page navigation.
 `QWebEngineLoadingInfo` supplies the real error code and description for the

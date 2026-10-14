@@ -9,6 +9,10 @@
 class QWindow;
 
 namespace ui {
+// Geometric visibility through every clipping ancestor. Unlike visibleRegion(),
+// this also works for logical widgets covered by the GPU presentation window.
+bool isVisibleInViewport(const QWidget* widget);
+
 enum class FrameMode { Fixed, Display, Unlimited };
 class FrameTimer;
 
@@ -31,7 +35,10 @@ public:
                       std::function<void()> requestFrame,
                       std::function<bool(QWidget*, const QRegion&)> damage);
     void clearPresenter(QWidget* surface, QObject* owner);
-    void presentationFrame(QWidget* surface, QObject* owner);
+    // Schedule an ordinary-widget/geometry capture on the same cadence as
+    // canvas damage, without manufacturing paint damage on the root widget.
+    void requestPresentation(QWidget* surface, QObject* owner);
+    bool presentationFrame(QWidget* surface, QObject* owner);
 
 signals:
     void preferenceChanged();

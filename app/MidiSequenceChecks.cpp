@@ -65,7 +65,7 @@ bool TimelineWidget::checkMidiSequenceForTest(const QString& images) {
 
     // The real GPU path must contain one title even across several time tiles.
     ui::graphics::SceneRecorder header(timeline.size(), 1);
-    { QPainter p(&header); timeline.drawMidiClipHeader(p, *clip(), timeline.clipRect(0, *clip())); }
+    { QPainter p(&header); p.setClipRect(timeline.rect()); timeline.drawMidiClipHeaders(p); }
     QImage title;
     for (const auto& mesh : header.takeMeshes())
         if (mesh.texture.width() > title.width()) title = mesh.texture;

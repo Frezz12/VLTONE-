@@ -233,9 +233,9 @@ audio::Result AudioRuntime::restorePluginNode(plugins::PluginNode& node,
                 return audio::Result::fail(audio::EngineError::FileNotFound,
                     "Slicer source or state is missing for slot " + std::string(slotId));
         } else restored = instance->loadState(state.state);
-    } else if (!state.stateFile.empty() && !state.tolerateErrors && (sampler || slicer)) {
+    } else if (!state.stateFile.empty() && !state.tolerateErrors) {
         return audio::Result::fail(audio::EngineError::FileNotFound,
-            "Sampler state file is missing or unreadable: " + state.stateFile);
+            "Plugin state file is missing or unreadable: " + state.stateFile);
     }
     if (!state.state.empty() && !restored && !state.tolerateErrors)
         return audio::Result::fail(audio::EngineError::PluginLoadFailed,

@@ -193,6 +193,13 @@ inline double clipCornerRadius(double roundedRadius = 5.0) {
     return roundedClipCorners() ? roundedRadius : 0.0;
 }
 
+// A screen-space circle, including very short clips. Letting QPainter clamp
+// the x/y radii independently stretches the corner as the timeline zooms.
+inline double clipCornerRadius(const QRectF& body, double roundedRadius = 5.0) {
+    return std::max(0.0, std::min({clipCornerRadius(roundedRadius),
+                                  body.width() * 0.5, body.height() * 0.5}));
+}
+
 /// How thick the playhead line is drawn, in pixels. A hairline is right on a
 /// sparse arrangement and invisible on a dense one at a high pixel density, and
 /// which of those someone is looking at is not something the application knows.

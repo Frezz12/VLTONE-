@@ -4,8 +4,11 @@
 #include <QApplication>
 #include <QFontDatabase>
 #include <QPainter>
+#include <QQuickRenderControl>
+#include <QQuickRenderTarget>
 #include <QQuickWindow>
-#include <QTimer>
+#include <QScopeGuard>
+#include <rhi/qrhi.h>
 #include <atomic>
 #include <cmath>
 #include <iostream>
@@ -43,12 +46,49 @@ void checkText(const std::vector<SceneMesh>& meshes, qreal dpr) {
     }
     require(antialiasing, "glyph edge antialiasing must remain enabled");
 }
+void checkRasterText(QFont font, qreal dpr) {
+    const QSize size(480, 160);
+    const QPointF baseline(20 / dpr, 40 / dpr);
+    const QString label = QStringLiteral("Pan Fixed Pattern — Ноты Файл До#");
+    SceneRecorder recorder(size, dpr);
+    {
+        QPainter p(&recorder); p.setFont(font); p.setPen(Qt::white);
+        p.translate(baseline); p.drawText(QPointF(), label);
+    }
+    QImage reference(size * dpr, QImage::Format_ARGB32_Premultiplied);
+    reference.setDevicePixelRatio(dpr); reference.fill(Qt::transparent);
+    {
+        QPainter p(&reference); p.setFont(font); p.setPen(Qt::white);
+        p.translate(baseline); p.drawText(QPointF(), label);
+    }
+    QImage recorded(reference.size(), reference.format());
+    recorded.setDevicePixelRatio(dpr); recorded.fill(Qt::transparent);
+    {
+        QPainter p(&recorded);
+        for (const auto& mesh : recorder.takeMeshes())
+            p.drawImage(QPointF(std::round(mesh.vertices[0].x * dpr) / dpr,
+                               std::round(mesh.vertices[0].y * dpr) / dpr), mesh.texture);
+    }
+    if (recorded != reference) {
+        std::cerr << "Raster mismatch at DPR " << dpr << '\n';
+        const auto directory = qEnvironmentVariable("DAW_TEXT_CHECK_DIR");
+        if (!directory.isEmpty()) {
+            reference.save(directory + QStringLiteral("/reference-%1.png").arg(dpr));
+            recorded.save(directory + QStringLiteral("/recorded-%1.png").arg(dpr));
+        }
+    }
+    require(recorded == reference, "cached glyphs must match native raster text at a device-aligned baseline");
+}
 }
 int main(int argc, char** argv) try {
     QApplication app(argc, argv);
     require(QFontDatabase::addApplicationFont(DAW_TEST_FONT_PATH) >= 0, "load bundled Inter fixture");
     QFont font(QStringLiteral("Inter")); font.setPixelSize(10);
+    SceneRecorder fractional(QSize(480, 160), 1.3);
+    require(fractional.devicePixelRatioF() == 1.3, "paint device must report the exact fractional DPR");
+    RetainedScene movingBetweenScreens;
     for (qreal dpr : {1., 1.25, 1.5, 1.75, 2.}) {
+        checkRasterText(font, dpr);
         for (QPointF origin : {QPointF(), QPointF(.25, .5), QPointF(17.75, 9.25)})
             checkText(text(font, dpr, origin), dpr);
         const auto scaled = text(font, dpr, {}, true);
@@ -76,13 +116,21 @@ int main(int argc, char** argv) try {
         require(groups.size() == 2 && groups[0].group == groups[1].group && cache.builds() == 1,
                 "scrolling reuses the glyph group");
         checkText(groups[0].group->meshes, dpr);
+        SceneRecorder moved(QSize(480, 160), dpr);
+        QPainter mp(&moved); mp.setFont(font);
+        movingBetweenScreens.paint(mp, 1, QSize(480, 160), {}, draw);
+        mp.end();
+        const auto movedGroups = moved.takeMeshes();
+        checkText(movedGroups.front().group->meshes, dpr);
     }
     std::cout << "PASS native text filtering, antialiasing, clipping and retained groups at 100/125/150/175/200%\n";
     if (!app.arguments().contains("--hardware")) return 0;
 
     // Test-only GPU readback: identical glyph pixels, old vs new sampling.
     // This exercises shared atlas textures with two different material filters.
-    QQuickWindow window;
+    QQuickRenderControl renderControl;
+    renderControl.setSamples(4);
+    QQuickWindow window(&renderControl);
     window.setColor(QColor(20, 23, 28)); window.resize(480, 220);
     auto* item = new SceneItem(window.contentItem()); item->setSize(window.size());
     std::atomic<bool> resourceError{false};
@@ -92,6 +140,7 @@ int main(int argc, char** argv) try {
     auto layer = std::make_shared<SceneLayer>(); layer->id = layer->revision = 1;
     layer->clip = QRectF(QPointF(), window.size());
     const auto dpr = window.devicePixelRatio();
+    const int noteX = qRound(300 * dpr), noteY = qRound(20 * dpr);
     for (int row = 0; row < 2; ++row) {
         const auto append = [&](QFont f, QPointF origin) {
             auto glyphs = text(f, dpr, origin);
@@ -104,15 +153,83 @@ int main(int argc, char** argv) try {
         auto larger = font; larger.setPixelSize(12);
         append(larger, QPointF(14.25, 40 + row * 100));
     }
-    snapshot->layers.push_back(layer); item->setSnapshot(snapshot);
-    window.show();
-    QTimer::singleShot(500, &app, &QCoreApplication::quit); app.exec();
-    const QImage frame = window.grabWindow();
+    snapshot->layers.push_back(layer);
+    // Widget placement and retained scrolling each contribute a fractional
+    // translation. Straight edges must still land on complete device pixels.
+    SceneRecorder notes(QSize(480, 220), dpr);
+    {
+        QPainter p(&notes); p.setPen(Qt::NoPen); p.setBrush(Qt::white);
+        p.fillRect(QRectF(noteX / dpr, noteY / dpr, 100 / dpr, 20 / dpr), Qt::white);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.drawRoundedRect(QRectF(noteX / dpr, (noteY + 40) / dpr, 100 / dpr, 20 / dpr), 4 / dpr, 4 / dpr);
+    }
+    auto noteGroup = std::make_shared<SceneMeshGroup>(); noteGroup->meshes = notes.takeMeshes();
+    SceneMesh movingNotes; movingNotes.group = noteGroup;
+    movingNotes.transform.translate(.3 / dpr, .3 / dpr);
+    auto noteLayer = std::make_shared<SceneLayer>(); noteLayer->id = 2; noteLayer->revision = 1;
+    noteLayer->origin = QPointF(.3 / dpr, .3 / dpr);
+    noteLayer->clip = layer->clip; noteLayer->meshes.push_back(movingNotes);
+    snapshot->layers.push_back(noteLayer); item->setSnapshot(snapshot);
+    // QQuickWindow::grabWindow() on a hidden window uses DPR 1 and disables
+    // MSAA in Qt 6.8. Use an explicit render target to test real DPI and 4x AA.
+    require(renderControl.initialize(), "initialize hardware render control");
+    auto* rhi = renderControl.rhi();
+    require(rhi && rhi->supportedSampleCounts().contains(4), "hardware supports 4x MSAA");
+    const QSize pixels = window.size() * dpr;
+    std::unique_ptr<QRhiTexture> texture(rhi->newTexture(QRhiTexture::RGBA8, pixels, 1,
+        QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
+    std::unique_ptr<QRhiRenderBuffer> color(rhi->newRenderBuffer(QRhiRenderBuffer::Color, pixels, 4));
+    std::unique_ptr<QRhiRenderBuffer> depth(rhi->newRenderBuffer(QRhiRenderBuffer::DepthStencil, pixels, 4));
+    require(texture->create() && color->create() && depth->create(), "create MSAA readback buffers");
+    QRhiColorAttachment attachment(color.get()); attachment.setResolveTexture(texture.get());
+    QRhiTextureRenderTargetDescription description;
+    description.setColorAttachments({attachment}); description.setDepthStencilBuffer(depth.get());
+    std::unique_ptr<QRhiTextureRenderTarget> target(rhi->newTextureRenderTarget(description));
+    std::unique_ptr<QRhiRenderPassDescriptor> pass(target->newCompatibleRenderPassDescriptor());
+    target->setRenderPassDescriptor(pass.get());
+    require(target->create(), "create MSAA render target");
+    auto quickTarget = QQuickRenderTarget::fromRhiRenderTarget(target.get());
+    quickTarget.setDevicePixelRatio(dpr); window.setRenderTarget(quickTarget);
+    const auto cleanup = qScopeGuard([&] { window.setRenderTarget({}); renderControl.invalidate(); });
+    renderControl.polishItems(); renderControl.beginFrame(); renderControl.sync(); renderControl.render();
+    QRhiReadbackResult readback;
+    auto* updates = rhi->nextResourceUpdateBatch();
+    updates->readBackTexture(QRhiReadbackDescription(texture.get()), &readback);
+    renderControl.commandBuffer()->resourceUpdate(updates);
+    renderControl.endFrame(); rhi->finish();
+    QImage frame(reinterpret_cast<const uchar*>(readback.data.constData()),
+                 readback.pixelSize.width(), readback.pixelSize.height(), QImage::Format_RGBA8888_Premultiplied);
+    frame = rhi->isYUpInFramebuffer() ? frame.mirrored() : frame.copy();
+    frame.setDevicePixelRatio(dpr);
     require(!frame.isNull(), "hardware frame available");
     const QString destination = app.arguments().value(app.arguments().indexOf("--hardware") + 1);
     if (!destination.isEmpty()) require(frame.save(destination), "save GPU comparison");
+    const QColor background(20, 23, 28);
+    for (int y : {noteY, noteY + 40}) {
+        require(frame.pixelColor(noteX + 50, y - 1) == background &&
+                frame.pixelColor(noteX + 50, y) == QColor(Qt::white) &&
+                frame.pixelColor(noteX + 50, y + 19) == QColor(Qt::white) &&
+                frame.pixelColor(noteX + 50, y + 20) == background,
+                "flat and rounded note edges must stay sharp after fractional widget/tile translation");
+    }
+    bool roundedAntialiasing = false;
+    for (int y = noteY + 40; y < noteY + 45; ++y)
+        for (int x = noteX; x < noteX + 5; ++x) {
+            const auto color = frame.pixelColor(x, y);
+            roundedAntialiasing |= color != background && color != QColor(Qt::white);
+        }
+    require(roundedAntialiasing, "rounded note corners must retain antialiasing");
+    require(frame.pixelColor(noteX, noteY + 40) == background,
+            "the note corner must remain rounded");
+    bool visibleText = false;
+    for (int y = 0; y < int(180 * dpr); ++y)
+        for (int x = 0; x < int(250 * dpr); ++x)
+            visibleText |= frame.pixelColor(x, y) != background;
+    require(visibleText, "GPU readback must contain rendered text, not a blank offscreen frame");
     require(!resourceError.load(), "hardware scene rendered");
-    std::cout << "PASS GPU comparison captured: top=previous linear, bottom=native glyph texels\n";
+    std::cout << "PASS GPU text and sharp note edges at DPR " << dpr
+              << " with 4x MSAA"
+              << " (top=linear sampling, bottom=native glyph texels)\n";
     return 0;
 } catch (const std::exception& error) {
     std::cerr << "FAIL " << error.what() << '\n'; return 1;

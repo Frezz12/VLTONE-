@@ -100,6 +100,7 @@ constexpr int kFadeZonePx = 16;
 constexpr double kFadeGrabPx = 8.0;
 /// Radius of the gain-handle circle at a clip's bottom centre.
 constexpr double kGainHandleR = 3.5;
+constexpr int kClipPaintOutset = 4; // Gain handle radius plus its antialiased stroke.
 /// How close the pointer must be to the gain handle to grab it.
 constexpr double kGainGrabPx = 9.0;
 /// Vertical drag distance that doubles (or halves) a clip's gain.
@@ -116,6 +117,86 @@ constexpr int kClipVerticalInset = 2;
 /// stays immediately above an open mixer instead of disappearing behind it.
 constexpr int kTimelineScrollExtent = ui::kTimelineScrollExtent;
 constexpr int kTimelineScrollUnitsPerSecond = 1000;
+
+double fadeHandleX(const QRectF& body, double width, bool fadeIn) {
+    const double inset = std::min(4.0, body.width() * 0.5);
+    return std::clamp(fadeIn ? body.left() + width : body.right() - width,
+                      body.left() + inset, body.right() - inset);
+}
+
+QPainterPath clipBodyPath(QPainter& p, const QRectF& span, qreal roundedRadius = 5.0) {
+    QPainterPath path;
+    if (span.isEmpty()) return path;
+    // Fill, content mask and inset outline must share physical pixel bounds.
+    // Retained tiles move by whole device pixels, so their corners then keep
+    // the same coverage at fractional display scaling and after zoom settles.
+    const auto body = ui::pixelAlignedRect(span, p.device()->devicePixelRatioF());
+    const qreal radius = ui::clipCornerRadius(body, roundedRadius);
+    path.addRoundedRect(body, radius, radius);
+    return path;
+}
+
+void drawClipBody(QPainter& p, const QRectF& span, const QColor& fill,
+                  qreal captionHeight = 0, const QColor& tint = Qt::transparent) {
+    if (span.isEmpty()) return;
+    const qreal dpr = p.device()->devicePixelRatioF();
+    const auto body = ui::pixelAlignedRect(span, dpr);
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const auto shape = clipBodyPath(p, body);
+    captionHeight = std::clamp(captionHeight, 0.0, body.height());
+    if (captionHeight > 0) {
+        const qreal split = std::clamp(std::round((body.top() + captionHeight) * dpr) / dpr,
+                                      body.top(), body.bottom());
+        // Compose the header colour before rasterizing its edge. Painting a
+        // translucent header over an already antialiased body applies coverage
+        // twice and leaves a bright, uneven fringe around the top corners.
+        const qreal a = tint.alphaF(), b = fill.alphaF() * (1 - a);
+        const qreal alpha = a + b;
+        const QColor header = alpha > 0
+            ? QColor::fromRgbF((tint.redF() * a + fill.redF() * b) / alpha,
+                               (tint.greenF() * a + fill.greenF() * b) / alpha,
+                               (tint.blueF() * a + fill.blueF() * b) / alpha, alpha)
+            : QColor(Qt::transparent);
+        p.save();
+        // Only clip at the shared, device-aligned header/body boundary. A
+        // second mask on the curved outer edge would multiply its coverage.
+        p.setClipRect(QRectF(body.left() - 1, body.top() - 1, body.width() + 2,
+                            split - body.top() + 1), Qt::IntersectClip);
+        p.fillPath(shape, header);
+        p.restore();
+        p.setClipRect(body.adjusted(-1, split - body.top(), 1, 1), Qt::IntersectClip);
+    }
+    p.fillPath(shape, fill);
+    p.restore();
+}
+
+QColor selectedClipHeader(const QColor& base) {
+    return mixColors(base, Qt::white, 0.24);
+}
+
+QColor clipHeaderText(const QColor& base, bool selected) {
+    return selected ? contrastingTextColor(selectedClipHeader(base))
+                    : QColor(255, 255, 255, 235);
+}
+
+// Stroke inside the time span, after content. Adjacent clips each own their
+// edge; neither the neighbour nor a waveform can erase the separator.
+void drawClipOutline(QPainter& p, const QRectF& body, const QColor& color,
+                     bool selected = false, Qt::PenStyle style = Qt::SolidLine) {
+    const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+    const QRectF bounds = ui::pixelAlignedRect(body, dpr);
+    const qreal stroke = std::min({std::round((selected ? 2.0 : 1.0) * dpr) / dpr,
+                                  bounds.width(), bounds.height()});
+    const qreal inset = stroke * 0.5;
+    const qreal radius = std::max(0.0, ui::clipCornerRadius(bounds) - inset);
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(color, stroke, style));
+    p.drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset), radius, radius);
+    p.restore();
+}
 
 bool tempoAnalysisConfident(const daw::ClipTempoAnalysisModel& tempo) {
     return daw::analysis::highConfidence(tempo);
@@ -1704,6 +1785,17 @@ int TimelineWidget::laneAt(int yy) const {
     const int index = int(it - m_laneOffsets.begin()) - 1;
     return index >= 0 && index < int(m_layoutRows.size()) ? index : -1;
 }
+std::pair<int, int> TimelineWidget::lanesInRect(const QRect& region) const {
+    const auto& rows = visibleRows();
+    if (region.isEmpty()) return {0, 0};
+    const int origin = tracksTop() - m_scrollY;
+    // Gain handles can extend beyond a lane's body into the neighbouring row.
+    const int first = std::max(0, int(std::upper_bound(m_laneOffsets.begin(),
+        m_laneOffsets.end(), region.top() - origin - kClipPaintOutset) - m_laneOffsets.begin()) - 1);
+    const int last = std::min(int(rows.size()), int(std::upper_bound(m_laneOffsets.begin(),
+        m_laneOffsets.end(), region.bottom() - origin + kClipPaintOutset) - m_laneOffsets.begin()));
+    return {std::min(first, last), last};
+}
 int TimelineWidget::laneTop(int lane) const {
     visibleRows();
     return tracksTop() - m_scrollY + m_laneOffsets[size_t(std::clamp(lane, 0, int(m_layoutRows.size())))];
@@ -1956,11 +2048,29 @@ int TimelineWidget::laneForTrackId(const QString& trackId) const {
 QRectF TimelineWidget::clipRect(int lane, const daw::ClipModel& clip) const {
     const int y = laneTop(lane);
     const int h = laneBodyHeightAt(lane);
+    return clipSpanRect(clip, y + kClipVerticalInset,
+                        std::max(2, h - 2 * kClipVerticalInset));
+}
+
+QRectF TimelineWidget::clipSpanRect(const daw::ClipModel& clip,
+                                   double top, double height) const {
     const int x = secondsToX(clip.startSeconds);
-    const int w = std::max(
-        2, int(m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond));
-    return QRectF(x, y + kClipVerticalInset, w,
-                  std::max(2, h - 2 * kClipVerticalInset));
+    // Round both endpoints using the same timeline origin. Rounding duration
+    // separately leaves a one-pixel gap at fractional zoom/scroll positions.
+    const int end = secondsToX(clip.startSeconds + m_controller->clipDisplayDuration(clip));
+    return QRectF(x, top, std::max(2, end - x), height);
+}
+
+QRectF TimelineWidget::clipHeaderRect(const daw::TrackModel& track,
+                                     const daw::ClipModel& clip, QRectF body) const {
+    // Audio can intentionally share a waveform region. Names and MIDI
+    // controls still need their own space before the next clip starts.
+    for (const auto index : clipsInRange(track, int(body.left()), int(body.right()))) {
+        const auto& next = track.clips[index];
+        if (next.startSeconds > clip.startSeconds)
+            body.setRight(std::min(body.right(), double(secondsToX(next.startSeconds))));
+    }
+    return body;
 }
 
 QRectF TimelineWidget::compRect(int lane, const daw::ClipModel& clip) const {
@@ -1968,10 +2078,7 @@ QRectF TimelineWidget::compRect(int lane, const daw::ClipModel& clip) const {
     const int top = laneTop(lane) + laneBodyHeightAt(lane);
     const int bottom = laneTop(lane) + laneHeightAt(lane);
     if (bottom <= top) return {};
-    const int x = secondsToX(clip.startSeconds);
-    const int w = std::max(
-        2, int(m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond));
-    return QRectF(x, top, w, bottom - top);
+    return clipSpanRect(clip, top, bottom - top);
 }
 
 /// The sub-lane of take `index` inside an expanded clip's editor. Rows are laid
@@ -2434,7 +2541,7 @@ bool TimelineWidget::hitTestClip(const QPoint& pos, ClipHit& out) const {
         const auto& clip = track.clips[index];
         const int x = secondsToX(clip.startSeconds);
         const double visibleDuration = m_controller->clipDisplayDuration(clip);
-        const int w = std::max(2, int(visibleDuration * m_pixelsPerSecond));
+        const int w = std::max(2, secondsToX(clip.startSeconds + visibleDuration) - x);
         if (pos.x() >= x && pos.x() <= x + w) {
             out.trackId = QString::fromStdString(track.id);
             out.clipId = QString::fromStdString(clip.id);
@@ -2481,8 +2588,9 @@ bool TimelineWidget::hitTestClip(const QPoint& pos, ClipHit& out) const {
             // Fade handles live in the top strip of the clip, at the current
             // fade-end positions (at the corners when the fades are zero).
             if (w > 2 * kEdgePx && pos.y() <= clipTop + kFadeZonePx) {
-                const double inX = x + clip.fadeInSeconds * m_pixelsPerSecond;
-                const double outX = (x + w) - clip.fadeOutSeconds * m_pixelsPerSecond;
+                const QRectF body(x, clipTop, w, 0);
+                const double inX = fadeHandleX(body, clip.fadeInSeconds * m_pixelsPerSecond, true);
+                const double outX = fadeHandleX(body, clip.fadeOutSeconds * m_pixelsPerSecond, false);
                 const double dIn = std::abs(pos.x() - inX);
                 const double dOut = std::abs(pos.x() - outX);
                 const bool inHit = dIn <= kFadeGrabPx;
@@ -2532,7 +2640,8 @@ bool TimelineWidget::hitTestClip(const QPoint& pos, ClipHit& out) const {
                 else if (pos.x() >= x + w - kEdgePx) out.edge = Edge::Right;
             }
             // Volume handle: the small circle at the bottom centre of the clip.
-            if (std::hypot(pos.x() - (x + w / 2.0), pos.y() - clipBottom) <=
+            if (w >= 2 * kGainHandleR + 4 &&
+                std::hypot(pos.x() - (x + w / 2.0), pos.y() - (clipBottom - kGainHandleR - 1.5)) <=
                 kGainGrabPx) {
                 out.gainHandle = true;
             }
@@ -2965,7 +3074,8 @@ void TimelineWidget::drawMidiClipHeaders(QPainter& p) {
     p.save();
     p.setClipRect(QRect(0, tracksTop(), width(), visibleLaneHeight()), Qt::IntersectClip);
     const auto dirty = p.clipRegion();
-    for (std::size_t lane = 0; lane < rows.size(); ++lane) {
+    const auto [first, last] = lanesInRect(dirty.boundingRect());
+    for (int lane = first; lane < last; ++lane) {
         const auto& track = m_controller->project().tracks[rows[lane].index];
         if (track.kind == daw::TrackKind::Folder || track.kind == daw::TrackKind::Pattern ||
             daw::isAutomationLane(track)) continue;
@@ -2975,9 +3085,10 @@ void TimelineWidget::drawMidiClipHeaders(QPainter& p) {
         for (const auto index : clipsInRange(track, dirty.boundingRect().left(), dirty.boundingRect().right())) {
             const auto& clip = track.clips[index];
             if (clip.kind != daw::ClipKind::Midi) continue;
-            const QRectF body(secondsToX(clip.startSeconds), top,
-                std::max(2, int(m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond)), height);
-            drawMidiClipHeader(p, clip, body);
+            const QRectF body = clipSpanRect(clip, top, height);
+            const QColor base = clip.muted ? QColor(101, 105, 113) : colorFromRgb(track.color);
+            drawMidiClipHeader(p, clip, clipHeaderRect(track, clip, body),
+                              clipHeaderText(base, isClipSelected(QString::fromStdString(clip.id))));
         }
     }
     p.restore();
@@ -2990,7 +3101,8 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
     const auto& rows = visibleRows();
     const QRegion paintRegion = p.clipRegion();
     const auto rowIntersectsPaint = [&](int y, int height) {
-        return paintRegion.intersects(QRect(0, y, width(), height + 1));
+        return paintRegion.intersects(QRect(0, y - kClipPaintOutset,
+            width(), height + 2 * kClipPaintOutset));
     };
     struct SelectedLaneGrid {
         QRect rect;
@@ -3000,12 +3112,15 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
     QRegion selectedGridRegion;
     std::vector<SelectedLaneGrid> selectedGrids;
 
-    int laneIndex = 0;
+    const auto [firstLane, lastLane] = lanesInRect(paintRegion.boundingRect());
+    ui::perf::sample("timeline.lanes.visited", 2.0 * (lastLane - firstLane));
+    int laneIndex = firstLane;
     // The same origin `laneTop` uses: the lane stack scrolls under a fixed
     // ruler, and a second accumulator that forgot the offset would leave the
     // lane fills standing still while their clips moved.
-    int laneY = tracksTop() - m_scrollY;
-    for (const auto& row : rows) {
+    int laneY = tracksTop() - m_scrollY + m_laneOffsets[size_t(firstLane)];
+    for (auto rowIt = rows.begin() + firstLane; rowIt != rows.begin() + lastLane; ++rowIt) {
+        const auto& row = *rowIt;
         const auto& track = project.tracks[row.index];
         const int laneH = m_laneOffsets[size_t(laneIndex) + 1] - m_laneOffsets[size_t(laneIndex)];
         if (rowIntersectsPaint(laneY, laneH)) {
@@ -3070,8 +3185,8 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
         p.restore();
     }
 
-    laneIndex = 0;
-    laneY = tracksTop() - m_scrollY;
+    laneIndex = firstLane;
+    laneY = tracksTop() - m_scrollY + m_laneOffsets[size_t(firstLane)];
     struct PaintedClip {
         const daw::ClipModel* model = nullptr;
         QRectF body;
@@ -3085,7 +3200,8 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
     static thread_local std::vector<const PaintedClip*> audioByStart;
     visibleClips.clear();
     audioByStart.clear();
-    for (const auto& row : rows) {
+    for (auto rowIt = rows.begin() + firstLane; rowIt != rows.begin() + lastLane; ++rowIt) {
+        const auto& row = *rowIt;
         const auto& track = project.tracks[row.index];
         const int laneH = m_laneOffsets[size_t(laneIndex) + 1] - m_laneOffsets[size_t(laneIndex)];
         if (!rowIntersectsPaint(laneY, laneH)) {
@@ -3124,7 +3240,8 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
         // afterwards, so the overlap shows both waves.
         auto inPaintRegion = [&](const QRectF& r) {
             return paintRegion.intersects(
-                r.toAlignedRect().adjusted(-2, -2, 2, 2));
+                r.toAlignedRect().adjusted(-kClipPaintOutset, -kClipPaintOutset,
+                                           kClipPaintOutset, kClipPaintOutset));
         };
 
         // laneTop()/laneBodyHeightAt() both resolve visibleTracks(). Calling
@@ -3133,23 +3250,15 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
         // all of that geometry; derive each rectangle once and reuse it below.
         const int bodyH = ui::laneHeightFor(track.height);
         const auto bodyRect = [&](const daw::ClipModel& clip) {
-            const int x = secondsToX(clip.startSeconds);
-            const int w = std::max(
-                2, int(m_controller->clipDisplayDuration(clip) *
-                       m_pixelsPerSecond));
-            return QRectF(x, laneY + kClipVerticalInset, w,
-                          std::max(2, bodyH - 2 * kClipVerticalInset));
+            return clipSpanRect(clip, laneY + kClipVerticalInset,
+                                std::max(2, bodyH - 2 * kClipVerticalInset));
         };
         const auto expandedRect = [&](const daw::ClipModel& clip) {
             if (!clip.expanded || clip.takes.empty()) return QRectF{};
             const int top = laneY + bodyH;
             const int bottom = laneY + laneH;
             if (bottom <= top) return QRectF{};
-            const int x = secondsToX(clip.startSeconds);
-            const int w = std::max(
-                2, int(m_controller->clipDisplayDuration(clip) *
-                       m_pixelsPerSecond));
-            return QRectF(x, top, w, bottom - top);
+            return clipSpanRect(clip, top, bottom - top);
         };
 
         // Compute viewport membership once and reuse it for bodies, content,
@@ -3189,27 +3298,21 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
                                          ? QColor(101, 105, 113)
                                          : trackColor;
             const QColor clipColor =
-                sel ? mixColors(baseColor, Qt::white, 0.22) : baseColor;
-            p.setBrush(clipColor);
-            p.setPen(QPen(sel ? t.textPrimary
-                              : mixColors(clipColor, Qt::black, 0.45),
-                          sel ? 1.8 : 1.0));
-            p.drawRoundedRect(r, ui::clipCornerRadius(), ui::clipCornerRadius());
-
-            if (compact) continue;
-            const QRectF caption(r.left(), r.top(), r.width(),
-                                 clip.kind == daw::ClipKind::Midi ? 24 : 14);
-            p.setPen(Qt::NoPen);
-            p.setBrush(QColor(0, 0, 0, clip.kind == daw::ClipKind::Midi ? 150 : 60));
-            QPainterPath capPath;
-            capPath.addRoundedRect(caption, ui::clipCornerRadius(), ui::clipCornerRadius());
-            p.drawPath(capPath);
+                sel ? mixColors(baseColor, Qt::white, 0.08) : baseColor;
+            drawClipBody(p, r, clipColor, compact ? 0 : clip.kind == daw::ClipKind::Midi ? 24 : 14,
+                         sel ? selectedClipHeader(baseColor)
+                             : QColor(0, 0, 0, clip.kind == daw::ClipKind::Midi ? 150 : 60));
         }
 
         // Pass 2 — waveforms, fades, names, mono/stereo dots.
         for (const PaintedClip& painted : visibleClips) {
             const auto& clip = *painted.model;
             const QRectF& r = painted.body;
+            const bool selected = isClipSelected(QString::fromStdString(clip.id));
+            const QColor base = clip.muted ? QColor(101, 105, 113) : trackColor;
+            p.save();
+            const auto restoreClip = qScopeGuard([&] { p.restore(); });
+            p.setClipPath(clipBodyPath(p, r), Qt::IntersectClip);
             if (compact) {
                 p.save();
                 p.setClipRect(r.adjusted(1, 1, -1, -1), Qt::IntersectClip);
@@ -3221,7 +3324,8 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
                 p.restore();
                 continue;
             }
-            const QRectF caption(r.left(), r.top(), r.width(),
+            const QRectF headerBody = clipHeaderRect(track, clip, r);
+            const QRectF caption(r.left(), r.top(), headerBody.width(),
                                  clip.kind == daw::ClipKind::Midi ? 24 : 14);
 
             const QRectF content(r.left(), caption.bottom(), r.width(),
@@ -3231,9 +3335,7 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
                 // a plain clip shows its own waveform. Same picture whether or
                 // not the editor is open, so opening it changes nothing above.
                 p.save();
-                QPainterPath body;
-                body.addRoundedRect(r, ui::clipCornerRadius(), ui::clipCornerRadius());
-                p.setClipPath(body, Qt::IntersectClip);
+                p.setClipPath(clipBodyPath(p, r), Qt::IntersectClip);
                 drawCompLane(p, track, clip, content, midiNotesRevision);
                 p.restore();
                 if (clip.kind == daw::ClipKind::Audio) {
@@ -3263,12 +3365,12 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
                     !m_controller->pendingLocalAudioPath(clip.id).empty();
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(18, 20, 24, mine ? 40 : 120));
-                p.drawRoundedRect(r, ui::clipCornerRadius(4), ui::clipCornerRadius(4));
+                p.drawPath(clipBodyPath(p, r, 4));
                 QPen hatch(QColor(255, 255, 255, mine ? 70 : 110), 1.0,
                            Qt::DashLine);
                 p.setPen(hatch);
                 p.setBrush(Qt::NoBrush);
-                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), ui::clipCornerRadius(4), ui::clipCornerRadius(4));
+                p.drawPath(clipBodyPath(p, r.adjusted(0.5, 0.5, -0.5, -0.5), 4));
                 if (r.width() > 74.0 && r.height() > 18.0) {
                     const QFont previousFont = p.font();
                     QFont badgeFont = previousFont;
@@ -3285,9 +3387,12 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
             if (clip.muted) {
                 // Grey the content, not merely the border: mute remains clear
                 // even on tracks whose own colour is already subdued.
+                p.save();
+                if (selected) p.setClipRect(content, Qt::IntersectClip);
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(55, 58, 64, 118));
-                p.drawRoundedRect(r.adjusted(1, 1, -1, -1), ui::clipCornerRadius(4), ui::clipCornerRadius(4));
+                p.drawPath(clipBodyPath(p, r.adjusted(1, 1, -1, -1), 4));
+                p.restore();
                 if (clip.kind == daw::ClipKind::Audio) {
                     // Editing affordances stay bright even while the content
                     // itself is visibly switched off.
@@ -3300,29 +3405,30 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
             drawTakeBadge(p, clip, r);
 
             if (clip.kind == daw::ClipKind::Midi) {
-                if (midiHeaders) drawMidiClipHeader(p, clip, r);
+                if (midiHeaders) drawMidiClipHeader(p, clip, headerBody, clipHeaderText(base, selected));
                 continue;
             }
 
+            p.setClipRect(caption, Qt::IntersectClip);
             QFont f = p.font();
             f.setPixelSize(10);
             p.setFont(f);
-            p.setPen(clip.muted ? QColor(220, 222, 226, 175)
-                                : QColor(255, 255, 255, 220));
+            p.setPen(selected ? clipHeaderText(base, true)
+                              : clip.muted ? QColor(220, 222, 226, 175) : QColor(255, 255, 255, 220));
             const QFontMetrics fm(f);
-            const double nameLeft = caption.left() + (clip.muted ? 20.0 : 6.0);
+            const double nameLeft = caption.left() + (clip.muted ? 20.0 : 10.0);
             const QRectF nameRect(nameLeft, caption.top(),
-                                  std::max(0.0, caption.right() - nameLeft - 4.0),
+                                  std::max(0.0, caption.right() - nameLeft - 10.0),
                                   caption.height());
             const QString clipName = linkedName(clip);
             const QString shownName = fm.elidedText(
                 clipName, Qt::ElideRight, std::max(0, int(nameRect.width())));
             p.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter, shownName);
 
-            if (clip.muted) {
+            if (clip.muted && caption.width() >= 22) {
                 const QPointF centre(r.left() + 10.0, caption.center().y());
                 p.setBrush(Qt::NoBrush);
-                p.setPen(QPen(QColor(225, 227, 232, 190), 1.2));
+                p.setPen(QPen(selected ? clipHeaderText(base, true) : QColor(225, 227, 232, 190), 1.2));
                 p.drawEllipse(centre, 4.0, 4.0);
                 p.drawLine(centre + QPointF(-3.0, 3.0),
                            centre + QPointF(3.0, -3.0));
@@ -3389,9 +3495,29 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
             const double right = secondsToX(aEnd);
             const QRectF crossfade(left, ar.top(), right - left, ar.height());
             if (!inPaintRegion(crossfade)) continue;
+            p.save();
+            p.setClipPath(clipBodyPath(p, ar), Qt::IntersectClip);
+            p.setClipPath(clipBodyPath(p, audioByStart[i + 1]->body), Qt::IntersectClip);
+            if (!compact)
+                p.setClipRect(crossfade.adjusted(0, 14, 0, 0), Qt::IntersectClip);
             p.setPen(QPen(QColor(255, 255, 255, 160), 1.2));
             p.drawLine(QPointF(left, ar.bottom()), QPointF(right, ar.top()));
             p.drawLine(QPointF(left, ar.top()), QPointF(right, ar.bottom()));
+            p.restore();
+        }
+        for (const PaintedClip& painted : visibleClips) {
+            const auto& clip = *painted.model;
+            const QColor base = clip.muted ? QColor(101, 105, 113) : trackColor;
+            p.save();
+            if (!compact) {
+                const QRectF header = clipHeaderRect(track, clip, painted.body);
+                const QRectF covered(header.right(), header.top(),
+                    painted.body.right() - header.right(), clip.kind == daw::ClipKind::Midi ? 24 : 14);
+                if (!covered.isEmpty())
+                    p.setClipRegion(p.clipRegion().subtracted(QRegion(covered.toAlignedRect())), Qt::IntersectClip);
+            }
+            drawClipOutline(p, painted.body, mixColors(base, Qt::black, 0.55));
+            p.restore();
         }
         laneY += laneH;
         ++laneIndex;
@@ -3693,11 +3819,8 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
     for (const auto index : clipsInRange(track, paintRegion.boundingRect().left(), paintRegion.boundingRect().right())) {
         const auto& clip = track.clips[index];
         if (clip.kind != daw::ClipKind::Automation) continue;
-        const int x = secondsToX(clip.startSeconds);
-        const int w = std::max(
-            2, int(clip.durationSeconds * m_pixelsPerSecond));
-        const QRectF body(x, laneY + kClipVerticalInset, w,
-                          std::max(2, bodyH - 2 * kClipVerticalInset));
+        const QRectF body = clipSpanRect(clip, laneY + kClipVerticalInset,
+                                        std::max(2, bodyH - 2 * kClipVerticalInset));
         if (!paintRegion.intersects(
                 body.toAlignedRect().adjusted(-2, -2, 2, 2)))
             continue;
@@ -3705,17 +3828,18 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
         const bool selected = isClipSelected(QString::fromStdString(clip.id));
         const QColor accent = clip.muted ? QColor(101, 105, 113)
                                          : colorFromRgb(clip.color);
-
+        p.save();
+        const auto finishClip = qScopeGuard([&] {
+            p.restore();
+            drawClipOutline(p, body, mixColors(accent, t.textPrimary, t.dark ? 0.10 : 0.45));
+        });
         // The body is a well the curve is drawn *in*, not a block the curve is
         // drawn *on*: a solid clip the colour of the track would fight the line
         // it is there to show.
         QColor fill = mixColors(t.well(), accent, t.dark ? 0.16 : 0.10);
-        if (selected) fill = mixColors(fill, t.textPrimary, 0.06);
-        p.setBrush(fill);
-        p.setPen(QPen(selected ? t.textPrimary
-                               : mixColors(accent, t.background, 0.45),
-                      selected ? 1.25 : 1.0));
-        p.drawRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
+        if (selected) fill = mixColors(fill, Qt::white, 0.08);
+        drawClipBody(p, body, fill);
+        p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
 
         p.save();
         p.setClipRect(body.adjusted(1, 1, -1, -1), Qt::IntersectClip);
@@ -3814,7 +3938,8 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
         // the ceiling would otherwise run through its name.
         const QRectF grip = automationGrip(body);
         p.setPen(Qt::NoPen);
-        p.setBrush(mixColors(fill, accent, t.dark ? 0.34 : 0.24));
+        p.setBrush(selected ? selectedClipHeader(accent)
+                            : mixColors(fill, accent, t.dark ? 0.34 : 0.24));
         p.drawRect(grip);
         p.setPen(QPen(mixColors(accent, t.background, 0.4), 1.0));
         p.drawLine(grip.bottomLeft(), grip.bottomRight());
@@ -3822,7 +3947,7 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
             QFont label = p.font();
             label.setPixelSize(9);
             p.setFont(label);
-            p.setPen(mixColors(t.textPrimary, accent, 0.25));
+            p.setPen(selected ? clipHeaderText(accent, true) : mixColors(t.textPrimary, accent, 0.25));
             p.drawText(grip.adjusted(6, 0, -5, 0),
                        Qt::AlignLeft | Qt::AlignVCenter,
                        QFontMetrics(label).elidedText(
@@ -3877,20 +4002,18 @@ void TimelineWidget::drawFolderPreview(
         const auto candidates = clipsInRange(*child, dirty.left(), dirty.right());
         for (const auto index : candidates) {
             const auto& clip = child->clips[index];
-            const double x = secondsToX(clip.startSeconds);
-            const double w = std::max(2.0, m_controller->clipDisplayDuration(clip) * m_pixelsPerSecond);
-            const QRectF body(x, top + (rowHeight >= 4 ? 1 : 0), w,
-                              std::max(1.0, rowHeight - (rowHeight >= 4 ? 2 : 0)));
+            const QRectF body = clipSpanRect(clip, top + (rowHeight >= 4 ? 1 : 0),
+                                            std::max(1.0, rowHeight - (rowHeight >= 4 ? 2 : 0)));
             const QColor base = clip.muted ? mixColors(color, theme.background, 0.65) : color;
             p.setPen(Qt::NoPen);
             p.setBrush(mixColors(theme.background, base, theme.dark ? 0.62 : 0.42));
-            if (rowHeight >= 7) p.drawRoundedRect(body, 2, 2);
+            if (rowHeight >= 7) p.drawPath(clipBodyPath(p, body));
             else p.drawRect(body);
             // Tiny rows are occupancy strips. Avoid traversing notes or peaks
             // when there are too few pixels to represent either of them.
             if (body.height() >= 6 && clip.kind != daw::ClipKind::Pattern) {
                 p.save();
-                p.setClipRect(body, Qt::IntersectClip);
+                p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
                 const QRectF content = body.adjusted(0, 1, 0, -1);
                 if (clip.muted || child->muted) p.setOpacity(0.45);
                 const auto revision = m_controller->midiNotesRevision(child->id);
@@ -3916,6 +4039,10 @@ void TimelineWidget::drawFolderPreview(
                 }
                 p.restore();
             }
+            if (rowHeight >= 7)
+                drawClipOutline(p, body, mixColors(base, theme.background, 0.65));
+            else
+                p.fillRect(QRectF(body.right() - 1, body.top(), 1, body.height()), theme.background);
         }
     }
     p.restore();
@@ -3963,11 +4090,8 @@ void TimelineWidget::drawPatternClips(
     for (const auto index : clipsInRange(pattern, paintRegion.boundingRect().left(), paintRegion.boundingRect().right())) {
         const auto& container = pattern.clips[index];
         if (container.kind != daw::ClipKind::Pattern) continue;
-        const int x = secondsToX(container.startSeconds);
-        const int w = std::max(
-            2, int(container.durationSeconds * m_pixelsPerSecond));
-        const QRectF body(x, laneY + kClipVerticalInset, w,
-                          std::max(2, bodyH - 2 * kClipVerticalInset));
+        const QRectF body = clipSpanRect(container, laneY + kClipVerticalInset,
+                                        std::max(2, bodyH - 2 * kClipVerticalInset));
         if (!paintRegion.intersects(
                 body.toAlignedRect().adjusted(-2, -2, 2, 2)))
             continue;
@@ -3996,34 +4120,29 @@ void TimelineWidget::drawPatternClips(
                                 : colorFromRgb(pattern.color);
         const bool selected =
             isClipSelected(QString::fromStdString(container.id));
-        const QColor fill = selected ? mixColors(base, t.textPrimary, 0.20)
+        const QColor fill = selected ? mixColors(base, Qt::white, 0.08)
                                      : base;
-        p.setBrush(fill);
-        p.setPen(QPen(selected ? t.textPrimary
-                               : mixColors(fill, t.background, 0.52),
-                      selected ? 1.8 : 1.0));
-        p.drawRoundedRect(body, ui::clipCornerRadius(6), ui::clipCornerRadius(6));
-
+        p.save();
+        const auto finishClip = qScopeGuard([&] {
+            p.restore();
+            drawClipOutline(p, body, mixColors(base, Qt::black, 0.55));
+        });
         const bool compact = bodyH < 36;
         const QRectF caption(body.left(), body.top(), body.width(), compact ? 0 : 15);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0, 0, 0, 70));
-        QPainterPath cap;
-        cap.addRoundedRect(caption, ui::clipCornerRadius(6), ui::clipCornerRadius(6));
-        p.drawPath(cap);
+        drawClipBody(p, body, fill, caption.height(),
+                     selected ? selectedClipHeader(base) : QColor(0, 0, 0, 70));
+        p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
 
         const QRectF content(body.left() + 4, caption.bottom() + 2,
                              body.width() - 8,
                              body.bottom() - caption.bottom() - 5);
-        if (notes > 0 && content.height() >= 5.0) {
+        if (notes > 0 && content.width() > 0 && content.height() >= 5.0) {
             const int used = high - low + 1;
             const int span = std::max(12, used);
             const int basePitch = low - (span - used) / 2;
             const double rowH = content.height() / double(span);
-            QPainterPath clipPath;
-            clipPath.addRoundedRect(body, ui::clipCornerRadius(6), ui::clipCornerRadius(6));
             p.save();
-            p.setClipPath(clipPath, Qt::IntersectClip);
+            p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
             p.setRenderHint(QPainter::Antialiasing, false);
             const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
             const QRectF visible = content.intersected(paintRegion.boundingRect());
@@ -4072,16 +4191,18 @@ void TimelineWidget::drawPatternClips(
         font.setPixelSize(10);
         font.setBold(true);
         p.setFont(font);
-        p.setPen(QColor(255, 255, 255,
-                        container.muted ? 170 : 225));
+        p.setPen(selected ? clipHeaderText(base, true)
+                          : QColor(255, 255, 255, container.muted ? 170 : 225));
         const QString label = sources > 0
             ? tr("%1 · %2 sources")
                   .arg(container.name.empty() ? QString::fromStdString(pattern.name) : linkedName(container))
                   .arg(sources)
             : tr("%1 · add a sound")
                   .arg(container.name.empty() ? QString::fromStdString(pattern.name) : linkedName(container));
-        p.drawText(caption.adjusted(7, 0, -5, 0),
-                   Qt::AlignLeft | Qt::AlignVCenter, label);
+        const QRectF name = caption.adjusted(7, 0, -5, 0);
+        if (name.width() > 0)
+            p.drawText(name, Qt::AlignLeft | Qt::AlignVCenter,
+                       QFontMetrics(font).elidedText(label, Qt::ElideRight, int(name.width())));
     }
 }
 
@@ -4404,11 +4525,11 @@ void TimelineWidget::drawFades(QPainter& p, const daw::ClipModel& clip,
 
     // Grab knobs at the top corners, shown on the selected clip so the fade is
     // clearly draggable (also visible when a fade already exists).
-    if (sel || inW > 1.0 || outW > 1.0) {
+    if (r.width() > 2 * kEdgePx && (sel || inW > 1.0 || outW > 1.0)) {
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(255, 255, 255, 230));
-        p.drawEllipse(QPointF(r.left() + inW, r.top()), 3.0, 3.0);
-        p.drawEllipse(QPointF(r.right() - outW, r.top()), 3.0, 3.0);
+        p.drawEllipse(QPointF(fadeHandleX(r, inW, true), r.top() + 4), 2.5, 2.5);
+        p.drawEllipse(QPointF(fadeHandleX(r, outW, false), r.top() + 4), 2.5, 2.5);
         if (inW >= 10.0) {
             p.drawEllipse(fadeCurveHandlePoint(r, true, inW,
                                                clip.fadeInCurve),
@@ -4453,8 +4574,8 @@ void TimelineWidget::drawRecordingTakeRow(QPainter& p,
     p.drawRect(row);
 
     for (const auto& span : preview.spans) {
-        const double left = (span.startSeconds - m_scrollSeconds) * m_pixelsPerSecond;
-        const double right = (span.endSeconds - m_scrollSeconds) * m_pixelsPerSecond;
+        const double left = secondsToX(span.startSeconds);
+        const double right = secondsToX(span.endSeconds);
         const QRectF piece(left, row.top(), std::max(1.0, right - left),
                            row.height());
         const QRectF drawn = piece.intersected(row);
@@ -4527,19 +4648,17 @@ void TimelineWidget::drawRecordingClip(QPainter& p,
         const double right = (span.endSeconds - m_scrollSeconds) * m_pixelsPerSecond;
         const QRectF r(left, top, std::max(2.0, right - left), height);
         if (r.right() < 0 || r.left() > width()) continue;
-
+        p.save();
+        const auto restoreClip = qScopeGuard([&] {
+            p.restore();
+            drawClipOutline(p, r, QColor(rec.red(), rec.green(), rec.blue(),
+                                        live ? int(120 + 100 * pulse) : 110), live);
+        });
         // The clip body: exactly what a landed clip looks like, so the take
         // stops being a red stripe that turns into something else on stop.
-        p.setBrush(body);
-        p.setPen(QPen(mixColors(body, Qt::black, 0.45), 1.0));
-        p.drawRoundedRect(r, ui::clipCornerRadius(), ui::clipCornerRadius());
-
         const QRectF caption(r.left(), r.top(), r.width(), 14);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0, 0, 0, 60));
-        QPainterPath capPath;
-        capPath.addRoundedRect(caption, ui::clipCornerRadius(), ui::clipCornerRadius());
-        p.drawPath(capPath);
+        drawClipBody(p, r, body, caption.height(), QColor(0, 0, 0, 60));
+        p.setClipPath(clipBodyPath(p, r), Qt::IntersectClip);
 
         const QRectF content(r.left(), caption.bottom(), r.width(),
                              r.bottom() - caption.bottom());
@@ -4564,20 +4683,11 @@ void TimelineWidget::drawRecordingClip(QPainter& p,
                        QString::fromStdString(preview.name));
         }
 
-        // The rim: a record-red outline that breathes, so a take in progress is
-        // never mistaken for a clip that is already there — including when it is
-        // being layered straight on top of one.
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(QColor(rec.red(), rec.green(), rec.blue(),
-                             live ? int(120 + 100 * pulse) : 110),
-                      live ? 1.6 : 1.0));
-        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), ui::clipCornerRadius(), ui::clipCornerRadius());
-
         // The write head, where the take is being written right now.
         if (live && r.width() > 2.0) {
             p.setPen(QPen(QColor(rec.red(), rec.green(), rec.blue(), 235), 1.5));
-            p.drawLine(QPointF(r.right(), r.top() + 2),
-                       QPointF(r.right(), r.bottom() - 2));
+            p.drawLine(QPointF(r.right() - 1, r.top() + 2),
+                       QPointF(r.right() - 1, r.bottom() - 2));
         }
     }
 }
@@ -4594,24 +4704,21 @@ void TimelineWidget::drawPendingCloudRecordings(
          m_pendingCloudRecordingSpans) {
         if (span.trackId != trackId || span.endSeconds <= span.startSeconds)
             continue;
-        const double left =
-            (span.startSeconds - m_scrollSeconds) * m_pixelsPerSecond;
-        const double right =
-            (span.endSeconds - m_scrollSeconds) * m_pixelsPerSecond;
+        const double left = secondsToX(span.startSeconds);
+        const double right = secondsToX(span.endSeconds);
         const QRectF clip(left, top, std::max(2.0, right - left), height);
         if (clip.right() < 0.0 || clip.left() > width()) continue;
-
-        p.setPen(QPen(QColor(pending.red(), pending.green(), pending.blue(),
-                            220),
-                      1.4, Qt::DashLine));
-        p.setBrush(QColor(body.red(), body.green(), body.blue(), 120));
-        p.drawRoundedRect(clip, ui::clipCornerRadius(), ui::clipCornerRadius());
-
+        p.save();
+        const auto finishClip = qScopeGuard([&] {
+            p.restore();
+            drawClipOutline(p, clip, QColor(pending.red(), pending.green(), pending.blue(), 220),
+                            false, Qt::DashLine);
+        });
         const QRectF caption(clip.left(), clip.top(), clip.width(),
                              std::min(16.0, clip.height()));
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0, 0, 0, 90));
-        p.drawRoundedRect(caption, ui::clipCornerRadius(), ui::clipCornerRadius());
+        drawClipBody(p, clip, QColor(body.red(), body.green(), body.blue(), 120),
+                     caption.height(), QColor(0, 0, 0, 90));
+        p.setClipPath(clipBodyPath(p, clip), Qt::IntersectClip);
         if (caption.width() > 64.0) {
             QFont font = p.font();
             font.setPixelSize(10);
@@ -4659,8 +4766,7 @@ void TimelineWidget::drawRecordingEnvelope(QPainter& p,
     how.clipRight = std::min(double(width()), area.right());
     how.gain = float(m_waveformScale); how.color = color;
     p.save();
-    QPainterPath clip; clip.addRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
-    p.setClipPath(clip, Qt::IntersectClip);
+    p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
     ui::paintRecordingPeaks(p, preview.envelope, preview.envelopeStepSeconds,
         preview.envelopeId, sourceArea, how);
     p.restore();
@@ -4711,8 +4817,8 @@ void TimelineWidget::drawCountIn(QPainter& p) {
 void TimelineWidget::drawGainHandle(QPainter& p, const daw::ClipModel& clip,
                                     const QRectF& r, bool sel) {
     (void)clip;
-    if (r.width() < 2 * kGainHandleR + 2) return;
-    const QPointF c(r.center().x(), r.bottom());
+    if (r.width() < 2 * kGainHandleR + 4) return;
+    const QPointF c(r.center().x(), r.bottom() - kGainHandleR - 1.5);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(QPen(QColor(255, 255, 255, sel ? 255 : 190), 1.0));
     p.setBrush(sel ? QColor(30, 30, 30, 210) : QColor(0, 0, 0, 60));
@@ -5011,10 +5117,8 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
     // but not the clip's length, so without this they would spill past its
     // right edge — and a note on the lowest row would poke out of the rounded
     // bottom corners.
-    QPainterPath bodyClip;
-    bodyClip.addRoundedRect(body, ui::clipCornerRadius(), ui::clipCornerRadius());
     p.save();
-    p.setClipPath(bodyClip, Qt::IntersectClip);
+    p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
     p.setClipRect(area, Qt::IntersectClip);
     p.setRenderHint(QPainter::Antialiasing, false);
     p.setPen(Qt::NoPen);
@@ -8382,7 +8486,7 @@ void TimelineWidget::drawFileDropPreview(QPainter& p) {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(accent, 2.0, Qt::DashLine));
         for (const auto& [id, clip] : m_dropReplacementClips) {
-            p.drawRoundedRect(clipRect(m_dropLane, clip), ui::clipCornerRadius(), ui::clipCornerRadius());
+            p.drawPath(clipBodyPath(p, clipRect(m_dropLane, clip)));
         }
         const QString label = tr("Replace %1 clips with %2")
             .arg(m_dropReplacementClips.size()).arg(QFileInfo(m_dropFile).fileName());

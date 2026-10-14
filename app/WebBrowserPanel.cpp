@@ -28,8 +28,10 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QLocale>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QProgressBar>
 #include <QPalette>
@@ -46,6 +48,8 @@
 #include <QTabBar>
 #include <QMouseEvent>
 #include <QStandardPaths>
+#include <QScrollBar>
+#include <QStyledItemDelegate>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
@@ -66,19 +70,29 @@
 
 namespace {
 
-const QColor browserBackground(QStringLiteral("#191a22"));
-const QColor browserText(QStringLiteral("#f5f5f7"));
-const QColor browserMuted(QStringLiteral("#a6a8b5"));
-const QColor browserAccent(QStringLiteral("#c94347"));
-
 QString startPageIcon(icons::Glyph glyph) {
     QByteArray png;
     QBuffer buffer(&png);
     buffer.open(QIODevice::WriteOnly);
-    icons::icon(glyph, browserText, 40).pixmap(40, 40).save(&buffer, "PNG");
+    icons::icon(glyph, th().textPrimary, 40).pixmap(40, 40).save(&buffer, "PNG");
     return QStringLiteral("<img alt='' aria-hidden='true' src='data:image/png;base64,%1'>")
         .arg(QString::fromLatin1(png.toBase64()));
 }
+
+class BrowserIconButton final : public ui::IconButton {
+public:
+    using ui::IconButton::IconButton;
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        ui::IconButton::paintEvent(event);
+        if (!hasFocus()) return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(th().accentHighlight, 1));
+        painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 6, 6);
+    }
+};
 
 /// The application binds bare Return to transport navigation. Explicitly
 /// reserve it while the address field has focus so QLineEdit reliably emits
@@ -86,6 +100,7 @@ QString startPageIcon(icons::Glyph glyph) {
 class BrowserAddressEdit final : public QLineEdit {
 public:
     using QLineEdit::QLineEdit;
+    std::function<void()> openInNewTab;
 
 protected:
     bool event(QEvent* event) override {
@@ -94,12 +109,22 @@ protected:
             const auto blocked = Qt::ControlModifier | Qt::AltModifier |
                                  Qt::MetaModifier;
             if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
-                !(key->modifiers() & blocked)) {
+                (!(key->modifiers() & blocked) ||
+                 (openInNewTab && key->modifiers() == Qt::AltModifier))) {
                 event->accept();
                 return true;
             }
         }
         return QLineEdit::event(event);
+    }
+    void keyPressEvent(QKeyEvent* event) override {
+        if (openInNewTab && event->modifiers() == Qt::AltModifier &&
+            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+            openInNewTab();
+            event->accept();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
     }
 };
 
@@ -114,6 +139,15 @@ public:
     std::function<void()> newTabRequested;
 
 protected:
+    void paintEvent(QPaintEvent* event) override {
+        QTabBar::paintEvent(event);
+        if (!hasFocus() || currentIndex() < 0) return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(th().accentHighlight, 1));
+        painter.drawRoundedRect(tabRect(currentIndex()).adjusted(1, 1, -3, -1), 6, 6);
+    }
     void mouseReleaseEvent(QMouseEvent* event) override {
         if (event->button() == Qt::MiddleButton) {
             const int index = tabAt(event->position().toPoint());
@@ -134,6 +168,44 @@ protected:
             return;
         }
         QTabBar::mouseDoubleClickEvent(event);
+    }
+};
+
+class BrowserLibraryDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        const bool selected = option.state & QStyle::State_Selected;
+        const QRectF rect = option.rect.adjusted(0, 2, -1, -2);
+        painter->setPen(selected ? th().accent : th().separator());
+        painter->setBrush(selected ? mixColors(th().surface, th().accent, 0.16)
+            : option.state & QStyle::State_MouseOver ? th().surfaceElevated : th().surface);
+        painter->drawRoundedRect(rect, Theme::cornerRadius, Theme::cornerRadius);
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        icon.paint(painter, QRect(option.rect.left() + 12, option.rect.center().y() - 9, 18, 18));
+        const QRect textRect = option.rect.adjusted(42, 8, -12, -8);
+        QFont title = option.font;
+        title.setWeight(QFont::Medium);
+        painter->setFont(title);
+        painter->setPen(th().textPrimary);
+        painter->drawText(textRect, Qt::AlignTop | Qt::AlignLeft,
+            QFontMetrics(title).elidedText(index.data().toString(), Qt::ElideRight, textRect.width()));
+        painter->setFont(option.font);
+        painter->setPen(th().textSecondary);
+        painter->drawText(textRect, Qt::AlignBottom | Qt::AlignLeft,
+            QFontMetrics(option.font).elidedText(index.data(Qt::UserRole + 1).toString(), Qt::ElideRight, textRect.width()));
+        if (option.state & QStyle::State_HasFocus) {
+            painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(th().accentHighlight, 2));
+            painter->drawRoundedRect(rect.adjusted(1, 1, -1, -1), Theme::cornerRadius - 1, Theme::cornerRadius - 1);
+        }
+        painter->restore();
+    }
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const override {
+        return {100, std::max(60, QFontMetrics(option.font).height() * 2 + 22)};
     }
 };
 
@@ -248,11 +320,15 @@ QString initialDownloadName(QWebEngineDownloadRequest* request) {
 struct WebBrowserPanel::Tab {
     BrowserSurface* view = nullptr;
     QString failedUrl;
+    QString pendingUrl;
     bool showingStartPage = false;
     bool showingErrorPage = false;
     bool loading = false;
     bool userStoppedLoading = false;
     bool pinned = false;
+    bool muted = false;
+    int progress = 0;
+    QIcon favicon;
 };
 
 WebBrowserPanel::Tab* WebBrowserPanel::currentTab() const {
@@ -291,7 +367,6 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile)
     m_pageProgress->setTextVisible(false);
     m_pageProgress->setFixedHeight(2);
     m_pageProgress->setAccessibleName(tr("Page loading progress"));
-    m_pageProgress->hide();
     column->addWidget(m_pageProgress);
     column->addWidget(buildBookmarksBar());
     column->addWidget(buildFindBar());
@@ -306,6 +381,7 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile)
     m_stack = new QStackedWidget(m_viewFrame);
     m_stack->setObjectName(QStringLiteral("WebViewStack"));
     viewLayout->addWidget(m_stack, 1);
+    viewLayout->addWidget(buildLibrary(), 1);
     column->addWidget(m_viewFrame, 1);
     column->addWidget(buildDownloadBar());
 
@@ -351,8 +427,14 @@ WebBrowserPanel::WebBrowserPanel(QWidget* parent, QWebEngineProfile* profile)
 }
 
 WebBrowserPanel::~WebBrowserPanel() {
+    // The coalescing timer may not have fired when the application is closed.
+    if (m_sessionTimer) m_sessionTimer->stop();
+    saveSession();
     for (const auto& download : std::as_const(m_downloads)) {
-        if (download && !download->isFinished()) download->cancel();
+        if (download) {
+            download->disconnect(this);
+            if (!download->isFinished()) download->cancel();
+        }
     }
     // Every page keeps a reference to the profile. QObject child order would
     // otherwise tear down the older profile first and WebEngine warns (and can
@@ -383,8 +465,8 @@ QWidget* WebBrowserPanel::buildTabStrip() {
     m_tabStrip->setObjectName(QStringLiteral("WebTabStrip"));
     m_tabStrip->setAttribute(Qt::WA_StyledBackground, true);
     auto* row = new QHBoxLayout(m_tabStrip);
-    row->setContentsMargins(14, 7, 10, 2);
-    row->setSpacing(6);
+    row->setContentsMargins(8, 6, 8, 4);
+    row->setSpacing(4);
 
     auto* tabs = new BrowserTabBar(m_tabStrip);
     tabs->closeRequested = [this](int index) { closeTab(index); };
@@ -399,21 +481,31 @@ QWidget* WebBrowserPanel::buildTabStrip() {
     m_tabBar->setTabsClosable(false); // Each ordinary tab supplies its own close button.
     m_tabBar->setElideMode(Qt::ElideRight);
     m_tabBar->setUsesScrollButtons(true);
-    m_tabBar->setFocusPolicy(Qt::NoFocus);
+    m_tabBar->setFocusPolicy(Qt::StrongFocus);
+    m_tabBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_tabBar->setMinimumWidth(0);
     m_tabBar->setIconSize(QSize(14, 14));
     m_tabBar->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tabBar->setAccessibleName(tr("Browser tabs"));
 
-    m_newTab = new ui::IconButton(icons::Glyph::Plus, tr("New tab (Ctrl+T)"),
+    m_newTab = new BrowserIconButton(icons::Glyph::Plus, tr("New tab (Ctrl+T)"),
                                   m_tabStrip);
     m_newTab->setButtonSize(27, 27);
     m_newTab->setFocusPolicy(Qt::StrongFocus);
     m_newTab->setAccessibleName(tr("New tab"));
-    m_newTab->setIdleColor(browserMuted);
+    m_newTab->setIdleColor(th().textSecondary);
+    m_tabSearch = new BrowserIconButton(icons::Glyph::Chevron, tr("Search tabs (Ctrl+Shift+A)"), m_tabStrip);
+    m_tabSearch->setObjectName(QStringLiteral("WebTabSearch"));
+    m_tabSearch->setCheckable(true);
+    m_tabSearch->setButtonSize(28, 28);
+    m_tabSearch->setFocusPolicy(Qt::StrongFocus);
+    m_tabSearch->setAccessibleName(tr("Search tabs"));
+    connect(m_tabSearch, &QAbstractButton::clicked, this, [this] { showLibrary(Library::Tabs); });
 
     connect(m_newTab, &QAbstractButton::clicked, this,
             [this] { openTab(QLatin1String(ui::webprefs::kStartUrl)); });
     connect(m_tabBar, &QTabBar::currentChanged, this, [this](int index) {
+        closeLibrary();
         if (index >= 0 && index < m_tabs.size() && m_stack) {
             m_stack->setCurrentWidget(m_tabs.at(index)->view);
         }
@@ -438,13 +530,14 @@ QWidget* WebBrowserPanel::buildTabStrip() {
                 showTabContextMenu(m_tabBar->tabAt(at), m_tabBar->mapToGlobal(at));
             });
 
-    row->addWidget(m_tabBar);
+    row->addWidget(m_tabBar, 1);
     row->addWidget(m_newTab);
-    row->addStretch(1);
+    row->addWidget(m_tabSearch);
     return m_tabStrip;
 }
 
 int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow, bool pinned) {
+    if (activate) closeLibrary();
     auto* tab = new Tab;
     tab->pinned = pinned;
     tab->view = new BrowserSurface(m_profile, m_stack);
@@ -479,22 +572,22 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
         QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
     page->setWebAttribute(
         QWebEngineSettings::FullScreenSupportEnabled, false);
-    page->setBackgroundColor(browserBackground);
+    page->setBackgroundColor(th().background);
 
     m_tabs.push_back(tab);
     m_stack->addWidget(tab->view);
     const int index = m_tabBar->addTab(tr("New tab"));
     m_tabBar->setTabIcon(index,
-                         icons::icon(icons::Glyph::Globe, browserMuted, 14));
+                         icons::icon(icons::Glyph::Globe, th().textSecondary, 14));
 
     // The close button is ours rather than the style's: a stylesheet can only
     // give QTabBar's built-in one an image from a file, and every other button
     // in the program is drawn from the same glyph set.
     if (!pinned) {
-        auto* close = new ui::IconButton(icons::Glyph::Close, tr("Close tab"), m_tabBar);
+        auto* close = new BrowserIconButton(icons::Glyph::Close, tr("Close tab"), m_tabBar);
         close->setButtonSize(24, 24);
         close->setFocusPolicy(Qt::NoFocus);
-        close->setIdleColor(browserMuted);
+        close->setIdleColor(th().textSecondary);
         close->setAccessibleName(tr("Close tab"));
         connect(close, &QAbstractButton::clicked, this, [this, tab] {
             const int at = indexOfTab(tab);
@@ -524,6 +617,7 @@ int WebBrowserPanel::openTab(const QString& url, bool activate, bool navigateNow
         }
     } else if (const QUrl target = ordinaryUrlFromInput(destination);
                allowedMainFrameUrl(target)) {
+        tab->pendingUrl = target.toString();
         if (activate && m_address) m_address->setText(target.toDisplayString());
         tab->view->setUrl(target);
     } else {
@@ -551,9 +645,7 @@ void WebBrowserPanel::closeTab(int index) {
     if (tab->pinned) return;
 
     // Remembered before it goes, so Ctrl+Shift+T has something to reopen.
-    const QString address = tab->showingStartPage
-                                ? QLatin1String(ui::webprefs::kStartUrl)
-                                : tab->view->url().toString();
+    const QString address = tabUrl(tab);
     if (!address.isEmpty()) {
         m_closedTabs.push_back(address);
         while (m_closedTabs.size() > 12) m_closedTabs.removeFirst();
@@ -604,6 +696,8 @@ void WebBrowserPanel::wireTab(Tab* tab) {
 
     connect(target, &BrowserSurface::loadStarted, this, [this, tab] {
         tab->loading = true;
+        tab->progress = 0;
+        updateTabLabel(tab);
         if (!tab->showingStartPage) {
             tab->showingErrorPage = false;
             tab->failedUrl.clear();
@@ -616,6 +710,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
         m_pageProgress->show();
     });
     connect(target, &BrowserSurface::loadProgress, this, [this, tab](int progress) {
+        tab->progress = progress;
         if (tab == currentTab()) m_pageProgress->setValue(progress);
     });
     connect(target, &BrowserSurface::loadFinished, this, [this, tab](bool ok) {
@@ -623,10 +718,14 @@ void WebBrowserPanel::wireTab(Tab* tab) {
         if (tab == currentTab()) {
             m_reloadStop->setGlyph(icons::Glyph::Reload);
             m_reloadStop->setToolTip(tr("Reload page"));
-            m_pageProgress->hide();
+            m_pageProgress->setValue(0);
             updateNavigationState();
         }
         tab->userStoppedLoading = false;
+        if (tab == currentTab() && m_findPending && m_findBar->isVisible()) {
+            m_findPending = false;
+            findText();
+        }
         if (ok && !tab->showingStartPage && !tab->showingErrorPage) {
             recordHistory(tab->view->title(), tab->view->url().toString());
         }
@@ -649,6 +748,7 @@ void WebBrowserPanel::wireTab(Tab* tab) {
             tab->showingStartPage = false;
             tab->showingErrorPage = false;
             tab->failedUrl.clear();
+            tab->pendingUrl.clear();
             if (tab == currentTab()) ui::webprefs::setLastUrl(url.toString());
         } else if (tab->showingStartPage && tab == currentTab()) {
             ui::webprefs::setLastUrl(QLatin1String(ui::webprefs::kStartUrl));
@@ -669,17 +769,17 @@ void WebBrowserPanel::wireTab(Tab* tab) {
             });
     connect(target, &BrowserSurface::iconChanged, this,
             [this, tab](const QIcon& icon) {
-                const int index = indexOfTab(tab);
-                if (index >= 0 && !tab->pinned) {
-                    m_tabBar->setTabIcon(
-                        index, icon.isNull()
-                                   ? icons::icon(icons::Glyph::Globe,
-                                                 browserMuted, 14)
-                                   : icon);
-                }
+                tab->favicon = icon;
+                updateTabLabel(tab);
             });
 
     auto* page = target->page();
+    connect(page, &ui::graphics::BrowserPage::findTextFinished, this,
+            [this, tab](int active, int total) {
+        if (tab != currentTab() || !m_findBar->isVisible() || m_findText->text().isEmpty()) return;
+        m_findResult->setText(total ? tr("%1 of %2").arg(active).arg(total) : tr("No matches"));
+        m_findResult->setAccessibleName(m_findResult->text());
+    });
     connect(page, &ui::graphics::BrowserPage::loadingChanged, this,
             [this, tab](const QWebEngineLoadingInfo& info) {
         // loadFinished(false) also means a cancelled/superseded navigation or
@@ -731,24 +831,30 @@ void WebBrowserPanel::updateTabLabel(Tab* tab) {
     if (index < 0) return;
     if (tab->pinned) {
         m_tabBar->setTabText(index, QStringLiteral("VLT Studio"));
-        m_tabBar->setTabIcon(index, QIcon(QStringLiteral(":/vlt/icon-1024.png")));
+        m_tabBar->setTabIcon(index, tab->muted ? icons::icon(icons::Glyph::NoteMute, th().textSecondary, 14)
+                                             : QIcon(QStringLiteral(":/vlt/icon-1024.png")));
         m_tabBar->setTabToolTip(index, QLatin1String(ui::webprefs::kStudioUrl));
         return;
     }
     QString label = tab->view->title().trimmed();
     if (tab->showingStartPage) {
         label = tr("New tab");
-        m_tabBar->setTabIcon(index, icons::icon(icons::Glyph::Globe, browserAccent, 14));
     } else if (tab->showingErrorPage) {
         label = QUrl(tab->failedUrl).host();
     } else if (label.isEmpty() || label.startsWith(QLatin1String("data:"))) {
         label = tab->view->url().host();
     }
     if (label.isEmpty()) label = tr("New tab");
+    m_tabBar->setTabIcon(index, tab->muted ? icons::icon(icons::Glyph::NoteMute, th().textSecondary, 14)
+        : tab->loading ? icons::icon(icons::Glyph::Spinner, th().accentHighlight, 14)
+        : tab->showingStartPage ? icons::icon(icons::Glyph::Home, th().accentHighlight, 14)
+        : tab->showingErrorPage ? icons::icon(icons::Glyph::Warning, th().textSecondary, 14)
+        : tab->favicon.isNull() ? icons::icon(icons::Glyph::Globe, th().textSecondary, 14) : tab->favicon);
     m_tabBar->setTabText(index, label);
     m_tabBar->setTabToolTip(index, tab->showingStartPage
                                        ? tr("Start page")
                                        : tab->view->url().toDisplayString());
+    if (m_libraryKind == Library::Tabs) refreshLibrary();
 }
 
 void WebBrowserPanel::updateChromeForCurrentTab() {
@@ -760,7 +866,11 @@ void WebBrowserPanel::updateChromeForCurrentTab() {
         m_reloadStop->setToolTip(tab->loading ? tr("Stop loading")
                                               : tr("Reload page"));
     }
-    if (m_pageProgress) m_pageProgress->setVisible(tab->loading);
+    if (m_pageProgress) m_pageProgress->setValue(tab->loading ? tab->progress : 0);
+    if (m_zoom) {
+        m_zoom->setText(QStringLiteral("%1%").arg(qRound(tab->view->zoomFactor() * 100)));
+        m_zoom->setVisible(!qFuzzyCompare(tab->view->zoomFactor(), 1.0));
+    }
     updateAddress();
     updateNavigationState();
     updateBookmarkState();
@@ -769,7 +879,8 @@ void WebBrowserPanel::updateChromeForCurrentTab() {
     // tabs is not a reason to take focus away from whatever the user is
     // typing in, address bar included.
     if (m_findBar && m_findBar->isVisible()) {
-        if (BrowserSurface* target = view()) target->page()->findText(QString());
+        m_findPending = false;
+        for (Tab* candidate : std::as_const(m_tabs)) candidate->view->page()->findText(QString());
         m_findBar->hide();
     }
 }
@@ -787,9 +898,14 @@ void WebBrowserPanel::showTabContextMenu(int index, const QPoint& globalPos) {
                 [tab] { tab->view->reload(); });
         QAction* duplicate = menu.addAction(tr("Duplicate tab"));
         connect(duplicate, &QAction::triggered, this, [this, tab] {
-            openTab(tab->showingStartPage
-                        ? QLatin1String(ui::webprefs::kStartUrl)
-                        : tab->view->url().toString());
+            openTab(tabUrl(tab));
+        });
+        QAction* mute = menu.addAction(tab->muted ? tr("Unmute tab") : tr("Mute tab"));
+        mute->setObjectName(QStringLiteral("WebMuteTab"));
+        connect(mute, &QAction::triggered, this, [this, tab] { setTabMuted(tab, !tab->muted); });
+        QAction* muteOthers = menu.addAction(tr("Mute other tabs"));
+        connect(muteOthers, &QAction::triggered, this, [this, tab] {
+            for (Tab* other : std::as_const(m_tabs)) if (other != tab) setTabMuted(other, true);
         });
         menu.addSeparator();
         QAction* close = menu.addAction(tr("Close tab"));
@@ -803,6 +919,13 @@ void WebBrowserPanel::showTabContextMenu(int index, const QPoint& globalPos) {
             for (int i = m_tabs.size() - 1; i >= 0; --i) {
                 if (m_tabs.at(i) != tab) closeTab(i);
             }
+        });
+        QAction* right = menu.addAction(tr("Close tabs to the right"));
+        right->setEnabled(index < m_tabs.size() - 1);
+        connect(right, &QAction::triggered, this, [this, tab] {
+            const int at = indexOfTab(tab);
+            if (at < 0) return;
+            for (int i = int(m_tabs.size()) - 1; i > at; --i) closeTab(i);
         });
     }
     QAction* reopen = menu.addAction(tr("Reopen closed tab"));
@@ -842,9 +965,8 @@ void WebBrowserPanel::saveSession() {
     QStringList urls;
     urls.reserve(m_tabs.size());
     for (const Tab* tab : std::as_const(m_tabs)) {
-        urls.push_back(tab->pinned ? QLatin1String(ui::webprefs::kStudioUrl) : tab->showingStartPage
-                           ? QLatin1String(ui::webprefs::kStartUrl)
-                           : tab->showingErrorPage ? tab->failedUrl : tab->view->url().toString());
+        const QString url = tab->pinned ? QLatin1String(ui::webprefs::kStudioUrl) : tabUrl(tab);
+        urls.push_back(url.isEmpty() ? QLatin1String(ui::webprefs::kStartUrl) : url);
     }
     ui::webprefs::setSessionTabs(urls);
     ui::webprefs::setSessionActiveTab(m_tabBar ? m_tabBar->currentIndex() : 0);
@@ -853,6 +975,7 @@ void WebBrowserPanel::saveSession() {
 void WebBrowserPanel::recordHistory(const QString& title, const QString& url) {
     ui::webprefs::addHistoryEntry(title, url);
     refreshCompletions();
+    if (m_libraryKind == Library::History) refreshLibrary();
 }
 
 QWidget* WebBrowserPanel::buildToolbar() {
@@ -860,16 +983,16 @@ QWidget* WebBrowserPanel::buildToolbar() {
     toolbar->setObjectName(QStringLiteral("WebToolbar"));
     toolbar->setAttribute(Qt::WA_StyledBackground, true);
     auto* row = new QHBoxLayout(toolbar);
-    row->setContentsMargins(10, 4, 10, 9);
+    row->setContentsMargins(8, 2, 8, 6);
     row->setSpacing(4);
 
     const auto button = [toolbar](icons::Glyph glyph, const QString& tip) {
-        auto* result = new ui::IconButton(glyph, tip, toolbar);
+        auto* result = new BrowserIconButton(glyph, tip, toolbar);
         result->setButtonSize(28, 30);
         result->setFocusPolicy(Qt::StrongFocus);
         result->setAccessibleName(tip);
-        result->setIdleColor(browserMuted);
-        result->setActiveColor(browserAccent);
+        result->setIdleColor(th().textSecondary);
+        result->setActiveColor(th().accentHighlight);
         return result;
     };
 
@@ -885,7 +1008,7 @@ QWidget* WebBrowserPanel::buildToolbar() {
         QPainter painter(&menuDots);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(browserText);
+        painter.setBrush(th().textPrimary);
         for (int y : {8, 16, 24}) painter.drawEllipse(QPointF(16, y), 1.8, 1.8);
     }
     m_menu->setIcon(QIcon(menuDots));
@@ -896,15 +1019,25 @@ QWidget* WebBrowserPanel::buildToolbar() {
     m_menu->setAccessibleName(tr("Browser menu"));
     m_menu->setCursor(Qt::PointingHandCursor);
 
-    m_address = new BrowserAddressEdit(toolbar);
+    auto* address = new BrowserAddressEdit(toolbar);
+    address->openInNewTab = [this] { openTab(m_address->text()); };
+    m_address = address;
+    m_address->setMinimumWidth(50);
     m_address->setObjectName(QStringLiteral("WebAddress"));
     m_address->setPlaceholderText(tr("Search or enter address"));
     m_address->setClearButtonEnabled(true);
-    m_address->addAction(
-        icons::icon(icons::Glyph::Globe, browserAccent, 14),
+    m_addressIcon = m_address->addAction(
+        icons::icon(icons::Glyph::Globe, th().textSecondary, 14),
         QLineEdit::LeadingPosition);
     m_address->setAccessibleName(tr("Web address"));
     m_address->setProperty("dawWebInput", true);
+    m_zoom = new QPushButton(toolbar);
+    m_zoom->setObjectName(QStringLiteral("WebZoom"));
+    m_zoom->setToolTip(tr("Reset page zoom (Ctrl+0)"));
+    m_zoom->setAccessibleName(tr("Reset page zoom"));
+    m_zoom->setFixedSize(46, 28);
+    m_zoom->hide();
+    connect(m_zoom, &QPushButton::clicked, this, [this] { setZoom(1.0); });
 
     // Typing an address offers what has already been saved or visited. The
     // popup is a plain list of URLs — no search suggestions leave the machine.
@@ -948,6 +1081,7 @@ QWidget* WebBrowserPanel::buildToolbar() {
     row->addWidget(m_forward);
     row->addWidget(m_reloadStop);
     row->addWidget(m_address, 1);
+    row->addWidget(m_zoom);
     row->addWidget(m_bookmark);
     row->addWidget(m_menu);
     return toolbar;
@@ -970,55 +1104,302 @@ QWidget* WebBrowserPanel::buildSidebar() {
     auto* sidebar = new QWidget(this);
     sidebar->setObjectName(QStringLiteral("WebSidebar"));
     sidebar->setAttribute(Qt::WA_StyledBackground, true);
-    sidebar->setFixedWidth(56);
+    sidebar->setFixedWidth(44);
     auto* column = new QVBoxLayout(sidebar);
-    column->setContentsMargins(10, 18, 10, 18);
-    column->setSpacing(9);
-    const auto button = [sidebar, column](icons::Glyph glyph, const QString& name,
+    column->setContentsMargins(5, 10, 5, 10);
+    column->setSpacing(6);
+    const auto button = [this, sidebar, column](icons::Glyph glyph, const QString& name,
                                          const char* role) {
         auto* result = new QPushButton(sidebar);
         result->setObjectName(QStringLiteral("WebRailButton"));
         result->setProperty("railRole", role);
-        result->setFixedSize(36, 36);
-        result->setIcon(icons::icon(glyph, browserText, 18));
+        result->setProperty("webGlyph", int(glyph));
+        result->setFixedSize(34, 34);
+        result->setIcon(icons::icon(glyph, th().textSecondary, 18));
         result->setIconSize(QSize(18, 18));
         result->setToolTip(name);
         result->setAccessibleName(name);
         result->setCursor(Qt::PointingHandCursor);
+        result->setCheckable(true);
+        m_railButtons.push_back(result);
         column->addWidget(result);
         return result;
     };
-    column->addStretch(1);
     auto* home = button(icons::Glyph::Home, tr("Home (Alt+Home)"), "home");
     auto* bookmarks = button(icons::Glyph::Star, tr("Bookmarks"), "bookmarks");
     auto* history = button(icons::Glyph::Clock, tr("Recent pages"), "history");
-    auto* downloads = button(icons::Glyph::Download, tr("Open downloads folder"), "downloads");
-    column->addStretch(2);
+    auto* downloads = button(icons::Glyph::Download, tr("Downloads (Ctrl+J)"), "downloads");
+    column->addStretch(1);
     auto* settings = button(icons::Glyph::Gear, tr("Browser settings…"), "settings");
     connect(home, &QPushButton::clicked, this, [this] { navigate(ui::webprefs::homeUrl()); });
     connect(bookmarks, &QPushButton::clicked, this,
-            [this, bookmarks] { openBookmarksMenu(bookmarks); });
+            [this] { showLibrary(Library::Bookmarks); });
     connect(history, &QPushButton::clicked, this,
-            [this, history] { openHistoryMenu(history); });
-    connect(downloads, &QPushButton::clicked, this, [this] {
-        const QString directory = ui::webprefs::downloadDirectory();
-        if (!QDir().mkpath(directory) || !QDesktopServices::openUrl(QUrl::fromLocalFile(directory)))
-            emit statusMessage(tr("Could not open the downloads folder"));
-    });
+            [this] { showLibrary(Library::History); });
+    connect(downloads, &QPushButton::clicked, this, [this] { showLibrary(Library::Downloads); });
+    settings->setCheckable(false);
     connect(settings, &QPushButton::clicked, this, &WebBrowserPanel::settingsRequested);
     return sidebar;
+}
+
+
+
+QWidget* WebBrowserPanel::buildLibrary() {
+    m_library = new QWidget(m_viewFrame);
+    m_library->setObjectName(QStringLiteral("WebLibrary"));
+    m_library->setAttribute(Qt::WA_StyledBackground, true);
+    m_library->setMinimumWidth(0);
+    auto* column = new QVBoxLayout(m_library);
+    column->setContentsMargins(12, 16, 12, 12);
+    column->setSpacing(10);
+    auto* header = new QHBoxLayout;
+    m_libraryTitle = new QLabel(m_library);
+    m_libraryTitle->setObjectName(QStringLiteral("WebLibraryTitle"));
+    m_libraryTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    header->addWidget(m_libraryTitle, 1);
+    auto* close = new BrowserIconButton(icons::Glyph::Close, tr("Back to page (Esc)"), m_library);
+    close->setObjectName(QStringLiteral("WebLibraryClose"));
+    close->setButtonSize(28, 28);
+    close->setAccessibleName(tr("Back to page"));
+    close->setFocusPolicy(Qt::StrongFocus);
+    connect(close, &QAbstractButton::clicked, this, [this] {
+        closeLibrary();
+        if (view()) view()->setFocus();
+    });
+    header->addWidget(close);
+    column->addLayout(header);
+    m_librarySearch = new BrowserAddressEdit(m_library);
+    m_librarySearch->setObjectName(QStringLiteral("WebLibrarySearch"));
+    m_librarySearch->setAccessibleName(tr("Filter browser library"));
+    m_librarySearch->setPlaceholderText(tr("Search by name or address"));
+    m_librarySearch->setClearButtonEnabled(true);
+    m_librarySearch->setProperty("dawWebInput", true);
+    m_librarySearch->setMinimumWidth(0);
+    column->addWidget(m_librarySearch);
+    m_libraryAction = new QPushButton(m_library);
+    m_libraryAction->setObjectName(QStringLiteral("WebLibraryAction"));
+    column->addWidget(m_libraryAction, 0, Qt::AlignLeft);
+    m_libraryEmpty = new QLabel(m_library);
+    m_libraryEmpty->setObjectName(QStringLiteral("WebLibraryEmpty"));
+    m_libraryEmpty->setWordWrap(true);
+    m_libraryEmpty->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    column->addWidget(m_libraryEmpty);
+    m_libraryList = new QListWidget(m_library);
+    m_libraryList->setObjectName(QStringLiteral("WebLibraryList"));
+    m_libraryList->setItemDelegate(new BrowserLibraryDelegate(m_libraryList));
+    m_libraryList->setMouseTracking(true);
+    m_libraryList->setFrameShape(QFrame::NoFrame);
+    m_libraryList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_libraryList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_libraryList->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_libraryList->setProperty("dawWebInput", true);
+    column->addWidget(m_libraryList, 1);
+    connect(m_librarySearch, &QLineEdit::textChanged, this, &WebBrowserPanel::refreshLibrary);
+    connect(m_librarySearch, &QLineEdit::returnPressed, this, &WebBrowserPanel::activateLibraryItem);
+    connect(m_libraryList, &QListWidget::itemActivated, this, [this] { activateLibraryItem(); });
+    connect(m_libraryList, &QListWidget::itemClicked, this, [this] { activateLibraryItem(); });
+    connect(m_libraryList, &QWidget::customContextMenuRequested, this, &WebBrowserPanel::showLibraryContextMenu);
+    connect(m_libraryAction, &QPushButton::clicked, this, [this] {
+        if (m_libraryKind == Library::Bookmarks) addBookmark();
+        else if (m_libraryKind == Library::Tabs) reopenClosedTab();
+        else if (m_libraryKind == Library::Downloads) openDownloadsFolder();
+        else if (m_libraryKind == Library::History && QMessageBox::question(this, tr("Clear history"),
+                     tr("Clear the list of visited pages? Your bookmarks and downloads will be kept."),
+                     QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes) {
+            ui::webprefs::clearHistory();
+            refreshCompletions();
+            rebuildBookmarksBar();
+        }
+        refreshLibrary();
+    });
+    m_downloadRefreshTimer = new QTimer(this);
+    m_downloadRefreshTimer->setSingleShot(true);
+    m_downloadRefreshTimer->setInterval(150);
+    connect(m_downloadRefreshTimer, &QTimer::timeout, this, [this] {
+        if (m_libraryKind == Library::Downloads) refreshLibrary();
+    });
+    m_library->hide();
+    return m_library;
+}
+
+void WebBrowserPanel::showLibrary(Library kind) {
+    if (m_libraryKind == kind) { closeLibrary(); return; }
+    if (m_findBar->isVisible()) closeFindBar();
+    m_libraryKind = kind;
+    m_stack->hide();
+    m_library->show();
+    m_tabSearch->setChecked(kind == Library::Tabs);
+    const QString role = kind == Library::Bookmarks ? QStringLiteral("bookmarks")
+        : kind == Library::History ? QStringLiteral("history") : kind == Library::Downloads ? QStringLiteral("downloads") : QString();
+    for (auto* button : m_railButtons) button->setChecked(button->property("railRole").toString() == role);
+    m_librarySearch->clear();
+    refreshLibrary();
+    m_librarySearch->setFocus(Qt::ShortcutFocusReason);
+}
+
+void WebBrowserPanel::closeLibrary() {
+    if (!m_library) return;
+    m_libraryKind = Library::None;
+    m_library->hide();
+    m_stack->show();
+    m_tabSearch->setChecked(false);
+    for (auto* button : m_railButtons)
+        button->setChecked(button->property("railRole").toString() == QLatin1String("home") &&
+                           currentTab() && currentTab()->showingStartPage);
+}
+
+void WebBrowserPanel::refreshLibrary() {
+    if (!m_library || m_libraryKind == Library::None) return;
+    const QVariant selected = m_libraryList->currentItem() ? m_libraryList->currentItem()->data(Qt::UserRole) : QVariant();
+    const int scroll = m_libraryList->verticalScrollBar()->value();
+    const QString query = m_librarySearch->text().trimmed();
+    m_libraryList->clear();
+    const auto add = [&](const QString& title, const QString& detail, const QVariant& key, const QIcon& icon) {
+        if (!query.isEmpty() && !title.contains(query, Qt::CaseInsensitive) && !detail.contains(query, Qt::CaseInsensitive)) return;
+        auto* item = new QListWidgetItem(icon, title, m_libraryList);
+        item->setData(Qt::UserRole, key);
+        item->setData(Qt::UserRole + 1, detail);
+        item->setData(Qt::AccessibleTextRole, title + QStringLiteral(". ") + detail);
+        item->setToolTip(title + QLatin1Char('\n') + detail);
+        if (key == selected) m_libraryList->setCurrentItem(item);
+    };
+    QString title, empty;
+    m_libraryAction->setEnabled(true);
+    if (m_libraryKind == Library::Tabs) {
+        title = tr("Open tabs"); empty = tr("No matching tabs");
+        m_libraryAction->setText(tr("Reopen closed tab"));
+        m_libraryAction->setEnabled(!m_closedTabs.isEmpty());
+        for (int i = 0; i < m_tabs.size(); ++i) {
+            const Tab* tab = m_tabs.at(i);
+            add(m_tabBar->tabText(i) + (tab->muted ? tr(" · Muted") : QString()),
+                tab->showingStartPage ? tr("Start page") : tab->view->url().toDisplayString(),
+                QVariant::fromValue(static_cast<QObject*>(tab->view)), m_tabBar->tabIcon(i));
+        }
+    } else if (m_libraryKind == Library::Bookmarks) {
+        title = tr("Bookmarks"); empty = tr("Save a page with Ctrl+D, or add a bookmark here.");
+        m_libraryAction->setText(tr("Add bookmark"));
+        for (const auto& entry : ui::webprefs::bookmarks())
+            add(bookmarkLabel(entry), entry.url, entry.url, icons::icon(icons::Glyph::Star, th().accentHighlight, 18));
+    } else if (m_libraryKind == Library::History) {
+        title = tr("History"); empty = tr("Pages you visit will appear here.");
+        m_libraryAction->setText(tr("Clear history"));
+        const auto entries = ui::webprefs::history();
+        m_libraryAction->setEnabled(!entries.isEmpty());
+        for (const auto& entry : entries)
+            add(entry.title, entry.url, entry.url, icons::icon(icons::Glyph::Clock, th().textSecondary, 18));
+    } else {
+        title = tr("Downloads"); empty = tr("Downloads from this session appear here. Audio files are offered for import into your project.");
+        m_libraryAction->setText(tr("Open downloads folder"));
+        for (const auto& entry : std::as_const(m_downloadLog)) {
+            QString detail = entry.detail;
+            if (const auto* request = entry.request.data()) {
+                detail = request->isPaused() ? tr("Paused") : tr("Downloading");
+                detail += QStringLiteral(" · ") + QLocale().formattedDataSize(request->receivedBytes());
+                if (request->totalBytes() > 0) detail += QStringLiteral(" / ") + QLocale().formattedDataSize(request->totalBytes());
+            }
+            add(QFileInfo(entry.path).fileName(), detail, entry.path,
+                icons::icon(entry.completed ? icons::Glyph::Check : icons::Glyph::Download, th().accentHighlight, 18));
+        }
+    }
+    m_libraryTitle->setText(title + QStringLiteral(" · %1").arg(m_libraryList->count()));
+    m_libraryList->setAccessibleName(title);
+    m_libraryEmpty->setText(query.isEmpty() ? empty : tr("No results. Try another name or address."));
+    m_libraryEmpty->setVisible(m_libraryList->count() == 0);
+    if (!m_libraryList->currentItem() && m_libraryList->count()) m_libraryList->setCurrentRow(0);
+    m_libraryList->verticalScrollBar()->setValue(scroll);
+}
+
+void WebBrowserPanel::activateLibraryItem() {
+    const auto* item = m_libraryList->currentItem();
+    if (!item) return;
+    const QVariant key = item->data(Qt::UserRole);
+    if (m_libraryKind == Library::Tabs) {
+        for (int i = 0; i < m_tabs.size(); ++i) if (m_tabs.at(i)->view == key.value<QObject*>()) {
+            m_tabBar->setCurrentIndex(i);
+            closeLibrary();
+            view()->setFocus();
+            return;
+        }
+    } else if (m_libraryKind == Library::Downloads) {
+        showLibraryContextMenu(m_libraryList->visualItemRect(item).center());
+    } else {
+        if (QApplication::keyboardModifiers().testFlag(Qt::ControlModifier)) openTab(key.toString());
+        else navigate(key.toString());
+    }
+}
+
+void WebBrowserPanel::showLibraryContextMenu(const QPoint& position) {
+    auto* item = m_libraryList->itemAt(position);
+    if (!item) item = m_libraryList->currentItem();
+    if (!item) return;
+    const QVariant key = item->data(Qt::UserRole);
+    const QPoint global = m_libraryList->viewport()->mapToGlobal(position);
+    if (m_libraryKind == Library::Tabs) {
+        for (int i = 0; i < m_tabs.size(); ++i) if (m_tabs.at(i)->view == key.value<QObject*>()) {
+            showTabContextMenu(i, global); refreshLibrary(); return;
+        }
+    } else if (m_libraryKind == Library::Bookmarks) {
+        const auto bookmarks = ui::webprefs::bookmarks();
+        for (int i = 0; i < bookmarks.size(); ++i) if (bookmarks[i].url == key.toString()) {
+            showBookmarkContextMenu(i, global); refreshLibrary(); return;
+        }
+    } else if (m_libraryKind == Library::History) {
+        QMenu menu(this);
+        connect(menu.addAction(tr("Open in new tab")), &QAction::triggered, this, [this, key] { openTab(key.toString()); });
+        connect(menu.addAction(tr("Copy page address")), &QAction::triggered, this, [key] { QApplication::clipboard()->setText(key.toString()); });
+        menu.exec(global);
+    } else if (m_libraryKind == Library::Downloads) {
+        for (const auto& entry : std::as_const(m_downloadLog)) if (entry.path == key.toString()) {
+            QMenu menu(this);
+            const QPointer<QWebEngineDownloadRequest> request = entry.request;
+            if (request) {
+                auto* pause = menu.addAction(request->isPaused() ? tr("Resume download") : tr("Pause download"));
+                pause->setObjectName(QStringLiteral("WebPauseDownload"));
+                connect(pause, &QAction::triggered, this, [request] {
+                    if (request) { if (request->isPaused()) request->resume(); else request->pause(); }
+                });
+                auto* cancel = menu.addAction(tr("Cancel download"));
+                cancel->setObjectName(QStringLiteral("WebCancelDownload"));
+                connect(cancel, &QAction::triggered, this, [request] { if (request) request->cancel(); });
+            }
+            if (entry.completed && QFileInfo::exists(entry.path) && ui::isAudioFile(entry.path))
+                connect(menu.addAction(tr("Import audio into project")), &QAction::triggered, this,
+                        [this, path = entry.path] { probeCompletedDownload(path, {}); });
+            connect(menu.addAction(tr("Open downloads folder")), &QAction::triggered, this, &WebBrowserPanel::openDownloadsFolder);
+            connect(menu.addAction(tr("Copy file path")), &QAction::triggered, this,
+                    [path = entry.path] { QApplication::clipboard()->setText(QDir::toNativeSeparators(path)); });
+            menu.exec(global);
+            refreshLibrary();
+            return;
+        }
+    }
+}
+
+void WebBrowserPanel::setTabMuted(Tab* tab, bool muted) {
+    if (indexOfTab(tab) < 0) return;
+    tab->muted = muted;
+    tab->view->page()->setAudioMuted(muted);
+    updateTabLabel(tab);
+}
+
+void WebBrowserPanel::setZoom(qreal zoom) {
+    if (!view()) return;
+    const qreal value = std::clamp(zoom, 0.25, 5.0);
+    view()->setZoomFactor(value);
+    m_zoom->setText(QStringLiteral("%1%").arg(qRound(value * 100)));
+    m_zoom->setVisible(!qFuzzyCompare(value, 1.0));
+}
+
+void WebBrowserPanel::openDownloadsFolder() {
+    const QString directory = ui::webprefs::downloadDirectory();
+    if (!QDir().mkpath(directory) || !QDesktopServices::openUrl(QUrl::fromLocalFile(directory)))
+        emit statusMessage(tr("Could not open the downloads folder"));
 }
 
 void WebBrowserPanel::addBookmark() {
     QDialog dialog(this);
     dialog.setWindowTitle(tr("Add bookmark"));
     dialog.setMinimumWidth(340);
-    dialog.setStyleSheet(QStringLiteral(
-        "QDialog { background:#22232d; color:#f5f5f7; }"
-        "QLabel { color:#f5f5f7; }"
-        "QLineEdit { background:#171820; color:#f5f5f7; border:1px solid #454957; border-radius:6px; padding:7px; }"
-        "QPushButton { background:#343744; color:#f5f5f7; border:1px solid #505466; border-radius:6px; padding:7px 16px; }"
-        "QPushButton:hover { background:#454959; } QPushButton:pressed { background:#171820; }"));
     auto* form = new QFormLayout(&dialog);
     auto* title = new BrowserAddressEdit(&dialog);
     title->setObjectName(QStringLiteral("WebShortcutTitle"));
@@ -1031,7 +1412,6 @@ void WebBrowserPanel::addBookmark() {
     form->addRow(tr("Web address"), address);
     auto* error = new QLabel(&dialog);
     error->setWordWrap(true);
-    error->setStyleSheet(QStringLiteral("color:#ffb7b9"));
     error->hide();
     form->addRow(error);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
@@ -1100,19 +1480,26 @@ QWidget* WebBrowserPanel::buildFindBar() {
     row->setContentsMargins(8, 4, 6, 4);
     row->setSpacing(4);
 
-    auto* label = new QLabel(tr("FIND"), m_findBar);
+    auto* label = new QLabel(m_findBar);
+    label->setPixmap(icons::icon(icons::Glyph::Search, th().textSecondary, 16).pixmap(16, 16));
     label->setObjectName(QStringLiteral("WebFindLabel"));
-    m_findText = new QLineEdit(m_findBar);
+    m_findText = new BrowserAddressEdit(m_findBar);
+    m_findText->setMinimumWidth(0);
     m_findText->setObjectName(QStringLiteral("WebFindText"));
     m_findText->setPlaceholderText(tr("Find in page"));
     m_findText->setClearButtonEnabled(true);
     m_findText->setProperty("dawWebInput", true);
     m_findText->setAccessibleName(tr("Find in web page"));
+    m_findResult = new QLabel(m_findBar);
+    m_findResult->setObjectName(QStringLiteral("WebFindResult"));
+    m_findResult->setMinimumWidth(48);
+    m_findResult->setAlignment(Qt::AlignCenter);
 
     const auto button = [this](icons::Glyph glyph, const QString& tip) {
-        auto* result = new ui::IconButton(glyph, tip, m_findBar);
+        auto* result = new BrowserIconButton(glyph, tip, m_findBar);
         result->setButtonSize(27, 25);
         result->setFocusPolicy(Qt::StrongFocus);
+        result->setAccessibleName(tip);
         return result;
     };
     auto* previous = button(icons::Glyph::ArrowUp, tr("Previous match"));
@@ -1132,6 +1519,7 @@ QWidget* WebBrowserPanel::buildFindBar() {
 
     row->addWidget(label);
     row->addWidget(m_findText, 1);
+    row->addWidget(m_findResult);
     row->addWidget(previous);
     row->addWidget(next);
     row->addWidget(close);
@@ -1152,6 +1540,8 @@ QWidget* WebBrowserPanel::buildDownloadBar() {
         icons::icon(icons::Glyph::Download, th().accentHighlight, 15).pixmap(15, 15));
     mark->setAccessibleName(tr("Download"));
     m_downloadName = new QLabel(m_downloadBar);
+    m_downloadName->setMinimumWidth(0);
+    m_downloadName->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_downloadName->setObjectName(QStringLiteral("WebDownloadName"));
     m_downloadProgress = new QProgressBar(m_downloadBar);
     m_downloadProgress->setObjectName(QStringLiteral("WebDownloadProgress"));
@@ -1159,7 +1549,7 @@ QWidget* WebBrowserPanel::buildDownloadBar() {
     m_downloadProgress->setAccessibleName(tr("Download progress"));
     m_downloadProgress->setFixedWidth(92);
     m_downloadProgress->setFixedHeight(6);
-    m_cancelDownload = new ui::IconButton(icons::Glyph::Close,
+    m_cancelDownload = new BrowserIconButton(icons::Glyph::Close,
                                            tr("Cancel download"), m_downloadBar);
     m_cancelDownload->setButtonSize(26, 24);
     m_cancelDownload->setFocusPolicy(Qt::StrongFocus);
@@ -1205,6 +1595,7 @@ void WebBrowserPanel::navigate(const QString& text) {
     }
     Tab* tab = currentTab();
     if (!tab) return;
+    closeLibrary();
     if (tab->pinned && url != QUrl(QLatin1String(ui::webprefs::kStudioUrl))) {
         openTab(url.toString());
         return;
@@ -1212,8 +1603,10 @@ void WebBrowserPanel::navigate(const QString& text) {
     tab->showingStartPage = false;
     tab->showingErrorPage = false;
     tab->failedUrl.clear();
+    tab->pendingUrl = url.toString();
     m_address->setText(url.toDisplayString());
     tab->view->setUrl(url);
+    tab->view->setFocus(Qt::OtherFocusReason);
 }
 
 QString WebBrowserPanel::startPageHtml() const {
@@ -1248,9 +1641,6 @@ QString WebBrowserPanel::startPageHtml() const {
     QBuffer logoBuffer(&logoPng);
     logoBuffer.open(QIODevice::WriteOnly);
     logo.scaled(112, 112, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(&logoBuffer, "PNG");
-    const auto benefit = [](icons::Glyph glyph, const QString& title) {
-        return QStringLiteral("<span>%1%2</span>").arg(startPageIcon(glyph), title.toHtmlEscaped());
-    };
     const QString backgroundPath = ui::webprefs::startPageBackgroundPath();
     const QFileInfo background(backgroundPath);
     const bool video = isVideoBackground(backgroundPath);
@@ -1284,16 +1674,50 @@ QString WebBrowserPanel::startPageHtml() const {
         html.replace(QLatin1String(key), text.toHtmlEscaped());
     };
     replace("%LANG%", QLocale().name().section(QLatin1Char('_'), 0, 0));
+    replace("%EDITION%", tr("Browser"));
+    replace("%SPACE%", tr("YOUR WORKSPACE"));
+    replace("%HEADING%", tr("A space for your next idea."));
+    replace("%SUBTITLE%", tr("Find sounds, explore music and keep your references close."));
     replace("%SEARCH_LABEL%", tr("Web search"));
-    replace("%SEARCH_PLACEHOLDER%", tr("What are you looking for today?"));
+    replace("%SEARCH_PLACEHOLDER%", tr("Search the web"));
     replace("%SEARCH_BUTTON%", tr("Search"));
     replace("%SHORTCUTS_LABEL%", tr("Quick access"));
+    replace("%MUSIC_LABEL%", tr("Music & inspiration"));
+    replace("%IMPORT_TITLE%", tr("From the web to your track"));
     replace("%FOOTER%", tr("Download audio to bring it into your project"));
+    replace("%KEY_ADDRESS%", tr("Address"));
+    replace("%KEY_TAB%", tr("New tab"));
+    replace("%KEY_DOWNLOADS%", tr("Downloads"));
+    const auto& theme = th();
+    html.replace(QStringLiteral("%PALETTE%"), QStringLiteral(
+        "color-scheme:%1;--bg:%2;--surface:%3;--hover:%4;--line:%5;--text:%6;--muted:%7;--accent:%8;--accent-ink:%9;")
+        .arg(theme.dark ? QStringLiteral("dark") : QStringLiteral("light"), theme.background.name(),
+             theme.surface.name(), theme.surfaceElevated.name(), theme.separator().name(),
+             theme.textPrimary.name(), theme.textSecondary.name(), theme.accent.name(), theme.accentText().name())
+        + QStringLiteral("--well:%1;--top:%2;--edge:%3;--scrim:rgba(%4,%5,%6,.92);")
+            .arg(theme.well().name(), theme.panelTop().name(), theme.edgeLight(theme.surface).name())
+            .arg(theme.background.red()).arg(theme.background.green()).arg(theme.background.blue()));
+    const auto savedLink = [](const QString& title, const QString& url) {
+        const QString host = QUrl(url).host();
+        return QStringLiteral("<a class='saved-link' href='%1' title='%2'><span aria-hidden='true'>%3</span>"
+                              "<span class='saved-copy'><strong>%4</strong><small>%5</small></span></a>")
+            .arg(QUrl(url).toString(QUrl::FullyEncoded).toHtmlEscaped(), url.toHtmlEscaped(),
+                 host.left(1).toUpper().toHtmlEscaped(), title.toHtmlEscaped(), host.toHtmlEscaped());
+    };
+    const auto section = [](const QString& title, const QString& content) {
+        return content.isEmpty() ? QString() : QStringLiteral("<section><div class='section-head'><h2>%1</h2></div><div class='saved-grid'>%2</div></section>")
+            .arg(title.toHtmlEscaped(), content);
+    };
+    QString saved, recent;
+    const auto bookmarks = ui::webprefs::bookmarks();
+    for (int i = 0; i < std::min(6, int(bookmarks.size())); ++i)
+        saved += savedLink(bookmarkLabel(bookmarks[i]), bookmarks[i].url);
+    const auto visited = ui::webprefs::history();
+    for (int i = 0; i < std::min(4, int(visited.size())); ++i)
+        recent += savedLink(visited[i].title, visited[i].url);
+    html.replace(QStringLiteral("%SAVED%"), section(tr("Your bookmarks"), saved));
+    html.replace(QStringLiteral("%RECENT%"), section(tr("Recently visited"), recent));
     html.replace(QStringLiteral("%FONTS%"), ui::bundledFontFaceCss());
-    html.replace(QStringLiteral("%BENEFITS%"),
-        benefit(icons::Glyph::Search, tr("Web search")) +
-        benefit(icons::Glyph::Star, tr("Your bookmarks")) +
-        benefit(icons::Glyph::Download, tr("Audio import")));
     html.replace(QStringLiteral("%LOGO%"), QStringLiteral("data:image/png;base64,%1").arg(QString::fromLatin1(logoPng.toBase64())));
     html.replace(QStringLiteral("%SHORTCUTS%"), shortcuts);
     html.replace(QStringLiteral("%MEDIA%"), media);
@@ -1309,10 +1733,12 @@ QUrl WebBrowserPanel::startPageBaseUrl() const {
 void WebBrowserPanel::showStartPage() {
     Tab* tab = currentTab();
     if (!tab) return;
+    closeLibrary();
     if (tab->pinned) { openTab(QLatin1String(ui::webprefs::kStartUrl)); return; }
     tab->showingStartPage = true;
     tab->showingErrorPage = false;
     tab->failedUrl.clear();
+    tab->pendingUrl.clear();
     ui::webprefs::setLastUrl(QLatin1String(ui::webprefs::kStartUrl));
     updateAddress();
     updateBookmarkState();
@@ -1328,10 +1754,14 @@ void WebBrowserPanel::updateNavigationState() {
 }
 
 QString WebBrowserPanel::currentPageUrl() const {
-    Tab* tab = currentTab();
+    return tabUrl(currentTab());
+}
+
+QString WebBrowserPanel::tabUrl(const Tab* tab) const {
     if (!tab) return {};
     if (tab->showingStartPage) return QLatin1String(ui::webprefs::kStartUrl);
     if (tab->showingErrorPage) return tab->failedUrl;
+    if (!tab->pendingUrl.isEmpty()) return tab->pendingUrl;
     const QUrl url = tab->view->url();
     return allowedMainFrameUrl(url) &&
                    url != QUrl(QStringLiteral("about:blank"))
@@ -1343,13 +1773,18 @@ void WebBrowserPanel::updateAddress() {
     if (!m_address) return;
     Tab* tab = currentTab();
     if (!tab) return;
+    const bool secure = !tab->showingStartPage && !tab->showingErrorPage &&
+                        tab->view->url().scheme() == QLatin1String("https");
+    m_addressIcon->setIcon(icons::icon(tab->showingStartPage ? icons::Glyph::Search
+        : secure ? icons::Glyph::Key : icons::Glyph::Globe, th().textSecondary, 14));
+    m_addressIcon->setToolTip(tab->showingStartPage ? tr("Search or enter address")
+        : tab->showingErrorPage ? tr("Page could not be loaded")
+        : secure ? tr("Connection uses HTTPS") : tr("Connection is not encrypted"));
     if (tab->showingStartPage) {
         m_address->clear();
         return;
     }
-    const QString value = tab->showingErrorPage
-                              ? tab->failedUrl
-                              : tab->view->url().toDisplayString();
+    const QString value = QUrl(tabUrl(tab)).toDisplayString();
     m_address->setText(value == QLatin1String("about:blank") ? QString() : value);
 }
 
@@ -1367,6 +1802,7 @@ void WebBrowserPanel::toggleCurrentBookmark() {
     }
     updateBookmarkState();
     rebuildBookmarksBar();
+    refreshCompletions();
 }
 
 void WebBrowserPanel::updateBookmarkState() {
@@ -1432,9 +1868,13 @@ void WebBrowserPanel::rebuildBookmarksBar(bool refreshStartPage) {
     if (values.isEmpty()) {
         auto* hint = new QLabel(tr("Ctrl+D saves the current page"), m_bookmarksBar);
         hint->setObjectName(QStringLiteral("WebBookmarksHint"));
+        hint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        hint->setMinimumWidth(0);
+        hint->setToolTip(hint->text());
         m_bookmarksLayout->addWidget(hint);
     }
     m_bookmarksLayout->addStretch(1);
+    if (m_libraryKind == Library::Bookmarks || m_libraryKind == Library::History) refreshLibrary();
 
     if (refreshStartPage) {
         // The start page mirrors the same persistent list — in every tab that
@@ -1551,6 +1991,18 @@ void WebBrowserPanel::openBookmarksMenu(QWidget* anchor) {
 
 void WebBrowserPanel::showBrowserMenu() {
     QMenu menu(this);
+    auto* tabs = menu.addAction(tr("Search tabs"));
+    tabs->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
+    connect(tabs, &QAction::triggered, this, [this] { showLibrary(Library::Tabs); });
+    auto* library = menu.addAction(tr("Bookmarks"));
+    connect(library, &QAction::triggered, this, [this] { showLibrary(Library::Bookmarks); });
+    auto* history = menu.addAction(tr("History"));
+    history->setShortcut(QKeySequence(QStringLiteral("Ctrl+H")));
+    connect(history, &QAction::triggered, this, [this] { showLibrary(Library::History); });
+    auto* downloads = menu.addAction(tr("Downloads"));
+    downloads->setShortcut(QKeySequence(QStringLiteral("Ctrl+J")));
+    connect(downloads, &QAction::triggered, this, [this] { showLibrary(Library::Downloads); });
+    menu.addSeparator();
     const QString url = currentPageUrl();
     const bool canBookmark = !url.isEmpty() &&
                              url != QLatin1String(ui::webprefs::kStartUrl) &&
@@ -1581,6 +2033,7 @@ void WebBrowserPanel::showBrowserMenu() {
     connect(newTab, &QAction::triggered, this,
             [this] { openTab(QLatin1String(ui::webprefs::kStartUrl)); });
     QAction* closeTabAction = menu.addAction(tr("Close tab"));
+    closeTabAction->setEnabled(currentTab() && !currentTab()->pinned);
     closeTabAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+W")));
     connect(closeTabAction, &QAction::triggered, this,
             [this] { closeTab(m_tabBar->currentIndex()); });
@@ -1597,16 +2050,14 @@ void WebBrowserPanel::showBrowserMenu() {
     QAction* zoomOut = menu.addAction(tr("Zoom out"));
     QAction* actualSize = menu.addAction(tr("Actual size"));
     connect(zoomIn, &QAction::triggered, this, [this] {
-        if (BrowserSurface* target = view())
-            target->setZoomFactor(std::min(5.0, target->zoomFactor() + 0.1));
+        if (view()) setZoom(view()->zoomFactor() + 0.1);
     });
     connect(zoomOut, &QAction::triggered, this, [this] {
-        if (BrowserSurface* target = view())
-            target->setZoomFactor(std::max(0.25, target->zoomFactor() - 0.1));
+        if (view()) setZoom(view()->zoomFactor() - 0.1);
     });
     connect(actualSize, &QAction::triggered, this,
             [this] {
-                if (BrowserSurface* target = view()) target->setZoomFactor(1.0);
+                setZoom(1.0);
             });
 
     QAction* copyAddress = menu.addAction(tr("Copy page address"));
@@ -1627,12 +2078,15 @@ void WebBrowserPanel::showBrowserMenu() {
 }
 
 void WebBrowserPanel::showFindBar() {
+    closeLibrary();
     m_findBar->show();
     m_findText->setFocus(Qt::ShortcutFocusReason);
     m_findText->selectAll();
+    findText();
 }
 
 void WebBrowserPanel::closeFindBar() {
+    m_findPending = false;
     if (BrowserSurface* target = view()) {
         target->page()->findText(QString());
         target->setFocus(Qt::ShortcutFocusReason);
@@ -1645,7 +2099,14 @@ void WebBrowserPanel::findText(bool backward) {
     if (!target) return;
     const QString needle = m_findText->text();
     if (needle.isEmpty()) {
+        m_findPending = false;
+        m_findResult->clear();
         target->page()->findText(QString());
+        return;
+    }
+    if (currentTab() && currentTab()->loading) {
+        m_findPending = true;
+        m_findResult->setText(tr("Searching…"));
         return;
     }
     target->page()->findText(needle,
@@ -1663,6 +2124,18 @@ void WebBrowserPanel::installShortcuts() {
     add(QKeySequence(QStringLiteral("Ctrl+L")), [this] {
         m_address->setFocus(Qt::ShortcutFocusReason);
         m_address->selectAll();
+    });
+    add(QKeySequence(Qt::Key_F6), [this] { m_address->setFocus(); m_address->selectAll(); });
+    add(QKeySequence(Qt::Key_F5), [this] { if (m_reloadStop) m_reloadStop->click(); });
+    add(QKeySequence(Qt::Key_F3), [this] { if (!m_findBar->isVisible()) showFindBar(); else findText(); });
+    add(QKeySequence(QStringLiteral("Shift+F3")), [this] { if (!m_findBar->isVisible()) showFindBar(); else findText(true); });
+    add(QKeySequence(QStringLiteral("Ctrl+J")), [this] { showLibrary(Library::Downloads); });
+    add(QKeySequence(QStringLiteral("Ctrl+H")), [this] { showLibrary(Library::History); });
+    add(QKeySequence(QStringLiteral("Ctrl+Shift+A")), [this] { showLibrary(Library::Tabs); });
+    add(QKeySequence(QStringLiteral("Ctrl+Shift+B")), [this] {
+        const bool show = !ui::webprefs::bookmarksBarVisible();
+        ui::webprefs::setBookmarksBarVisible(show);
+        m_bookmarksBar->setVisible(show);
     });
     add(QKeySequence(QStringLiteral("Ctrl+T")),
         [this] { openTab(QLatin1String(ui::webprefs::kStartUrl)); });
@@ -1707,19 +2180,23 @@ void WebBrowserPanel::installShortcuts() {
     add(QKeySequence(QStringLiteral("Alt+Home")),
         [this] { navigate(ui::webprefs::homeUrl()); });
     add(QKeySequence(QStringLiteral("Ctrl++")), [this] {
-        if (BrowserSurface* target = view())
-            target->setZoomFactor(std::min(5.0, target->zoomFactor() + 0.1));
+        if (view()) setZoom(view()->zoomFactor() + 0.1);
     });
+    add(QKeySequence(QStringLiteral("Ctrl+=")), [this] { if (view()) setZoom(view()->zoomFactor() + 0.1); });
     add(QKeySequence(QStringLiteral("Ctrl+-")), [this] {
-        if (BrowserSurface* target = view())
-            target->setZoomFactor(std::max(0.25, target->zoomFactor() - 0.1));
+        if (view()) setZoom(view()->zoomFactor() - 0.1);
     });
     add(QKeySequence(QStringLiteral("Ctrl+0")),
         [this] {
-            if (BrowserSurface* target = view()) target->setZoomFactor(1.0);
+            setZoom(1.0);
         });
     add(QKeySequence(Qt::Key_Escape), [this] {
-        if (m_findBar->isVisible()) closeFindBar();
+        if (m_libraryKind != Library::None) { closeLibrary(); if (view()) view()->setFocus(); }
+        else if (m_findBar->isVisible()) closeFindBar();
+        else if (m_address->hasFocus()) {
+            updateAddress();
+            if (view()) view()->setFocus();
+        }
         else if (Tab* tab = currentTab(); tab && tab->loading) {
             tab->userStoppedLoading = true;
             tab->view->stop();
@@ -1787,12 +2264,18 @@ void WebBrowserPanel::acceptDownload(QWebEngineDownloadRequest* request) {
     request->setDownloadDirectory(directory);
     request->setDownloadFileName(name);
     m_downloads.push_back(request);
+    m_downloadLog.prepend({QDir(directory).filePath(name), tr("Downloading"), request, false});
+    if (m_downloadLog.size() > 100) {
+        for (int i = int(m_downloadLog.size()) - 1; i >= 100; --i)
+            if (!m_downloadLog.at(i).request) m_downloadLog.removeAt(i);
+    }
     showDownload(request);
 
     connect(request, &QWebEngineDownloadRequest::receivedBytesChanged, this,
             &WebBrowserPanel::refreshDownloadProgress);
     connect(request, &QWebEngineDownloadRequest::totalBytesChanged, this,
             &WebBrowserPanel::refreshDownloadProgress);
+    connect(request, &QWebEngineDownloadRequest::isPausedChanged, this, &WebBrowserPanel::refreshDownloadProgress);
     connect(request, &QWebEngineDownloadRequest::stateChanged, this,
             [this, request](QWebEngineDownloadRequest::DownloadState state) {
                 if (state == QWebEngineDownloadRequest::DownloadCompleted)
@@ -1825,6 +2308,13 @@ void WebBrowserPanel::removeDownload(QWebEngineDownloadRequest* request) {
         const auto staging = request->property("vltForumStaging").toString();
         if (!staging.isEmpty()) QDir(staging).removeRecursively();
     }
+    for (auto& entry : m_downloadLog) if (entry.request == request) {
+        entry.completed = request->state() == QWebEngineDownloadRequest::DownloadCompleted;
+        entry.detail = entry.completed ? tr("Completed") + QStringLiteral(" · ") + QLocale().formattedDataSize(request->receivedBytes())
+            : request->state() == QWebEngineDownloadRequest::DownloadCancelled ? tr("Cancelled")
+            : tr("Failed: %1").arg(request->interruptReasonString());
+        entry.request.clear();
+    }
     m_downloads.removeAll(request);
     if (m_visibleDownload == request) {
         m_visibleDownload.clear();
@@ -1837,6 +2327,7 @@ void WebBrowserPanel::removeDownload(QWebEngineDownloadRequest* request) {
     }
     if (!m_visibleDownload) m_downloadBar->hide();
     request->deleteLater();
+    if (m_libraryKind == Library::Downloads) refreshLibrary();
 }
 
 void WebBrowserPanel::showDownload(QWebEngineDownloadRequest* request) {
@@ -1848,6 +2339,7 @@ void WebBrowserPanel::showDownload(QWebEngineDownloadRequest* request) {
 }
 
 void WebBrowserPanel::refreshDownloadProgress() {
+    if (m_libraryKind == Library::Downloads && !m_downloadRefreshTimer->isActive()) m_downloadRefreshTimer->start();
     if (!m_visibleDownload) return;
     const qint64 total = m_visibleDownload->totalBytes();
     const qint64 received = m_visibleDownload->receivedBytes();
@@ -1964,61 +2456,111 @@ void WebBrowserPanel::resizeEvent(QResizeEvent* event) {
 }
 
 void WebBrowserPanel::applyTheme() {
-    // This browser has its own dark chrome, matching the built-in page even
-    // when the arrangement uses a different theme or a custom background.
+    const auto& theme = th();
     QPalette colors = palette();
-    colors.setColor(QPalette::Window, browserBackground);
-    colors.setColor(QPalette::Base, QColor(QStringLiteral("#22232d")));
-    colors.setColor(QPalette::WindowText, browserText);
-    colors.setColor(QPalette::Text, browserText);
-    colors.setColor(QPalette::PlaceholderText, browserMuted);
-    colors.setColor(QPalette::ButtonText, browserText);
-    colors.setColor(QPalette::Highlight, QColor(QStringLiteral("#a0cdef")));
-    colors.setColor(QPalette::HighlightedText, QColor(QStringLiteral("#152536")));
+    colors.setColor(QPalette::Window, theme.background);
+    colors.setColor(QPalette::Base, theme.well());
+    colors.setColor(QPalette::WindowText, theme.textPrimary);
+    colors.setColor(QPalette::Text, theme.textPrimary);
+    colors.setColor(QPalette::PlaceholderText, theme.textSecondary);
+    colors.setColor(QPalette::ButtonText, theme.textPrimary);
+    colors.setColor(QPalette::Highlight, theme.accent);
+    colors.setColor(QPalette::HighlightedText, theme.accentText());
     setPalette(colors);
-    for (Tab* tab : std::as_const(m_tabs))
-        if (tab->view && tab->view->page())
-            tab->view->page()->setBackgroundColor(browserBackground);
-    setStyleSheet(QStringLiteral(R"(
-#WebBrowserPanel, #WebTabStrip, #WebToolbar, #WebBookmarksBar, #WebFindBar,
-#WebViewFrame, #WebViewStack, #WebSidebar { background: #191a22; border: none; }
+    for (auto* button : findChildren<ui::IconButton*>()) {
+        button->setIdleColor(theme.textSecondary);
+        button->setActiveColor(theme.accentHighlight);
+    }
+    for (auto* button : m_railButtons)
+        button->setIcon(icons::icon(static_cast<icons::Glyph>(button->property("webGlyph").toInt()), theme.textPrimary, 18));
+    for (Tab* tab : std::as_const(m_tabs)) {
+        tab->view->page()->setBackgroundColor(theme.background);
+        updateTabLabel(tab);
+    }
+    if (m_menu) {
+        QPixmap dots(32, 32);
+        dots.fill(Qt::transparent);
+        QPainter painter(&dots);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(theme.textPrimary);
+        for (int x : {8, 16, 24}) painter.drawEllipse(QPointF(x, 16), 1.7, 1.7);
+        painter.end();
+        m_menu->setIcon(QIcon(dots));
+    }
+    QString style = QStringLiteral(R"(
+#WebBrowserPanel, #WebViewFrame, #WebViewStack, #WebLibrary { background: %BG%; border: none; }
+#WebTabStrip { background: %HEADER%; border: none; }
+#WebToolbar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %BOTTOM%); border: none; }
+#WebBookmarksBar, #WebFindBar { background: %BOTTOM%; border: none; border-bottom: 1px solid %LINE%; }
+#WebSidebar { background: %HEADER%; border: none; border-right: 1px solid %LINE%; }
 QTabBar#WebTabBar { background: transparent; qproperty-drawBase: 0; }
 QTabBar#WebTabBar::tab {
-    color: #a6a8b5; background: transparent; border: none; border-radius: 9px;
-    padding: 2px 5px 2px 12px; margin: 0 2px 0 0;
-    min-width: 60px; max-width: 180px; height: 27px; font-size: 11px;
+    color: %MUTED%; background: transparent; border: 1px solid transparent; border-radius: 6px;
+    padding: 2px 5px 2px 10px; margin: 0 3px 0 0;
+    min-width: 48px; max-width: 170px; height: 28px; font-size: 11px;
 }
-QTabBar#WebTabBar::tab:!selected:hover { background: #20212b; color: #f5f5f7; }
-QTabBar#WebTabBar::tab:selected { background: #252630; color: #f5f5f7; }
-QTabBar#WebTabBar::scroller { width: 26px; }
-QTabBar#WebTabBar QToolButton { background: #252630; border: none; color: #f5f5f7; }
-#WebAddress, #WebFindText {
-    color: #f5f5f7; background: #16171e; border: 1px solid #252630;
-    border-radius: 15px; padding: 4px 9px; min-height: 22px;
-    selection-background-color: #a0cdef; selection-color: #152536; font-size: 12px;
+QTabBar#WebTabBar::tab:!selected:hover { background: %SURFACE%; color: %TEXT%; }
+QTabBar#WebTabBar::tab:selected { background: %TOP%; color: %TEXT%; border-color: %EDGE%; }
+QTabBar#WebTabBar::scroller { width: 28px; }
+QTabBar#WebTabBar QToolButton { background: %TOP%; border: 1px solid %LINE%; border-radius: 4px; color: %TEXT%; }
+#WebAddress, #WebFindText, #WebLibrarySearch {
+    color: %TEXT%; background: %WELL%; border: 1px solid %LINE%; border-radius: 6px;
+    padding: 4px 7px; min-height: 22px; font-size: 12px;
+    selection-background-color: %ACCENT%; selection-color: %ACCENTINK%;
 }
-#WebMenuButton { color: #d8d9e0; background: transparent; border: 1px solid transparent; border-radius: 14px; font-size: 22px; }
-#WebMenuButton:hover { background: #2b2d38; }
-#WebMenuButton:pressed { background: #111218; }
-QPushButton#WebRailButton { background: #242630; border: 1px solid transparent; border-radius: 18px; }
-QPushButton#WebRailButton[railRole="home"], QPushButton#WebRailButton[railRole="settings"] { background: #c94347; }
-QPushButton#WebRailButton[railRole="bookmarks"] { background: #6464ce; }
-QPushButton#WebRailButton[railRole="history"] { background: #327c91; }
-QPushButton#WebRailButton:hover { border-color: #d6dce8; }
-QPushButton#WebRailButton:pressed { background: #111218; }
-#WebDownloadBar { background: #20212b; border: none; border-top: 1px solid #30323d; }
-#WebPageProgress, #WebDownloadProgress { border: none; background: #20212b; border-radius: 1px; }
-#WebPageProgress::chunk, #WebDownloadProgress::chunk { background: #c94347; border-radius: 1px; }
-#WebDownloadName { color: #f5f5f7; font-size: 11px; }
-#WebFindLabel, #WebBookmarksHint { color: #a6a8b5; font-size: 10px; }
+#WebAddress:hover, #WebFindText:hover, #WebLibrarySearch:hover { border-color: %EDGE%; }
+#WebAddress:focus, #WebFindText:focus, #WebLibrarySearch:focus { border-color: %ACCENT%; }
+#WebMenuButton, #WebZoom { color: %TEXT%; background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: 11px; padding: 0; }
+#WebMenuButton:hover, #WebZoom:hover { background: %HOVER%; border-color: %LINE%; }
+#WebMenuButton:pressed, #WebZoom:pressed { background: %WELL%; }
+#WebMenuButton:focus, #WebZoom:focus { border-color: %ACCENT%; }
+QPushButton#WebRailButton { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0; }
+QPushButton#WebRailButton:hover { background: %HOVER%; border-color: %LINE%; }
+QPushButton#WebRailButton:checked { background: %TINT%; border-color: %ACCENT%; }
+QPushButton#WebRailButton:pressed { background: %WELL%; }
+QPushButton#WebRailButton:focus { border-color: %ACCENT%; }
+#WebDownloadBar { background: %BOTTOM%; border: none; border-top: 1px solid %LINE%; }
+#WebPageProgress, #WebDownloadProgress { border: none; background: %BOTTOM%; border-radius: 1px; }
+#WebPageProgress::chunk, #WebDownloadProgress::chunk { background: %ACCENT%; border-radius: 1px; }
+#WebDownloadName { color: %TEXT%; font-size: 11px; }
+#WebFindLabel, #WebFindResult, #WebBookmarksHint { color: %MUTED%; font-size: 11px; }
 QPushButton#WebBookmarksButton, QPushButton#WebBookmarkChip, QPushButton#WebBookmarksMore {
     min-height: 23px; max-height: 23px; padding: 0 8px;
-    color: #a6a8b5; background: transparent; border: 1px solid transparent; border-radius: 11px; font-size: 10px;
+    color: %MUTED%; background: transparent; border: 1px solid transparent; border-radius: 5px; font-size: 11px;
 }
-QPushButton#WebBookmarksButton { color: #f5f5f7; }
+QPushButton#WebBookmarksButton { color: %TEXT%; }
 QPushButton#WebBookmarksButton:hover, QPushButton#WebBookmarkChip:hover,
-QPushButton#WebBookmarksMore:hover { color: #f5f5f7; background: #252630; }
-)"));
+QPushButton#WebBookmarksMore:hover { color: %TEXT%; background: %HOVER%; }
+QPushButton#WebBookmarksButton:focus, QPushButton#WebBookmarkChip:focus,
+QPushButton#WebBookmarksMore:focus { border-color: %ACCENT%; }
+#WebLibraryTitle { color: %TEXT%; font-size: 17px; font-weight: 600; }
+#WebLibraryEmpty { color: %MUTED%; font-size: 12px; padding: 8px 0; }
+#WebLibraryList { background: transparent; border: none; color: %TEXT%; outline: none; font-size: 12px; }
+#WebLibraryList::item { border: none; }
+#WebLibraryAction { color: %TEXT%; background: %SURFACE%; border: 1px solid %LINE%; border-radius: 6px; padding: 6px 10px; font-size: 11px; }
+#WebLibraryAction:hover { background: %HOVER%; }
+#WebLibraryAction:focus { border-color: %ACCENT%; }
+#WebLibraryAction:disabled { color: %MUTED%; background: %BG%; }
+)");
+    const auto color = [&style](const char* key, const QColor& value) { style.replace(QLatin1String(key), value.name()); };
+    color("%BG%", theme.background);
+    color("%HEADER%", theme.headerBackground);
+    color("%SURFACE%", theme.surface);
+    color("%TOP%", theme.panelTop());
+    color("%BOTTOM%", theme.panelBottom());
+    color("%TEXT%", theme.textPrimary);
+    color("%MUTED%", theme.textSecondary);
+    color("%LINE%", theme.separator());
+    color("%EDGE%", theme.edgeLight(theme.surface));
+    color("%HOVER%", theme.surfaceElevated);
+    color("%WELL%", theme.well());
+    color("%ACCENT%", theme.accent);
+    color("%ACCENTINK%", theme.accentText());
+    color("%TINT%", mixColors(theme.surface, theme.accent, 0.16));
+    setStyleSheet(style);
+    if (m_addressIcon && currentTab()) updateAddress();
+    if (m_libraryKind != Library::None) refreshLibrary();
     update();
 }
 

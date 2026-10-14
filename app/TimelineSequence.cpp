@@ -10,6 +10,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QToolTip>
 
 namespace seq = ui::sequence;
@@ -34,13 +35,16 @@ void TimelineWidget::applyMidiView(const ClipHit& hit, daw::MidiClipView view) {
 }
 
 void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
-                                         const QRectF& body) {
+                                         const QRectF& body, const QColor& text) {
     const bool sequenced = clip.midiView.sequence && sequenceAvailable(clip);
     const seq::Layout layout(body, sequenced, width() - ui::kTimelineScrollExtent);
     if (layout.header.isEmpty()) return;
     p.save();
-    p.setClipRect(body, Qt::IntersectClip);
-    const QColor text(255, 255, 255, 235);
+    QPainterPath shape;
+    const auto bounds = ui::pixelAlignedRect(body, p.device()->devicePixelRatioF());
+    const qreal radius = std::max(0.0, ui::clipCornerRadius(bounds) - 1.0);
+    shape.addRoundedRect(bounds.adjusted(1, 1, -1, -1), radius, radius);
+    p.setClipPath(shape, Qt::IntersectClip);
     p.setFont(ui::transportControlFont(10));
     const auto chip = [&](QRectF rect, const QString& value) {
         if (rect.isEmpty()) return;
@@ -77,8 +81,9 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, active ? 105 : 30));
         p.drawRoundedRect(rect.adjusted(1, 2, -1, -2), 3, 3);
-        icons::paint(p, glyph, rect.adjusted(5, 5, -5, -5),
-                     QColor(255, 255, 255, enabled ? (active ? 255 : 175) : 70));
+        QColor ink = text;
+        ink.setAlpha(enabled ? (active ? 255 : 175) : 70);
+        icons::paint(p, glyph, rect.adjusted(5, 5, -5, -5), ink);
         if (active) p.fillRect(QRectF(rect.left() + 6, rect.bottom() - 3, rect.width() - 12, 1), text);
     };
     mode(layout.midi, icons::Glyph::MidiKeys, !sequenced, true);
@@ -89,7 +94,8 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
 void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
                                       const daw::ClipModel& clip, const QRectF& body,
                                       std::uint64_t revision) {
-    const seq::Layout layout(body, true, width() - ui::kTimelineScrollExtent);
+    seq::Layout layout(clipHeaderRect(track, clip, body), true, width() - ui::kTimelineScrollExtent);
+    layout.steps.setWidth(body.width());
     if (layout.steps.height() < 3) return;
     const double tempo = m_controller->tempo();
     const double step = clip.midiView.stepBeats;
@@ -105,7 +111,9 @@ void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
     const double first = std::max(offset, offset + daw::secondsToBeats((dirty.left() - body.left()) / m_pixelsPerSecond, tempo));
     const double last = std::min(end, offset + daw::secondsToBeats((dirty.right() - body.left()) / m_pixelsPerSecond, tempo));
     const QColor color = colorFromRgb(track.color);
+    const bool selected = isClipSelected(QString::fromStdString(clip.id));
     QColor background = mixColors(th().well(), color, th().dark ? .14 : .09);
+    if (selected) background = mixColors(background, Qt::white, .08);
     // Color interpolation can round an opaque alpha down to 254. This well
     // replaces the clip background, so repainting it must fully cover it.
     background.setAlpha(255);
@@ -118,7 +126,8 @@ void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
         p.setPen(Qt::NoPen);
         for (double beat = seq::stepAt(first, step); beat < last - 1e-8; beat += step) {
             const auto quarter = std::llround(std::floor(beat + 1e-8));
-            p.setBrush(mixColors(th().well(), color, quarter % 2 ? .28 : .18));
+            const QColor cell = mixColors(th().well(), color, quarter % 2 ? .28 : .18);
+            p.setBrush(selected ? mixColors(cell, Qt::white, .08) : cell);
             p.drawRoundedRect(seq::cellRect(layout, xAt(beat), pixels), 2, 2);
             if (pixels >= 22 && std::abs(beat - std::round(beat)) < 1e-8 && !layout.footer.isEmpty()) {
                 p.setFont(ui::transportControlFont(9));
@@ -181,11 +190,13 @@ void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
 bool TimelineWidget::hitTestSequence(const QPoint& pos, SequenceHit& hit) {
     if (!hitTestClip(pos, hit.clip) || hit.clip.kind != daw::ClipKind::Midi) return false;
     const auto* clip = findClipModel(hit.clip.trackId, hit.clip.clipId);
-    if (!clip) return false;
+    const auto* track = m_controller->project().findTrack(hit.clip.trackId.toStdString());
+    if (!clip || !track) return false;
     const QRectF body = clipRect(laneAt(pos.y()), *clip);
     if (!body.contains(pos)) return false;
     const bool sequenced = clip->midiView.sequence && sequenceAvailable(*clip);
-    const seq::Layout layout(body, sequenced, width() - ui::kTimelineScrollExtent);
+    seq::Layout layout(clipHeaderRect(*track, *clip, body), sequenced, width() - ui::kTimelineScrollExtent);
+    layout.steps.setWidth(body.width());
     if (layout.midi.contains(pos)) hit.part = SequencePart::Midi;
     else if (layout.sequence.contains(pos)) hit.part = SequencePart::Sequence;
     else if (layout.pitch.contains(pos)) hit.part = SequencePart::Pitch;

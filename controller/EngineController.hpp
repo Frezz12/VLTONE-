@@ -381,7 +381,8 @@ public:
         const std::unordered_set<std::string>& changedTracks, bool allChanged);
     bool refreshRecoveryPluginStates(
         std::size_t maxPluginStateCaptures,
-        std::span<const std::string> preferredStems = {});
+        std::span<const std::string> preferredStems = {},
+        audio::Result* captureResult = nullptr);
     /// Activate a journal document and restore state from its State/ folder.
     /// State absent from the journal may fall back to the last manual package.
     audio::Result restoreRecoveryProject(

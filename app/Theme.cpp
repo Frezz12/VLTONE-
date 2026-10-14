@@ -146,9 +146,13 @@ QColor Theme::sectionDivider() const {
 }
 
 QColor Theme::accentText() const {
-    const QColor darkInk = accent.saturation() == 0 ? grey(18) : QColor(18, 18, 20);
-    const QColor lightInk = accent.saturation() == 0 ? grey(250) : QColor(250, 250, 252);
-    const double luminance = relativeLuminance(accent);
+    return contrastingTextColor(accent);
+}
+
+QColor contrastingTextColor(const QColor& background) {
+    const QColor darkInk = background.saturation() == 0 ? grey(18) : QColor(18, 18, 20);
+    const QColor lightInk = background.saturation() == 0 ? grey(250) : QColor(250, 250, 252);
+    const double luminance = relativeLuminance(background);
     const double darkContrast = (luminance + 0.05) /
                                 (relativeLuminance(darkInk) + 0.05);
     const double lightContrast = (relativeLuminance(lightInk) + 0.05) /

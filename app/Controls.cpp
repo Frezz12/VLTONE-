@@ -1,5 +1,6 @@
 #include "PluginStyle.hpp"
 #include "Controls.hpp"
+#include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
 #include "EngineController.hpp"
 #include "GlassPanel.hpp"
@@ -1135,8 +1136,10 @@ FaderWidget::FaderWidget(Qt::Orientation orientation, QWidget* parent)
     setCursor(Qt::OpenHandCursor);
     setToolTip(tr("Drag to set level · double-click for unity · Shift for fine"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-            QOverload<>::of(&QWidget::update));
+            [this] { m_capScene.reset(); m_staticSceneDirty = true; update(); });
 }
+
+FaderWidget::~FaderWidget() = default;
 
 void FaderWidget::setGain(double gain) {
     const double g = std::clamp(gain, 0.0, 2.0);
@@ -1148,6 +1151,7 @@ void FaderWidget::setGain(double gain) {
 void FaderWidget::setScaleVisible(bool visible) {
     if (m_scale == visible || m_orientation != Qt::Vertical) return;
     m_scale = visible;
+    m_staticSceneDirty = true;
     setMinimumWidth(int(kCapAcross + 4 + (visible ? kScaleWidth : 0.0)));
     // A printed scale with numbers missing from it is worse than no scale: the
     // marks stop being a ruler and become decoration. So a fader that carries
@@ -1431,6 +1435,10 @@ void FaderWidget::paintCap(QPainter& p, const QRectF& cap) const {
 
 void FaderWidget::paintEvent(QPaintEvent*) {
     QPainter p(this);
+    paintScene(p, QRegion(rect()));
+}
+
+void FaderWidget::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, true);
     const Theme& t = th();
     const bool vertical = m_orientation == Qt::Vertical;
@@ -1477,20 +1485,25 @@ void FaderWidget::paintEvent(QPaintEvent*) {
     const QRectF track = trackRect();
     const double axis = knobPos(position);
 
-    if (m_scale && vertical) paintScale(p);
+    auto* scene = graphics::sceneGeometrySink(p);
+    if (!scene || scene->beginRetainedSection(1, m_staticSceneDirty)) {
+        if (m_scale && vertical) paintScale(p);
 
-    // The slot: cut into the panel, not laid on it.
-    p.setPen(Qt::NoPen);
-    p.setBrush(mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.55 : 0.18));
-    p.drawRoundedRect(track, 2.0, 2.0);
-    p.setPen(QPen(t.edgeLight(t.well()), 1.0));
-    if (vertical) {
-        p.drawLine(QPointF(track.right() - 0.5, track.top() + 2.0),
-                   QPointF(track.right() - 0.5, track.bottom() - 2.0));
-    } else {
-        p.drawLine(QPointF(track.left() + 2.0, track.bottom() - 0.5),
-                   QPointF(track.right() - 2.0, track.bottom() - 0.5));
+        // The slot: cut into the panel, not laid on it.
+        p.setPen(Qt::NoPen);
+        p.setBrush(mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.55 : 0.18));
+        p.drawRoundedRect(track, 2.0, 2.0);
+        p.setPen(QPen(t.edgeLight(t.well()), 1.0));
+        if (vertical) {
+            p.drawLine(QPointF(track.right() - 0.5, track.top() + 2.0),
+                       QPointF(track.right() - 0.5, track.bottom() - 2.0));
+        } else {
+            p.drawLine(QPointF(track.left() + 2.0, track.bottom() - 0.5),
+                       QPointF(track.right() - 2.0, track.bottom() - 0.5));
+        }
+        if (scene) scene->endRetainedSection();
     }
+    if (scene) m_staticSceneDirty = false;
 
     // Ours: the travelled part of the slot is lit. Logic leaves it dark; this
     // is the one place the accent belongs on a fader, and it is what makes a
@@ -1524,7 +1537,24 @@ void FaderWidget::paintEvent(QPaintEvent*) {
         }
     }
 
-    paintCap(p, capRect(position));
+    const QRectF cap = capRect(position);
+    if (scene) {
+        // The sculpted handle only changes its material on hover/press. Keep
+        // its local geometry and move it with one GPU transform while dragging
+        // or following automation, just like the retained timeline tiles.
+        if (!m_capScene) m_capScene = std::make_unique<graphics::RetainedScene>();
+        if (m_cachedCapSize != cap.size()) {
+            m_cachedCapSize = cap.size();
+            m_capScene->clear();
+        }
+        const quint64 state = quint64(m_dragging) | (quint64(m_hovered) << 1) |
+                              (quint64(isEnabled()) << 2);
+        m_capScene->paint(p, state, cap.size().toSize(), cap.topLeft(),
+            [this, cap](QPainter& local) {
+                local.setRenderHint(QPainter::Antialiasing, true);
+                paintCap(local, QRectF(QPointF(), cap.size()));
+            });
+    } else paintCap(p, cap);
 }
 
 void FaderWidget::showBubble() {

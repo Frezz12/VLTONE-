@@ -453,16 +453,22 @@ int main() {
             check(reopened.saveProject(package).isOk(), "the restored preset saves again");
         }
 
-        // If no chunk is available, the inline fallback must still reach DSP.
+        // A named chunk which disappeared is data loss, not a parameter-only
+        // project. Reject it before replacing the current session.
         savedDocument.tracks.front().inserts.front().stateFile = "missing.bin";
         savedDocument.tracks.front().inserts.front().parameters.front().value = 0.75;
         check(ProjectSerializer::save(savedDocument, package).isOk(),
               "a project with a missing plugin state file is prepared");
         EngineController fallback{};
         fallback.initialize(48000, kBlock, false);
+        check(!fallback.openProject(package),
+              "a missing named chunk is reported instead of silently losing opaque preset state");
+        savedDocument.tracks.front().inserts.front().stateFile.clear();
+        check(ProjectSerializer::save(savedDocument, package).isOk(),
+              "a legacy parameter-only project is prepared");
         check(fallback.openProject(package).isOk() &&
                   std::fabs(processAndReadGain(fallback) - 0.75) < 1e-9,
-              "a missing chunk still restores the inline parameter fallback");
+              "a parameter-only project still restores the inline fallback");
         std::filesystem::remove_all(directory, error);
     }
 

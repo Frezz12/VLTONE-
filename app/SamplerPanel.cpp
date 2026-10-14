@@ -2602,7 +2602,7 @@ bool SamplerWaveform::checkPeakUpdatesForTest() {
         ui::graphics::SceneRecorder recorder(waveform.size(), 1, cache);
         { QPainter painter(&recorder); waveform.paintScene(painter, waveform.rect()); }
         QVector<ui::graphics::SceneVertex> vertices;
-        for (const auto& mesh : cache->sections.at(1002))
+        for (const auto& mesh : cache->sections.at(1002)->meshes)
             if (mesh.color == QColor(Qt::white)) vertices += mesh.vertices;
         return vertices;
     };

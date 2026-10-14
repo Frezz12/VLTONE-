@@ -13,6 +13,7 @@
 #include <QQmlComponent>
 #include <QDir>
 #include <QWebEngineScript>
+#include <QWebEngineFindTextResult>
 #include <QApplication>
 #include <QMetaEnum>
 #include <QQuickWindow>
@@ -84,6 +85,10 @@ BrowserPage::BrowserPage(BrowserProfile* profile, QObject* owner) : QuickVisual(
         connect(m_legacy, &QWebEnginePage::loadingChanged, this, &BrowserPage::loadingChanged);
         connect(m_legacy, &QWebEnginePage::renderProcessTerminated, this, &BrowserPage::renderProcessTerminated);
         connect(m_legacy, &QWebEnginePage::newWindowRequested, this, &BrowserPage::newWindowRequested);
+        connect(m_legacy, &QWebEnginePage::findTextFinished, this,
+                [this](const QWebEngineFindTextResult& result) {
+            notifyFindText(result.activeMatch(), result.numberOfMatches());
+        });
     }
 }
 BrowserPage::~BrowserPage() {
@@ -188,6 +193,9 @@ void BrowserPage::runJavaScript(const QString& script, std::function<void(const 
         if (auto pending = m_scriptCallbacks.take(requestId))
             QTimer::singleShot(0, this, [pending = std::move(pending)] { pending({}); });
     }
+}
+void BrowserPage::notifyFindText(int activeMatch, int numberOfMatches) {
+    emit findTextFinished(activeMatch, numberOfMatches);
 }
 void BrowserPage::completeJavaScript(quint32 requestId, const QJSValue& result) {
     if (auto callback = m_scriptCallbacks.take(requestId)) callback(result.toVariant());

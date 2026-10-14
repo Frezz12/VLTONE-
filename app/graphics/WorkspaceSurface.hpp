@@ -43,11 +43,13 @@ signals:
 protected:
     bool eventFilter(QObject*, QEvent*) override;
 private:
-    void requestCapture();
+    void requestFrame();
+    void requestCapture(bool hierarchyChanged = true);
     void capture();
     void present(std::shared_ptr<const SceneSnapshot>);
     void visit(QWidget*, std::shared_ptr<SceneSnapshot>&, QSet<quintptr>&,
-               QPoint parentOrigin, QRect parentClip, const QRegion& parentMask);
+               QPoint parentOrigin, QRect parentClip, const QRegion& parentMask,
+               bool descendants = true);
     bool forwardInput(QEvent*);
     void updateHover(QWidget* target, const QPointF& globalPosition,
                      Qt::KeyboardModifiers modifiers = Qt::NoModifier,
@@ -58,6 +60,7 @@ private:
     QPointF m_lastHoverPosition;
     QQuickWindow* m_window = nullptr;
     SceneItem* m_item = nullptr;
+    QQuickItem* m_framePreparation = nullptr;
     QQmlEngine* m_qml = nullptr;
     std::vector<SceneItem*> m_segments;
     struct VisualItem {
@@ -74,8 +77,18 @@ private:
         std::shared_ptr<const SceneLayer> layer;
         std::shared_ptr<SceneRecordingCache> recording;
         QPoint viewportOffset;
+        QPoint parentOrigin;
+        QRect parentClip;
+        QRegion parentMask;
     };
     std::unordered_map<quintptr, CachedLayer> m_layers;
+    struct OffscreenLayer { CachedLayer cached; qint64 bytes; quint64 used; };
+    std::unordered_map<quintptr, OffscreenLayer> m_offscreenLayers;
+    qint64 m_offscreenBytes = 0;
+    void discardOffscreenLayer(quintptr id);
+    std::shared_ptr<const SceneSnapshot> m_lastSnapshot;
+    bool m_hierarchyDirty = true;
+    int m_visitedWidgets = 0;
     // Written on the GUI thread, sampled only while it is blocked for sync.
     FrameStats m_preparedFrame;
     quint64 m_preparedRevision = 0;
@@ -93,6 +106,7 @@ private:
     QTimer m_presentationTimer;
     quint64 m_revision = 0;
     quint64 m_quickGrabVisual = 0;
-    bool m_capturePending = false, m_capturing = false, m_stopping = false, m_nativeGesture = false;
+    bool m_capturePending = false, m_capturing = false, m_preparingFrame = false;
+    bool m_stopping = false, m_nativeGesture = false;
 };
 } // namespace ui::graphics

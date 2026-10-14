@@ -313,6 +313,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     int laneCentreForTest(int lane) const;
     static bool checkInterruptedPointerGestureForTest();
     static bool checkTrackPresentationForTest();
+    static bool checkClipEdgesForTest();
     /// Geometry probes for the real-mouse region drag check.
     double regionStartSecondsForTest() const { return m_regionStart; }
     int regionFirstLaneForTest() const { return m_regionLaneA; }
@@ -480,7 +481,7 @@ private:
     void paintSequenceSteps(double beat);
     void finishSequence(bool cancel = false);
     void drawMidiClipHeaders(QPainter& p);
-    void drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip, const QRectF& body);
+    void drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip, const QRectF& body, const QColor& text);
     void drawMidiSequence(QPainter& p, const daw::TrackModel& track,
                           const daw::ClipModel& clip, const QRectF& body,
                           std::uint64_t revision);
@@ -542,6 +543,9 @@ private:
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(
         const class QMimeData* mime) const;
     int laneAt(int y) const;                 // lane index under y, or -1
+    std::pair<int, int> lanesInRect(const QRect& region) const;
+    QRectF clipSpanRect(const daw::ClipModel& clip, double top, double height) const;
+    QRectF clipHeaderRect(const daw::TrackModel& track, const daw::ClipModel& clip, QRectF body) const;
     int laneTop(int lane) const;             // y of a lane's top edge
     int laneHeightAt(int lane) const;        // a lane's on-screen height
     /// The strip of a lane the clip bodies live in: the whole lane normally, and

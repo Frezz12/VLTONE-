@@ -130,6 +130,11 @@ std::string uniqueMediaName(const fs::path& source) {
     return prefix.str() + "-" + platform::pathToUtf8(source.filename());
 }
 
+std::string idFromJson(const json& value) {
+    const auto id = value.find("id");
+    return id == value.end() ? newUuid() : id->get<std::string>();
+}
+
 json noteToJson(const NoteModel& n) {
     return json{
         {"id", n.id},
@@ -149,7 +154,7 @@ json noteToJson(const NoteModel& n) {
 
 NoteModel noteFromJson(const json& j) {
     NoteModel n;
-    n.id = j.value("id", newUuid());
+    n.id = idFromJson(j);
     n.pitch = j.value("pitch", 60);
     n.startBeats = j.value("startBeats", 0.0);
     n.lengthBeats = j.value("lengthBeats", 1.0);
@@ -206,12 +211,16 @@ json automationToJson(const ClipAutomationModel& automation) {
 
 ClipAutomationModel automationFromJson(const json& j) {
     ClipAutomationModel automation;
+    // Canonical curves are shared; their destination belongs to each
+    // placement. Older documents stored the destination inline in the curve.
+    const auto nested = j.find("target");
+    const auto& target = nested != j.end() && nested->is_object() ? *nested : j;
     automation.target.kind =
-        automationTargetKindFromString(j.value("kind", std::string("volume")));
-    automation.target.channelId = j.value("channelId", std::string());
-    automation.target.slotId = j.value("slotId", std::string());
-    automation.target.parameterId = j.value("parameterId", std::string());
-    automation.target.sendId = j.value("sendId", std::string());
+        automationTargetKindFromString(target.value("kind", std::string("volume")));
+    automation.target.channelId = target.value("channelId", std::string());
+    automation.target.slotId = target.value("slotId", std::string());
+    automation.target.parameterId = target.value("parameterId", std::string());
+    automation.target.sendId = target.value("sendId", std::string());
     automation.defaultValue = std::clamp(j.value("defaultValue", 0.0), 0.0, 1.0);
     // Curves saved before passive automation existed were always applied.
     automation.active = j.value("active", true);
@@ -243,7 +252,7 @@ json laneToJson(const ControllerLane& lane) {
 
 ControllerLane laneFromJson(const json& j) {
     ControllerLane lane;
-    lane.id = j.value("id", newUuid());
+    lane.id = idFromJson(j);
     lane.name = j.value("name", "CC");
     lane.cc = j.value("cc", 1);
     lane.channel = std::clamp(j.value("channel", 0), 0, 15);
@@ -300,7 +309,7 @@ json takeToJson(const TakeModel& t, MediaPaths media) {
 
 TakeModel takeFromJson(const json& j, const std::string& mediaDir) {
     TakeModel t;
-    t.id = j.value("id", newUuid());
+    t.id = idFromJson(j);
     t.name = j.value("name", "");
     const std::string file = j.value("file", "");
     if (!file.empty()) {
@@ -606,7 +615,7 @@ json clipToJson(const ClipModel& c, MediaPaths media, bool withHistory = true) {
 ClipModel clipFromJson(const json& j, const std::string& mediaDir,
                        bool withHistory = true) {
     ClipModel c;
-    c.id = j.value("id", newUuid());
+    c.id = idFromJson(j);
     c.name = j.value("name", "");
     const std::string file = j.value("file", "");
     if (!file.empty()) {
@@ -770,7 +779,7 @@ ClipModel clipFromJson(const json& j, const std::string& mediaDir,
             if (!entry.is_object() || !entry.contains("source") ||
                 !entry.at("source").is_object()) continue;
             OfflineRenderVersion version;
-            version.id = entry.value("id", newUuid());
+            version.id = idFromJson(entry);
             if (version.id.empty() || std::any_of(c.offlineHistory.begin(), c.offlineHistory.end(),
                     [&](const auto& prior) { return prior.id == version.id; })) continue;
             version.parentId = entry.value("parentId", std::string());
@@ -801,7 +810,7 @@ json sendToJson(const SendModel& s) {
 
 SendModel sendFromJson(const json& j) {
     SendModel s;
-    s.id = j.value("id", newUuid());
+    s.id = idFromJson(j);
     s.destinationTrackId = j.value("destination", "");
     s.level = j.value("level", 0.5f);
     s.preFader = j.value("preFader", false);
@@ -871,9 +880,11 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
     return track;
 }
 
-TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
+TrackModel trackFromJson(const json& j, const std::string& mediaDir,
+    const json* contents = nullptr,
+    std::unordered_map<ClipContentId, std::shared_ptr<ClipContent>>* decoded = nullptr) {
     TrackModel t;
-    t.id = j.value("id", newUuid());
+    t.id = idFromJson(j);
     t.kind = trackKindFromString(j.value("kind", "audio"));
     t.name = j.value("name", "");
     t.iconId = j.value("iconId", "");
@@ -959,7 +970,43 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir) {
         const auto& clips = j.at("clips");
         if (clips.is_array()) t.clips.reserve(clips.size());
         for (const auto& jc : clips) {
-            t.clips.push_back(clipFromJson(jc, mediaDir));
+            if (!contents) {
+                t.clips.push_back(clipFromJson(jc, mediaDir));
+                continue;
+            }
+            const auto id = jc.value("contentId", std::string());
+            const auto content = contents->find(id);
+            if (content == contents->end()) throw std::runtime_error("missing clip content");
+            if (!content->is_object() || !content->contains("kind") ||
+                (jc.contains("kind") && jc.at("kind") != content->at("kind")))
+                throw std::runtime_error("clip content type mismatch");
+
+            // Decode notes, takes and curves once, then bind other placements
+            // directly to their canonical storage. Expanding the JSON into
+            // every linked clip used memory and time proportional to copies.
+            const auto cached = decoded->find(id);
+            json expanded = jc;
+            for (auto it = content->begin(); it != content->end(); ++it) {
+                if (cached == decoded->end() || it.key() == "kind") expanded[it.key()] = it.value();
+                else expanded.erase(it.key());
+            }
+            if (const auto curve = content->find("automation"); curve != content->end() && curve->is_object()) {
+                if (cached != decoded->end()) {
+                    expanded["automation"] = json::object();
+                    for (const char* key : {"kind", "channelId", "slotId", "parameterId", "sendId"})
+                        if (curve->contains(key)) expanded["automation"][key] = curve->at(key);
+                }
+                const auto target = jc.find("automation");
+                if (target != jc.end() && target->is_object() && target->contains("target"))
+                    expanded["automation"]["target"] = target->at("target");
+            }
+            auto clip = clipFromJson(expanded, mediaDir);
+            if (cached != decoded->end()) clip.bindContent(cached->second);
+            else {
+                clip.contentStorage()->kind = clip.kind;
+                decoded->emplace(id, clip.contentStorage());
+            }
+            t.clips.push_back(std::move(clip));
         }
     }
     if (j.contains("freeze") && j.at("freeze").is_object()) {
@@ -1028,7 +1075,10 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
         if (clip.contains("automation") && clip["automation"].is_object()) {
             content["automation"] = clip["automation"];
             content["automation"].erase("target");
-            clip["automation"] = {{"target",clip["automation"]["target"]}};
+            json target = json::object();
+            for (const char* key : {"kind", "channelId", "slotId", "parameterId", "sendId"})
+                target[key] = clip["automation"][key];
+            clip["automation"] = {{"target", std::move(target)}};
         }
         if (!contents.contains(id)) contents[id] = std::move(content);
     }
@@ -1048,31 +1098,10 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     return root;
 }
 
-audio::Result documentFromJson(ProjectModel& out, const json& input,
+audio::Result documentFromJson(ProjectModel& out, const json& root,
                                const std::string& mediaDir) {
-    json root = input;
-    try {
     if(root.contains("clipContents") && !root["clipContents"].is_object())
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,"clip content registry must be an object");
-    if (root.contains("clipContents") && root["clipContents"].is_object() && root.contains("tracks")) {
-        for (auto& track : root["tracks"]) if (track.contains("clips")) for (auto& clip : track["clips"]) {
-            const auto id = clip.value("contentId",std::string());
-            if (!root["clipContents"].contains(id))
-                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"missing clip content");
-            const auto& content = root["clipContents"][id];
-            if(!content.is_object() || !content.contains("kind") ||
-               (clip.contains("kind") && clip["kind"] != content["kind"]))
-                return audio::Result::fail(audio::EngineError::UnsupportedFormat,"clip content type mismatch");
-            const auto target = clip.value("automation",json::object());
-            for (auto it = content.begin(); it != content.end(); ++it) clip[it.key()] = it.value();
-            if (target.is_object() && target.contains("target")) clip["automation"]["target"] = target["target"];
-        }
-    }
-
-    } catch (const std::exception& error) {
-        return audio::Result::fail(audio::EngineError::UnsupportedFormat,
-            std::string("invalid clip content registry: ") + error.what());
-    }
     if (!root.is_object()) {
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,
                                    "project document is not a JSON object");
@@ -1180,8 +1209,10 @@ audio::Result documentFromJson(ProjectModel& out, const json& input,
                     "project tracks are not an array");
             }
             out.tracks.reserve(tracks.size());
+            const auto contents = root.find("clipContents");
             for (const auto& track : tracks)
-                out.tracks.push_back(trackFromJson(track, mediaDir));
+                out.tracks.push_back(trackFromJson(track, mediaDir,
+                    contents == root.end() ? nullptr : &*contents, &out.clipContents));
         }
         if (root.contains("clipLibrary")) {
             for (const auto& saved : root.at("clipLibrary")) {
@@ -1239,26 +1270,24 @@ audio::Result writeJsonAtomically(const json& root, const fs::path& file) {
     // Stream the DOM directly.  dump(2) materialises a second project-sized
     // string before the first byte reaches disk, which is especially costly for
     // MIDI-heavy documents whose note arrays already occupy the JSON tree.
-    os << std::setw(2) << root;
-    os.flush();
-    if (!os.good()) {
+    try {
+        os << std::setw(2) << root;
+    } catch (const json::exception& error) {
         os.close();
+        fs::remove(temporary, ec);
+        return audio::Result::fail(audio::EngineError::FileWriteError,
+                                   "cannot encode project: " + std::string(error.what()));
+    }
+    os.close();
+    if (!os.good()) {
         fs::remove(temporary, ec);
         return audio::Result::fail(audio::EngineError::FileWriteError,
                                    "write failed");
     }
-    os.close();
-
-    // POSIX rename replaces atomically. Some standard library/filesystem
-    // combinations reject replacement; retain a checked fallback there.
+    // Rename replaces a regular file atomically on supported platforms. Never
+    // remove the destination on failure: it may still be the only good save.
     ec.clear();
     fs::rename(temporary, file, ec);
-    if (ec) {
-        std::error_code removeError;
-        fs::remove(file, removeError);
-        ec.clear();
-        fs::rename(temporary, file, ec);
-    }
     if (ec) {
         const std::string renameFailure = ec.message();
         std::error_code cleanupError;

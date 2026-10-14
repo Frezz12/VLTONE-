@@ -3850,24 +3850,45 @@ void EngineController::setProjectMetadata(std::string author,
 }
 
 recovery::RecoverySnapshot EngineController::prepareProjectSave() {
-    return captureRecoverySnapshot(std::numeric_limits<std::size_t>::max());
+    audio::Result captured = audio::Result::ok();
+    refreshRecoveryPluginStates(std::numeric_limits<std::size_t>::max(), {}, &captured);
+    auto snapshot = captureRecoverySnapshot(0);
+    if (!captured) snapshot.captureError = captured.message();
+    return snapshot;
 }
 
 audio::Result EngineController::writePreparedProject(
     recovery::RecoverySnapshot& snapshot, const std::string& packageDir) {
+    if (!snapshot.captureError.empty())
+        return audio::Result::fail(audio::EngineError::PluginLoadFailed, snapshot.captureError);
     // Only owned document/state data is used here. In particular sampler
     // packaging rewrites our known JSON schema without calling an instance.
     std::unordered_map<std::string, std::size_t> states;
     for (std::size_t i = 0; i < snapshot.pluginStates.size(); ++i)
         states.emplace(snapshot.pluginStates[i].fileName, i);
     audio::Result result = audio::Result::ok();
-    visitLibraryPlugins(snapshot.project, [&](const InsertModel& slot) {
+    const auto validateState = [&](const InsertModel& slot) {
         for (const auto* file : {&slot.stateFile, &slot.rightStateFile})
             if (!file->empty() && !states.contains(*file))
                 result = audio::Result::fail(audio::EngineError::FileNotFound,
-                    "Saved clip plugin state is unavailable: " + slot.name);
-    });
+                    "Plugin state is unavailable: " + slot.name + " (" + *file + ")");
+    };
+    for (const auto& track : snapshot.project.tracks) visitStoredPlugins(track, validateState);
+    for (const auto& slot : snapshot.project.masterInserts) validateState(slot);
+    for (const auto& slot : snapshot.project.masterMiniModules) validateState(slot);
+    visitLibraryPlugins(snapshot.project, validateState);
+    for (const auto& state : snapshot.pluginStates) {
+        const auto path = platform::pathFromUtf8(state.fileName);
+        if (state.fileName.empty() || path.filename() != path || state.bytes.empty() ||
+            state.bytes.size() > plugins::kMaxPluginStateBytes)
+            return audio::Result::fail(audio::EngineError::InvalidArgument, "Invalid plugin state: " + state.fileName);
+    }
     if (!result) return result;
+    // Packaging can fail after copying samples but before the manifest is
+    // committed. Keep absolute source paths in the caller's snapshot until
+    // then, so retrying the same prepared save remains possible.
+    ProjectModel packagedProject = snapshot.project;
+    std::unordered_map<std::size_t, recovery::RecoverySnapshot::PluginState> rewrittenStates;
     std::unordered_map<std::string, std::string> packagedStates;
     const auto packageSampler = [&](InsertModel& slot) {
         if (!result || (slot.uid != plugins::sampler::SamplerInstance::uid() && slot.uid != plugins::slicer::SlicerInstance::uid())) return;
@@ -3877,14 +3898,15 @@ audio::Result EngineController::writePreparedProject(
             }
             const auto found = states.find(*file);
             if (found == states.end()) continue;
-            auto& state = snapshot.pluginStates[found->second];
-            auto json = nlohmann::json::parse(state.bytes.begin(), state.bytes.end(), nullptr, false);
+            const auto& original = snapshot.pluginStates[found->second];
+            auto json = nlohmann::json::parse(original.bytes.begin(), original.bytes.end(), nullptr, false);
             if (!json.is_object() || !json.value("sample", nlohmann::json{}).is_string()) continue;
             std::string packaged;
             result = ProjectSerializer::copyContentFile(json["sample"].get<std::string>(), packageDir, packaged);
             if (!result) return;
             json["sample"] = packaged;
             const std::string text = json.dump();
+            auto& state = rewrittenStates[found->second];
             state.bytes.assign(text.begin(), text.end());
             state.fileName = pluginStateFileName(slot.id + (file == &slot.rightStateFile ? "-right" : ""), state.bytes);
             packagedStates[*file] = state.fileName;
@@ -3894,20 +3916,39 @@ audio::Result EngineController::writePreparedProject(
     const auto packageSlots = [&](std::vector<InsertModel>& slots) {
         for (auto& slot : slots) packageSampler(slot);
     };
-    for (auto& track : snapshot.project.tracks) {
+    for (auto& track : packagedProject.tracks) {
         packageSampler(track.instrument); packageSlots(track.inserts); packageSlots(track.samplerFx.inserts);
         for (auto& clip : track.clips) packageSlots(clip.inserts);
     }
-    packageSlots(snapshot.project.masterInserts);
-    visitLibraryPlugins(snapshot.project, packageSampler);
+    packageSlots(packagedProject.masterInserts);
+    visitLibraryPlugins(packagedProject, packageSampler);
     if (!result) return result;
     const fs::path directory = platform::pathFromUtf8(ProjectSerializer::statePath(packageDir));
     std::error_code error;
     fs::create_directories(directory, error);
     if (error) return audio::Result::fail(audio::EngineError::FileWriteError, error.message());
-    for (const auto& state : snapshot.pluginStates) {
+    for (std::size_t i = 0; i < snapshot.pluginStates.size(); ++i) {
+        const auto rewritten = rewrittenStates.find(i);
+        const auto& state = rewritten == rewrittenStates.end() ? snapshot.pluginStates[i] : rewritten->second;
         const fs::path target = directory / state.fileName;
-        if (fs::is_regular_file(target, error) && !error) continue;
+        // Content-addressed names are immutable, but an interrupted external
+        // copy or disk damage can leave the right name with the wrong bytes.
+        // Never publish a successful save which still references that file.
+        std::ifstream existing(target, std::ios::binary | std::ios::ate);
+        bool matches = existing && existing.tellg() == std::streamoff(state.bytes.size());
+        if (matches) {
+            existing.seekg(0);
+            std::array<std::uint8_t, 65536> buffer;
+            for (std::size_t offset = 0; matches && offset < state.bytes.size();) {
+                const auto count = std::min(buffer.size(), state.bytes.size() - offset);
+                existing.read(reinterpret_cast<char*>(buffer.data()), std::streamsize(count));
+                matches = bool(existing) && std::equal(buffer.begin(), buffer.begin() + count,
+                                                       state.bytes.begin() + offset);
+                offset += count;
+            }
+        }
+        existing.close();
+        if (matches) continue;
         error.clear();
         fs::path temporary = target; temporary += ".tmp-" + newUuid();
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
@@ -3923,8 +3964,12 @@ audio::Result EngineController::writePreparedProject(
             return audio::Result::fail(audio::EngineError::FileWriteError, "Cannot publish plugin state " + state.fileName);
         }
     }
-    result = ProjectSerializer::save(snapshot.project, packageDir);
-    if (result) cleanupPluginState(snapshot.project, packageDir);
+    result = ProjectSerializer::save(packagedProject, packageDir);
+    if (result) {
+        snapshot.project = std::move(packagedProject);
+        for (auto& [index, state] : rewrittenStates) snapshot.pluginStates[index] = std::move(state);
+        cleanupPluginState(snapshot.project, packageDir);
+    }
     return result;
 }
 
@@ -4293,7 +4338,8 @@ const recovery::RecoverySnapshot::PluginState* EngineController::cachedPluginSta
 
 bool EngineController::refreshRecoveryPluginStates(
     std::size_t maxPluginStateCaptures,
-    std::span<const std::string> preferredStems) {
+    std::span<const std::string> preferredStems, audio::Result* captureResult) {
+    if (captureResult) *captureResult = audio::Result::ok();
     // A bounded refresh is background work. An explicit full snapshot (Save,
     // export, initial journal checkpoint) must still capture current opaque
     // presets, with the existing format-safe gate, rather than saving stale data.
@@ -4313,7 +4359,8 @@ bool EngineController::refreshRecoveryPluginStates(
     // state. Keep its original bytes through Save As and recovery snapshots.
     const auto retain = [&](const InsertModel& slot) {
         liveStems.emplace(slot.id, &slot);
-        if (slot.channelMode == PluginChannelMode::DualMono) liveStems.emplace(slot.id + "-right", &slot);
+        if (slot.channelMode == PluginChannelMode::DualMono || !slot.rightStateFile.empty())
+            liveStems.emplace(slot.id + "-right", &slot);
     };
     for (const auto& track : m_project.tracks) visitStoredPlugins(track, retain);
     for (const auto& slot : m_project.masterInserts) retain(slot);
@@ -4370,7 +4417,13 @@ bool EngineController::refreshRecoveryPluginStates(
             changed |= m_recoveryPluginStateCache.erase(candidate.stem) != 0;
             continue;
         }
-        if (!captured.stateCaptured || captured.state.empty()) continue;
+        if (!captured.stateCaptured || captured.state.empty()) {
+            if (captureResult && captured.exists && captured.supportsState)
+                *captureResult = audio::Result::fail(audio::EngineError::PluginLoadFailed,
+                    "Cannot capture current plugin state: " + captured.descriptor.name +
+                    (candidate.address.right ? " (right channel)" : ""));
+            continue;
+        }
         auto bytes = std::move(captured.state);
         const std::string fileName = pluginStateFileName(candidate.stem, bytes);
         const auto previous = m_recoveryPluginStateCache.find(candidate.stem);
@@ -4429,7 +4482,7 @@ recovery::RecoverySnapshot EngineController::captureRecoverySnapshot(
     auto collectSlot = [&](const std::string& channelId, InsertModel& slot) {
         collectInstance(slot, {channelId, slot.id},
                         slot.id, slot.stateFile, slot.parameters);
-        if (slot.channelMode == PluginChannelMode::DualMono) {
+        if (slot.channelMode == PluginChannelMode::DualMono || !slot.rightStateFile.empty()) {
             collectInstance(slot, {channelId, slot.id, true},
                             slot.id + "-right", slot.rightStateFile,
                             slot.rightParameters);
@@ -4481,14 +4534,14 @@ recovery::RecoverySnapshot EngineController::captureIncrementalRecoverySnapshot(
                               std::string& file, std::vector<InsertParameter>& values) {
             const auto captured = m_runtime->pluginStateSnapshot(address, false, {});
             if (captured.exists) {
-                appendMissingParameters(values, captured.parameters);
+                if (!captured.documentParametersAuthoritative) values = captured.parameters;
                 overlayPendingParameters(values, captured.pending);
             }
             if (captured.exists && !captured.supportsState) { file.clear(); return; }
             if (const auto* state = cachedPluginState(stem, slot)) file = state->fileName;
         };
         one({channelId, slot.id}, slot.id, slot.stateFile, slot.parameters);
-        if (slot.channelMode == PluginChannelMode::DualMono)
+        if (slot.channelMode == PluginChannelMode::DualMono || !slot.rightStateFile.empty())
             one({channelId, slot.id, true}, slot.id + "-right", slot.rightStateFile, slot.rightParameters);
     };
     const auto captureSlots = [&](const std::string& channelId, std::vector<InsertModel>& slots) {
@@ -4726,6 +4779,11 @@ audio::Result EngineController::collectProjectPluginStateEdits(
                         return;
                     }
                     std::ifstream stream(source, std::ios::binary);
+                    if ((!stream || stateError || size == 0) && !tolerateStateErrors) {
+                        result = audio::Result::fail(audio::EngineError::FileNotFound,
+                            "Plugin state is missing or unreadable: " + slot.name + " (" + stateFile + ")");
+                        return;
+                    }
                     if (stream && !stateError) {
                         restore.state.resize(static_cast<std::size_t>(size));
                         stream.read(reinterpret_cast<char*>(restore.state.data()), std::streamsize(size));
@@ -4757,7 +4815,7 @@ audio::Result EngineController::collectProjectPluginStateEdits(
                 slot.rightParameters.empty())
                 slot.rightParameters = slot.parameters;
             restoreOne({channelId, slot.id}, slot.stateFile, slot.parameters);
-            if (slot.channelMode == PluginChannelMode::DualMono) {
+            if (slot.channelMode == PluginChannelMode::DualMono || !slot.rightStateFile.empty()) {
                 restoreOne({channelId, slot.id, true}, slot.rightStateFile,
                            slot.rightParameters);
             }
@@ -4899,29 +4957,38 @@ audio::Result EngineController::prepareProjectOpen(const std::string& packageDir
         if (slot.uid != plugins::sampler::SamplerInstance::uid() && slot.uid != plugins::slicer::SlicerInstance::uid()) return;
         for (const auto* file : {&slot.stateFile, &slot.rightStateFile}) {
             if (file->empty()) continue;
-            std::ifstream stream(platform::pathFromUtf8(ProjectSerializer::statePath(packageDir)) / *file, std::ios::binary);
+            const auto name = platform::pathFromUtf8(*file);
+            if (name.filename() != name) continue; // Activation reports the invalid reference.
+            const auto path = platform::pathFromUtf8(ProjectSerializer::statePath(packageDir)) / name;
+            std::error_code error;
+            const auto size = fs::file_size(path, error);
+            if (error || size > plugins::kMaxPluginStateBytes) continue;
+            std::ifstream stream(path, std::ios::binary);
             if (!stream) continue;
             const auto state = nlohmann::json::parse(stream, nullptr, false);
             if (!state.is_object() || !state.value("sample", nlohmann::json{}).is_string()) continue;
-            std::string path = state["sample"].get<std::string>();
-            if (path.empty()) continue;
-            if (platform::pathFromUtf8(path).is_relative())
-                path = platform::pathToUtf8(platform::pathFromUtf8(ProjectSerializer::mediaPath(packageDir)) / platform::pathFromUtf8(path).filename());
-            paths.insert(std::move(path));
+            std::string sample = state["sample"].get<std::string>();
+            if (sample.empty()) continue;
+            if (platform::pathFromUtf8(sample).is_relative())
+                sample = platform::pathToUtf8(platform::pathFromUtf8(ProjectSerializer::mediaPath(packageDir)) / platform::pathFromUtf8(sample).filename());
+            paths.insert(std::move(sample));
         }
     };
     const auto slots = [&](const std::vector<InsertModel>& list) { for (const auto& slot : list) samplerPath(slot); };
     for (const auto& track : prepared.document.tracks) {
         samplerPath(track.instrument); slots(track.inserts); slots(track.samplerFx.inserts);
+        if (track.freeze.active()) paths.insert(track.freeze.filePath);
+        for (const auto& source : track.instrument.audioEdit.sources)
+            if (!source.filePath.empty()) paths.insert(source.filePath);
         for (const auto& clip : track.clips) {
             if (clip.kind == ClipKind::Audio && !clip.filePath.empty()) paths.insert(clip.filePath);
             if (!clip.offlineProcess.renderedFilePath.empty()) paths.insert(clip.offlineProcess.renderedFilePath);
             for (const auto& take : clip.takes) if (!take.filePath.empty()) paths.insert(take.filePath);
-            for (const auto& version : clip.offlineHistory) {
-                if (!version.source.filePath.empty()) paths.insert(version.source.filePath);
-                for (const auto& take : version.source.takes)
-                    if (!take.filePath.empty()) paths.insert(take.filePath);
-            }
+            for (const auto& source : clip.audioEdit.sources)
+                if (!source.filePath.empty()) paths.insert(source.filePath);
+            // Previous render versions stay portable in Content, but only
+            // the selected source is needed to open/play the project. An
+            // explicit version switch already loads its own source on demand.
             slots(clip.inserts);
         }
     }

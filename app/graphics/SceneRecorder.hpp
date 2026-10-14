@@ -7,7 +7,7 @@
 
 namespace ui::graphics {
 struct SceneRecordingCache {
-    std::unordered_map<quint64, std::vector<SceneMesh>> sections;
+    std::unordered_map<quint64, std::shared_ptr<const SceneMeshGroup>> sections;
     QSize size;
     qreal dpr = 0;
 };

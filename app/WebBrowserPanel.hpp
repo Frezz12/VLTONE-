@@ -9,6 +9,8 @@
 #include <QWidget>
 
 class QLabel;
+class QAction;
+class QListWidget;
 class QHBoxLayout;
 class QLineEdit;
 class QMenu;
@@ -92,11 +94,21 @@ private:
     QWidget* buildTabStrip();
     QWidget* buildToolbar();
     QWidget* buildSidebar();
+    QWidget* buildLibrary();
     QWidget* buildBookmarksBar();
     QWidget* buildFindBar();
     QWidget* buildDownloadBar();
     void installShortcuts();
     void applyTheme();
+    enum class Library { None, Tabs, Bookmarks, History, Downloads };
+    void showLibrary(Library kind);
+    void refreshLibrary();
+    void closeLibrary();
+    void activateLibraryItem();
+    void showLibraryContextMenu(const QPoint& position);
+    void setTabMuted(Tab* tab, bool muted);
+    void setZoom(qreal zoom);
+    void openDownloadsFolder();
 
     // ── Tabs ──
     Tab* currentTab() const;
@@ -122,6 +134,7 @@ private:
     void updateNavigationState();
     void updateAddress();
     QString currentPageUrl() const;
+    QString tabUrl(const Tab* tab) const;
 
     void toggleCurrentBookmark();
     void addBookmark();
@@ -149,12 +162,15 @@ private:
     QTabBar* m_tabBar = nullptr;
     QWidget* m_tabStrip = nullptr;
     ui::IconButton* m_newTab = nullptr;
+    ui::IconButton* m_tabSearch = nullptr;
     QStackedWidget* m_stack = nullptr;
     QList<Tab*> m_tabs;
     /// Addresses of tabs the user closed, oldest first, for Ctrl+Shift+T.
     QStringList m_closedTabs;
     QWidget* m_viewFrame = nullptr;
     QLineEdit* m_address = nullptr;
+    QAction* m_addressIcon = nullptr;
+    QPushButton* m_zoom = nullptr;
     ui::IconButton* m_back = nullptr;
     ui::IconButton* m_forward = nullptr;
     ui::IconButton* m_reloadStop = nullptr;
@@ -168,6 +184,18 @@ private:
 
     QWidget* m_findBar = nullptr;
     QLineEdit* m_findText = nullptr;
+    QLabel* m_findResult = nullptr;
+    bool m_findPending = false;
+
+    QWidget* m_library = nullptr;
+    Library m_libraryKind = Library::None;
+    QLabel* m_libraryTitle = nullptr;
+    QLabel* m_libraryEmpty = nullptr;
+    QLineEdit* m_librarySearch = nullptr;
+    QListWidget* m_libraryList = nullptr;
+    QPushButton* m_libraryAction = nullptr;
+    QList<QPushButton*> m_railButtons;
+    QTimer* m_downloadRefreshTimer = nullptr;
 
     QWidget* m_downloadBar = nullptr;
     QLabel* m_downloadName = nullptr;
@@ -175,6 +203,13 @@ private:
     ui::IconButton* m_cancelDownload = nullptr;
     QList<QPointer<QWebEngineDownloadRequest>> m_downloads;
     QPointer<QWebEngineDownloadRequest> m_visibleDownload;
+    struct DownloadEntry {
+        QString path;
+        QString detail;
+        QPointer<QWebEngineDownloadRequest> request;
+        bool completed = false;
+    };
+    QList<DownloadEntry> m_downloadLog;
     QString m_testDownloadPath;
     QStringListModel* m_completionModel = nullptr;
     /// Coalesces session writes: a burst of tab edits is one settings write.

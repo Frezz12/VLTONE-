@@ -138,6 +138,17 @@ int main(int argc, char** argv) {
     canvas.setGeometry(0, 0, 140, 150);
     sibling.setGeometry(160, 0, 140, 150);
     window.show(); run(150);
+    QWidget clipped(&window), nested(&clipped);
+    clipped.setGeometry(20, 10, 40, 40);
+    nested.setGeometry(0, 45, 10, 10);
+    clipped.show(); nested.show();
+    check(!ui::isVisibleInViewport(&nested), "an ancestor clips a visible child outside its viewport");
+    nested.move(0, 35);
+    check(ui::isVisibleInViewport(&nested), "a partially visible child remains active");
+    clipped.move(400, 0);
+    check(!ui::isVisibleInViewport(&nested), "all ancestor viewports are respected");
+    clipped.hide();
+    run(80);
     ui::FrameTimer cursorClock(&canvas);
     int cursorTicks = 0;
     const QRect strip(30, 10, 12, 100);
@@ -165,6 +176,7 @@ int main(int argc, char** argv) {
             presented += region; return true;
         });
     canvas.reset(); sibling.reset();
+    for (int i = 0; i < 20; ++i) clock.requestPresentation(&window, &presenter);
     canvas.update(strip); canvas.update(QRect(45, 10, 5, 100));
     run(40);
     check(requests == 1 && canvas.paints == 0 && presented.isEmpty(),
@@ -174,6 +186,48 @@ int main(int argc, char** argv) {
           "damage reaches the current Quick frame without a QWidget paint round trip");
     run(80);
     check(requests == 1, "a static presented scene requests no successor frame");
+    presented = {};
+    for (int i = 0; i < 20; ++i) clock.requestPresentation(&window, &presenter);
+    run(40);
+    check(requests == 2, "ordinary widget geometry coalesces into one cadence request");
+    clock.presentationFrame(&window, &presenter); run(60);
+    check(requests == 2 && presented.isEmpty(),
+          "geometry capture invents no root paint damage or idle successor");
+    QObject unrelatedPresenter;
+    clock.requestPresentation(&window, &unrelatedPresenter); run(40);
+    check(requests == 2, "only the window's current presenter may request a capture");
+    ui::FrameTimer firstFrameClock(&canvas);
+    double firstFrameDelta = 0.0;
+    QObject::connect(&firstFrameClock, &ui::FrameTimer::timeout, &canvas, [&] {
+        firstFrameDelta = firstFrameClock.deltaSeconds();
+        firstFrameClock.stop();
+    });
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        // Hold the presenter's first frame after both start and restart. Motion
+        // must integrate the actual wait, not an invented 60 Hz interval.
+        firstFrameDelta = 0.0;
+        firstFrameClock.start();
+        const double waited = run(55);
+        clock.presentationFrame(&window, &presenter);
+        std::cout << "First frame: " << firstFrameDelta << " s; waited " << waited << " s\n";
+        check(std::abs(firstFrameDelta - waited) < 0.015,
+              "starting and restarting motion uses the real time to its first frame");
+    }
+    ui::FrameTimer starter(&canvas), follower(&canvas);
+    int followerTicks = 0;
+    double followerDelta = 0.0;
+    QObject::connect(&starter, &ui::FrameTimer::timeout, &canvas, [&] {
+        starter.stop(); follower.start();
+    });
+    QObject::connect(&follower, &ui::FrameTimer::timeout, &canvas, [&] {
+        ++followerTicks; followerDelta = follower.deltaSeconds(); follower.stop();
+    });
+    starter.start(); follower.start(); follower.stop(); // registered, but idle
+    run(30); clock.presentationFrame(&window, &presenter);
+    check(followerTicks == 0, "motion started inside a frame waits for the next frame");
+    run(30); clock.presentationFrame(&window, &presenter);
+    check(followerTicks == 1 && followerDelta > 0.0,
+          "motion started by another callback receives a positive elapsed time");
     clock.clearPresenter(&window, &presenter);
     canvas.update(strip); run(80);
     check(canvas.paints > 0 && canvas.damage == QRegion(strip),

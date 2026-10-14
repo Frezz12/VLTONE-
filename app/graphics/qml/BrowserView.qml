@@ -34,6 +34,7 @@ WebEngineView {
     onTitleChanged: bridge.notifyTitle()
     onLoadProgressChanged: bridge.notifyProgress()
     onIconChanged: bridge.notifyIcon()
+    onFindTextFinished: function(result) { bridge.notifyFindText(result.activeMatch, result.numberOfMatches) }
     onLoadingChanged: function(info) { bridge.notifyLoading(info) }
     onNavigationRequested: function(request) {
         if (!bridge.allowNavigation(request.url, request.isMainFrame)) request.reject()

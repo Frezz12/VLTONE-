@@ -12,6 +12,19 @@
 #include <cmath>
 
 namespace ui {
+bool isVisibleInViewport(const QWidget* widget) {
+    if (!widget || !widget->isVisible() || widget->window()->isMinimized()) return false;
+    QRect visible = widget->rect();
+    for (auto* child = widget; !visible.isEmpty() && !child->isWindow();) {
+        const auto* parent = child->parentWidget();
+        if (!parent) break;
+        visible.translate(child->pos());
+        visible &= parent->rect();
+        child = parent;
+    }
+    return !visible.isEmpty();
+}
+
 namespace {
 qint64 nowNs() {
     static const QElapsedTimer epoch = [] { QElapsedTimer t; t.start(); return t; }();
@@ -45,9 +58,11 @@ public:
     detail::FrameCadence cadence;
     bool requested = false;
     bool queued = false;
+    bool presentationPending = false;
 
     bool needed() const {
         if (!visible(window)) return false;
+        if (presenter && presentationPending) return true;
         for (const auto& item : dirty) if (visible(item.surface)) return true;
         for (const auto& timer : clock->m_timers)
             if (timer && timer->m_active && visible(timer->m_surface) &&
@@ -96,15 +111,16 @@ public:
             else native->requestUpdate();
         }, Qt::QueuedConnection);
     }
-    void frame() {
-        if (!requested) return;
+    bool frame() {
+        if (!requested) return false;
         requested = false;
         const qint64 now = nowNs();
         const auto delivery = std::clamp<qint64>(now - requestNs, 0, 100000000);
         nativeLeadNs = nativeLeadNs ? (nativeLeadNs * 3 + delivery) / 4 : delivery;
         const qint64 period = qint64(clock->periodSeconds(window) * 1e9);
-        if (!cadence.due(now, period)) { schedule(); return; }
+        if (!cadence.due(now, period)) { schedule(); return false; }
         cadence.advance(now, period);
+        presentationPending = false;
         if (lastNs) {
             ui::perf::sample("frame.interval.ms", double(now - lastNs) / 1e6);
             if (now - lastNs >= 250000000)
@@ -116,6 +132,9 @@ public:
         for (const auto& timer : timers) {
             if (!timer || !timer->m_active || !visible(timer->m_surface) ||
                 timer->m_surface->window() != window) continue;
+            // An earlier callback can start another registered timer during
+            // this frame. Its time origin belongs to the next frame.
+            if (timer->m_lastNs >= now) continue;
             timer->m_dt = timer->m_lastNs ? double(now - timer->m_lastNs) / 1e9 : 1.0 / 60.0;
             timer->m_lastNs = now;
             emit timer->timeout();
@@ -126,12 +145,14 @@ public:
             if (visible(item.surface) && !(presenter && presentDamage && presentDamage(item.surface, item.region)))
                 item.surface->update(item.region);
         schedule();
+        return true;
     }
     void resetPresenter() {
         ++generation;
         presenter = nullptr; presentationWindow = nullptr;
         requestFrame = {}; presentDamage = {};
         native = nullptr; requested = queued = false;
+        presentationPending = false;
         wait.stop(); lastNs = nativeLeadNs = 0; cadence.reset();
     }
 };
@@ -200,9 +221,19 @@ void FrameClock::clearPresenter(QWidget* surface, QObject* owner) {
             d->resetPresenter(); d->schedule();
         }
 }
-void FrameClock::presentationFrame(QWidget* surface, QObject* owner) {
+bool FrameClock::presentationFrame(QWidget* surface, QObject* owner) {
     for (const auto& d : std::as_const(m_drivers))
-        if (d && surface && d->window == surface->window() && d->presenter == owner) d->frame();
+        if (d && surface && d->window == surface->window() && d->presenter == owner) return d->frame();
+    return false;
+}
+void FrameClock::requestPresentation(QWidget* surface, QObject* owner) {
+    if (!surface || !owner) return;
+    for (const auto& d : std::as_const(m_drivers)) {
+        if (!d || d->window != surface->window() || d->presenter != owner) continue;
+        // Keep pre-exposure damage pending. Show/Expose will wake this driver.
+        d->presentationPending = true;
+        d->schedule();
+    }
 }
 void FrameClock::request(QWidget* surface, const QRegion& region) {
     if (!surface || region.isEmpty() || !visible(surface)) return;
@@ -262,13 +293,15 @@ FrameTimer::FrameTimer(QWidget* surface, QObject* owner)
     : QObject(owner ? owner : surface), m_surface(surface) {}
 void FrameTimer::start() {
     if (m_active) return;
-    m_active = true; m_lastNs = 0;
+    // The first callback can arrive at any point in the display cycle. Measure
+    // from this start just as subsequent callbacks measure from their frame.
+    m_active = true; m_lastNs = nowNs();
     FrameClock::instance().activate(this);
 }
 void FrameTimer::stop() { m_active = false; m_lastNs = 0; }
 void FrameTimer::setSurface(QWidget* surface) {
     if (m_surface == surface) return;
-    m_surface = surface; m_lastNs = 0;
+    m_surface = surface; m_lastNs = m_active ? nowNs() : 0;
     if (m_active) FrameClock::instance().wake();
 }
 } // namespace ui

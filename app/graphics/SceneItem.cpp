@@ -7,11 +7,19 @@
 #include <QSGTextureMaterial>
 #include <QSGTransformNode>
 #include <QThread>
+#include <cmath>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace ui::graphics {
 namespace {
+QTransform pixelAlignedTranslation(const QTransform& transform, qreal dpr) {
+    if (transform.type() > QTransform::TxTranslate) return transform;
+    // Geometry is recorded in device-aligned local coordinates. Keep it aligned
+    // after widget placement and retained-tile scrolling at fractional DPI.
+    return QTransform::fromTranslate(std::round(transform.dx() * dpr) / dpr,
+                                     std::round(transform.dy() * dpr) / dpr);
+}
 // Each window owns this cache in its render thread. Active nodes hold shared
 // references; unused textures are evicted in LRU order before allocating more.
 class TextureStore {
@@ -121,8 +129,8 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
         delete node->clip; node->clip = nullptr;
         node->appendChildNode(node->transform);
     }
-    if (node->previous.transform != mesh.transform)
-        node->transform->setMatrix(QMatrix4x4(mesh.transform));
+    const QMatrix4x4 matrix(pixelAlignedTranslation(mesh.transform, window->devicePixelRatio()));
+    if (node->transform->matrix() != matrix) node->transform->setMatrix(matrix);
     if (mesh.group) {
         if (node->drawing) { delete node->drawing; node->drawing = nullptr; node->texture.reset(); }
         if (node->previous.group != mesh.group) {
@@ -288,7 +296,8 @@ QSGNode* SceneItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
             }
             break;
         }
-        QMatrix4x4 matrix; matrix.translate(float(layer->origin.x()), float(layer->origin.y()));
+        const QMatrix4x4 matrix(pixelAlignedTranslation(
+            QTransform::fromTranslate(layer->origin.x(), layer->origin.y()), window()->devicePixelRatio()));
         // setMatrix marks the entire subtree dirty even for an equal matrix.
         // Scrolling one canvas must not invalidate the cached batches of every
         // stationary panel/control in the workspace.
