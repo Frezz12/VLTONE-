@@ -47,6 +47,8 @@ struct AudioGraphSpec {
         std::vector<SendModel> sends;
         std::vector<MiniModuleRoute> miniModules;
         std::vector<SidechainRoute> sidechains;
+        modulation::Rack modulation;
+        bool renderControlOnly = false;
         std::vector<ClipFx> clipFx;
         std::shared_ptr<const engine::SampleBuffer> frozenAudio;
         engine::SamplePos frozenFrames = 0;
@@ -56,6 +58,7 @@ struct AudioGraphSpec {
     float masterVolume = 1.0f, masterPan = 0.0f;
     std::vector<MiniModuleRoute> masterMiniModules;
     std::vector<SidechainRoute> masterSidechains;
+    modulation::Rack masterModulation;
     bool metronomeEnabled = false;
     std::string auditionCapture;
 };

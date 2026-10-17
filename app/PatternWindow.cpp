@@ -9,11 +9,12 @@
 #include "PluginPickerMenu.hpp"
 #include "PianoRollWindow.hpp"
 #include "Theme.hpp"
+#include "plugins/PluginManager.hpp"
 
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
-#include <QCloseEvent>
+#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QDragEnterEvent>
@@ -24,6 +25,7 @@
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -60,9 +62,13 @@
 
 namespace {
 
-constexpr int kRowHeight = 60;
-constexpr int kKnobSize = 34;
-constexpr int kSourceWidth = 150;
+constexpr int kRowHeight = 36;
+constexpr int kContentHeight = 28;
+constexpr int kKnobSize = 24;
+constexpr int kKnobColumnWidth = 28;
+constexpr int kMixWidth = 42;
+constexpr int kSourceWidth = 124;
+constexpr int kActionSize = 22;
 constexpr int kMaxSketchNotes = 768;
 
 const daw::ClipModel* sourcePatternClip(const daw::TrackModel* pattern,
@@ -75,7 +81,7 @@ class PatternLevelKnob final : public ui::FaderWidget {
 public:
     explicit PatternLevelKnob(QWidget* parent) : FaderWidget(Qt::Horizontal, parent) {
         setCompactKnob(true);
-        setFixedSize(kKnobSize, kKnobSize);
+        setFixedSize(kKnobColumnWidth, kKnobSize);
         setFocusPolicy(Qt::TabFocus);
         setAccessibleName(QObject::tr("Volume"));
     }
@@ -136,7 +142,7 @@ protected:
 class PatternPanKnob final : public ui::PanKnob {
 public:
     explicit PatternPanKnob(QWidget* parent) : PanKnob(parent) {
-        setFixedSize(kKnobSize, kKnobSize);
+        setFixedSize(kKnobColumnWidth, kKnobSize);
         setAccessibleName(QObject::tr("Pan"));
     }
 protected:
@@ -166,6 +172,8 @@ protected:
 /// The row background is a selection surface. Child controls keep their own
 /// gestures; only presses that land on the exposed grey surface reach this
 /// widget, so selecting/reordering cannot steal a fader or open-button drag.
+class SourceNameButton;
+class SourceSketch;
 class PatternSourceRow final : public QWidget {
 public:
     using Press = std::function<void(const QString&, const QPoint&,
@@ -185,6 +193,14 @@ public:
     Move onMove;
     Release onRelease;
     Menu onMenu;
+    // Owned by this row. Polling live controls must not recursively search
+    // the widget tree on every rack refresh.
+    ui::MsrButton* mute = nullptr;
+    ui::MsrButton* solo = nullptr;
+    SourceNameButton* name = nullptr;
+    ui::FaderWidget* fader = nullptr;
+    ui::PanKnob* pan = nullptr;
+    SourceSketch* sketch = nullptr;
 
 protected:
     void mousePressEvent(QMouseEvent* event) override {
@@ -243,7 +259,7 @@ public:
           m_trackId(std::move(trackId)) {
         setCursor(Qt::PointingHandCursor);
         setMinimumWidth(120);
-        setFixedHeight(40);
+        setFixedHeight(kContentHeight);
         setAccessibleName(QObject::tr("Open this source in the piano roll"));
         setToolTip(QObject::tr("Open piano roll"));
     }
@@ -258,6 +274,22 @@ public:
         m_rangeLength = length;
         m_barSeconds = barSeconds;
         m_cachedRevision = std::numeric_limits<std::uint64_t>::max();
+        update();
+    }
+    void syncFromModel(const daw::TrackModel& track) {
+        const auto revision = m_controller->midiNotesRevision(track.id);
+        const auto geometry = m_controller->clipGeometryRevision();
+        const auto generation = m_controller->projectGeneration();
+        const auto tempo = m_controller->project().tempo;
+        if (m_observed && m_observedRevision == revision &&
+            m_observedGeometry == geometry && m_observedGeneration == generation &&
+            m_observedTempo == tempo && m_observedColor == track.color) return;
+        m_observed = true;
+        m_observedRevision = revision;
+        m_observedGeometry = geometry;
+        m_observedGeneration = generation;
+        m_observedTempo = tempo;
+        m_observedColor = track.color;
         update();
     }
 
@@ -276,16 +308,19 @@ protected:
         p.setBrush(fill);
         p.setPen(QPen(mixColors(t.separator(), accent, 0.28),
                       1.0));
-        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7);
+        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
         if (!track) return;
         if (!daw::trackAccepts(track->kind, daw::ClipKind::Midi)) {
+            QFont font = p.font();
+            font.setPixelSize(10);
+            p.setFont(font);
             p.setPen(t.textSecondary);
             p.drawText(rect().adjusted(10, 0, -10, 0), Qt::AlignVCenter | Qt::AlignLeft,
                        QCoreApplication::translate("PatternWindow", "Group channel"));
             return;
         }
 
-        const QRectF area = QRectF(rect()).adjusted(7, 5, -7, -5);
+        const QRectF area = QRectF(rect()).adjusted(6, 4, -6, -4);
         const double tempo = m_controller->project().tempo;
         p.save();
         p.setClipRect(area);
@@ -323,12 +358,17 @@ private:
                             double tempo) {
         const std::uint64_t revision =
             m_controller->midiNotesRevision(track.id);
-        if (m_cachedRevision == revision && m_cachedSize == size() &&
+        const auto geometry = m_controller->clipGeometryRevision();
+        const auto generation = m_controller->projectGeneration();
+        if (m_cachedRevision == revision && m_cachedGeometry == geometry &&
+            m_cachedGeneration == generation && m_cachedSize == size() &&
             m_cachedTempo == tempo) {
             return;
         }
 
         m_cachedRevision = revision;
+        m_cachedGeometry = geometry;
+        m_cachedGeneration = generation;
         m_cachedSize = size();
         m_cachedTempo = tempo;
         m_cachedNotes = {};
@@ -390,6 +430,11 @@ private:
     QSize m_cachedSize;
     std::uint64_t m_cachedRevision =
         std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t m_cachedGeometry = 0, m_cachedGeneration = 0;
+    std::uint64_t m_observedRevision = 0, m_observedGeometry = 0, m_observedGeneration = 0;
+    double m_observedTempo = 0;
+    std::uint32_t m_observedColor = 0;
+    bool m_observed = false;
     std::size_t m_cachedNoteCount = 0;
     double m_cachedTempo = -1.0;
     double m_rangeStart = 0.0;
@@ -422,7 +467,7 @@ public:
     SourceNameButton(QString text, QString instrumentName, QWidget* parent)
         : QAbstractButton(parent) {
         setFixedWidth(kSourceWidth);
-        setFixedHeight(40);
+        setFixedHeight(kContentHeight);
         setCursor(Qt::PointingHandCursor);
         setFocusPolicy(Qt::StrongFocus);
         syncFromModel(std::move(text), std::move(instrumentName));
@@ -464,7 +509,7 @@ protected:
         const Theme& t = th();
         const QRectF panel = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
         QPainterPath shape;
-        shape.addRoundedRect(panel, 7, 7);
+        shape.addRoundedRect(panel, 6, 6);
         p.fillPath(shape, mixColors(t.surfaceElevated, t.accent,
                                     isDown() ? 0.15 : underMouse() ? 0.07 : 0.0));
         p.setBrush(Qt::NoBrush);
@@ -472,24 +517,29 @@ protected:
         p.drawPath(shape);
         p.setPen(Qt::NoPen);
         p.setBrush(m_color.isValid() ? m_color : t.accent);
-        p.drawRoundedRect(QRectF(8, 10, 3, height() - 20), 1.5, 1.5);
+        p.drawRoundedRect(QRectF(7, (height() - 10) / 2.0, 2, 10), 1, 1);
 
         QFont font = p.font();
-        font.setPixelSize(12);
+        font.setPixelSize(11);
         font.setWeight(QFont::DemiBold);
+        QFont detailFont = font;
+        detailFont.setPixelSize(10);
+        detailFont.setWeight(QFont::Normal);
+        const QFontMetrics nameMetrics(font);
+        const QFontMetrics detailMetrics(detailFont);
+        const int textTop = (height() - nameMetrics.height() - detailMetrics.height()) / 2;
         p.setFont(font);
         p.setPen(t.textPrimary);
-        const QRect nameRect(18, 5, width() - 28, 16);
+        const QRect nameRect(15, textTop, width() - 21, nameMetrics.height());
         p.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
-                   QFontMetrics(font).elidedText(text(), Qt::ElideRight, nameRect.width()));
-        font.setPixelSize(10);
-        font.setWeight(QFont::Normal);
-        p.setFont(font);
+                   nameMetrics.elidedText(text(), Qt::ElideRight, nameRect.width()));
+        p.setFont(detailFont);
         p.setPen(t.textSecondary);
-        p.drawText(QRect(18, 22, width() - 28, 13), Qt::AlignLeft | Qt::AlignVCenter,
-            QFontMetrics(font).elidedText(m_instrumentName.isEmpty()
+        p.drawText(QRect(15, textTop + nameMetrics.height(), nameRect.width(),
+                         detailMetrics.height()), Qt::AlignLeft | Qt::AlignVCenter,
+            detailMetrics.elidedText(m_instrumentName.isEmpty()
                 ? QObject::tr("Instrument") : m_instrumentName,
-                Qt::ElideRight, width() - 28));
+                Qt::ElideRight, nameRect.width()));
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override {
@@ -543,54 +593,90 @@ private:
 } // namespace
 
 PatternWindow::PatternWindow(daw::EngineController* controller, QWidget* parent)
-    : QDialog(parent, Qt::Widget), m_controller(controller) {
+    : QWidget(parent), m_controller(controller) {
     setObjectName(QStringLiteral("PatternWindow"));
     setWindowTitle(tr("Pattern"));
-    setModal(false);
-    setAttribute(Qt::WA_DeleteOnClose, false);
+    setAttribute(Qt::WA_StyledBackground);
     setAcceptDrops(true);
     setFocusPolicy(Qt::StrongFocus);
-    resize(900, 360);
-    setMinimumSize(640, 240);
+    setFixedWidth(620);
+    setMinimumHeight(180);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(8);
+    root->setContentsMargins(6, 0, 6, 6);
+    root->setSpacing(4);
+
+    auto* header = new QWidget(this);
+    header->setObjectName(QStringLiteral("PatternRackHeader"));
+    header->setFixedHeight(30);
+    auto* bar = new QHBoxLayout(header);
+    bar->setContentsMargins(4, 0, 0, 0);
+    bar->setSpacing(8);
+    m_title = new QLabel(tr("Pattern"), header);
+    m_title->setObjectName(QStringLiteral("PatternRackTitle"));
+    m_title->setMinimumWidth(60);
+    m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    bar->addWidget(m_title, 1);
+    m_clipSelector = new QComboBox(header);
+    m_clipSelector->setObjectName(QStringLiteral("PatternClipSelector"));
+    m_clipSelector->setAccessibleName(tr("Pattern MIDI clip"));
+    m_clipSelector->setMinimumWidth(140);
+    m_clipSelector->setMaximumWidth(220);
+    bar->addWidget(m_clipSelector, 1);
+    connect(m_clipSelector, &QComboBox::activated, this, [this](int index) {
+        setPattern(m_patternId, m_clipSelector->itemData(index).toString());
+    });
+    auto* add = toolbarButton(icons::Glyph::Plus, tr("Add sound"),
+        tr("Add an instrument or drop audio to create a new sound"), header);
+    add->setObjectName(QStringLiteral("PatternAddInstrument"));
+    add->setMinimumHeight(24);
+    bar->addWidget(add);
+    connect(add, &QAbstractButton::clicked, this, &PatternWindow::showInstrumentMenu);
+    root->addWidget(header);
 
     auto* columnHeader = new QWidget(this);
     columnHeader->setObjectName(QStringLiteral("PatternColumnHeader"));
     auto* columns = new QHBoxLayout(columnHeader);
-    columns->setContentsMargins(8, 0, 8, 0);
-    columns->setSpacing(7);
+    columns->setContentsMargins(6, 0, 6, 0);
+    columns->setSpacing(4);
     auto addColumn = [&](const QString& text, int width) {
         auto* label = new QLabel(text, columnHeader);
         label->setFixedWidth(width);
         columns->addWidget(label);
     };
-    addColumn(tr("VOL"), kKnobSize);
-    addColumn(tr("PAN"), kKnobSize);
-    addColumn(tr("MIX"), 48);
+    addColumn(tr("VOL"), kKnobColumnWidth);
+    addColumn(tr("PAN"), kKnobColumnWidth);
+    addColumn(tr("MIX"), kMixWidth);
     addColumn(tr("SOURCE"), kSourceWidth);
     auto* midi = new QLabel(tr("MIDI PATTERN"), columnHeader);
     columns->addWidget(midi, 1);
-    addColumn(QString(), 32);
-    addColumn(QString(), 28);
+    addColumn(QString(), kActionSize);
+    addColumn(QString(), kActionSize);
+    addColumn(QString(), kActionSize);
     root->addWidget(columnHeader);
 
     auto* scroll = new QScrollArea(this);
     scroll->setObjectName(QStringLiteral("PatternScroll"));
     scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setFrameShape(QFrame::NoFrame);
     m_rowsHost = new QWidget(scroll);
     m_rowsLayout = new QVBoxLayout(m_rowsHost);
+    m_rowsLayout->setSizeConstraint(QLayout::SetMinAndMaxSize);
     m_rowsLayout->setContentsMargins(0, 0, 0, 0);
-    m_rowsLayout->setSpacing(5);
+    m_rowsLayout->setSpacing(2);
     m_dropIndicator = new QWidget(m_rowsHost);
     m_dropIndicator->setObjectName(QStringLiteral("PatternDropIndicator"));
     m_dropIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_dropIndicator->hide();
     scroll->setWidget(m_rowsHost);
     root->addWidget(scroll, 1);
+    auto* hint = new QLabel(tr("Drop audio to add a sound. Drop MIDI onto a sound to replace its notes."), this);
+    hint->setObjectName(QStringLiteral("PatternDropHint"));
+    hint->setWordWrap(true);
+    root->addWidget(hint);
 
     auto* deleteSelection = new QAction(tr("Delete selected sources"), this);
     deleteSelection->setObjectName(
@@ -616,13 +702,15 @@ void PatternWindow::setPattern(const QString& patternId, const QString& clipId) 
         if (isVisible()) refresh();
         return;
     }
+    endRowGestureState();
+    clearExternalDropFeedback();
     m_patternId = patternId;
     m_patternClipId = clipId;
     if (isVisible()) refresh();
 }
 
 void PatternWindow::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    QWidget::showEvent(event);
     refresh();
 }
 
@@ -649,12 +737,46 @@ void PatternWindow::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     }
-    QDialog::keyPressEvent(event);
+    QWidget::keyPressEvent(event);
 }
 
-void PatternWindow::closeEvent(QCloseEvent* event) {
-    if (m_controller) m_controller->stopPreview();
-    QDialog::closeEvent(event);
+bool PatternWindow::command(const QString& action) {
+    if (action == "delete") deleteSelectedSources();
+    else if (action == "all") {
+        const auto ids = childTrackIds();
+        setSelectedSources(ids, ids.isEmpty() ? QString{} : ids.back());
+    } else if (action == "duplicate") {
+        const auto ids = m_selectedIds;
+        const auto depth = m_controller->beginUndoGroup();
+        for (const auto& id : ids) duplicateSource(id);
+        m_controller->collapseUndo(depth, "Duplicate Pattern Source");
+    } else if (action == "undo" || action == "redo") {
+        if (action == "undo") m_controller->undo();
+        else m_controller->redo();
+        refresh();
+        emit projectEdited();
+    } else return false;
+    return true;
+}
+
+void PatternWindow::syncClipSelector() {
+    const auto* pattern = m_controller->project().findTrack(m_patternId.toStdString());
+    QStringList ids{QString{}}, names{tr("All MIDI")};
+    if (pattern) for (const auto& clip : pattern->clips) {
+        if (clip.kind != daw::ClipKind::Pattern) continue;
+        ids.push_back(QString::fromStdString(clip.id));
+        names.push_back(tr("%1 · %2").arg(ids.size() - 1).arg(QString::fromStdString(clip.name)));
+    }
+    if (!ids.contains(m_patternClipId)) m_patternClipId.clear();
+    const QSignalBlocker block(m_clipSelector);
+    bool changed = m_clipSelector->count() != ids.size();
+    for (int i = 0; !changed && i < ids.size(); ++i)
+        changed = m_clipSelector->itemData(i).toString() != ids[i] || m_clipSelector->itemText(i) != names[i];
+    if (changed) {
+        m_clipSelector->clear();
+        for (int i = 0; i < ids.size(); ++i) m_clipSelector->addItem(names[i], ids[i]);
+    }
+    m_clipSelector->setCurrentIndex(ids.indexOf(m_patternClipId));
 }
 
 void PatternWindow::refresh() {
@@ -662,12 +784,14 @@ void PatternWindow::refresh() {
     // Undo/project refreshes while it is closed must not construct or mutate a
     // complete off-screen row tree.
     if (!isVisible()) return;
+    syncClipSelector();
     const auto* pattern = m_controller
                               ? m_controller->project().findTrack(
                                     m_patternId.toStdString())
                               : nullptr;
     if (!pattern || pattern->kind != daw::TrackKind::Pattern) {
         setWindowTitle(tr("Pattern unavailable"));
+        m_title->setText(windowTitle());
         const QStringList ids = childTrackIds();
         if (!rowStructureMatches(ids) || !syncRowsFromModel()) rebuildRows();
         return;
@@ -676,6 +800,9 @@ void PatternWindow::refresh() {
                        .arg(QString::fromStdString(pattern->name)));
     if (!m_patternClipId.isEmpty()) { const auto count = m_controller->linkedClipCount({m_patternId.toStdString(),m_patternClipId.toStdString()});
         if (count > 1) setWindowTitle(windowTitle() + tr(" · Linked: %1").arg(count)); }
+    m_title->setText(QString::fromStdString(pattern->name));
+    m_title->setToolTip(windowTitle());
+    setAccessibleName(windowTitle());
     const QStringList ids = childTrackIds();
     if (!rowStructureMatches(ids) || !syncRowsFromModel()) rebuildRows();
 }
@@ -794,7 +921,7 @@ void PatternWindow::updateSelectionVisuals() {
         row->setAccessibleDescription(
             selected ? tr("Selected pattern source. Drag to reorder.")
                      : tr("Not selected. Drag to select a range."));
-        row->setCursor(selected ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        row->setCursor(selected ? Qt::SizeVerCursor : Qt::ArrowCursor);
         row->style()->unpolish(row);
         row->style()->polish(row);
         row->update();
@@ -844,8 +971,8 @@ int PatternWindow::replacementRowAtGlobal(const QPoint& globalPos) const {
     return -1;
 }
 
-void PatternWindow::updateExternalDropFeedback(const QPoint& globalPos) {
-    const int replacement = replacementRowAtGlobal(globalPos);
+void PatternWindow::updateExternalDropFeedback(const QPoint& globalPos, bool replaceMidi) {
+    const int replacement = replaceMidi ? replacementRowAtGlobal(globalPos) : -1;
     if (replacement != m_externalReplaceIndex) {
         for (int i = 0; i < m_rowWidgets.size(); ++i) {
             QWidget* row = m_rowWidgets[i];
@@ -940,7 +1067,7 @@ void PatternWindow::updateRowGesture(const QPoint& globalPos) {
         for (QWidget* row : std::as_const(m_rowWidgets)) {
             if (row && m_selectedIds.contains(
                            row->property("trackId").toString())) {
-                row->setCursor(Qt::ClosedHandCursor);
+                row->setCursor(Qt::SizeVerCursor);
             }
         }
     }
@@ -1153,7 +1280,10 @@ void PatternWindow::rebuildRows() {
     if (!isVisible()) return;
     endRowGestureState();
     while (QLayoutItem* item = m_rowsLayout->takeAt(0)) {
-        if (QWidget* widget = item->widget()) widget->deleteLater();
+        if (QWidget* widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
         delete item;
     }
     m_rowWidgets.clear();
@@ -1203,20 +1333,22 @@ void PatternWindow::rebuildRows() {
             showSelectionMenu(trackId, global);
         };
         auto* layout = new QHBoxLayout(row);
-        layout->setContentsMargins(8, 6, 8, 6);
-        layout->setSpacing(7);
+        layout->setContentsMargins(6, 2, 6, 2);
+        layout->setSpacing(4);
 
         auto* mix = new QWidget(row);
-        mix->setFixedWidth(48);
+        mix->setFixedWidth(kMixWidth);
         auto* mixRow = new QHBoxLayout(mix);
         mixRow->setContentsMargins(0, 0, 0, 0);
-        mixRow->setSpacing(3);
+        mixRow->setSpacing(2);
         auto* mute = new ui::MsrButton("M", Theme::mute(), tr("Mute"), mix);
         auto* solo = new ui::MsrButton("S", Theme::solo(), tr("Solo"), mix);
+        row->mute = mute;
+        row->solo = solo;
         mute->setObjectName(QStringLiteral("PatternSourceMute"));
         solo->setObjectName(QStringLiteral("PatternSourceSolo"));
-        mute->setChipSize(22, 20);
-        solo->setChipSize(22, 20);
+        mute->setChipSize(20, 18);
+        solo->setChipSize(20, 18);
         mute->setChecked(track->muted);
         mute->setAutomatable(true);
         connect(mute, &ui::MsrButton::automateRequested, this,
@@ -1242,6 +1374,7 @@ void PatternWindow::rebuildRows() {
         auto* name = new SourceNameButton(
             QString::fromStdString(track->name),
             QString::fromStdString(track->instrument.name), row);
+        row->name = name;
         name->setObjectName(QStringLiteral("PatternSourceName"));
         name->onOpen = [this, id] { openInstrument(id); };
         name->onRename = [this, id] { renameSource(id); };
@@ -1250,6 +1383,7 @@ void PatternWindow::rebuildRows() {
         layout->addWidget(name);
 
         auto* fader = new PatternLevelKnob(row);
+        row->fader = fader;
         fader->setObjectName(QStringLiteral("PatternSourceLevel"));
         fader->setAutomatable(true);
         connect(fader, &ui::FaderWidget::automateRequested, this,
@@ -1282,6 +1416,7 @@ void PatternWindow::rebuildRows() {
         layout->insertWidget(0, fader);
 
         auto* pan = new PatternPanKnob(row);
+        row->pan = pan;
         pan->setObjectName(QStringLiteral("PatternSourcePan"));
         pan->setAutomatable(true);
         connect(pan, &ui::PanKnob::automateRequested, this,
@@ -1311,6 +1446,7 @@ void PatternWindow::rebuildRows() {
         layout->insertWidget(1, pan);
 
         auto* sketch = new SourceSketch(m_controller, id, row);
+        row->sketch = sketch;
         sketch->setObjectName(QStringLiteral("PatternSourceSketch"));
         if (!midiSource) {
             sketch->setEnabled(false);
@@ -1326,8 +1462,9 @@ void PatternWindow::rebuildRows() {
 
         auto* rhythm = new QToolButton(row);
         rhythm->setObjectName(QStringLiteral("PatternRhythm"));
-        rhythm->setFixedSize(32, 32);
-        rhythm->setIcon(icons::icon(icons::Glyph::GridDivision, th().textSecondary, 18));
+        rhythm->setFixedSize(kActionSize, kActionSize);
+        rhythm->setIcon(icons::icon(icons::Glyph::GridDivision, th().textSecondary, 14));
+        rhythm->setIconSize(QSize(14, 14));
         rhythm->setToolTip(tr("Fill rhythm — replace this sound’s MIDI with evenly spaced notes"));
         rhythm->setAccessibleName(tr("Fill rhythm"));
         rhythm->setCursor(Qt::PointingHandCursor);
@@ -1343,9 +1480,20 @@ void PatternWindow::rebuildRows() {
         }
         layout->addWidget(rhythm);
 
+        auto* rack = new ui::IconButton(icons::Glyph::Mixer, tr("Open sound rack"), row);
+        rack->setObjectName(QStringLiteral("PatternSourceRack"));
+        rack->setButtonSize(kActionSize, kActionSize);
+        rack->setGlyphSize(14);
+        connect(rack, &QAbstractButton::clicked, this, [this, id] {
+            setSelectedSources({id}, id);
+            emit sourceRackRequested(id);
+        });
+        layout->addWidget(rack);
+
         auto* remove = new ui::IconButton(icons::Glyph::Trash,
                                           tr("Remove source"), row);
-        remove->setButtonSize(28, 28);
+        remove->setButtonSize(kActionSize, kActionSize);
+        remove->setGlyphSize(14);
         remove->setCursor(Qt::PointingHandCursor);
         connect(remove, &QAbstractButton::clicked, this,
                 [this, id] { removeSource(id); });
@@ -1356,7 +1504,8 @@ void PatternWindow::rebuildRows() {
         QWidget::setTabOrder(solo, name);
         QWidget::setTabOrder(name, sketch);
         QWidget::setTabOrder(sketch, rhythm);
-        QWidget::setTabOrder(rhythm, remove);
+        QWidget::setTabOrder(rhythm, rack);
+        QWidget::setTabOrder(rack, remove);
         if (!m_rowWidgets.isEmpty()) {
             // Continue from the previous row's final control, not from its
             // source name (which was constructed before the two left knobs).
@@ -1368,27 +1517,6 @@ void PatternWindow::rebuildRows() {
         m_rowsLayout->addWidget(row);
     }
 
-    auto* add = toolbarButton(
-        icons::Glyph::Plus, tr("Add virtual instrument"),
-        tr("Add a virtual instrument or Sampler. You can also drop audio "
-           "files into this window."),
-        m_rowsHost);
-    add->setObjectName(QStringLiteral("PatternAddInstrument"));
-    add->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(add, &QAbstractButton::clicked, this,
-            &PatternWindow::showInstrumentMenu);
-    auto* footer = new QWidget(m_rowsHost);
-    auto* footerLayout = new QHBoxLayout(footer);
-    footerLayout->setContentsMargins(0, 7, 0, 0);
-    footerLayout->setSpacing(14);
-    add->setText(tr("Add sound"));
-    add->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
-    footerLayout->addWidget(add);
-    auto* hint = new QLabel(tr("Drop audio to add a sound. Drop MIDI onto a sound to replace its notes."), footer);
-    hint->setObjectName(QStringLiteral("PatternDropHint"));
-    hint->setWordWrap(true);
-    footerLayout->addWidget(hint, 1);
-    m_rowsLayout->addWidget(footer);
     m_rowsLayout->addStretch(1);
     updateSelectionVisuals();
     syncRowsFromModel();
@@ -1399,13 +1527,7 @@ void PatternWindow::rebuildRows() {
 }
 
 bool PatternWindow::rowStructureMatches(const QStringList& ids) const {
-    // The empty-pattern case still needs its persistent Add row. Without this
-    // sentinel an uninitialised tree and a valid zero-source tree both look like
-    // the same empty m_rowWidgets list.
-    if (!m_rowsHost || !m_rowsHost->findChild<QToolButton*>(
-                           QStringLiteral("PatternAddInstrument"))) {
-        return false;
-    }
+    if (!m_rowsLayout || m_rowsLayout->count() == 0) return false;
     if (m_rowWidgets.size() != ids.size()) return false;
     for (int i = 0; i < ids.size(); ++i) {
         const QWidget* row = m_rowWidgets[i];
@@ -1441,18 +1563,13 @@ bool PatternWindow::syncRowsFromModel() {
             m_controller->project().findTrack(id.toStdString());
         if (!track) return false;
 
-        auto* mute = row->findChild<ui::MsrButton*>(
-            QStringLiteral("PatternSourceMute"));
-        auto* solo = row->findChild<ui::MsrButton*>(
-            QStringLiteral("PatternSourceSolo"));
-        auto* name = dynamic_cast<SourceNameButton*>(row->findChild<QWidget*>(
-            QStringLiteral("PatternSourceName")));
-        auto* fader = row->findChild<ui::FaderWidget*>(
-            QStringLiteral("PatternSourceLevel"));
-        auto* pan = row->findChild<ui::PanKnob*>(
-            QStringLiteral("PatternSourcePan"));
-        auto* sketch = dynamic_cast<SourceSketch*>(row->findChild<QWidget*>(
-            QStringLiteral("PatternSourceSketch")));
+        const auto* sourceRow = static_cast<PatternSourceRow*>(row);
+        auto* mute = sourceRow->mute;
+        auto* solo = sourceRow->solo;
+        auto* name = sourceRow->name;
+        auto* fader = sourceRow->fader;
+        auto* pan = sourceRow->pan;
+        auto* sketch = sourceRow->sketch;
         if (!mute || !solo || !name || !fader || !pan || !sketch) return false;
         sketch->setPatternClip(m_patternClipId);
 
@@ -1490,11 +1607,10 @@ bool PatternWindow::syncRowsFromModel() {
         }
         if (!pan->isEditing()) pan->setPan(track->pan);
 
-        // Notes, timing, colour and tempo are read directly by SourceSketch at
-        // paint time. A non-structural MIDI edit therefore schedules only this
-        // bounded-LOD repaint and preserves every QObject in the row.
+        // Keep live mix controls synchronized, but repaint a miniature only
+        // when its notes, timing, colour or tempo actually change.
         sketch->setTimeRange(rangeStart, rangeLength, barSeconds);
-        sketch->update();
+        sketch->syncFromModel(*track);
     }
     return true;
 }
@@ -1503,10 +1619,7 @@ void PatternWindow::showInstrumentMenu() {
     QMenu* plugins = ui::buildPluginMenu(
         this, m_controller, true,
         [this](const daw::plugins::PluginDescriptor& descriptor) {
-            const auto* owner=sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),nullptr,m_patternClipId.toStdString());
-            const std::string id = m_controller->addPatternInstrument(
-                m_patternId.toStdString(), descriptor,owner?owner->startSeconds:0.0,m_patternClipId.toStdString());
-            if (id.empty()) {
+            if (!addInstrument(descriptor)) {
                 QMessageBox::warning(
                     this, tr("Instrument could not be loaded"),
                     tr("%1 could not be opened. Check the plugin installation "
@@ -1514,26 +1627,33 @@ void PatternWindow::showInstrumentMenu() {
                         .arg(QString::fromStdString(descriptor.name)));
                 return;
             }
-            emit projectEdited();
-            refresh();
-            ui::rememberRecentPlugin(descriptor);
-            const auto* track = m_controller->project().findTrack(id);
-            if (track && !track->instrument.id.empty())
-                emit openPluginEditorRequested(
-                    QString::fromStdString(id),
-                    QString::fromStdString(track->instrument.id));
+            openInstrument(m_primaryId);
         });
     plugins->setAttribute(Qt::WA_DeleteOnClose);
     plugins->popup(QCursor::pos());
 }
 
+bool PatternWindow::addInstrument(const daw::plugins::PluginDescriptor& descriptor) {
+    if (!descriptor.isInstrument || !m_controller->sharedPluginAllowed(descriptor)) return false;
+    const auto* owner = sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),
+                                         nullptr, m_patternClipId.toStdString());
+    const auto id = m_controller->addPatternInstrument(m_patternId.toStdString(), descriptor,
+        owner ? owner->startSeconds : 0.0, m_patternClipId.toStdString());
+    if (id.empty()) return false;
+    refresh();
+    setSelectedSources({QString::fromStdString(id)}, QString::fromStdString(id));
+    ui::rememberRecentPlugin(descriptor);
+    emit projectEdited();
+    return true;
+}
+
 void PatternWindow::addSampleFiles(const QStringList& paths,
                                    double startSeconds,
                                    int insertionIndex) {
-    if(!m_patternClipId.isEmpty()) {
-        const auto* owner=sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),nullptr,m_patternClipId.toStdString());
-        if(owner)startSeconds=owner->startSeconds;
-    }
+    const auto undoStart = m_controller->beginUndoGroup();
+    const auto* owner = sourcePatternClip(m_controller->project().findTrack(m_patternId.toStdString()),
+                                         nullptr, m_patternClipId.toStdString());
+    if (owner) startSeconds = owner->startSeconds;
     bool changed = false;
     QStringList failed;
     QStringList added;
@@ -1553,12 +1673,16 @@ void PatternWindow::addSampleFiles(const QStringList& paths,
                "Sampler:\n%1")
                 .arg(failed.join(QLatin1Char('\n'))));
     }
-    if (!changed) return;
-    if (insertionIndex >= 0 && !added.isEmpty()) {
+    if (!changed) {
+        m_controller->releaseUndoGroup(undoStart);
+        return;
+    }
+    if (!added.isEmpty()) {
         setSelectedSources(added, added.back());
         m_selectionAnchorId = added.back();
-        reorderSelectedSources(insertionIndex);
+        if (insertionIndex >= 0) reorderSelectedSources(insertionIndex);
     }
+    m_controller->collapseUndo(undoStart, "Add Pattern Sample");
     emit projectEdited();
     refresh();
 }
@@ -1761,6 +1885,7 @@ void PatternWindow::populateSourceMenu(QMenu* menu, const QString& trackId) {
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     if (!ownsTrack(track)) return;
     const bool midiSource = daw::trackAccepts(track->kind, daw::ClipKind::Midi);
+    menu->addAction(tr("Open sound rack"), this, [this, trackId] { emit sourceRackRequested(trackId); });
     if (midiSource) {
         menu->addAction(tr("Open Instrument"), this, [this, trackId] { openInstrument(trackId); });
         menu->addAction(tr("Open piano roll"), this, [this, trackId] { openRoll(trackId); });
@@ -1934,7 +2059,23 @@ void PatternWindow::openRoll(const QString& trackId) {
     refresh();
 }
 
+std::optional<daw::plugins::PluginDescriptor> PatternWindow::droppedInstrument(const QMimeData* mime) const {
+    int format = 0;
+    QString uid;
+    if (!ui::decodePluginRef(mime, format, uid)) return std::nullopt;
+    const auto descriptor = m_controller->pluginManager().find(daw::plugins::Format(format), uid.toStdString());
+    if (!descriptor || !descriptor->isInstrument || !m_controller->sharedPluginAllowed(*descriptor))
+        return std::nullopt;
+    return descriptor;
+}
+
 void PatternWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (droppedInstrument(event->mimeData())) {
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        updateExternalDropFeedback(mapToGlobal(event->position().toPoint()), false);
+        return;
+    }
     if (!event->mimeData()->hasUrls()) return;
     const auto urls = event->mimeData()->urls();
     const bool midi = urls.size() == 1 && urls.front().isLocalFile() &&
@@ -1946,11 +2087,17 @@ void PatternWindow::dragEnterEvent(QDragEnterEvent* event) {
     event->setDropAction(Qt::CopyAction);
     event->accept();
     const auto global = mapToGlobal(event->position().toPoint());
-    if (!midi || replacementRowAtGlobal(global) >= 0) updateExternalDropFeedback(global);
+    if (!midi || replacementRowAtGlobal(global) >= 0) updateExternalDropFeedback(global, midi);
     else clearExternalDropFeedback();
 }
 
 void PatternWindow::dragMoveEvent(QDragMoveEvent* event) {
+    if (droppedInstrument(event->mimeData())) {
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        updateExternalDropFeedback(mapToGlobal(event->position().toPoint()), false);
+        return;
+    }
     const auto urls = event->mimeData()->urls();
     const bool midi = urls.size() == 1 && urls.front().isLocalFile() &&
                        ui::isMidiFile(urls.front().toLocalFile());
@@ -1965,7 +2112,7 @@ void PatternWindow::dragMoveEvent(QDragMoveEvent* event) {
     }
     event->setDropAction(Qt::CopyAction);
     event->accept();
-    updateExternalDropFeedback(global);
+    updateExternalDropFeedback(global, midi);
 }
 
 void PatternWindow::dragLeaveEvent(QDragLeaveEvent* event) {
@@ -1974,6 +2121,18 @@ void PatternWindow::dragLeaveEvent(QDragLeaveEvent* event) {
 }
 
 void PatternWindow::dropEvent(QDropEvent* event) {
+    if (const auto descriptor = droppedInstrument(event->mimeData())) {
+        const int insertion = insertionIndexAtGlobal(mapToGlobal(event->position().toPoint()));
+        const auto undoStart = m_controller->beginUndoGroup();
+        clearExternalDropFeedback();
+        if (addInstrument(*descriptor)) {
+            if (insertion >= 0) reorderSelectedSources(insertion);
+            event->setDropAction(Qt::CopyAction);
+            event->accept();
+        }
+        m_controller->collapseUndo(undoStart, "Add Pattern Instrument");
+        return;
+    }
     const auto urls = event->mimeData()->urls();
     if (urls.size() == 1 && urls.front().isLocalFile() &&
         ui::isMidiFile(urls.front().toLocalFile())) {
@@ -1998,22 +2157,10 @@ void PatternWindow::dropEvent(QDropEvent* event) {
     }
     if (files.isEmpty()) return;
     const QPoint globalPos = mapToGlobal(event->position().toPoint());
-    const int replacement = replacementRowAtGlobal(globalPos);
     const int insertion = insertionIndexAtGlobal(globalPos);
-    const QStringList ids = childTrackIds();
     clearExternalDropFeedback();
-    event->acceptProposedAction();
-    if (replacement >= 0 && replacement < ids.size()) {
-        const QString first = files.takeFirst();
-        if (!replaceSample(ids[replacement], first)) {
-            QMessageBox::warning(
-                this, tr("Sample could not be replaced"),
-                tr("The selected audio file could not be decoded or loaded "
-                   "into the Sampler."));
-        }
-        if (!files.isEmpty()) addSampleFiles(files, 0.0, replacement + 1);
-        return;
-    }
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
     addSampleFiles(files, 0.0, insertion);
 }
 
@@ -2103,6 +2250,20 @@ bool PatternWindow::checkEditingForTest() {
         ok &= condition;
     };
     check(window.checkInteractionGesturesForTest(), "stable rows and model sync");
+    class PaintCounter final : public QObject {
+    public:
+        int paints = 0;
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::Paint) ++paints;
+            return false;
+        }
+    } sketchPaints;
+    auto* firstSketch = static_cast<PatternSourceRow*>(window.m_rowWidgets.front())->sketch;
+    const QImage emptySketch = firstSketch->grab().toImage();
+    QApplication::processEvents();
+    firstSketch->installEventFilter(&sketchPaints);
+    for (int i = 0; i < 10; ++i) { window.refresh(); QApplication::processEvents(); }
+    check(sketchPaints.paints == 0, "idle rack polls do not repaint unchanged MIDI sketches");
     auto* level = window.m_rowWidgets[0]->findChild<ui::FaderWidget*>("PatternSourceLevel");
     auto* pan = window.m_rowWidgets[0]->findChild<ui::PanKnob*>("PatternSourcePan");
     auto* name = window.m_rowWidgets[0]->findChild<QWidget*>("PatternSourceName");
@@ -2139,6 +2300,9 @@ bool PatternWindow::checkEditingForTest() {
     rhythm.findChild<QAction*>("pattern.fill.4")->trigger();
     check(firstClip()->notes.size() == 4 && firstClip()->notes[3].startBeats == 3.0,
           "quarter-bar action makes four on the floor");
+    QApplication::processEvents();
+    check(sketchPaints.paints > 0 && firstSketch->grab().toImage() != emptySketch,
+          "a MIDI edit repaints the existing sketch with the changed notes");
     check(std::all_of(firstClip()->notes.begin(), firstClip()->notes.end(),
                      [](const auto& note) { return note.velocity == 127 && note.pan == 0.0f; }),
           "new rhythm notes retain the sample's full level");
@@ -2412,19 +2576,63 @@ bool PatternWindow::checkEditingForTest() {
     window.refresh();
     check(audioLevel && std::abs(audioLevel->gain() - 0.35) < 1e-5,
           "Pattern audio level follows its track fader");
+    window.resize(640, 220);
+    QApplication::processEvents();
+    auto* vertical = scroll->verticalScrollBar();
+    vertical->setValue(vertical->maximum());
+    const int bottom = vertical->value();
+    wheel(scroll->viewport());
+    check(bottom > 0 && vertical->value() < bottom &&
+          scroll->horizontalScrollBar()->maximum() == 0,
+          "compact Pattern rows retain wheel scrolling when the list overflows");
+    const auto controlsFitRows = [&window] {
+        for (auto* row : std::as_const(window.m_rowWidgets)) {
+            const QRect interior = row->rect().adjusted(2, 2, -2, -2);
+            QRect previous;
+            for (int i = 0; i < row->layout()->count(); ++i) {
+                const auto* widget = row->layout()->itemAt(i)->widget();
+                if (!widget || widget->isHidden()) continue;
+                if (!interior.contains(widget->geometry()) ||
+                    previous.intersects(widget->geometry())) return false;
+                previous = widget->geometry();
+                const auto buttons = widget->findChildren<QAbstractButton*>(
+                    QString{}, Qt::FindDirectChildrenOnly);
+                for (const auto* button : buttons)
+                    if (!widget->rect().contains(button->geometry())) return false;
+            }
+        }
+        return true;
+    };
+    check(controlsFitRows(), "compact row controls fit without clipping or overlap");
+    vertical->setValue(0);
+    auto* targetRow = rowFor(qb);
+    window.updateExternalDropFeedback(targetRow->mapToGlobal(targetRow->rect().center()), true);
+    QApplication::processEvents();
+    check(targetRow->property("dropTarget").toBool() && controlsFitRows(),
+          "the MIDI drop border leaves room for every compact row control");
+    window.clearExternalDropFeedback();
+    QApplication::processEvents();
+    if (!groupShot.isEmpty()) {
+        check(window.grab().save(groupShot + ".compact.png"), "compact scrolling Pattern screenshot saved");
+        vertical->setValue(vertical->maximum());
+        check(window.grab().save(groupShot + ".bottom.png"), "last Pattern source remains reachable");
+    }
     return ok;
 }
 
 void PatternWindow::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#PatternWindow { background: %BG%; color: %TEXT%; }
-#PatternColumnHeader { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %BOTTOM%); }
+#PatternWindow { background: %SURFACE%; color: %TEXT%; border: 1px solid %SEP%; border-radius: %RADIUS%px; }
+#PatternRackHeader { background: transparent; border-bottom: 1px solid %SEP%; }
+#PatternRackTitle { color: %TEXT%; font-size: 11px; font-weight: 600; }
+#PatternClipSelector { color: %TEXT%; background: %WELL%; font-size: 11px; min-height: 22px; }
+#PatternColumnHeader { background: transparent; }
 #PatternColumnHeader QLabel { color: %TEXT2%; font-size: 9px;
                               font-weight: 500; letter-spacing: 0.3px; }
 #PatternScroll { background: %BG%; }
-#PatternSourceRow { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %TOP%,stop:1 %SURFACE%);
-                    border: 1px solid %SEP%; border-top-color: %LIGHT%; border-bottom-color: %SHADOW%;
+#PatternSourceRow { background: %SURFACE%;
+                    border: 1px solid %SEP%;
                     border-radius: %RADIUS%px; }
 #PatternSourceRow:hover { background: %HOVER%; border-color: %SECTION%; }
 #PatternSourceRow[selected="true"] { background: %SELECTED%;
@@ -2439,7 +2647,7 @@ QToolButton#PatternToolbarButton { color: %TEXT%;
 QToolButton#PatternToolbarButton:hover { background: %HOVER%;
     border-color: %ACCENT%; }
 QToolButton#PatternToolbarButton:disabled { color: %TEXT2%; background: %SURFACE%; }
-QToolButton#PatternAddInstrument { min-height: 28px; padding: 4px 10px;
+QToolButton#PatternAddInstrument { min-height: 22px; padding: 1px 8px;
     color: %TEXT%; background: %WELL%; border: 1px solid %SEP%; border-radius: %RADIUS%px; }
 QToolButton#PatternAddInstrument:hover { background: %HOVER%; }
 #PatternDropHint { color: %TEXT2%; font-size: 10px; }

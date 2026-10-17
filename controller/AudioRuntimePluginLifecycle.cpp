@@ -45,7 +45,8 @@ void AudioRuntime::refreshMasterSafetyMute() {
     const auto master = channels.find(AudioGraphSpec::masterChannelId);
     if (master != channels.end()) {
         for (const auto* chain : {&master->second.inserts, &master->second.miniModules})
-            for (const auto& slot : *chain) failed |= slot.node && slot.node->faultBypassed();
+            for (const auto& slot : *chain)
+                failed |= !slot.configuration.analysisOnly && slot.node && slot.node->faultBypassed();
     }
     engine.outputSafetyMute().store(failed, std::memory_order_release);
 }
@@ -61,7 +62,7 @@ void AudioRuntime::bindPluginSafety(const std::string& channelId, InsertSlot& sl
     auto group = slot.node->faultGroup();
     group->sides.store((slot.node->fault() != plugins::PluginNode::Fault::None ? 1u : 0u) |
         (slot.rightNode && slot.rightNode->fault() != plugins::PluginNode::Fault::None ? 2u : 0u));
-    const auto mute = channelId == AudioGraphSpec::masterChannelId
+    const auto mute = channelId == AudioGraphSpec::masterChannelId && !slot.configuration.analysisOnly
         ? engine.outputSafetyLatch() : std::shared_ptr<std::atomic<bool>>{};
     slot.node->setFaultGroup(group, 0, mute);
     if (slot.rightNode) slot.rightNode->setFaultGroup(group, 1, mute);

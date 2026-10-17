@@ -91,13 +91,6 @@ bool hasGroupInput(const daw::TrackModel& track) {
            daw::isSummingFolder(track);
 }
 
-QString panText(double pan) {
-    if (std::abs(pan) < 0.01) return QStringLiteral("C");
-    const int amount = int(std::round(std::abs(pan) * 100.0));
-    return (pan < 0 ? QStringLiteral("L") : QStringLiteral("R")) +
-           QString::number(amount);
-}
-
 // Size of the actions that appear on a hovered slot, and the gaps around them.
 // Big enough to hit without aiming: these are the controls the chain is worked
 // with, and a 14-pixel target inside a 17-pixel row was a dot.
@@ -242,7 +235,7 @@ public:
               std::function<void()> dragFinished, QWidget* parent)
         : ElidingLabel(text, parent), m_mime(mime), m_payload(std::move(payload)),
           m_dragFinished(std::move(dragFinished)) {
-        setCursor(Qt::OpenHandCursor);
+        setCursor(Qt::SizeAllCursor);
     }
 
 protected:
@@ -336,7 +329,7 @@ public:
         m_dragMime = mime;
         m_dragPayload = std::move(payload);
         m_dragFinished = std::move(dragFinished);
-        m_slot->setCursor(Qt::OpenHandCursor);
+        m_slot->setCursor(Qt::SizeAllCursor);
     }
     void setDropTarget(const char* mime,
                        std::function<void(const QString&, Qt::KeyboardModifiers)> onDrop) {
@@ -987,43 +980,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     col->setSpacing(6);
 
     col->addWidget(buildHeader());
-    m_rack = new QWidget(this);
-    m_rack->setObjectName(QStringLiteral("ChannelRack"));
-    auto* rack = new QVBoxLayout(m_rack);
-    rack->setContentsMargins(0, 0, 0, 0);
-    rack->setSpacing(6);
-    // Empty audio/bus instrument space is deliberate: FX slot N must share a
-    // baseline with slot N on MIDI channels, independent of their instrument.
-    QWidget* instrument = buildInstrument();
-    if (instrument) instrument->setObjectName(QStringLiteral("ChannelInstrumentRow"));
-    if (m_master) {
-        m_loudness = new LoudnessDisplay(m_rack);
-        connect(m_loudness, &QAbstractButton::clicked, this, [this] {
-            m_controller->resetMasterLoudness(); refreshMeter();
-        });
-        instrument = m_loudness;
-    }
-    auto* inserts = buildInserts();
-    inserts->setObjectName(QStringLiteral("ChannelInsertsRow"));
-    const std::array<QWidget*, 5> sections{
-        buildRouting(), buildColor(), instrument, inserts, m_master ? nullptr : buildSends()};
-    const std::array<const char*, 5> sectionNames{
-        "ChannelRoutingRow", "ChannelColorRow", "ChannelInstrumentTier", "ChannelProcessingRow", "ChannelSendsRow"};
-    for (std::size_t i = 0; i < sections.size(); ++i) {
-        auto* row = new QWidget(m_rack);
-        row->setObjectName(QString::fromLatin1(sectionNames[i]));
-        auto* layout = new QVBoxLayout(row);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(0);
-        // Outputs line up below the optional input. Every other section grows
-        // downwards, keeping its title and first slot on the shared baseline.
-        if (i == 0) layout->addStretch(1);
-        if (sections[i]) layout->addWidget(sections[i], 0,
-            i == 0 ? Qt::AlignBottom : Qt::AlignTop);
-        if (i != 0) layout->addStretch(1);
-        m_rackSections[i] = row;
-        rack->addWidget(row);
-    }
+    buildRack();
     col->addWidget(m_rack);
 
     auto* levelWell = new ui::ConsoleLevelWell(this);
@@ -1111,7 +1068,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
             }
             m_controller->setTrackPanGestureSample(id, float(v));
         }
-        m_panLabel->setText(panText(v));
+        m_panLabel->setText(ui::formatPan(v));
     });
     connect(m_pan, &ui::PanKnob::editFinished, this, [this] {
         if (m_panGestureStart) {
@@ -1132,11 +1089,55 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     syncFromModel();
     refreshMeter();
 
+    measureRack();
+}
+
+void ChannelStrip::buildRack() {
+    m_rack = new QWidget(this);
+    m_rack->setObjectName(QStringLiteral("ChannelRack"));
+    auto* rack = new QVBoxLayout(m_rack);
+    rack->setContentsMargins(0, 0, 0, 0);
+    rack->setSpacing(6);
+    // Empty audio/bus instrument space is deliberate: FX slot N must share a
+    // baseline with slot N on MIDI channels, independent of their instrument.
+    QWidget* instrument = buildInstrument();
+    if (instrument) instrument->setObjectName(QStringLiteral("ChannelInstrumentRow"));
+    if (m_master) {
+        m_loudness = new LoudnessDisplay(m_rack);
+        connect(m_loudness, &QAbstractButton::clicked, this, [this] {
+            m_controller->resetMasterLoudness(); m_readoutClock.invalidate(); refreshMeter();
+        });
+        instrument = m_loudness;
+    }
+    auto* inserts = buildInserts();
+    inserts->setObjectName(QStringLiteral("ChannelInsertsRow"));
+    const std::array<QWidget*, 5> sections{
+        buildRouting(), buildColor(), instrument, inserts, m_master ? nullptr : buildSends()};
+    const std::array<const char*, 5> sectionNames{
+        "ChannelRoutingRow", "ChannelColorRow", "ChannelInstrumentTier", "ChannelProcessingRow", "ChannelSendsRow"};
+    for (std::size_t i = 0; i < sections.size(); ++i) {
+        auto* row = new QWidget(m_rack);
+        row->setObjectName(QString::fromLatin1(sectionNames[i]));
+        auto* layout = new QVBoxLayout(row);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        // Outputs line up below the optional input. Every other section grows
+        // downwards, keeping its title and first slot on the shared baseline.
+        if (i == 0) layout->addStretch(1);
+        if (sections[i]) layout->addWidget(sections[i], 0,
+            i == 0 ? Qt::AlignBottom : Qt::AlignTop);
+        if (i != 0) layout->addStretch(1);
+        m_rackSections[i] = row;
+        rack->addWidget(row);
+    }
+}
+
+void ChannelStrip::measureRack() {
     // Measure what the console actually needs and make that the floor. Adding
     // inserts or sends grows it, and the mixer starts scrolling instead of
     // clipping the strip.
     for (std::size_t i = 0; i < m_rackSections.size(); ++i) {
-        const int height = sections[i] ? m_rackSections[i]->sizeHint().height() : 0;
+        const int height = std::max(0, m_rackSections[i]->sizeHint().height());
         m_rackNaturalHeights[i] = height;
         m_rackSections[i]->setFixedHeight(height);
         m_rackSections[i]->setVisible(height > 0);
@@ -1148,6 +1149,68 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     // above instead of inside buildColor, where the row does not exist yet.
     refreshColorRackRow();
     updateResponsiveLayout();
+}
+
+bool ChannelStrip::rebindChannel(const QString& trackId, int insertSlots) {
+    if (m_master || m_insertsOnly || hasActiveGesture() ||
+        (QApplication::focusWidget() && (hasFocus() || isAncestorOf(QApplication::focusWidget())))) return false;
+    const auto* from = m_controller->project().findTrack(m_trackId.toStdString());
+    const auto* to = m_controller->project().findTrack(trackId.toStdString());
+    if (!from || !to || from->kind != to->kind || to->kind == daw::TrackKind::Pattern) return false;
+    if (auto* rack = qobject_cast<ui::MiniModuleRack*>(m_colorWell)) rack->finishEdits();
+    delete m_rack;
+    m_rack = nullptr; m_rackSections.fill(nullptr);
+    m_colorWell = nullptr; m_colorPower = nullptr; m_colorDrive = m_colorTone = nullptr;
+    m_inputButton = m_outputButton = nullptr;
+    m_sendKnobs.clear(); m_finishColorEdits.clear();
+    m_rackNaturalHeights.fill(0); m_rackNaturalHeight = m_rackExtraHeight = 0;
+    m_trackId = trackId; m_insertSlotCount = insertSlots;
+    m_displayedPeak = -1.f; m_displayedGain = -1.; m_displayedPan = -2.;
+    m_readoutClock.invalidate(); m_meter->clearLevels();
+    m_layoutWidth = 0;
+    buildRack();
+    m_mainLayout->insertWidget(1, m_rack);
+    applyTheme(); syncFromModel(); refreshMeter(); measureRack();
+    return true;
+}
+
+bool ChannelStrip::checkRebindForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000, 512, false)) return false;
+    const auto first = controller.addTrack(daw::TrackKind::Audio, "Original");
+    const auto second = controller.addTrack(daw::TrackKind::Audio, "Recycled");
+    auto& project = const_cast<daw::ProjectModel&>(controller.project());
+    for (const auto& id : {first, second}) {
+        daw::InsertModel slot; slot.id = id + "-slot"; slot.name = "Example";
+        project.findTrack(id)->inserts.push_back(std::move(slot));
+    }
+    ChannelStrip strip(&controller, QString::fromStdString(first), false);
+    auto* fader = strip.m_fader;
+    QPointer<QToolButton> originalSlot = strip.findChild<QToolButton*>(QStringLiteral("SlotButton"));
+    if (!originalSlot || !strip.rebindChannel(QString::fromStdString(second), 4) ||
+        strip.m_fader != fader || originalSlot || strip.insertSlotCount() != 4) return false;
+    QString editedChannel, editedSlot;
+    connect(&strip, &ChannelStrip::editorRequested, &strip, [&](const auto& channel, const auto& slot) {
+        editedChannel = channel; editedSlot = slot;
+    });
+    auto* slot = strip.findChild<QToolButton*>(QStringLiteral("SlotButton"));
+    if (!slot) return false;
+    slot->click();
+    if (editedChannel != QString::fromStdString(second) ||
+        editedSlot != QString::fromStdString(second + "-slot")) return false;
+    // These are the same signals a live fader gesture sends. The preserved
+    // control must commit only to its new channel, with one undo operation.
+    const auto undo = controller.undoDepth();
+    emit fader->gainChanged(.35);
+    emit fader->editFinished();
+    if (std::abs(project.findTrack(first)->volume - 1.f) > 1e-5 ||
+        std::abs(project.findTrack(second)->volume - .35f) > 1e-5 ||
+        controller.undoDepth() != undo + 1) return false;
+    controller.undo();
+    if (std::abs(project.findTrack(second)->volume - 1.f) > 1e-5) return false;
+    for (int i = 0; i < 6; ++i)
+        if (!strip.rebindChannel(QString::fromStdString(i % 2 ? second : first), 4)) return false;
+    return strip.m_fader == fader;
 }
 
 QWidget* ChannelStrip::buildHeader() {
@@ -1180,7 +1243,11 @@ QWidget* ChannelStrip::buildHeader() {
 }
 
 QToolButton* ChannelStrip::makeSlotButton(const QString& text, bool active) {
-    auto* b = new SlotNameButton(this);
+    return createSlotButton(text, active, this);
+}
+
+QToolButton* ChannelStrip::createSlotButton(const QString& text, bool active, QWidget* parent) {
+    auto* b = new SlotNameButton(parent);
     b->setObjectName("SlotButton");
     b->setProperty("active", active);
     b->setText(text);
@@ -1190,6 +1257,13 @@ QToolButton* ChannelStrip::makeSlotButton(const QString& text, bool active) {
     b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     b->setToolButtonStyle(Qt::ToolButtonTextOnly);
     return b;
+}
+
+QWidget* ChannelStrip::createSlotRow(QToolButton* slot,
+                                   const std::vector<QAbstractButton*>& actions, QWidget* parent) {
+    auto* row = new SlotRow(slot, parent);
+    for (auto* action : actions) row->addSlotAction(action);
+    return row;
 }
 
 QWidget* ChannelStrip::buildSlotRow(QToolButton* slot, const QString& channel,
@@ -2506,8 +2580,8 @@ QWidget* ChannelStrip::buildButtons() {
     const bool pattern = track && track->kind == daw::TrackKind::Pattern;
     if (pattern) {
         auto* open = new ui::MsrButton("P", colorFromRgb(track->color),
-                                       tr("Open Pattern editor"), box);
-        open->setAccessibleName(tr("Open Pattern editor"));
+                                       tr("Open Pattern in Rack"), box);
+        open->setAccessibleName(tr("Open Pattern in Rack"));
         connect(open, &QAbstractButton::clicked, this,
                 [this] { emit patternRequested(m_trackId); });
         row->addWidget(open);
@@ -2600,26 +2674,30 @@ void ChannelStrip::resizeEvent(QResizeEvent* event) {
 
 void ChannelStrip::updateResponsiveLayout() {
     if (!m_readoutLayout || !m_panLayout || !m_rackNaturalHeight || m_layoutWidth == width()) return;
+    const bool dense = width() < 100;
+    const bool rearrangePan = m_layoutWidth == 0 || m_denseLayout != dense;
     m_layoutWidth = width();
-    m_denseLayout = width() < 100;
+    m_denseLayout = dense;
     const bool compactGutters = width() <= 110;
     m_mainLayout->setContentsMargins(m_denseLayout ? 2 : compactGutters ? 3 : 5, m_inspectorCompact ? 6 : 8,
                                      compactGutters ? 3 : 6, m_inspectorCompact ? 5 : 7);
     m_mainLayout->setSpacing(m_inspectorCompact ? 5 : 6);
     m_levelLayout->setContentsMargins(m_denseLayout ? 1 : 3, 4, m_denseLayout ? 1 : 3, 2);
-    while (auto* item = m_panLayout->takeAt(0)) delete item;
-    m_panLayout->setSpacing(m_denseLayout ? 1 : 3);
-    m_panLayout->setVerticalSpacing(0);
-    m_panLayout->setAlignment(Qt::AlignHCenter);
-    m_panSection->setFixedHeight(m_denseLayout ? 36 : 30);
-    if (m_denseLayout) {
-        m_panLayout->addWidget(m_pan, 0, 0, 2, 1, Qt::AlignCenter);
-        m_panLayout->addWidget(m_panLabel, 0, 1, m_monoButton ? 1 : 2, 1, Qt::AlignCenter);
-        if (m_monoButton) m_panLayout->addWidget(m_monoButton, 1, 1, Qt::AlignCenter);
-    } else {
-        m_panLayout->addWidget(m_pan, 0, 0, Qt::AlignCenter);
-        m_panLayout->addWidget(m_panLabel, 0, 1, Qt::AlignCenter);
-        if (m_monoButton) m_panLayout->addWidget(m_monoButton, 0, 2, Qt::AlignCenter);
+    if (rearrangePan) {
+        while (auto* item = m_panLayout->takeAt(0)) delete item;
+        m_panLayout->setSpacing(m_denseLayout ? 1 : 3);
+        m_panLayout->setVerticalSpacing(0);
+        m_panLayout->setAlignment(Qt::AlignHCenter);
+        m_panSection->setFixedHeight(m_denseLayout ? 36 : 30);
+        if (m_denseLayout) {
+            m_panLayout->addWidget(m_pan, 0, 0, 2, 1, Qt::AlignCenter);
+            m_panLayout->addWidget(m_panLabel, 0, 1, m_monoButton ? 1 : 2, 1, Qt::AlignCenter);
+            if (m_monoButton) m_panLayout->addWidget(m_monoButton, 1, 1, Qt::AlignCenter);
+        } else {
+            m_panLayout->addWidget(m_pan, 0, 0, Qt::AlignCenter);
+            m_panLayout->addWidget(m_panLabel, 0, 1, Qt::AlignCenter);
+            if (m_monoButton) m_panLayout->addWidget(m_monoButton, 0, 2, Qt::AlignCenter);
+        }
     }
     m_faderLayout->setSpacing(m_denseLayout ? 2 : 5);
     const int available = width() - (m_denseLayout ? 7 : 17);
@@ -2628,7 +2706,6 @@ void ChannelStrip::updateResponsiveLayout() {
     m_readoutLayout->setDirection(QBoxLayout::LeftToRight);
     m_gainLabel->setFixedHeight(20);
     m_peakLabel->setFixedHeight(20);
-    m_displayedGain = -1;
     updateReadouts();
     // The dense pan row is taller. Resolve its minimum before asking the
     // outer strip for a height, including while it lives in a stacked view.
@@ -2786,6 +2863,29 @@ bool ChannelStrip::checkGroupInputsForTest() {
     check(!controller.project().findTrack(group)->inputEnabled &&
         !controller.project().findTrack(group)->monitor,
         "group routing does not enable a hardware input or monitoring");
+    ChannelStrip responsive(&controller, QString::fromStdString(audio), false);
+    responsive.setAttribute(Qt::WA_DontShowOnScreen);
+    responsive.show();
+    const auto panItem = [&] {
+        return responsive.m_panLayout->itemAt(responsive.m_panLayout->indexOf(responsive.m_pan));
+    };
+    for (const auto widths : {std::array{75, 83, 99}, std::array{100, 111, 140}}) {
+        responsive.setStripWidth(widths[0]);
+        auto* item = panItem();
+        for (const int width : widths) {
+            responsive.setStripWidth(width);
+            check(panItem() == item && responsive.m_panLayout->count() == 3,
+                  "width changes within a breakpoint retain pan layout items");
+        }
+    }
+    for (const int width : {99, 100, 99}) {
+        responsive.setStripWidth(width);
+        int row = 0, column = 0, rowSpan = 0, columnSpan = 0;
+        responsive.m_panLayout->getItemPosition(responsive.m_panLayout->indexOf(responsive.m_pan),
+                                                &row, &column, &rowSpan, &columnSpan);
+        check(row == 0 && column == 0 && rowSpan == (width < 100 ? 2 : 1),
+              "crossing the compact breakpoint immediately rearranges pan controls");
+    }
     return ok;
 }
 
@@ -2887,7 +2987,7 @@ void ChannelStrip::refreshAutomationValues() {
     refreshLevelAutomationValues();
 }
 
-void ChannelStrip::refreshLevelAutomationValues() {
+void ChannelStrip::refreshLevelAutomationValues(bool readouts) {
     if (!m_controller) return;
     const auto* track =
         m_controller->project().findTrack(m_trackId.toStdString());
@@ -2917,7 +3017,7 @@ void ChannelStrip::refreshLevelAutomationValues() {
         const QSignalBlocker blocker(m_pan);
         m_pan->setPan(pan);
     }
-    updateReadouts();
+    if (readouts) updateReadouts();
 }
 
 void ChannelStrip::updateReadouts() {
@@ -2931,7 +3031,7 @@ void ChannelStrip::updateReadouts() {
     }
     if (m_displayedPan != m_pan->pan()) {
         m_displayedPan = m_pan->pan();
-        const auto text = panText(m_displayedPan);
+        const auto text = ui::formatPan(m_displayedPan);
         if (m_panLabel->text() != text) m_panLabel->setText(text);
     }
 }
@@ -2942,16 +3042,22 @@ double ChannelStrip::faderGainForTest() const {
 
 void ChannelStrip::refreshMeter() {
     if (!m_controller) return;
+    // Numeric labels and LUFS text do not need 240 string/layout updates per
+    // second. Fader/pan motion and peak detection retain the display cadence;
+    // direct user edits still update their readouts synchronously.
+    const bool initialize = m_displayedPeak < 0.0f;
+    const bool readouts = initialize || !m_readoutClock.isValid() ||
+                          m_readoutClock.elapsed() >= 50;
+    if (readouts) m_readoutClock.start();
     // Meter ticks follow the display clock. Automated faders and pan controls
     // must follow it too, instead of stepping with the shell's slow control
     // poll. Keep module/model synchronization outside this hot path.
     if (m_controller->isPlaying() &&
         (ui::isVisibleInViewport(m_fader) || ui::isVisibleInViewport(m_pan)))
-        refreshLevelAutomationValues();
+        refreshLevelAutomationValues(readouts);
     // Prime a new view (and explicit resets) before its first exposure. Normal
     // frame ticks only touch the visible part of a vertically scrolled strip.
-    const bool initialize = m_displayedPeak < 0.0f;
-    if (m_master && m_loudness && (initialize || ui::isVisibleInViewport(m_loudness)))
+    if (readouts && m_master && m_loudness && (initialize || ui::isVisibleInViewport(m_loudness)))
         m_loudness->setLevels(m_controller->masterLoudness());
     const bool meterVisible = m_meter && (initialize || ui::isVisibleInViewport(m_meter));
     const bool peakVisible = m_peakLabel && (initialize || ui::isVisibleInViewport(m_peakLabel));
@@ -2962,7 +3068,8 @@ void ChannelStrip::refreshMeter() {
         m_meter->setPeakHold(levels.hold);
     }
     const float peak = levels.hold;
-    if (peakVisible && m_displayedPeak != peak) {
+    if (peakVisible && m_displayedPeak != peak &&
+        (readouts || (peak >= 1.0f) != (m_displayedPeak >= 1.0f))) {
         m_displayedPeak = peak;
         const QString value = peak > 0
             ? QString::number(20.0 * std::log10(peak), 'f', 1)

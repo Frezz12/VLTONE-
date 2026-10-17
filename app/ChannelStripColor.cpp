@@ -33,7 +33,7 @@ QWidget *ChannelStrip::buildColor() {
   connect(rack, &ui::MiniModuleRack::layoutChanged, this,
           &ChannelStrip::refreshColorRackRow);
   connect(&ui::MixerPreferences::instance(),
-          &ui::MixerPreferences::colorVisibleChanged, this,
+          &ui::MixerPreferences::colorVisibleChanged, rack,
           [this](bool) { refreshColorRackRow(); });
   return rack;
 }

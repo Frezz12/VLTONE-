@@ -1,5 +1,6 @@
 #include "RackDeviceCard.hpp"
 #include "Controls.hpp"
+#include "EqualizerStyle.hpp"
 #include "Icons.hpp"
 #include "RackBuiltinView.hpp"
 #include "RackParameterBinding.hpp"
@@ -27,6 +28,26 @@
 #include <algorithm>
 
 namespace {
+class DeviceTitle final : public QLabel {
+  public:
+    using QLabel::QLabel;
+    bool vertical = false;
+
+  protected:
+    void paintEvent(QPaintEvent* event) override {
+        if (!vertical) {
+            QLabel::paintEvent(event);
+            return;
+        }
+        QPainter painter(this);
+        painter.setPen(palette().color(isEnabled() ? QPalette::Active : QPalette::Disabled,
+                                      QPalette::WindowText));
+        painter.translate(0, height());
+        painter.rotate(-90);
+        painter.drawText(QRect(0, 0, height(), width()), Qt::AlignCenter,
+                         fontMetrics().elidedText(text(), Qt::ElideRight, height()));
+    }
+};
 // Only visible rows exist. Neither a 1,000-parameter catalog nor scrolling it
 // causes 1,000 QWidget allocations or parameter reads on every display frame.
 class ParameterGrid final : public QScrollArea {
@@ -108,6 +129,10 @@ QString expansionKey(daw::EngineController* c, const QString& channel, const QSt
     return "rack/" + QString::fromStdString(c->project().miniModuleProjectId) + "/" + channel + "/expanded/" +
            slot;
 }
+QString collapseKey(daw::EngineController* c, const QString& channel, const QString& slot) {
+    return "rack/" + QString::fromStdString(c->project().miniModuleProjectId) + "/" + channel + "/collapsed/" +
+           slot;
+}
 } // namespace
 RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QString slot, QWidget* parent)
     : QFrame(parent), m_controller(c), m_channel(std::move(channel)), m_slot(std::move(slot)) {
@@ -118,16 +143,22 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
     m_root->setContentsMargins(1, 1, 1, 1);
     m_root->setSpacing(0);
     m_header = new QWidget(this);
+    m_header->setObjectName("RackDeviceHeader");
     m_header->setFixedHeight(30);
     m_header->installEventFilter(this);
-    auto* header = new QHBoxLayout(m_header);
+    auto* header = m_headerLayout = new QHBoxLayout(m_header);
     header->setContentsMargins(3, 0, 3, 0);
     header->setSpacing(2);
     m_power = new ui::IconButton(icons::Glyph::Power, tr("Enable device"), m_header);
     m_power->setCheckable(true);
     m_power->setButtonSize(24, 24);
     m_power->setObjectName("RackDevicePower");
-    m_title = new QLabel(m_header);
+    m_fold = new ui::IconButton(icons::Glyph::Chevron, tr("Collapse device"), m_header);
+    m_fold->setObjectName("RackDeviceFold");
+    m_fold->setButtonSize(24, 24);
+    m_fold->setCheckable(true);
+    m_fold->setFocusPolicy(Qt::StrongFocus);
+    m_title = new DeviceTitle(m_header);
     m_title->setMinimumWidth(0);
     m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_title->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -136,17 +167,21 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
     font.setPixelSize(11);
     m_title->setFont(font);
     auto* open = new ui::IconButton(icons::Glyph::WindowMaximize, tr("Open full editor"), m_header);
+    open->setObjectName("RackDeviceOpen");
     open->setButtonSize(24, 24);
     m_configure = new ui::IconButton(icons::Glyph::Gear, tr("Configure eight controls"), m_header);
+    m_configure->setObjectName("RackDeviceConfigure");
     m_configure->setButtonSize(24, 24);
     m_expand = new ui::IconButton(icons::Glyph::ChevronRight, tr("Show all parameters"), m_header);
     m_expand->setButtonSize(24, 24);
+    m_expand->setObjectName("RackDeviceExpandParameters");
     m_expand->setCheckable(true);
     header->addWidget(m_power);
+    header->addWidget(open);
     header->addWidget(m_title, 1);
     header->addWidget(m_configure);
-    header->addWidget(open);
     header->addWidget(m_expand);
+    header->addWidget(m_fold);
     m_root->addWidget(m_header);
     connect(m_power, &QAbstractButton::clicked, this, [this](bool on) {
         finishEdits();
@@ -158,9 +193,13 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
         finishEdits();
         emit editorRequested(m_channel, m_slot);
     });
-    connect(m_expand, &QAbstractButton::clicked, this, [this] { setExpanded(!m_expanded); });
+    connect(m_expand, &QAbstractButton::clicked, this, [this] {
+        setCollapsed(false);
+        setExpanded(!m_expanded);
+    });
+    connect(m_fold, &QAbstractButton::clicked, this, [this] { setCollapsed(false); });
     connect(m_configure, &QAbstractButton::clicked, this, &RackDeviceCard::configurePins);
-    auto* footer = new QWidget(this);
+    auto* footer = m_footer = new QWidget(this);
     footer->setObjectName("RackDeviceFooter");
     footer->setFixedHeight(30);
     auto* foot = new QHBoxLayout(footer);
@@ -224,6 +263,7 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
     connect(m_sidechain, &QAbstractButton::clicked, this, &RackDeviceCard::sidechainMenu);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, &RackDeviceCard::updateTheme);
     m_expanded = QSettings().value(expansionKey(c, m_channel, m_slot), false).toBool();
+    m_collapsed = QSettings().value(collapseKey(c, m_channel, m_slot), false).toBool();
     updateTheme();
     sync();
 }
@@ -271,7 +311,7 @@ void RackDeviceCard::sync() {
         m_pins = model->rackParameterIds;
         rebuildControls();
     }
-    m_title->setText(QString::fromStdString(model->name));
+    m_title->setText(eqUi::displayName(model->uid, model->name));
     m_title->setToolTip(m_title->text());
     setAccessibleName(m_title->text());
     m_power->setChecked(!model->bypassed);
@@ -283,10 +323,20 @@ void RackDeviceCard::sync() {
     m_channelSide->setToolTip(model->editorChannel == daw::PluginEditorChannel::Left
                                   ? tr("Editing left channel")
                                   : tr("Editing right channel"));
-    if (auto* choices = qobject_cast<QStandardItemModel*>(m_mode->model()))
+    if (auto* choices = qobject_cast<QStandardItemModel*>(m_mode->model())) {
+        // Auto, mono and stereo share the runtime's availability gate; only
+        // dual mono asks for an additional capability. Query live capabilities
+        // each refresh so plugin I/O changes cannot leave stale menu state.
+        const auto channel = m_channel.toStdString();
+        const auto slot = m_slot.toStdString();
+        const bool available = m_controller->insertSupportsChannelMode(
+            channel, slot, daw::PluginChannelMode::Auto);
+        const bool dualMono = available && m_controller->insertSupportsChannelMode(
+            channel, slot, daw::PluginChannelMode::DualMono);
         for (int i = 0; i < 4; ++i)
-            choices->item(i)->setEnabled(m_controller->insertSupportsChannelMode(
-                m_channel.toStdString(), m_slot.toStdString(), daw::PluginChannelMode(i)));
+            choices->item(i)->setEnabled(daw::PluginChannelMode(i) == daw::PluginChannelMode::DualMono
+                ? dualMono : available);
+    }
     if (!m_mix->hasFocus() && !m_mixBefore)
         m_mix->setValue(model->mix * 100.);
     const bool sidechain =
@@ -300,6 +350,7 @@ void RackDeviceCard::sync() {
 }
 void RackDeviceCard::refresh(bool synchronize) {
     if (synchronize) sync();
+    if (m_collapsed) return;
     if (m_binding)
         m_binding->refresh();
     if (m_builtin)
@@ -320,6 +371,42 @@ void RackDeviceCard::setExpanded(bool on) {
     rebuildControls();
     emit widthChanged();
 }
+void RackDeviceCard::setCollapsed(bool on) {
+    if (m_collapsed == on) return;
+    finishEdits();
+    const bool focusControls = on && ((m_body && m_body->isAncestorOf(QApplication::focusWidget())) ||
+                                      m_footer->isAncestorOf(QApplication::focusWidget()));
+    const bool focusFold = !on && m_fold->hasFocus();
+    m_pressed = false;
+    m_collapsed = on;
+    QSettings().setValue(collapseKey(m_controller, m_channel, m_slot), on);
+    updateCollapsed();
+    if (focusControls) m_fold->setFocus();
+    else if (focusFold) setFocus();
+    emit widthChanged();
+}
+void RackDeviceCard::updateCollapsed() {
+    const bool native = RackBuiltinView::supports(m_uid);
+    m_expand->setVisible(!native && !m_collapsed);
+    m_fold->setVisible(m_collapsed);
+    m_body->setVisible(!m_collapsed);
+    m_footer->setVisible(!m_collapsed);
+    m_headerLayout->setDirection(m_collapsed ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_headerLayout->setContentsMargins(3, m_collapsed ? 3 : 0, 3, m_collapsed ? 3 : 0);
+    m_header->setMinimumHeight(m_collapsed ? 0 : 30);
+    m_header->setMaximumHeight(m_collapsed ? QWIDGETSIZE_MAX : 30);
+    m_header->setSizePolicy(QSizePolicy::Preferred, m_collapsed ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+    static_cast<DeviceTitle*>(m_title)->vertical = m_collapsed;
+    m_title->setSizePolicy(QSizePolicy::Ignored, m_collapsed ? QSizePolicy::Ignored : QSizePolicy::Preferred);
+    m_title->update();
+    m_fold->setChecked(!m_collapsed);
+    m_fold->setGlyph(m_collapsed ? icons::Glyph::ChevronRight : icons::Glyph::Chevron);
+    const auto action = m_collapsed ? tr("Expand device") : tr("Collapse device");
+    m_fold->setToolTip(action);
+    m_fold->setAccessibleName(action);
+    m_header->setToolTip(m_collapsed ? tr("Double-click to expand device") : tr("Double-click to collapse device"));
+    setFixedWidth(m_collapsed ? 36 : (native ? RackBuiltinView::preferredWidth(m_uid) : (m_expanded ? 560 : 288)));
+}
 void RackDeviceCard::rebuildControls() {
     if (m_body) {
         m_root->removeWidget(m_body);
@@ -334,16 +421,15 @@ void RackDeviceCard::rebuildControls() {
     connect(m_binding, &RackParameterBinding::automationRequested, this,
             [this](const QString& id) { emit automationRequested(m_channel, m_slot, id); });
     m_body = new QWidget(this);
+    m_body->setObjectName("RackDeviceBody");
     auto* row = new QHBoxLayout(m_body);
     row->setContentsMargins(3, 3, 3, 3);
     row->setSpacing(4);
     const bool native = RackBuiltinView::supports(m_uid);
     m_configure->setVisible(!native);
     m_configure->setEnabled(!m_controller->hasCloudProjectBinding());
-    m_expand->setVisible(!native);
     m_expand->setChecked(m_expanded);
     m_expand->setToolTip(m_expanded ? tr("Hide all parameters") : tr("Show all parameters"));
-    setFixedWidth(native ? RackBuiltinView::preferredWidth(m_uid) : (m_expanded ? 560 : 288));
     if (!m_binding->available() || m_runtimeState != daw::AudioPluginRuntimeState::Local) {
         auto* col = new QVBoxLayout;
         auto* message = new QLabel(tr("Device unavailable"), m_body);
@@ -413,6 +499,7 @@ void RackDeviceCard::rebuildControls() {
         }
     }
     m_root->insertWidget(1, m_body, 1);
+    updateCollapsed();
 }
 void RackDeviceCard::configurePins() {
     finishEdits();
@@ -515,8 +602,10 @@ bool RackDeviceCard::eventFilter(QObject* object, QEvent* event) {
             m_pressed = false;
         }
         if (event->type() == QEvent::MouseButtonDblClick) {
-            emit editorRequested(m_channel, m_slot);
-            return true;
+            if (static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+                setCollapsed(!m_collapsed);
+                return true;
+            }
         }
     }
     return QFrame::eventFilter(object, event);

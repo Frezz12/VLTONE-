@@ -136,6 +136,22 @@ Status AudioGraph::connect(NodeId producer, NodeId consumer, InputRole role) {
     return {};
 }
 
+bool AudioGraph::wouldCycle(NodeId producer, NodeId consumer) const {
+    if (producer == consumer) return true;
+    std::vector<NodeId> pending{consumer};
+    std::vector<bool> visited(m_nodes.size());
+    while (!pending.empty()) {
+        const auto id = pending.back(); pending.pop_back();
+        if (id >= m_nodes.size() || visited[id]) continue;
+        visited[id] = true;
+        for (auto next : m_nodes[id].outputs) {
+            if (next == producer) return true;
+            pending.push_back(next);
+        }
+    }
+    return false;
+}
+
 Status AudioGraph::disconnect(NodeId producer, NodeId consumer) {
     if (producer >= m_nodes.size() || consumer >= m_nodes.size()) {
         return fail(EngineError::UnknownNode);
@@ -330,13 +346,13 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
             : (arrival.empty() ? 0 : *std::max_element(arrival.begin(), arrival.end()));
 
     // ── Edges, with a delay line wherever a path arrives early ──
-    BufferAllocator allocator;
+    std::uint32_t bufferCount = 0;
 
     // Transfer reusable slots along one chosen dependency edge. A token is
     // owned by exactly one future node, and every reader of its old contents
     // has finished before that node starts. This replaces the V-by-V ancestor
     // matrix with O(V + E) bookkeeping. Fan-out outputs are conservatively kept
-    // for the block; ordinary channel chains still alternate two buffers.
+    // for the block. In-place nodes may retain their sole input buffer.
     struct FreeList { std::uint32_t head = kInvalidNode, tail = kInvalidNode; };
     std::vector<FreeList> available(order.size());
     std::vector<std::uint32_t> nextFree;
@@ -414,28 +430,41 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
                 }
                 // Scratch for the delayed signal: written and read by this node
                 // alone, so it is never shared.
-                edge.scratchBuffer = std::uint32_t(allocator.acquireExclusive());
+                edge.scratchBuffer = bufferCount++;
             }
             compiled->inputEdges.push_back(edge);
             compiled->inputRoles.push_back(edge.role);
         }
 
-        // The node writes into a buffer of its own …
+        // A sole consumer can overwrite its input if its DSP explicitly allows
+        // it. Never overwrite the sink, a fan-out, a sidechain or a delayed
+        // input. The original source stays pinned for all other readers.
+        std::uint32_t inPlace = kInvalidNode;
+        if (entry.inputCount == 1 && entry.node->supportsInPlace()) {
+            const auto& edge = compiled->inputEdges[entry.firstInput];
+            const auto producer = compiled->nodes[edge.producer].id;
+            if (edge.role == InputRole::Main && edge.delayIndex == kInvalidNode &&
+                m_nodes[producer].outputs.size() == 1 && producer != m_sink)
+                inPlace = compiled->nodes[edge.producer].outputBuffer;
+        }
         auto& free = available[i];
-        if (free.head != kInvalidNode) {
+        if (inPlace != kInvalidNode) {
+            entry.outputBuffer = inPlace;
+        } else if (free.head != kInvalidNode) {
             entry.outputBuffer = free.head;
             free.head = nextFree[free.head];
             if (free.head == kInvalidNode) free.tail = kInvalidNode;
         } else {
-            entry.outputBuffer = std::uint32_t(allocator.acquireExclusive());
+            entry.outputBuffer = bufferCount++;
         }
-        nextFree.resize(allocator.bufferCount(), kInvalidNode);
+        nextFree.resize(bufferCount, kInvalidNode);
 
         // A sole reader makes this input reusable only AFTER this node.
         for (const Connection& input : slot.inputs) {
             const auto producerIndex = denseIndex[input.producer];
             if (m_nodes[input.producer].outputs.size() == 1 &&
-                input.producer != m_sink)
+                input.producer != m_sink &&
+                compiled->nodes[producerIndex].outputBuffer != inPlace)
                 append(free, compiled->nodes[producerIndex].outputBuffer);
         }
         if (free.head != kInvalidNode && !slot.outputs.empty()) {
@@ -483,7 +512,7 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
         successor.inlineTask = true;
         --compiled->taskCount;
     }
-    compiled->pendingTemplate.reserve(order.size());
+    std::uint32_t joinCount = 0;
     // Nodes with the same dependency level never depend on one another, so a
     // level's size is a safe lower bound on exploitable parallelism. Compute it
     // once on the control thread; the callback only reads the scalar result.
@@ -491,7 +520,8 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
     std::vector<std::uint32_t> levelWidth(order.size(), 0);
     for (std::uint32_t i = 0; i < order.size(); ++i) {
         compiled->order.push_back(i);
-        compiled->pendingTemplate.push_back(compiled->nodes[i].dependencies);
+        if (compiled->nodes[i].dependencies > 1)
+            compiled->nodes[i].dependencyCounter = joinCount++;
         if (compiled->nodes[i].dependencies == 0) compiled->roots.push_back(i);
 
         std::uint32_t level = 0;
@@ -525,12 +555,15 @@ Result<std::shared_ptr<const CompiledGraph>> AudioGraph::compile(
         m_sink != kInvalidNode ? denseIndex[m_sink] : kInvalidNode;
 
     // Every buffer the graph can possibly need, in one arena.
-    compiled->arena.allocate(std::max<std::size_t>(allocator.bufferCount(), 1),
+    compiled->arena.allocate(std::max<std::size_t>(bufferCount, 1),
                              info.channels, info.maxBlockSize);
 
     // Per-block scratch travels with the snapshot, so a renderer that has
     // loaded this graph can never index it with another graph's sizes.
-    compiled->pending = std::vector<PendingCounter>(order.size());
+    compiled->pending = std::vector<PendingCounter>(joinCount);
+    for (const auto& entry : compiled->nodes)
+        if (entry.dependencyCounter != kInvalidNode)
+            compiled->pending[entry.dependencyCounter].initial = entry.dependencies;
     compiled->inputScratch.assign(compiled->inputEdges.size(), AudioBlock{});
 
     // MIDI scratch, sized here for the same reason as the audio scratch: the

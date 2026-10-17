@@ -76,7 +76,7 @@ private:
   void *m_port = nullptr;
   QGraphicsPathItem *m_wire = nullptr;
   bool m_space = false, m_panning = false;
-  QPoint m_panAt;
+  QPointF m_panAt;
   std::optional<QPointF> m_pinchAnchor;
   QMap<QString, QPointF> m_beforeMove;
   daw::plugins::mini::MiniModuleDefinition m_graph;

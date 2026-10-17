@@ -706,7 +706,7 @@ bool supportedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.gain" || insert.uid == "daw.stereo-utility" || insert.uid == "daw.reverse" ||
             insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.channel-color" ||
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.1073" || insert.uid == "daw.channel-color" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
             insert.uid == "daw.pitch-corrector");

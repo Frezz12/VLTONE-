@@ -215,7 +215,7 @@ void ToolDialog::finishLayout() {
     m_preview = new QCheckBox(tr("Preview"), this);
     m_preview->setChecked(true);
     m_preview->setToolTip(
-        tr("Draw the result in the grid as you change the settings. Nothing is "
+        tr("See and hear the result during playback as you change the settings. Nothing is "
            "written to the clip until you press Apply."));
     connect(m_preview, &QCheckBox::toggled, this, &ToolDialog::paramsChanged);
 

@@ -436,3 +436,8 @@ VLT_MUTATION(resetMasterPeakHold, LocalOnly)
 VLT_MUTATION(midiRecordingLanding, LocalOnly)
 
 VLT_MUTATION(prepareAutomaticRecordingSilence, LocalOnly)
+
+VLT_MUTATION(setRackModulation, LocalOnly)
+VLT_MUTATION(addRackModulator, LocalOnly)
+VLT_MUTATION(duplicateRackModulator, LocalOnly)
+VLT_MUTATION(assignRackModulation, LocalOnly)

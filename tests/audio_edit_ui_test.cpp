@@ -11,6 +11,8 @@
 #include <QElapsedTimer>
 #include <QThread>
 #include <QPixmap>
+#include <QAction>
+#include <QFontDatabase>
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -64,6 +66,25 @@ static bool gestureChecks() {
     QKeyEvent space(QEvent::KeyPress,Qt::Key_Space,Qt::NoModifier);
     QApplication::sendEvent(&canvas,&space);
     if(space.isAccepted())return false;
+    // A segment handle must move in Select mode, preserve the grab offset,
+    // ignore click jitter and restore the selection when Escape is pressed.
+    auto splitDoc=doc;daw::audioedit::split(splitDoc,24000);canvas.setAudio(splitDoc,{},{});
+    canvas.showRange(0,96000);canvas.setSelection(1000,2000);
+    QString movedId;qint64 movedTo=-1;
+    QObject::connect(&canvas,&AudioEditCanvas::moveRequested,[&](const QString& id,qint64 at){movedId=id;movedTo=at;});
+    mouse(QEvent::MouseButtonPress,250,287);mouse(QEvent::MouseMove,253,287);mouse(QEvent::MouseButtonRelease,253,287);
+    if(moves!=0||canvas.first()!=24000||canvas.last()!=48000)return false;
+    mouse(QEvent::MouseButtonPress,250,287);mouse(QEvent::MouseMove,350,287);mouse(QEvent::MouseButtonRelease,350,287);
+    if(moves!=1||movedTo!=36000||movedId.toStdString()!=splitDoc.regions[1].id)return false;
+    canvas.setSelection(1000,2000);
+    mouse(QEvent::MouseButtonPress,250,287);mouse(QEvent::MouseMove,350,287);escape();mouse(QEvent::MouseButtonRelease,350,287);
+    if(moves!=1||canvas.first()!=1000||canvas.last()!=2000)return false;
+    // The ruler always places/selects time, including while the Move tool is active.
+    canvas.setTool(AudioEditCanvas::Tool::Move);
+    mouse(QEvent::MouseButtonPress,100,12);mouse(QEvent::MouseButtonRelease,100,12);
+    if(canvas.cursor()!=12000||canvas.last()!=canvas.first())return false;
+    QKeyEvent selectTool(QEvent::KeyPress,Qt::Key_1,Qt::NoModifier);QApplication::sendEvent(&canvas,&selectTool);
+    if(canvas.tool()!=AudioEditCanvas::Tool::Select)return false;
     std::fprintf(stderr,"PASS Audio editor: selection handles, immediate slip reversal, Escape, single commit, project Space\n");
     return true;
 }
@@ -91,8 +112,24 @@ static bool editorChecks() {
         return false;
     };
     if(!left||!right||!gain||!wait([&]{first.triggerAction("all");second.triggerAction("all");return left->last()==4800&&right->last()==4800;}))return false;
+    controller.seekSeconds(.05);first.refresh();
+    if(std::abs(left->playhead()-2400)>1)return false;
+    controller.seekSeconds(.2);first.refresh();if(left->playhead()!=-1)return false;
+    left->setSelection(480,2400);first.triggerAction("audition");
+    if(!wait([&]{return controller.previewPath().starts_with("sample-editor:");}))return false;
+    audio::AudioBuffer input(2,256),output(2,256);input.clear();
+    if(!controller.processDeviceBlockForTest(input,output,256))return false;
+    first.refresh();
+    if(!controller.previewPlaying()||std::abs(left->playhead()-(480+controller.previewPositionSeconds()*48000))>1)return false;
+    first.triggerAction("stop");controller.processDeviceBlockForTest(input,output,256);first.refresh();
+    if(left->playhead()!=-1)return false;
+    std::fprintf(stderr,"PASS Audio editor: timeline seek and audition cursor use actual playback position plus selection offset\n");
     auto* start = first.findChild<QDoubleSpinBox*>("sampleEditor.start");
     if (!start) return false;
+    auto* details=first.findChild<QAction*>("sampleEditor.details");
+    if(!details||details->isChecked()||start->isVisible())return false;
+    details->setChecked(true);QApplication::processEvents();
+    if(!start->isVisible())return false;
     left->setSelection(480, 4320);
     auto numberMouse = [&](QEvent::Type type, double y) {
         QMouseEvent event(type, QPointF(10, 10), QPointF(300, y),
@@ -119,6 +156,22 @@ static bool editorChecks() {
     QMetaObject::invokeMethod(gain,"editFinished",Qt::DirectConnection);
     if(!wait([&]{return controller.audioEditDocument(target)==baseline&&!first.property("gainTransaction").toBool();})||
        controller.undoLabel()!=undoBefore)return false;
+    const auto cachedBefore=controller.cachedAudioEditSamples(target);
+    left->setSelection(2400,2400);first.triggerAction("split");
+    auto cut=controller.audioEditDocument(target);
+    if(cut.regions.size()!=2||left->tool()!=AudioEditCanvas::Tool::Move||
+       controller.cachedAudioEditSamples(target)!=cachedBefore)return false;
+    auto* moveTool=first.findChild<QAction*>("sampleEditor.tool2");if(!moveTool||!moveTool->isChecked())return false;
+    left->showRange(0,9600);
+    auto drag=[&](QEvent::Type type,double frame){const QPointF at(frame/9600*left->width(),100);QMouseEvent e(type,at,at,type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(left,&e);};
+    drag(QEvent::MouseButtonPress,3000);drag(QEvent::MouseMove,6600);drag(QEvent::MouseButtonRelease,6600);
+    if(!wait([&]{const auto doc=controller.audioEditDocument(target);return doc.regions.size()==2&&doc.regions.back().start==6000;}))return false;
+    if(left->first()!=6000||left->last()!=8400)return false;
+    first.triggerAction("undo");
+    if(!wait([&]{return controller.audioEditDocument(target)==cut&&moveTool->isEnabled()&&first.findChild<QAction*>("sampleEditor.undo")->isEnabled();}))return false;
+    first.triggerAction("undo");
+    if(!wait([&]{first.triggerAction("all");return controller.audioEditDocument(target)==baseline&&left->last()==4800&&gain->isEnabled();}))return false;
+    std::fprintf(stderr,"PASS Audio editor: immediate split reuses audio, switches to Move, drags with grab offset, two-step undo\n");
     second.hide(); // Stop polling to force an obsolete second view.
     first.triggerAction("silence");
     if(!wait([&]{return controller.audioEditDocument(target).regions.empty();}))return false;
@@ -160,6 +213,11 @@ static bool longWaveformChecks() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+#ifdef Q_OS_WIN
+    // The offscreen platform has no system font database on Windows.
+    QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR")+"/Fonts/segoeui.ttf");
+    app.setFont(QFont("Segoe UI",10));
+#endif
     std::fprintf(stderr,"Audio editor UI check: QApplication ready\n");
     QApplication::setApplicationName("VLTONE Audio Editor Check");
     QTranslator russian;

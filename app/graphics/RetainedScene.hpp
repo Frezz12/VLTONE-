@@ -2,6 +2,7 @@
 #include "SceneRecorder.hpp"
 #include <QPainter>
 #include <functional>
+#include <list>
 #include <unordered_map>
 
 namespace ui::graphics {
@@ -10,10 +11,14 @@ namespace ui::graphics {
 class RetainedScene {
 public:
     static constexpr qint64 budget = 32 * 1024 * 1024;
-    void clear() { m_entries.clear(); m_bytes = 0; }
+    void clear() { m_entries.clear(); m_lru.clear(); m_bytes = 0; }
     template<class Predicate> void invalidate(Predicate affected) {
         for (auto it = m_entries.begin(); it != m_entries.end();) {
-            if (affected(it->first)) { m_bytes -= it->second.group->bytes; it = m_entries.erase(it); }
+            if (affected(it->first)) {
+                m_bytes -= it->second.group->bytes;
+                m_lru.erase(it->second.recency);
+                it = m_entries.erase(it);
+            }
             else ++it;
         }
     }
@@ -42,26 +47,27 @@ public:
             // cache. SceneRecorder and WorkspaceSurface enforce admission too.
             if (group->bytes > budget) { sink->appendGroup(std::move(group), origin); return true; }
             while (m_bytes + group->bytes > budget || m_entries.size() >= 512) {
-                auto oldest = m_entries.begin();
-                for (auto it = m_entries.begin(); it != m_entries.end(); ++it)
-                    if (it->second.used < oldest->second.used) oldest = it;
+                const auto oldest = m_entries.find(m_lru.front());
                 m_bytes -= oldest->second.group->bytes;
                 m_entries.erase(oldest);
+                m_lru.pop_front();
             }
             m_bytes += group->bytes;
-            found = m_entries.emplace(key, Entry{std::move(group), 0}).first;
+            m_lru.push_back(key);
+            found = m_entries.emplace(key, Entry{std::move(group), std::prev(m_lru.end())}).first;
             ++m_builds;
         }
-        found->second.used = ++m_clock;
+        m_lru.splice(m_lru.end(), m_lru, found->second.recency);
         sink->appendGroup(found->second.group, origin);
         return true;
     }
     quint64 builds() const { return m_builds; }
 private:
-    struct Entry { std::shared_ptr<const SceneMeshGroup> group; quint64 used; };
+    struct Entry { std::shared_ptr<const SceneMeshGroup> group; std::list<quint64>::iterator recency; };
+    std::list<quint64> m_lru;
     std::unordered_map<quint64, Entry> m_entries;
     qint64 m_bytes = 0;
     qreal m_dpr = 0;
-    quint64 m_clock = 0, m_builds = 0;
+    quint64 m_builds = 0;
 };
 }

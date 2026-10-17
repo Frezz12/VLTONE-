@@ -59,3 +59,7 @@ void SampleEditorWindow::closeEvent(QCloseEvent* event) {
 void SampleEditorWindow::showSampler() {
     if(m_panel)m_panel->showDefaultPage();
 }
+
+void SampleEditorWindow::showWarp() {
+    if (m_panel) m_panel->showWarpPage();
+}

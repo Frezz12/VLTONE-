@@ -238,6 +238,7 @@ bool MiniModuleInstance::configure(const MiniModuleDefinition &d,
     const auto &c = d.controls[i];
     m_parameters.push_back(
         {i, c.id, c.name, c.unit, c.minimum, c.maximum, c.initial});
+    m_parameters.back().isLogarithmic = c.logarithmic;
     m_values[i] = c.initial;
   }
   return !active || activate(m_info);

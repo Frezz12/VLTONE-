@@ -12,7 +12,7 @@ public:
     static constexpr int kDefaultWidth = 100;
     static constexpr int kMaximumWidth = 180;
     static constexpr auto kWidthSetting = "mixer/channelWidth";
-    static constexpr auto kMasterVisibleSetting = "mixer/masterVisible";
+    static constexpr auto kMasterVisibleSetting = "master/panelVisible";
     /// Section visibility applies to the whole console to retain alignment.
     /// The legacy COLOR setting name is kept for existing preferences.
     static constexpr auto kColorVisibleSetting = "mixer/colorVisible";

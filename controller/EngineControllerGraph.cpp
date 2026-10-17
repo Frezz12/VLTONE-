@@ -66,6 +66,7 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
     };
     auto& spec = session.graph;
     spec.channels.reserve(m_project.tracks.size());
+    spec.masterModulation = m_project.masterModulation;
     spec.masterVolume = m_project.masterVolume;
     spec.masterPan = m_project.masterPan;
     spec.masterMiniModules = miniModuleRoutes(m_project.masterMiniModules);
@@ -81,6 +82,8 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
         if (!carriesAudio(track)) continue;
         auto& description = spec.channels.emplace_back();
         description.id = track.id;
+        description.modulation = track.modulation;
+        description.renderControlOnly = track.renderControlOnly;
         description.name = track.name;
         description.outputBusId = track.outputBusId;
         description.acceptsMidi = trackAccepts(track.kind, ClipKind::Midi);
@@ -93,7 +96,7 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
         description.volume = track.volume;
         description.pan = track.pan;
         description.mono = track.mono;
-        description.silent = track.muted || (solo.any && !solo.open.contains(track.id));
+        description.silent = track.muted || (!track.renderControlOnly && solo.any && !solo.open.contains(track.id));
         description.sends = track.sends;
         description.miniModules = miniModuleRoutes(track.miniModules);
         description.samplerOwned = track.samplerFx.isOwnedBy(track.instrument);

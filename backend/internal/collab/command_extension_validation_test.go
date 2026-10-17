@@ -208,7 +208,7 @@ func TestMixerPluginAndClipCommandsStayInValidationLockstep(t *testing.T) {
 
 func TestBuiltinEffectCommands(t *testing.T) {
 	for _, schemaVersion := range []int{2, 3, 4, 5, 6} {
-		for _, uid := range []string{"daw.compressor", "daw.cla2a", "daw.delay", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.modulation", "daw.pitch-corrector", "daw.gain", "daw.stereo-utility", "daw.reverse"} {
+		for _, uid := range []string{"daw.compressor", "daw.cla2a", "daw.1073", "daw.delay", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger", "daw.phaser", "daw.modulation", "daw.pitch-corrector", "daw.gain", "daw.stereo-utility", "daw.reverse"} {
 			for _, chain := range []string{"master", "track", "samplerFx", "clip", "instrument"} {
 				trackID, clipID, insertID := uuid.New(), uuid.Nil, uuid.New()
 				if chain == "master" {

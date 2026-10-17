@@ -1,4 +1,5 @@
 #include "DSP/WarpPlayback.hpp"
+#include "Nodes/PlaybackNodes.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -22,6 +23,38 @@ int main() {
     auto audio = std::make_shared<engine::SampleBuffer>(2, 96000, 48000);
     ClipWarpModel map; map.enabled = true; map.baselineDurationSeconds = 2;
     map.markers = {{"a", 0, 0, true}, {"b", .5, 1.5, false}, {"c", 2, 4, true}};
+    {
+        engine::ClipPlayerNode player;
+        player.prepare({48000, 128, 2});
+        auto second = std::make_shared<engine::SampleBuffer>(2, 64, 48000);
+        auto clips = std::make_shared<engine::ClipPlayerNode::ClipList>();
+        engine::ClipPlacement first; first.clipId = "shared-comp-id"; first.audio = audio;
+        first.warp = std::make_shared<const ClipWarpModel>(map); first.lengthSamples = 96000;
+        clips->push_back(first);
+        auto other = first; other.audio = second; other.startSample = 100000;
+        clips->push_back(other);
+        auto duplicate = first; duplicate.startSample = 200000;
+        clips->push_back(duplicate);
+        for (int i = 0; i < 7; ++i) {
+            duplicate.startSample = 300000 + i * 10000;
+            clips->push_back(duplicate);
+        }
+        for (int i = 0; i < 32; ++i) {
+            engine::ClipPlacement empty;
+            empty.clipId = std::to_string(i); empty.startSample = 500000 + i * 1000;
+            clips->push_back(empty);
+        }
+        player.setClips(clips);
+        const auto before = player.clips();
+        std::reverse(clips->begin(), clips->end());
+        player.setClips(clips);
+        const auto after = player.clips();
+        check((*after)[0].warpPlayback == (*before)[0].warpPlayback &&
+              (*after)[1].warpPlayback == (*before)[1].warpPlayback &&
+              (*after)[2].warpPlayback == (*before)[0].warpPlayback &&
+              (*after)[9].warpPlayback == (*before)[0].warpPlayback,
+              "warp reuse retains first matching clip id and source across reordered comp slices");
+    }
     for (int kind = 0; kind < 2; ++kind) {
         for (unsigned i = 0; i < audio->frames(); ++i) {
             const int phase = int(i) % 24000;

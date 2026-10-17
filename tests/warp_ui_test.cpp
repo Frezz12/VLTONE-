@@ -5,6 +5,8 @@
 #include "WaveformPaint.hpp"
 #include "Recording/RecordingEngine.hpp"
 #include <QApplication>
+#include <QFontDatabase>
+#include <QDir>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QTimer>
@@ -34,6 +36,10 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("VLTONE-Warp-Test"); app.setApplicationName("Warp-Test");
     ui::initializeApplicationFonts();
+#ifdef Q_OS_WIN
+    QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR") + "/Fonts/segoeui.ttf");
+    app.setFont(QFont("Segoe UI", 10));
+#endif
     ThemeManager::instance().apply();
     int failures = 0;
     const auto check = [&](bool ok, const char* what) { std::printf("%s %s\n", ok ? "PASS" : "FAIL", what); failures += !ok; };
@@ -50,16 +56,25 @@ int main(int argc, char** argv) {
     audio::AudioRecorder recorder; recorder.initialize(48000, 2); recorder.writeWAVFile(file, audio, 48000);
     daw::EngineController controller{}; if (!controller.initialize(48000, 256, false)) return 1;
     daw::ProjectModel project; project.tempo = 120;
-    daw::TrackModel track; track.id = daw::newUuid(); track.kind = daw::TrackKind::Audio; track.name = "Drums";
+    daw::TrackModel track; track.id = daw::newUuid(); track.kind = daw::TrackKind::Audio; track.name = "Drums"; track.color = 0x417dbe;
     daw::ClipModel clip; clip.id = daw::newUuid(); clip.filePath = file; clip.kind = daw::ClipKind::Audio;
     clip.name = "Acoustic loop"; clip.durationSeconds = 2; clip.channels = 2;
-    track.clips.push_back(clip); project.tracks.push_back(track); controller.restoreProject(project, "Test");
+    auto secondClip = clip; secondClip.id = daw::newUuid(); secondClip.startSeconds = 3;
+    track.clips = {clip, secondClip}; project.tracks.push_back(track); controller.restoreProject(project, "Test");
     WarpEditorWidget editor(&controller); editor.resize(1000, 410); editor.show();
     check(editor.setClip(QString::fromStdString(track.id), QString::fromStdString(clip.id)), "Warp opens selected clip");
     QTest::qWait(180);
     auto* canvas = editor.findChild<QWidget*>("WarpCanvas");
     const auto point = [&](double beat) { return QPoint(int(12 + beat / 4 * (canvas->width() - 24)), 92); };
     const auto state = [&] { return controller.audioClip(track.id, clip.id)->warp; };
+    check(editor.findChild<QScrollArea*>("WarpInspector")->isHidden(), "precise settings are collapsed on first open");
+    const auto initialDepth = controller.undoDepth();
+    const auto beforeNavigation = state();
+    QTest::mousePress(canvas, Qt::MiddleButton, Qt::NoModifier, point(2));
+    QTest::mouseMove(canvas, point(1));
+    QTest::keyClick(canvas, Qt::Key_Escape);
+    QTest::mouseRelease(canvas, Qt::MiddleButton, Qt::NoModifier, point(1));
+    check(state() == beforeNavigation && controller.undoDepth() == initialDepth, "middle-button navigation and cancellation never edit timing");
     QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, point(1));
     check(state().markers.size() == 3, "double-click adds a real marker");
     if (state().markers.size() != 3) return 1;
@@ -152,10 +167,11 @@ int main(int argc, char** argv) {
     check(std::abs(editor.findChild<QDoubleSpinBox*>("WarpRangeStart")->value() - 1.75) < .02 &&
           std::abs(editor.findChild<QDoubleSpinBox*>("WarpRangeEnd")->value() - 3.75) < .02, "ruler gesture selects an independent processing range");
     editor.resize(720, 360); QTest::qWait(40);
-    check(editor.width() == 720 && editor.findChild<QPushButton*>("WarpFit")->mapTo(&editor, QPoint()).x() + editor.findChild<QPushButton*>("WarpFit")->width() <= editor.width(), "compact toolbar fits without horizontal overflow");
+    check(editor.width() == 720 && editor.findChild<QToolButton*>("WarpFit")->mapTo(&editor, QPoint()).x() + editor.findChild<QToolButton*>("WarpFit")->width() <= editor.width(), "compact toolbar fits without horizontal overflow");
     auto* inspector = editor.findChild<QScrollArea*>("WarpInspector"); auto* settings = editor.findChild<QToolButton*>("WarpInspectorButton");
-    QTest::mouseClick(settings, Qt::LeftButton); check(inspector->isHidden(), "compact inspector closes immediately");
-    QTest::mouseClick(settings, Qt::LeftButton); check(inspector->isVisible(), "compact inspector opens as an overlay");
+    QTest::mouseClick(settings, Qt::LeftButton); QTest::qWait(20);
+    check(inspector->isVisible() && canvas->mapTo(&editor, canvas->rect().topRight()).x() < inspector->mapTo(&editor, QPoint()).x(), "settings open beside the waveform without covering markers");
+    QTest::mouseClick(settings, Qt::LeftButton); check(inspector->isHidden(), "settings close immediately");
     editor.previewAlignment(); editor.hide();
     check(!controller.warpPreviewActive() && state().markers.size() == assistedBase.markers.size(), "hiding the panel cancels uncommitted audition");
     editor.resize(1100, 440); editor.show();
@@ -176,8 +192,21 @@ int main(int argc, char** argv) {
         editor.findChild<QSpinBox*>("WarpSwing")->setValue(64); editor.previewAlignment(); QTest::qWait(100);
         editor.grab().save(QString::fromLocal8Bit(argv[1])); editor.cancelPreview();
     }
+    {
+        WarpEditorWidget peer(&controller); peer.resize(720, 400); peer.show();
+        peer.setClip(QString::fromStdString(track.id), QString::fromStdString(secondClip.id));
+        editor.previewAlignment(); peer.previewAlignment();
+        const auto peerMap = *controller.warpPreviewMap();
+        const auto peerDepth = controller.undoDepth();
+        editor.applyPreview();
+        check(controller.warpPreviewActiveFor(track.id, secondClip.id) && *controller.warpPreviewMap() == peerMap && controller.undoDepth() == peerDepth,
+              "Apply in a stale window cannot commit another clip's audition");
+        editor.previewAlignment(); peer.previewAlignment(); editor.hide();
+        check(controller.warpPreviewActiveFor(track.id, secondClip.id), "hiding one Warp tab leaves the other clip's audition intact");
+        peer.cancelPreview(); editor.show();
+    }
     controller.removeClip(track.id, clip.id); editor.refresh();
-    check(editor.findChild<QWidget*>("WarpCanvas") && !editor.findChildren<QCheckBox*>().front()->isEnabled(), "deleted clip shows inactive editor");
+    check(editor.findChild<QWidget*>("WarpCanvas") && !editor.findChild<QToolButton*>("WarpEnabled")->isEnabled(), "deleted clip shows inactive editor");
     editor.clearClip();
     auto extractionProject = project;
     daw::TrackModel midiTrack; midiTrack.id = daw::newUuid(); midiTrack.kind = daw::TrackKind::Midi; midiTrack.name = "Groove reference";
@@ -204,12 +233,16 @@ int main(int argc, char** argv) {
         app.installTranslator(&russian);
         controller.restoreProject(project, "Visual fixture");
         WarpEditorWidget localized(&controller); localized.resize(1100, 440); localized.show(); localized.setClip(QString::fromStdString(track.id), QString::fromStdString(clip.id));
-        QTest::qWait(500); localized.previewAlignment(); QTest::qWait(100);
+        QTest::qWait(500);
         const auto output = QString::fromLocal8Bit(argv[1]);
         localized.grab().save(output + ".ru.png");
+        localized.previewAlignment(); QTest::qWait(100);
+        localized.grab().save(output + ".ru-preview.png");
         localized.resize(720, 400); QTest::qWait(100);
-        check(localized.width() == 720 && localized.findChild<QPushButton*>("WarpSuggest")->mapTo(&localized, QPoint()).x() + localized.findChild<QPushButton*>("WarpSuggest")->width() <= localized.width(), "Russian compact controls fit the panel");
+        check(localized.width() == 720 && localized.findChild<QToolButton*>("WarpInspectorButton")->mapTo(&localized, QPoint()).x() + localized.findChild<QToolButton*>("WarpInspectorButton")->width() <= localized.width(), "Russian compact controls fit the panel");
         localized.grab().save(output + ".ru-compact.png");
+        localized.findChild<QToolButton*>("WarpInspectorButton")->click(); QTest::qWait(80);
+        localized.grab().save(output + ".ru-settings.png");
         ThemeManager::instance().setThemeId("light", false); QTest::qWait(80);
         localized.grab().save(output + ".ru-light.png");
         localized.cancelPreview(); localized.clearClip(); app.removeTranslator(&russian);

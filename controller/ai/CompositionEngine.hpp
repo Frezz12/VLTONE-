@@ -12,6 +12,9 @@ namespace daw::ai {
 /// The musical job a candidate should perform in the arrangement.
 enum class CompositionRole { Melody, Bass, Chords, Drums };
 
+enum class CompositionCharacter { Singing, Rhythmic, Spacious };
+enum class CompositionEnding { Resolved, Loop };
+
 /// Inclusive MIDI pitch bounds. Ignored for drums, whose pitches are GM keys.
 struct CompositionPitchRange {
     int lowest = 0;
@@ -40,6 +43,16 @@ struct CompositionRequest {
     std::optional<CompositionPitchRange> pitchRange;
     double rhythmicDensity = 0.5;  ///< 0 = sparse, 1 = busy
     double beatsPerBar = 4.0;
+    /// Zero retains the legacy quarter-note pulse. Otherwise these must agree
+    /// with beatsPerBar; compound meters accent groups of three eighths.
+    int meterNumerator = 0;
+    int meterDenominator = 4;
+    CompositionCharacter character = CompositionCharacter::Singing;
+    CompositionEnding ending = CompositionEnding::Resolved;
+    double swing = 0.5;           ///< 0.5 = straight, maximum 0.75
+    double expression = 0.0;      ///< bounded velocity and timing variation
+    double chordBars = 1.0;       ///< one chord every 0.5, 1 or 2 bars
+    bool seventhChords = false;
     std::vector<CompositionHarmonySegment> harmony;
     /// Existing arrangement onsets by sixteenth-note phase. Melody generation
     /// prefers lower values so a new line answers rather than doubles it.

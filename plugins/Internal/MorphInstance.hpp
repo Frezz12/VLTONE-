@@ -74,6 +74,8 @@ private:
   double saturate(double, unsigned channel, bool feedback) noexcept;
   std::array<std::atomic<double>, Count> m_values{};
   Values m_targets{}, m_current{}, m_steps{};
+  std::array<unsigned, MatrixStart> m_rampingParameters{};
+  unsigned m_rampingCount = 0;
   State m_state;
   // Classic SPSC triple buffer: front belongs to audio, back to control,
   // middle changes owners only through the exchange. No reclamation in RT.
@@ -88,8 +90,12 @@ private:
   std::array<Core, 2> m_cores;
   double m_routeBlend = 0;
   std::array<double, 4> m_phases{}, m_motion{}, m_weights{}, m_weightSteps{};
-  std::array<double, 2> m_lfoPhase{}, m_lfo{}, m_previousDrive{},
-      m_previousFeedbackDrive{};
+  std::array<double, 2> m_lfoPhase{}, m_lfo{};
+  struct DriveHistory {
+    double input = 0, foldPrimitive = -1;
+    bool foldValid = true;
+  };
+  std::array<DriveHistory, 2> m_previousDrive{}, m_previousFeedbackDrive{};
   std::array<std::array<double, 8>, 2> m_allpassCoefficients{},
       m_allpassSteps{};
   std::array<std::array<double, 4>, 2> m_chorusDelays{}, m_chorusDelaySteps{};

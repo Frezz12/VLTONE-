@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import { HeroVideo } from "@/components/hero-video";
 import Link from "next/link";
-import { ArrowDown, ArrowUpRight, ArrowRight, Plus } from "lucide-react";
+import { ArrowDown, ArrowUpRight, ArrowRight, Heart, Plus } from "lucide-react";
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { StudioGallery, ProductShot } from "@/components/product-gallery";
 import { AmbientMotionControl } from "@/components/ambient-motion-control";
 import { HomePlayground } from "@/components/home-playground";
+import { SupportLink } from "@/components/support-link";
 import { studioContent } from "@/lib/studio-content";
 import { screenshotVersion } from "@/lib/screenshot-version";
 import { siteMetadata, siteUrl } from "@/lib/seo";
@@ -165,6 +166,16 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
           <Link className="vlt-button" href="/releases">{c.start}<ArrowDown size={18} aria-hidden /></Link>
           <Link className="text-link" href="/manual">{c.explore}<ArrowUpRight size={16} aria-hidden /></Link>
         </div>
+      </div>
+    </section>
+    <section className="studio-support" aria-labelledby="support-title">
+      <div className="studio-container support-inner" data-reveal="0">
+        <Heart className="support-heart" size={32} strokeWidth={1.4} aria-hidden />
+        <div>
+          <h2 id="support-title">{ru ? "Помоги VLTone расти." : "Help VLTone grow."}</h2>
+          <p>{ru ? "Если тебе близок проект, поддержи его подпиской на Boosty. Твоя поддержка помогает развивать программу и создавать новые инструменты для музыки." : "If you enjoy the project, support it with a Boosty subscription. Your support helps us develop the app and build new tools for making music."}</p>
+        </div>
+        <SupportLink source="home" className="vlt-button support-button">{ru ? "Поддержать на Boosty" : "Support on Boosty"}<ArrowUpRight size={18} aria-hidden /></SupportLink>
       </div>
     </section>
   </main>;

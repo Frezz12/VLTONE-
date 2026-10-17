@@ -68,7 +68,7 @@ private:
     QScrollBar* vScroll_ = nullptr;
 
     int dragStartX_ = -1;
-    double dragStartScroll_ = 0.0;
+    double dragLastX_ = 0;
 
     static constexpr int kLabelWidth = 120;
     static constexpr int kTrackHeight = 72;

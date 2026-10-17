@@ -38,8 +38,10 @@ bool AudioRuntime::applyContent(const std::string& channelId, AudioContentSpec c
         channel.midiClips->setNotes(std::move(content.midi->notes));
     }
     if (content.plugins) {
+        const engine::RealtimeEngine::RenderGate modulationGate(engine);
         channel.automation = std::make_shared<const AudioContentSpec::PluginCurves>(std::move(*content.plugins));
         applyPluginAutomation(channel);
+        refreshModulation(channel);
     }
     if (content.levels) {
         if (channel.fader) channel.fader->setAutomation(std::move(content.levels->fader));
@@ -79,6 +81,7 @@ void AudioRuntime::applyPluginAutomation(TrackChannel& channel) {
     using Curve = AudioContentSpec::PluginCurve;
     std::unordered_map<std::string, std::vector<const Curve*>> bySlot;
     for (const auto& curve : *channel.automation) {
+        if (curve.kind != AutomationTargetKind::PluginParameter) continue;
         const auto& slotId = curve.slotId.empty() && !channel.instrument.empty()
             ? channel.instrument.front().slotId : curve.slotId;
         bySlot[slotId].push_back(&curve);

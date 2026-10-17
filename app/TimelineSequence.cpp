@@ -4,6 +4,8 @@
 #include "Icons.hpp"
 #include "Theme.hpp"
 #include "UiConstants.hpp"
+#include "UiPerformance.hpp"
+#include "graphics/StretchableRect.hpp"
 #include <QActionGroup>
 #include <QCursor>
 #include <QInputDialog>
@@ -12,6 +14,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QToolTip>
+#include <QVarLengthArray>
 
 namespace seq = ui::sequence;
 namespace {
@@ -25,6 +28,30 @@ double sourceOffset(const daw::ClipModel& clip, double tempo) {
 double endBeat(const daw::ClipModel& clip, double tempo) {
     return sourceOffset(clip, tempo) + daw::secondsToBeats(clip.durationSeconds, tempo);
 }
+
+void paintHeaderGlyph(QPainter& painter, icons::Glyph glyph, QRectF rect, QColor color) {
+    auto* sink = ui::graphics::sceneGeometrySink(painter);
+    if (!sink) { icons::paint(painter, glyph, rect, color); return; }
+    // These three monochrome glyphs keep their size while the clip zooms.
+    // Reuse their triangles, including round strokes, rather than restroking
+    // the keyboard and division marks for every visible clip on every frame.
+    static thread_local QCache<quint64, QVector<QPointF>> cache(512);
+    const qreal dpr = painter.device()->devicePixelRatioF();
+    const quint64 key = qHashMulti(size_t(0), int(glyph), rect.width(), rect.height(), dpr);
+    auto* vertices = cache.object(key);
+    if (!vertices) {
+        ui::graphics::SceneRecorder recorder(rect.size().toSize(), dpr);
+        { QPainter local(&recorder); icons::paint(local, glyph, QRectF(QPointF(), rect.size()), Qt::white); }
+        if (!recorder.supported()) { icons::paint(painter, glyph, rect, color); return; }
+        auto geometry = std::make_unique<QVector<QPointF>>();
+        for (const auto& mesh : recorder.takeMeshes())
+            for (const auto& v : mesh.vertices) geometry->append(QPointF(v.x, v.y));
+        const int cost = int(geometry->size() * sizeof(QPointF) / 1024 + 1);
+        cache.insert(key, geometry.release(), cost);
+        vertices = cache.object(key);
+    }
+    if (vertices) sink->appendTriangles(vertices->constData(), int(vertices->size()), color, rect.topLeft());
+}
 }
 
 void TimelineWidget::applyMidiView(const ClipHit& hit, daw::MidiClipView view) {
@@ -35,10 +62,30 @@ void TimelineWidget::applyMidiView(const ClipHit& hit, daw::MidiClipView view) {
 }
 
 void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
-                                         const QRectF& body, const QColor& text) {
+                                         const QRectF& body, const QColor& text,
+                                         qreal viewportRight, bool cacheHeader) {
+    ui::perf::Scope timing("timeline.midi.header.ms");
+    if (viewportRight < 0) viewportRight = width() - ui::kTimelineScrollExtent;
     const bool sequenced = clip.midiView.sequence && sequenceAvailable(clip);
-    const seq::Layout layout(body, sequenced, width() - ui::kTimelineScrollExtent);
+    const seq::Layout layout(body, sequenced, viewportRight);
     if (layout.header.isEmpty()) return;
+    // At a fixed zoom, most headers only translate. Keep their shaped text,
+    // icons and masks immutable; only a clip crossing a viewport edge changes
+    // its local layout. The cache is bounded and cleared on document edits.
+    if (cacheHeader && m_staticFrameScale == m_pixelsPerSecond && ui::graphics::isSceneRecording(p)) {
+        const qreal dpr = p.device()->devicePixelRatioF();
+        const QPointF origin(std::floor(std::max(0., body.left()) * dpr) / dpr,
+                             std::floor(body.top() * dpr) / dpr);
+        const auto localBody = body.translated(-origin);
+        const qreal localRight = std::min(viewportRight, body.right()) - origin.x();
+        const auto key = qHashMulti(size_t(0), QString::fromStdString(clip.id),
+            localBody.left(), localBody.top(), localBody.width(), localBody.height(), localRight,
+            text.rgba(), sequenced, clip.muted, clip.midiView.pitch, clip.midiView.stepBeats,
+            sequenceAvailable(clip), linkedName(clip));
+        m_gpuMidiHeaders.paint(p, quint64(key), QSize(int(std::ceil(localRight)), 24), origin,
+            [&](QPainter& local) { drawMidiClipHeader(local, clip, localBody, text, localRight, false); });
+        return;
+    }
     p.save();
     QPainterPath shape;
     const auto bounds = ui::pixelAlignedRect(body, p.device()->devicePixelRatioF());
@@ -50,10 +97,11 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
         if (rect.isEmpty()) return;
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 55));
-        p.drawRoundedRect(rect.adjusted(0, 3, 0, -3), 3, 3);
+        if (!ui::graphics::paintStretchableRoundedRect(p, rect.adjusted(0, 3, 0, -3), 3, false))
+            p.drawRoundedRect(rect.adjusted(0, 3, 0, -3), 3, 3);
         p.setPen(text);
         p.drawText(rect.adjusted(5, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, value);
-        icons::paint(p, icons::Glyph::Chevron,
+        paintHeaderGlyph(p, icons::Glyph::Chevron,
                      QRectF(rect.right() - 11, rect.center().y() - 4, 8, 8), text);
     };
     chip(layout.pitch, seq::pitchName(clip.midiView.pitch));
@@ -80,10 +128,11 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
         if (rect.isEmpty()) return;
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, active ? 105 : 30));
-        p.drawRoundedRect(rect.adjusted(1, 2, -1, -2), 3, 3);
+        if (!ui::graphics::paintStretchableRoundedRect(p, rect.adjusted(1, 2, -1, -2), 3, false))
+            p.drawRoundedRect(rect.adjusted(1, 2, -1, -2), 3, 3);
         QColor ink = text;
         ink.setAlpha(enabled ? (active ? 255 : 175) : 70);
-        icons::paint(p, glyph, rect.adjusted(5, 5, -5, -5), ink);
+        paintHeaderGlyph(p, glyph, rect.adjusted(5, 5, -5, -5), ink);
         if (active) p.fillRect(QRectF(rect.left() + 6, rect.bottom() - 3, rect.width() - 12, 1), text);
     };
     mode(layout.midi, icons::Glyph::MidiKeys, !sequenced, true);
@@ -94,6 +143,7 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
 void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
                                       const daw::ClipModel& clip, const QRectF& body,
                                       std::uint64_t revision) {
+    ui::perf::Scope timing("timeline.sequence.ms");
     seq::Layout layout(clipHeaderRect(track, clip, body), true, width() - ui::kTimelineScrollExtent);
     layout.steps.setWidth(body.width());
     if (layout.steps.height() < 3) return;
@@ -124,23 +174,42 @@ void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
     // targets. The same zoom threshold is used for hit testing.
     if (pixels >= 8) {
         p.setPen(Qt::NoPen);
-        for (double beat = seq::stepAt(first, step); beat < last - 1e-8; beat += step) {
-            const auto quarter = std::llround(std::floor(beat + 1e-8));
-            const QColor cell = mixColors(th().well(), color, quarter % 2 ? .28 : .18);
-            p.setBrush(selected ? mixColors(cell, Qt::white, .08) : cell);
-            p.drawRoundedRect(seq::cellRect(layout, xAt(beat), pixels), 2, 2);
-            if (pixels >= 22 && std::abs(beat - std::round(beat)) < 1e-8 && !layout.footer.isEmpty()) {
-                p.setFont(ui::transportControlFont(9));
-                p.setPen(th().textSecondary);
+        QColor cells[] = {mixColors(th().well(), color, .18), mixColors(th().well(), color, .28)};
+        if (selected) for (auto& cell : cells) cell = mixColors(cell, Qt::white, .08);
+        // Empty cells never overlap. Emit each colour together so a long row
+        // uses two GPU batches instead of breaking a batch on every beat.
+        for (int parity = 0; parity < 2; ++parity) {
+            p.setBrush(cells[parity]);
+            for (double beat = seq::stepAt(first, step); beat < last - 1e-8; beat += step) {
+                if ((std::llround(std::floor(beat + 1e-8)) % 2 != 0) != bool(parity)) continue;
+                const auto cellRect = seq::cellRect(layout, xAt(beat), pixels);
+                if (!ui::graphics::paintStretchableRoundedRect(p, cellRect, 2, false))
+                    p.drawRoundedRect(cellRect, 2, 2);
+            }
+        }
+        if (pixels >= 22 && !layout.footer.isEmpty()) {
+            p.setFont(ui::transportControlFont(9));
+            p.setPen(th().textSecondary);
+            for (double beat = seq::stepAt(first, step); beat < last - 1e-8; beat += step) {
+                if (std::abs(beat - std::round(beat)) >= 1e-8) continue;
                 p.drawText(QRectF(xAt(beat) + 3, layout.footer.top(), pixels, layout.footer.height()),
-                           Qt::AlignVCenter | Qt::AlignLeft, QString::number(quarter + 1));
-                p.setPen(Qt::NoPen);
+                           Qt::AlignVCenter | Qt::AlignLeft, QString::number(std::llround(beat) + 1));
             }
         }
     }
     const auto& notes = clip.notes;
     const auto& index = midiPreviewIndex(clip.id, clip.id, notes, revision);
-    index.forEachVisible(notes, seq::stepAt(first, step), std::min(end, seq::stepAt(last, step) + step),
+    struct NoteCell { QRectF rect; const daw::NoteModel* note; double beat; int layer; };
+    QVarLengthArray<NoteCell, 128> visible;
+    std::optional<double> lastOtherPitchStep, lastPitchStep;
+    const bool disjoint = pixels >= 8;
+    int layer = 0;
+    p.setPen(Qt::NoPen);
+    p.setBrush(mixColors(th().well(), color, .55));
+    // A one-pixel cell/accent can extend beyond its musical step when zoomed
+    // out. Include that overhang when repainting a narrow damaged stripe.
+    const double overhang = daw::secondsToBeats(2.0 / m_pixelsPerSecond, tempo);
+    index.forEachVisible(notes, seq::stepAt(first - overhang, step), std::min(end, seq::stepAt(last + overhang, step) + step),
         [&](const daw::NoteModel& note, std::size_t) {
         if (note.startBeats < offset - 1e-8 || note.startBeats >= end - 1e-8) return;
         const double beat = seq::stepAt(note.startBeats, step);
@@ -148,25 +217,63 @@ void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
         // changes a note's onset or duration in the document.
         const double x = xAt(beat);
         const QRectF cell = seq::cellRect(layout, x, pixels, note.velocity);
-        if (cell.right() < dirty.left() || cell.left() > dirty.right()) return;
-        p.setPen(Qt::NoPen);
+        if (cell.right() + 2 < dirty.left() || cell.left() - 1 > dirty.right()) return;
         if (note.pitch != clip.midiView.pitch) {
-            p.setBrush(mixColors(th().well(), color, .55));
-            p.drawRoundedRect(QRectF(cell.left(), layout.steps.top() - 5, cell.width(), 3), 1, 1);
+            // The index visits onsets in order. Several pitches in one step
+            // represent one occupancy marker, not repeated translucent edges.
+            if (lastOtherPitchStep == beat) return;
+            lastOtherPitchStep = beat;
+            const QRectF marker(cell.left(), layout.steps.top() - 5, cell.width(), 3);
+            if (!ui::graphics::paintStretchableRoundedRect(p, marker, 1, false))
+                p.drawRoundedRect(marker, 1, 1);
             return;
         }
-        const QColor fill = mixColors(mixColors(th().well(), color, .35), color, note.velocity / 127.0);
-        p.setBrush(note.muted ? mixColors(th().well(), fill, .3) : fill);
-        p.setPen(QPen(mixColors(fill, th().textPrimary, .20), 1, note.muted ? Qt::DashLine : Qt::SolidLine));
-        p.drawRoundedRect(cell, 2, 2);
-        p.setPen(Qt::NoPen);
-        p.fillRect(QRectF(cell.left() + 1, cell.top(), std::max(1.0, cell.width() - 2), 2),
-                   mixColors(fill, th().textPrimary, .48));
-        if (std::abs(note.startBeats - beat) > 1e-6 && pixels >= 8) {
-            const double onset = xAt(note.startBeats);
-            p.fillRect(QRectF(onset, cell.top() + 3, 1, std::max(1.0, cell.height() - 5)), th().textPrimary);
-        }
+        layer = lastPitchStep == beat ? layer + 1 : 0;
+        lastPitchStep = beat;
+        visible.push_back({cell, &note, beat, layer});
     });
+    const auto style = [](const NoteCell& cell) { return cell.note->velocity * 2 + int(cell.note->muted); };
+    // At editable zoom separate steps have a gap wider than their outlines.
+    // Group equal velocities within each layer. Stacked notes retain their
+    // painter order; subpixel steps, which can overlap, stay in onset order.
+    if (disjoint) std::sort(visible.begin(), visible.end(), [&](const auto& a, const auto& b) {
+        return a.layer != b.layer ? a.layer < b.layer : style(a) < style(b);
+    });
+    QVarLengthArray<QRectF, 128> highlights, onsets;
+    const QColor noteBase = mixColors(th().well(), color, .35);
+    for (qsizetype begin = 0; begin < visible.size();) {
+        qsizetype stop = begin + 1;
+        if (disjoint) while (stop < visible.size() && visible[stop].layer == visible[begin].layer &&
+                            style(visible[stop]) == style(visible[begin])) ++stop;
+        const auto& note = *visible[begin].note;
+        const QColor fill = mixColors(noteBase, color, note.velocity / 127.0);
+        const QPen outline(mixColors(fill, th().textPrimary, .20), 1, note.muted ? Qt::DashLine : Qt::SolidLine);
+        // All fills, then all outlines, then all accents. Interleaving them
+        // per note prevents the scene recorder from coalescing equal colours.
+        const bool single = stop == begin + 1;
+        for (int pass = 0; pass < (single ? 1 : 2); ++pass) {
+            p.setPen(single || pass == 1 ? outline : QPen(Qt::NoPen));
+            p.setBrush(pass == 0 ? QBrush(note.muted ? mixColors(th().well(), fill, .3) : fill) : QBrush(Qt::NoBrush));
+            for (auto i = begin; i < stop; ++i) {
+                if (!ui::graphics::paintStretchableRoundedRect(p, visible[i].rect, 2, false))
+                    p.drawRoundedRect(visible[i].rect, 2, 2);
+            }
+        }
+        highlights.clear(); onsets.clear();
+        for (auto i = begin; i < stop; ++i) {
+            const auto& cell = visible[i];
+            highlights.push_back(QRectF(cell.rect.left() + 1, cell.rect.top(), std::max(1.0, cell.rect.width() - 2), 2));
+            if (pixels >= 8 && std::abs(cell.note->startBeats - cell.beat) > 1e-6)
+                onsets.push_back(QRectF(xAt(cell.note->startBeats), cell.rect.top() + 3, 1,
+                                       std::max(1.0, cell.rect.height() - 5)));
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(mixColors(fill, th().textPrimary, .48));
+        p.drawRects(highlights.constData(), int(highlights.size()));
+        p.setBrush(th().textPrimary);
+        p.drawRects(onsets.constData(), int(onsets.size()));
+        begin = stop;
+    }
     if (!layout.footer.isEmpty()) {
         const double count = daw::secondsToBeats(clip.durationSeconds, tempo) / step;
         const QString label = tr("Steps: %1").arg(QString::number(count, 'g', 4));
@@ -178,11 +285,6 @@ void TimelineWidget::drawMidiSequence(QPainter& p, const daw::TrackModel& track,
             p.setPen(th().textSecondary);
             p.drawText(badge, Qt::AlignVCenter | Qt::AlignRight, label);
         }
-    }
-    if (pixels < 8 && layout.header.width() > 120) {
-        p.setPen(th().textPrimary);
-        p.setFont(ui::transportControlFont(10));
-        p.drawText(layout.steps.intersected(QRectF(0, 0, width(), height())), Qt::AlignCenter, tr("Zoom in to edit steps"));
     }
     p.restore();
 }

@@ -12,6 +12,8 @@
 
 #include <QColor>
 #include <QHash>
+#include <QImage>
+#include <QPainterPath>
 #include <QPointer>
 #include <QSet>
 #include <QString>
@@ -33,6 +35,7 @@ namespace ui { class MsrButton; }
 class ArpeggiatorDialog;
 class ArticulateDialog;
 class ChordDialog;
+class MidiGeneratorDialog;
 class GlueDialog;
 class QAbstractButton;
 class QAction;
@@ -205,8 +208,11 @@ public:
     /// stretch handle that only belongs to a multi-note selection.
     bool checkSlidesForTest(const QString& imageDirectory);
     bool checkInteractionGesturesForTest();
+    static bool checkNavigationForTest(const QString& images = {});
+    static bool checkPaintCachesForTest();
     static bool checkAuditionForTest();
     static bool checkVelocityRampForTest(const QString& images = {});
+    static bool checkSplitPreviewForTest(const QString& images = {});
 
     /// Privacy-safe collaboration mapping for the application-owned note
     /// canvas. Beat/pitch/value survive different zoom, scroll and lane sizes;
@@ -254,6 +260,7 @@ public:
     /// run here: Apply must preserve the exact notes the user is looking at.
     bool commitPreview(const QString& label);
     void clearPreview();
+    void beginSplitPreview();
 
     // ── Edits the context panel drives ──
     //
@@ -296,6 +303,7 @@ public:
     daw::miditools::Notes clipNotes() const;
     /// The clip's length in beats — what "fill the clip" means to a tool.
     double clipBeats() const;
+    double editorBeats() const;
     /// The cycle a rotate turns within: the clip when nothing is selected, and
     /// otherwise the selection's span rounded up to a whole bar, so a pattern
     /// stays on the grid however short its last note is.
@@ -342,7 +350,11 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 private:
-    void paintSlides(QPainter&);
+    void paintSlides(QPainter&, const QRegion&);
+    void updateSplitPreview();
+    void dragSplitPreview(double y);
+    bool validateSplitPreview();
+    QString splitPreviewLabel() const;
     bool slidePress(QMouseEvent*);
     bool slideMove(QMouseEvent*);
     bool slideRelease();
@@ -501,7 +513,7 @@ private:
     void drawTimeRangeStrip(QPainter& p);
     daw::miditools::Notes notesInTimeRange() const;
     void paintNoteShape(QPainter& p, const QRectF& r, const QColor& fill,
-                        bool selected, bool muted) const;
+                        bool muted) const;
 
     void emitStatus();
 
@@ -536,10 +548,10 @@ private:
 
     bool m_showKeyboard = true;
     bool m_showVelocityLane = true;
-    bool m_showNoteNames = false;
+    bool m_showNoteNames = true;
     bool m_noteBorders = true;
     NoteStyle m_noteStyle = NoteStyle::Rounded;
-    bool m_showAllKeyNames = false;
+    bool m_showAllKeyNames = true;
     bool m_scaleHighlight = false;
     ColorMode m_colorMode = ColorMode::Clip;
     double m_gridContrast = 0.5;
@@ -568,6 +580,8 @@ private:
     double m_scrollY = 0.0;
 
     // Drag state. Mirrors the arrangement's naming so the two read alike.
+    bool m_panning = false;
+    QPointF m_panLastPosition;
     bool m_moving = false;
     bool m_resizing = false;
     bool m_resizingLeft = false;
@@ -581,6 +595,10 @@ private:
     /// Shift-drag keeps the original notes in place and turns this captured
     /// selection into copies only after the pointer clears the drag threshold.
     daw::slides::PitchCurves m_slidePaintCurves;
+    std::vector<std::size_t> m_slidePaintNoteIndices;
+    std::vector<QPainterPath> m_slidePaintPaths;
+    QSize m_slidePaintSize;
+    std::array<double, 5> m_slidePaintView{};
     std::uint64_t m_slidePaintRevision=~std::uint64_t(0);
     std::string m_slidePaintClip;
     bool m_duplicateDragPending = false;
@@ -708,6 +726,18 @@ private:
     /// What a tool dialog says the result would be. Painted instead of the
     /// clip's notes, and never written anywhere.
     std::optional<daw::miditools::Notes> m_preview;
+    struct SplitPreview {
+        double beats = 0.25;
+        int pitchStep = 0;
+        double wheelRemainder = 0.0;
+        bool dragging = false;
+        double lastY = 0.0;
+        double dragRemainder = 0.0;
+        std::uint64_t revision = 0;
+        daw::miditools::Notes source;
+        QSet<QString> selection;
+    };
+    std::optional<SplitPreview> m_splitPreview;
     /// Beat-range index shared by full and narrow repaints. A monotonic model
     /// revision replaces the former O(N) geometry hash, and block maxima keep
     /// long notes that begin left of the viewport discoverable.
@@ -724,10 +754,13 @@ private:
         daw::MidiPreviewIndex index;
         std::uint64_t revision = 0;
         std::size_t noteCount = 0;
+        std::uint64_t lastSeen = 0;
     };
     /// One compact index per ghost clip. Clip offsets and colours are read live,
     /// so moving or recolouring a clip does not require rebuilding note order.
     std::unordered_map<std::string, GhostPaintIndexEntry> m_ghostPaintIndexes;
+    std::array<std::uint64_t, 4> m_ghostPaintModelStamp{~std::uint64_t(0), 0, 0, 0};
+    std::uint64_t m_ghostPaintSweep = 0;
     std::vector<std::size_t> m_ghostPaintScratch;
     /// IDs of the transformed result inside `m_preview`, prepared while the
     /// preview is built so Apply can preserve selection without regenerating.
@@ -746,6 +779,7 @@ class PianoRollWindow : public QWidget {
 public:
     static bool checkSlidesForTest(const QString& imageDirectory);
     static bool checkWorkflowsForTest(const QString& imageDirectory);
+    static bool checkNavigatorForTest(const QString& imageDirectory);
     void populateActionsMenu(QMenu& menu);
     explicit PianoRollWindow(daw::EngineController* controller,
                              QWidget* parent = nullptr,
@@ -847,6 +881,7 @@ private:
     bool exportMidiToPath(const QString& path, QString& error);
     void updateTitle();
     void updateScrollBars();
+    void paintNavigatorNotes(QPainter& painter);
     void updateActionState();
     /// Rebuild the ghost-note list from the project's other MIDI tracks.
     void refreshGhostMenu();
@@ -892,6 +927,8 @@ private:
     PianoRollView* m_view = nullptr;
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
+    QImage m_navigatorPreview;
+    QByteArray m_navigatorSignature;
     QSlider* m_timeZoom = nullptr;
     QSlider* m_noteHeight = nullptr;
     QWidget* m_navigationKeyboardSpace = nullptr;
@@ -926,8 +963,10 @@ private:
     QAction* m_quantizeAction = nullptr;
     QAction* m_arpAction = nullptr;
     QAction* m_chordAction = nullptr;
+    QAction* m_generatorAction = nullptr;
     QAction* m_glueAction = nullptr;
     QAction* m_strumAction = nullptr;
+    QAction* m_splitAction = nullptr;
     QAction* m_articulateAction = nullptr;
     QAction* m_randomAction = nullptr;
     QAction* m_undoAction = nullptr;
@@ -957,6 +996,7 @@ private:
     /// result in exactly one expensive transform.
     std::size_t m_coalescedToolPreviewRuns = 0;
     ChordDialog* m_chordDialog = nullptr;
+    QPointer<MidiGeneratorDialog> m_generatorDialog;
 
     /// Undo/project sync may arrive while the editor frame is hidden. Defer
     /// menu reconstruction and repaint until it can produce a visible frame.

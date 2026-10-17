@@ -54,6 +54,7 @@ constexpr float kMissingBusSentinel = -999.0f;
 constexpr ParamID kGainId = 100;
 constexpr ParamID kOffsetId = 101;
 constexpr ParamID kMidiVolumeId = 102;
+constexpr ParamID kMeterId = 103;
 constexpr double kGainMax = 2.0;
 
 // Fixed class ids. Arbitrary, but they must never change: a project file that
@@ -123,6 +124,7 @@ public:
     int32 PLUGIN_API getBusCount(MediaType type, BusDirection direction) override {
         if (type == kEvent) return m_instrument && direction == kInput ? 1 : 0;
         if (type != kAudio) return 0;
+        if (std::getenv("DAW_TEST_VST3_EVENT_ONLY")) return 0;
         if (m_instrument) return direction == kInput ? 0 : 1;
         // Two inputs — main and sidechain — and one output.
         return direction == kInput ? 2 : 1;
@@ -171,7 +173,8 @@ public:
     }
     tresult PLUGIN_API setActive(TBool state) override {
         if (state) {
-            if (!m_audioOutputActive || (m_instrument && !m_eventInputActive)) {
+            if ((!m_audioOutputActive && !std::getenv("DAW_TEST_VST3_EVENT_ONLY")) ||
+                (m_instrument && !m_eventInputActive)) {
                 return kResultFalse;
             }
             m_delayLatency = getLatencySamples();
@@ -179,6 +182,8 @@ public:
             m_writePosition = 0;
         }
         m_active = state;
+        if (state && m_connection && std::getenv("DAW_TEST_VST3_ACTIVATION_RESTART_FLAGS"))
+            m_connection->notify(nullptr);
         return kResultOk;
     }
 
@@ -231,6 +236,31 @@ public:
     tresult PLUGIN_API setProcessing(TBool) override { return kNotImplemented; }
 
     tresult PLUGIN_API process(ProcessData& data) override {
+        if (std::getenv("DAW_TEST_VST3_READONLY_METER") && data.outputParameterChanges) {
+            int32 index = 0;
+            auto* meter = data.outputParameterChanges->addParameterData(kMeterId, index);
+            if (!meter || meter->addPoint(0, .75, index) != kResultOk) return kResultFalse;
+        }
+        if (std::getenv("DAW_TEST_VST3_VALIDATE_STEADY_TIME")) {
+            if (!data.processContext || !(data.processContext->state & ProcessContext::kContTimeValid) ||
+                data.processContext->continousTimeSamples < m_nextSteadyTime) return kResultFalse;
+            m_nextSteadyTime = data.processContext->continousTimeSamples + data.numSamples;
+        }
+        if (std::getenv("DAW_TEST_VST3_EVENT_ONLY")) {
+            if (data.numInputs || data.numOutputs) return kResultFalse;
+            for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q) {
+                auto* input = data.inputParameterChanges->getParameterData(q);
+                int32 index = 0;
+                auto* output = data.outputParameterChanges->addParameterData(input->getParameterId(), index);
+                if (!output) return kResultFalse;
+                for (int32 p = 0; p < input->getPointCount(); ++p) {
+                    int32 offset = 0; ParamValue value = 0;
+                    input->getPoint(p, offset, value);
+                    output->addPoint(offset, value, index);
+                }
+            }
+            return kResultOk;
+        }
         if (data.numOutputs < 1 || !data.outputs) return kResultFalse;
         const int32 frames = data.numSamples;
         float** out = data.outputs[0].channelBuffers32;
@@ -404,6 +434,7 @@ private:
     int32 m_outputChannels = 2;
     int32 m_writePosition = 0;
     uint32 m_delayLatency = kLatency;
+    int64 m_nextSteadyTime = 0;
     double m_gain = 1.0;
     double m_offset = 0.0;
     double m_midiVolume = 1.0;
@@ -483,7 +514,12 @@ public:
         m_connection = nullptr;
         return kResultOk;
     }
-    tresult PLUGIN_API notify(IMessage*) override { return kResultOk; }
+    tresult PLUGIN_API notify(IMessage*) override {
+        if (m_handler)
+            if (const char* flags = std::getenv("DAW_TEST_VST3_ACTIVATION_RESTART_FLAGS"))
+                m_handler->restartComponent(std::atoi(flags));
+        return kResultOk;
+    }
 
     tresult PLUGIN_API setComponentState(IBStream* stream) override {
         // Reproduce controllers that dereference the processor established by
@@ -516,7 +552,7 @@ public:
             applyPresetToProcessor();
             m_handler->restartComponent(kParamValuesChanged);
         }
-        return m_hasMidiHelper ? 3 : 2;
+        return (m_hasMidiHelper ? 3 : 2) + (std::getenv("DAW_TEST_VST3_READONLY_METER") ? 1 : 0);
     }
     tresult PLUGIN_API getParameterInfo(int32 index, ParameterInfo& info) override {
         std::memset(&info, 0, sizeof(info));
@@ -532,6 +568,11 @@ public:
         } else if (index == 2 && m_hasMidiHelper) {
             info.id = kMidiVolumeId;
             copyUtf16(info.title, "MIDI CC7 helper", 128);
+            return kResultOk;
+        } else if (index == (m_hasMidiHelper ? 3 : 2) && std::getenv("DAW_TEST_VST3_READONLY_METER")) {
+            info.id = kMeterId;
+            copyUtf16(info.title, "Output Meter", 128);
+            info.flags = ParameterInfo::kIsReadOnly;
             return kResultOk;
         } else {
             return kInvalidArgument;
@@ -555,16 +596,17 @@ public:
     }
 
     ParamValue PLUGIN_API normalizedParamToPlain(ParamID id, ParamValue normalized) override {
-        if (id == kMidiVolumeId) return normalized;
+        if (id == kMidiVolumeId || id == kMeterId) return normalized;
         return id == kGainId ? gainFromNormalized(normalized)
                              : offsetFromNormalized(normalized);
     }
     ParamValue PLUGIN_API plainParamToNormalized(ParamID id, ParamValue plain) override {
-        if (id == kMidiVolumeId) return plain;
+        if (id == kMidiVolumeId || id == kMeterId) return plain;
         return id == kGainId ? plain / kGainMax : (plain + 1.0) / 2.0;
     }
     ParamValue PLUGIN_API getParamNormalized(ParamID id) override {
         if (id == kMidiVolumeId) return 0.0;
+        if (id == kMeterId) return .125; // Deliberately stale: process emits .75.
         return plainParamToNormalized(id, id == kGainId ? m_gain : m_offset);
     }
     tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override {

@@ -1698,6 +1698,42 @@ Selection is captured when you send a request.
         <source>Audio device connected.</source>
         <translation>Аудиоустройство подключено.</translation>
     </message>
+    <message>
+        <source>Audio device</source>
+        <translation>Аудиоустройство</translation>
+    </message>
+    <message>
+        <source>Quality &amp; latency</source>
+        <translation>Качество и задержка</translation>
+    </message>
+    <message>
+        <source>Buffer duration</source>
+        <translation>Длительность буфера</translation>
+    </message>
+    <message>
+        <source>A smaller buffer responds faster; a larger buffer gives the audio engine more time. This is one buffer&#x27;s duration, not total input-to-output latency.</source>
+        <translation>Меньший буфер ускоряет отклик, больший даёт аудиодвижку больше времени. Здесь показана длительность одного буфера, а не полная задержка от входа до выхода.</translation>
+    </message>
+    <message>
+        <source>Monitoring</source>
+        <translation>Мониторинг</translation>
+    </message>
+    <message>
+        <source>%1 ms per buffer · %2 samples</source>
+        <translation>%1 мс на буфер · %2 сэмплов</translation>
+    </message>
+    <message>
+        <source>Choose an audio device to see buffer duration.</source>
+        <translation>Выберите аудиоустройство, чтобы увидеть длительность буфера.</translation>
+    </message>
+    <message>
+        <source>Audio settings applied.</source>
+        <translation>Настройки звука применены.</translation>
+    </message>
+    <message>
+        <source>Quality and latency</source>
+        <translation>Качество и задержка</translation>
+    </message>
 </context>
 <context>
     <name>AutomationCurveView</name>
@@ -2133,8 +2169,8 @@ Selection is captured when you send a request.
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Summing Folders</source>
-        <translation type="unfinished"></translation>
+        <source>Bus Folders</source>
+        <translation>Папки-шины</translation>
     </message>
     <message>
         <source>Master FX</source>
@@ -2926,6 +2962,10 @@ The plugin is still listed from an earlier scan but its module no longer offers 
     <message><source>Delete group</source><translation>Удалить группу</translation></message>
     <message><source>Duplicate group</source><translation>Дублировать группу</translation></message>
     <message><source>Enable or bypass group</source><translation>Включить или обойти группу</translation></message>
+    <message>
+        <source>Open Pattern in Rack</source>
+        <translation>Открыть паттерн в рэке</translation>
+    </message>
 </context>
 <context>
     <name>ChordDialog</name>
@@ -3893,8 +3933,8 @@ The plugin is still listed from an earlier scan but its module no longer offers 
         <translation>Папка</translation>
     </message>
     <message>
-        <source>Summing folder</source>
-        <translation>Суммирующая папка</translation>
+        <source>Bus folder</source>
+        <translation>Папка-шина</translation>
     </message>
     <message>
         <source>Track type</source>
@@ -5391,8 +5431,8 @@ Release to keep this clip in the project</source><translation>Сохранить
         <translation>Группирует дорожки, чтобы их можно было сворачивать, перемещать и раскрашивать вместе. Аудио остается без изменений — каждая дорожка все еще идет туда, куда шла раньше.</translation>
     </message>
     <message>
-        <source>Summing Folder</source>
-        <translation>Суммирующая папка</translation>
+        <source>Bus Folder</source>
+        <translation>Папка-шина</translation>
     </message>
     <message>
         <source>The same, plus a channel of its own: every track inside is routed through it, so one fader, one set of plugins and one mute govern the whole group.</source>
@@ -6764,8 +6804,8 @@ Release to keep this clip in the project</source><translation>Сохранить
         <translation>&amp;Переместить выделенное в папку</translation>
     </message>
     <message>
-        <source>Move Selected into a &amp;Summing Folder</source>
-        <translation>&amp;Переместить выделенное в суммирующую папку</translation>
+        <source>Move Selected into a &amp;Bus Folder</source>
+        <translation>&amp;Переместить выделенное в папку-шину</translation>
     </message>
     <message>
         <source>Show &amp;Automation</source>
@@ -6888,8 +6928,8 @@ Release to keep this clip in the project</source><translation>Сохранить
         <translation>Инструмент-указатель</translation>
     </message>
     <message>
-        <source>Knife Tool</source>
-        <translation>Инструмент-нож</translation>
+        <source>Scissors Tool</source>
+        <translation>Инструмент «Ножницы»</translation>
     </message>
     <message>
         <source>Eraser Tool</source>
@@ -7088,8 +7128,8 @@ Release to keep this clip in the project</source><translation>Сохранить
         <translation>Шина</translation>
     </message>
     <message>
-        <source>Summing folder created — everything inside it now runs through its channel</source>
-        <translation>Создана суммирующая папка — всё внутри неё теперь проходит через её канал</translation>
+        <source>Bus folder created — everything inside it now runs through its channel</source>
+        <translation>Создана папка-шина — всё внутри неё теперь проходит через её канал</translation>
     </message>
     <message>
         <source>Folder created — drag other tracks onto it to add them</source>
@@ -7384,8 +7424,8 @@ Release to keep this clip in the project</source><translation>Сохранить
         <translation>Указатель</translation>
     </message>
     <message>
-        <source>Knife</source>
-        <translation>Нож</translation>
+        <source>Scissors</source>
+        <translation>Ножницы</translation>
     </message>
     <message>
         <source>Eraser</source>
@@ -9258,6 +9298,16 @@ Retry in session details to continue this publication.</source>
         <translation>Части композиции</translation>
     </message>
     <message><source>Rack — %1</source><translation>Рэк — %1</translation></message>
+    <message>
+        <source>Pattern Actions</source>
+        <translation>Действия с паттерном</translation>
+    </message>
+    <message>
+        <source>Select a sound in the Pattern rack first</source>
+        <translation>Сначала выберите звук в модуле паттерна в рэке</translation>
+    </message>
+    <message><source>Show Master Panel</source><translation>Показать панель мастера</translation></message>
+    <message><source>Analyzer disabled. The master output is unchanged. Recovery will wait until playback stops.</source><translation>Анализатор отключён. Звук на мастере не изменился. Восстановление начнётся после остановки воспроизведения.</translation></message>
 </context>
 <context>
     <name>MixerWidget</name>
@@ -10268,9 +10318,61 @@ Click to load. Drag onto Audio FX.</source>
     </message>
 
     <message><source> · Linked: %1</source><translation> · Связано: %1</translation></message>
+    <message>
+        <source>Pattern MIDI clip</source>
+        <translation>MIDI-клип паттерна</translation>
+    </message>
+    <message>
+        <source>All MIDI</source>
+        <translation>Все MIDI</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>Add an instrument or drop audio to create a new sound</source>
+        <translation>Добавить инструмент или перетащить аудио для создания нового звука</translation>
+    </message>
+    <message>
+        <source>Open sound rack</source>
+        <translation>Открыть рэк звука</translation>
+    </message>
 </context>
 <context>
     <name>PianoRollView</name>
+    <message>
+        <source>Split %1 · Notes: %2</source>
+        <translation>Деление %1 · Нот: %2</translation>
+    </message>
+    <message>
+        <source>1/%1 triplet</source>
+        <translation>1/%1 триоль</translation>
+    </message>
+    <message>
+        <source>1/%1 dotted</source>
+        <translation>1/%1 с точкой</translation>
+    </message>
+    <message>
+        <source>%1 beats</source>
+        <translation>%1 доли</translation>
+    </message>
+    <message>
+        <source>Split Notes</source>
+        <translation>Разделить ноты</translation>
+    </message>
+    <message>
+        <source>Split · %1 beats · step %2 st · Wheel: division · Middle-drag: stairs · Click: apply · Esc: cancel</source>
+        <translation>Деление · %1 доли · шаг %2 пт · Колесо: длина · Перетаскивание колесом: лесенка · Клик: применить · Esc: отмена</translation>
+    </message>
+    <message>
+        <source>Outside clip</source>
+        <translation>За границей клипа</translation>
+    </message>
+    <message>
+        <source>Notes here will play after you extend the MIDI clip.</source>
+        <translation>Чтобы ноты в этой области звучали, продлите MIDI-клип.</translation>
+    </message>
     <message>
         <source>Right-drag to draw a velocity ramp.</source>
         <translation>Удерживайте правую кнопку мыши и тяните, чтобы плавно изменить velocity ряда нот.</translation>
@@ -10402,6 +10504,13 @@ Click to load. Drag onto Audio FX.</source>
 </context>
 <context>
     <name>PianoRollWindow</name>
+    <message>
+        <source>Split Notes</source>
+        <translation>Разделить ноты</translation>
+    </message>
+    <message><source>MIDI Generator</source><translation>Генератор MIDI</translation></message>
+    <message><source>MIDI Generator…</source><translation>Генератор MIDI…</translation></message>
+    <message><source>Generate…</source><translation>Создать…</translation></message>
     <message><source>Piano roll settings</source><translation>Настройки редактора нот</translation></message>
     <message><source>Import MIDI File…</source><translation>Импорт MIDI-файла…</translation></message>
     <message><source>Export MIDI File…</source><translation>Экспорт MIDI-файла…</translation></message>
@@ -11214,6 +11323,18 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>Move left or right through the clip</source>
         <translation>Перемещение по времени внутри клипа</translation>
+    </message>
+    <message>
+        <source>Drag to scroll through the clip. Drag the lower edge to resize (10–30 px); double-click it to reset. Right-click for height presets.</source>
+        <translation>Перетаскивайте для прокрутки клипа. Потяните за нижний край, чтобы изменить высоту (10–30 пикс.); двойной щелчок сбрасывает её. Правый щелчок — выбор высоты.</translation>
+    </message>
+    <message>
+        <source>Navigator height</source>
+        <translation>Высота навигатора</translation>
+    </message>
+    <message>
+        <source>%1 px</source>
+        <translation>%1 пикс.</translation>
     </message>
     <message>
         <source>Piano roll vertical scroll</source>
@@ -12535,6 +12656,14 @@ This session also contains a finished cloud recording awaiting upload. Restore a
         <source>This template could not be read: %1</source>
         <translation>Не удалось прочитать этот шаблон: %1</translation>
     </message>
+    <message>
+        <source>Import destination</source>
+        <translation>Куда импортировать</translation>
+    </message>
+    <message>
+        <source>Audio analysis</source>
+        <translation>Анализ аудио</translation>
+    </message>
 </context>
 <context>
     <name>RandomizeDialog</name>
@@ -12724,6 +12853,18 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
     <message>
         <source>Auto Silence — trim silence after recording</source>
         <translation>Auto Silence — удалять тишину после записи</translation>
+    </message>
+    <message>
+        <source>Recording &amp; takes</source>
+        <translation>Запись и дубли</translation>
+    </message>
+    <message>
+        <source>Recording start and monitoring</source>
+        <translation>Начало записи и мониторинг</translation>
+    </message>
+    <message>
+        <source>Recording and takes</source>
+        <translation>Запись и дубли</translation>
     </message>
 </context>
 <context>
@@ -13347,6 +13488,10 @@ Legato связывает перекрывающиеся ноты. Диапаз�
     <message><source>Editor</source><translation>Редактор</translation></message>
 
     <message><source>Sampler</source><translation>Сэмплер</translation></message>
+    <message>
+        <source>Warp</source>
+        <translation>Warp</translation>
+    </message>
 </context>
 <context>
     <name>SamplerWaveform</name>
@@ -14937,6 +15082,158 @@ Reassign it to &quot;%3&quot;?</source>
     <message><source>Speed</source><translation>Скорость</translation></message>
     <message><source>Smoothing</source><translation>Мягкость</translation></message>
     <message><source>Applies immediately to scrolling in the browser, lists, mixer and editors. Higher speed stops sooner; more smoothing gives a softer finish. Touchpad gestures, keyboard commands and editing follow your input directly.</source><translation>Применяется сразу к прокрутке браузера, списков, микшера и редакторов. Чем выше скорость, тем быстрее затухает движение; мягкость усиливает сглаживание. Жесты тачпада, команды клавиатуры и редактирование реагируют напрямую.</translation></message>
+    <message>
+        <source>Choose a palette or manage complete saved themes.</source>
+        <translation>Выбор палитры и управление сохранёнными темами.</translation>
+    </message>
+    <message>
+        <source>Project startup and everyday editing preferences.</source>
+        <translation>Запуск проектов и повседневное редактирование.</translation>
+    </message>
+    <message>
+        <source>Images, video, visibility and blur for the timeline and header.</source>
+        <translation>Изображения, видео, видимость и размытие фона таймлайна и верхней панели.</translation>
+    </message>
+    <message>
+        <source>Grid, waveforms, clip corners, playhead and track selection.</source>
+        <translation>Сетка, волновые формы, углы клипов, курсор и выделение дорожек.</translation>
+    </message>
+    <message>
+        <source>Interface typography and your track icon library.</source>
+        <translation>Шрифт интерфейса и библиотека иконок дорожек.</translation>
+    </message>
+    <message>
+        <source>Refresh rate, rendering quality and navigation motion.</source>
+        <translation>Частота обновления, качество графики и плавность навигации.</translation>
+    </message>
+    <message>
+        <source>Plugin formats, search results and insertion behavior.</source>
+        <translation>Форматы плагинов, результаты поиска и порядок добавления.</translation>
+    </message>
+    <message>
+        <source>Home page, bookmarks and the browser start background.</source>
+        <translation>Домашняя страница, закладки и фон стартовой страницы браузера.</translation>
+    </message>
+    <message>
+        <source>Settings</source>
+        <translation>Настройки</translation>
+    </message>
+    <message>
+        <source>Search all settings</source>
+        <translation>Поиск по всем настройкам</translation>
+    </message>
+    <message>
+        <source>Search settings…</source>
+        <translation>Найти настройку…</translation>
+    </message>
+    <message>
+        <source>Search all settings (%1)</source>
+        <translation>Поиск по всем настройкам (%1)</translation>
+    </message>
+    <message>
+        <source>Performance &amp; Motion</source>
+        <translation>Графика и движение</translation>
+    </message>
+    <message>
+        <source>Files &amp; Preview</source>
+        <translation>Файлы и прослушивание</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>Плагины</translation>
+    </message>
+    <message>
+        <source>Web Browser</source>
+        <translation>Веб-браузер</translation>
+    </message>
+    <message>
+        <source>Backgrounds</source>
+        <translation>Фон</translation>
+    </message>
+    <message>
+        <source>Fonts &amp; Icons</source>
+        <translation>Шрифт и иконки</translation>
+    </message>
+    <message>
+        <source>Jump to section</source>
+        <translation>Перейти к блоку</translation>
+    </message>
+    <message>
+        <source>Search results</source>
+        <translation>Результаты поиска</translation>
+    </message>
+    <message>
+        <source>Matching settings</source>
+        <translation>Найденные настройки</translation>
+    </message>
+    <message>
+        <source>Setting</source>
+        <translation>Параметр</translation>
+    </message>
+    <message>
+        <source>Location</source>
+        <translation>Раздел</translation>
+    </message>
+    <message>
+        <source>Changes apply as you edit.</source>
+        <translation>Изменения применяются сразу.</translation>
+    </message>
+    <message>
+        <source>Use Apply for device changes. The CPU display updates immediately.</source>
+        <translation>Настройки устройства — кнопкой «Применить». Индикатор CPU меняется сразу.</translation>
+    </message>
+    <message>
+        <source>Use Save model for connections. Other options apply as you edit.</source>
+        <translation>Подключения — кнопкой «Сохранить модель». Остальные параметры применяются сразу.</translation>
+    </message>
+    <message>
+        <source>Changes are saved for the next application launch.</source>
+        <translation>Изменения сохранены и вступят в силу при следующем запуске.</translation>
+    </message>
+    <message>
+        <source>Changes apply immediately. Switching GPU rendering requires a restart.</source>
+        <translation>Изменения применяются сразу. Переключение GPU требует перезапуска.</translation>
+    </message>
+    <message>
+        <source>Palettes apply on selection. Use Apply for a saved theme.</source>
+        <translation>Палитра меняется при выборе. Сохранённая тема — кнопкой «Применить».</translation>
+    </message>
+    <message>
+        <source>Account information is synchronized with VLTONE.</source>
+        <translation>Информация об аккаунте синхронизируется с VLTONE.</translation>
+    </message>
+    <message>
+        <source>On this page…</source>
+        <translation>Перейти к блоку на странице…</translation>
+    </message>
+    <message>
+        <source>No settings found. Try a shorter word or a section name.</source>
+        <translation>Ничего не найдено. Попробуйте более короткое слово или название раздела.</translation>
+    </message>
+    <message>
+        <source>%1 results. Select a setting to open its page.</source>
+        <translation>Найдено: %1. Выберите параметр, чтобы перейти к нему.</translation>
+    </message>
+    <message>
+        <source>Enter opens a result · Esc clears search</source>
+        <translation>Enter — открыть результат · Esc — очистить поиск</translation>
+    </message>
+    <message>
+        <source>Search keyboard shortcuts</source>
+        <translation>Поиск горячих клавиш</translation>
+    </message>
+    <message>
+        <source>Find a command or category…</source>
+        <translation>Найти команду или категорию…</translation>
+    </message>
+    <message>
+        <source>Translation files</source>
+        <translation>Файлы переводов</translation>
+    </message>
+    <message>
+        <source>Apply audio device settings</source>
+        <translation>Применить настройки аудиоустройства</translation>
+    </message>
 </context>
 <context>
     <name>SpectrumMeter</name>
@@ -15328,7 +15625,6 @@ Reassign it to &quot;%3&quot;?</source>
     <message><source>MIDI view</source><translation>Вид MIDI</translation></message>
     <message><source>Sequence view</source><translation>Секвенция</translation></message>
     <message><source>Steps: %1</source><translation>Шагов: %1</translation></message>
-    <message><source>Zoom in to edit steps</source><translation>Увеличьте масштаб для редактирования шагов</translation></message>
     <message><source>MIDI view · double-click the header to open piano roll</source><translation>Вид MIDI · двойной щелчок по заголовку открывает piano roll</translation></message>
     <message><source>Sequence view · edit the same notes as steps</source><translation>Секвенция · те же ноты в виде шагов</translation></message>
     <message><source>Note for new steps · existing notes keep their pitch</source><translation>Нота для новых шагов · высота существующих нот не меняется</translation></message>
@@ -15958,6 +16254,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Скрыть строку</translation>
     </message>
     <message><source>Make Clips Independent</source><translation>Сделать независимыми</translation></message>
+    <message>
+        <source>Open Pattern in Rack</source>
+        <translation>Открыть паттерн в рэке</translation>
+    </message>
 </context>
 <context>
     <name>ToolDialog</name>
@@ -15966,8 +16266,8 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Предпросмотр</translation>
     </message>
     <message>
-        <source>Draw the result in the grid as you change the settings. Nothing is written to the clip until you press Apply.</source>
-        <translation>При изменении настроек результат будет нарисован на сетке. Ничего не записывается в клип до нажатия «Применить».</translation>
+        <source>See and hear the result during playback as you change the settings. Nothing is written to the clip until you press Apply.</source>
+        <translation>При изменении настроек результат виден на сетке и слышен при воспроизведении. Ничего не записывается в клип до нажатия «Применить».</translation>
     </message>
 </context>
 <context>
@@ -16241,12 +16541,12 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Переместить в папку</translation>
     </message>
     <message>
-        <source>Move %1 Tracks into a Summing Folder</source>
-        <translation>Переместить %1 дорожек в суммирующую папку</translation>
+        <source>Move %1 Tracks into a Bus Folder</source>
+        <translation>Переместить %1 дорожек в папку-шину</translation>
     </message>
     <message>
-        <source>Move into a Summing Folder</source>
-        <translation>Переместить в суммирующую папку</translation>
+        <source>Move into a Bus Folder</source>
+        <translation>Переместить в папку-шину</translation>
     </message>
     <message>
         <source>Delete %1 Tracks</source>
@@ -16303,6 +16603,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
     <message>
         <source>Hide %1</source>
         <translation>Скрыть: %1</translation>
+    </message>
+    <message>
+        <source>Open Pattern in Rack</source>
+        <translation>Открыть паттерн в рэке</translation>
     </message>
 </context>
 <context>
@@ -16500,8 +16804,8 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
         <translation>Выделить</translation>
     </message>
     <message>
-        <source>Knife</source>
-        <translation>Нож</translation>
+        <source>Scissors</source>
+        <translation>Ножницы</translation>
     </message>
     <message>
         <source>Eraser</source>
@@ -16596,6 +16900,8 @@ Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
         <source>Notebook</source>
         <translation>Блокнот</translation>
     </message>
+    <message><source>Master panel (Alt+M)</source><translation>Панель мастера (Alt+M)</translation></message>
+    <message><source>Master panel</source><translation>Панель мастера</translation></message>
 </context>
 <context>
     <name>TransportSettingsPage</name>
@@ -16660,9 +16966,22 @@ Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
 Restart: when playback is paused, Space jumps back to the position where the current run started and plays from there.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Playback &amp; metronome</source>
+        <translation>Воспроизведение и метроном</translation>
+    </message>
+    <message>
+        <source>Transport appearance</source>
+        <translation>Оформление транспорта</translation>
+    </message>
+    <message>
+        <source>Playback and metronome</source>
+        <translation>Воспроизведение и метроном</translation>
+    </message>
 </context>
 <context>
     <name>UndoCommands</name>
+    <message><source>Generate MIDI</source><translation>Генерация MIDI</translation></message>
     <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
     <message><source>Resize Sequence</source><translation>Изменение длины секвенции</translation></message>
     <message><source>Create Linked Copies</source><translation>Создать связанные копии</translation></message>
@@ -16677,6 +16996,7 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message><source>Change COLOR Drive</source><translation>Изменить COLOR Drive</translation></message>
     <message><source>Change COLOR Tone</source><translation>Изменить COLOR Tone</translation></message>
     <message><source>Change VLT 2A</source><translation>Изменить VLT 2A</translation></message>
+    <message><source>Change VLT 1073</source><translation>Изменить VLT 1073</translation></message>
     <message><source>Set Sampler Root Note</source><translation>Назначить исходную ноту сэмплера</translation></message>
     <message><source>Correct Sampler Tuning</source><translation>Исправить строй сэмплера</translation></message>
     <message>
@@ -16716,6 +17036,10 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Add Track</source>
         <translation>Добавить дорожку</translation>
+    </message>
+    <message>
+        <source>Remove Folder</source>
+        <translation>Удалить папку</translation>
     </message>
     <message>
         <source>Remove Track</source>
@@ -17046,6 +17370,23 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message><source>Rename Plugin Group</source><translation>Переименовать группу плагинов</translation></message>
     <message><source>Set Send Destination</source><translation>Изменить назначение посыла</translation></message>
     <message><source>Ungroup Plugins</source><translation>Разгруппировать плагины</translation></message>
+    <message>
+        <source>Change Rack Modulation</source>
+        <translation>Изменить модуляцию Rack</translation>
+    </message>
+    <message><source>Duplicate Modulator</source><translation>Дублировать модулятор</translation></message>
+    <message>
+        <source>Add LFO</source>
+        <translation>Добавить LFO</translation>
+    </message>
+    <message>
+        <source>Add Envelope Follower</source>
+        <translation>Добавить Envelope Follower</translation>
+    </message>
+    <message>
+        <source>Assign Modulation</source>
+        <translation>Назначить модуляцию</translation>
+    </message>
 </context>
 <context>
     <name>UpdateChecker</name>
@@ -18157,8 +18498,8 @@ Restart: when playback is paused, Space jumps back to the position where the cur
         <translation>Добавить папку</translation>
     </message>
     <message>
-        <source>Add Summing Folder</source>
-        <translation>Добавить суммирующую папку</translation>
+        <source>Add Bus Folder</source>
+        <translation>Добавить папку-шину</translation>
     </message>
     <message>
         <source>Add Send Track</source>
@@ -18589,20 +18930,20 @@ Double-click to rename</source>
         <translation>Название, обложка и папка для вашего проекта.</translation>
     </message>
     <message>
-        <source>Use Timeline</source>
-        <translation>Снимок таймлайна</translation>
+        <source>Use Window Snapshot</source>
+        <translation>Снимок окна</translation>
     </message>
     <message>
-        <source>Use a timeline snapshot as the project preview</source>
-        <translation>Использовать снимок таймлайна для превью проекта</translation>
+        <source>Use a snapshot of the whole window as the project preview</source>
+        <translation>Использовать снимок всего окна для превью проекта</translation>
     </message>
     <message>
-        <source>Timeline snapshot</source>
-        <translation>Снимок таймлайна</translation>
+        <source>Window snapshot</source>
+        <translation>Снимок окна</translation>
     </message>
     <message>
-        <source>Timeline snapshot. Updated each time you save.</source>
-        <translation>Снимок таймлайна обновляется при каждом сохранении.</translation>
+        <source>Whole window snapshot. Updated each time you save.</source>
+        <translation>Снимок всего окна обновляется при каждом сохранении.</translation>
     </message>
     <message>
         <source>Custom cover. Your image is kept when you save.</source>
@@ -20004,6 +20345,10 @@ I измеряется при воспроизведении. Нажмите д�
         <translation>Предложить выравнивание</translation>
     </message>
     <message>
+        <source>Detect audio attacks and preview automatic timing alignment. Compare Before / After, then Apply or Cancel.</source>
+        <translation>Найти атаки звука и прослушать автоматическое выравнивание ритма. Сравните «До» и «После», затем примените или отмените изменения.</translation>
+    </message>
+    <message>
         <source>Swing</source>
         <translation>Свинг</translation>
     </message>
@@ -20086,6 +20431,58 @@ I измеряется при воспроизведении. Нажмите д�
     <message>
         <source>Whole clip</source>
         <translation>Весь клип</translation>
+    </message>
+    <message>
+        <source>Delete selected markers</source>
+        <translation>Удалить выбранные маркеры</translation>
+    </message>
+    <message>
+        <source>Enable Warp</source>
+        <translation>Включить Warp</translation>
+    </message>
+    <message>
+        <source>Fit clip · F</source>
+        <translation>Показать весь клип · F</translation>
+    </message>
+    <message>
+        <source>Fit range · Shift+F</source>
+        <translation>Показать выбранный диапазон · Shift+F</translation>
+    </message>
+    <message>
+        <source>Open Warp from an audio clip</source>
+        <translation>Откройте Warp для аудиоклипа</translation>
+    </message>
+    <message>
+        <source>Quantize selected markers</source>
+        <translation>Выровнять выбранные маркеры по сетке</translation>
+    </message>
+    <message>
+        <source>Align markers to the grid using the timing settings. With no selection, align all markers in the range.</source>
+        <translation>Выровнять маркеры по сетке с учётом настроек ритма. Если ничего не выделено, выровнять все маркеры в диапазоне.</translation>
+    </message>
+    <message>
+        <source>Snap to grid · Alt: temporarily disable</source>
+        <translation>Привязка к сетке · Alt: временно отключить</translation>
+    </message>
+    <message>
+        <source>Strength</source>
+        <translation>Сила</translation>
+    </message>
+    <message>
+        <source>The source audio is unavailable or too short for Warp.</source>
+        <translation>Исходный звук недоступен или слишком короткий для Warp.</translation>
+    </message>
+    <message>
+        <source>Warp is unavailable for this clip. Check the message below.</source>
+        <translation>Warp недоступен для этого клипа. Причина указана внизу.</translation>
+    </message>
+    <message>
+        <source>Zoom in</source>
+        <translation>Увеличить масштаб</translation>
+    </message>
+    <message>
+        <source>Zoom out</source>
+        <translation>Уменьшить масштаб</translation>
     </message>
 </context>
 <context>
@@ -21911,6 +22308,30 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>AudioEditPanel</name>
+    <message><source>Select a range (1)</source><translation>Выделить диапазон (1)</translation></message>
+    <message><source>Move a segment (2)</source><translation>Переместить фрагмент (2)</translation></message>
+    <message><source>Split, then move (3)</source><translation>Разрезать и переместить (3)</translation></message>
+    <message><source>Slip trim window (4)</source><translation>Сдвинуть границы сэмпла (4)</translation></message>
+    <message><source>Move the trim window without moving audio</source><translation>Сдвинуть границы воспроизведения внутри аудио</translation></message>
+    <message><source>Undo (Ctrl+Z)</source><translation>Отменить (Ctrl+Z)</translation></message>
+    <message><source>Redo (Ctrl+Shift+Z)</source><translation>Повторить (Ctrl+Shift+Z)</translation></message>
+    <message><source>Listen to selection or sample (Enter)</source><translation>Прослушать выделение или сэмпл (Enter)</translation></message>
+    <message><source>Stop listening</source><translation>Остановить прослушивание</translation></message>
+    <message><source>Zoom out (−)</source><translation>Уменьшить масштаб (−)</translation></message>
+    <message><source>Zoom in (+)</source><translation>Увеличить масштаб (+)</translation></message>
+    <message><source>Fit sample (F)</source><translation>Показать сэмпл целиком (F)</translation></message>
+    <message><source>Fit selection (Shift+F)</source><translation>Приблизить выделение (Shift+F)</translation></message>
+    <message><source>More editing actions</source><translation>Другие действия с аудио</translation></message>
+    <message><source>Split at cursor (S)</source><translation>Разрезать в позиции курсора (S)</translation></message>
+    <message><source>Selection settings</source><translation>Параметры выделения</translation></message>
+    <message><source>Normalize selection</source><translation>Нормализовать выделение</translation></message>
+    <message><source>Silence selection (Delete)</source><translation>Заменить выделение тишиной (Delete)</translation></message>
+    <message><source>Drag a segment to move · Double-click to select · Esc to cancel</source><translation>Тяните фрагмент для перемещения · Двойной щелчок — выделить · Esc — отменить</translation></message>
+    <message><source>Click to split · Then drag either part to move it</source><translation>Щёлкните для разреза · Затем перетащите нужную часть</translation></message>
+    <message><source>Drag to shift the trim window · Esc to cancel</source><translation>Тяните, чтобы сдвинуть границы сэмпла · Esc — отменить</translation></message>
+    <message><source>Drag wave to select · Drag bottom strip to move · Ctrl+wheel to zoom</source><translation>Тяните волну — выделить · Нижнюю полоску — переместить · Ctrl+колесо — масштаб</translation></message>
+    <message><source>%1 – %2 s  ·  %3 ms</source><translation>%1 – %2 с  ·  %3 мс</translation></message>
+    <message><source>Cursor  %1 s</source><translation>Курсор  %1 с</translation></message>
     <message><source>Gain</source><translation>Уровень</translation></message>
     <message><source>Create editable comp version</source><translation>Создать версию comp для редактирования</translation></message>
     <message><source>Render the comp for editing. Original takes remain in version history.</source><translation>Создать сведённую версию для редактирования. Исходные дубли останутся в истории версий.</translation></message>
@@ -21974,6 +22395,8 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>AudioEditCanvas</name>
+    <message><source>%1 s</source><translation>%1 с</translation></message>
+    <message><source>Drag the waveform to select. Drag a segment strip to move it. Double-click a segment to select it. Ctrl+wheel zooms at the pointer; middle-drag pans.</source><translation>Тяните волну для выделения, нижнюю полоску фрагмента — для перемещения. Двойной щелчок выделяет фрагмент. Ctrl+колесо меняет масштаб под указателем, средняя кнопка мыши прокручивает волну.</translation></message>
     <message><source>Audio waveform editor</source><translation>Редактор звуковой волны</translation></message>
     <message><source>Load a sample to edit audio</source><translation>Загрузите сэмпл для редактирования</translation></message>
     <message><source>Mono</source><translation>Моно</translation></message>
@@ -22034,6 +22457,41 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>RackBuiltinView</name>
+    <message><source>Each colored bar is a repeat. Spacing is delay time; height is relative to the first repeat. Feedback sets the decay.</source><translation>Каждый цветной столбец — повтор. Расстояние показывает время задержки, высота — уровень относительно первого повтора. Обратная связь задаёт затухание.</translation></message>
+    <message><source>4 voices</source><translation>4 голоса</translation></message>
+    <message><source> dotted</source><translation> с точкой</translation></message>
+    <message><source> triplet</source><translation> триоль</translation></message>
+    <message><source>%1 s</source><translation>%1 с</translation></message>
+    <message><source>%1 s / cycle</source><translation>%1 с / цикл</translation></message>
+    <message><source>0 s</source><translation>0 с</translation></message>
+    <message><source>1 bar</source><translation>1 такт</translation></message>
+    <message><source>2 bars</source><translation>2 такта</translation></message>
+    <message><source>Amount</source><translation>Эффект</translation></message>
+    <message><source>Bypassed</source><translation>Выключено</translation></message>
+    <message><source>Depth</source><translation>Глубина</translation></message>
+    <message><source>Each bar is a repeat. Spacing is delay time; height is repeat level. Feedback sets the decay.</source><translation>Каждый столбец — повтор. Расстояние показывает время задержки, высота — уровень. Обратная связь задаёт затухание.</translation></message>
+    <message><source>Echo timing and level, left and right</source><translation>Время и уровень повторов в левом и правом каналах</translation></message>
+    <message><source>Enable %1</source><translation>Включить %1</translation></message>
+    <message><source>Filter sweep · Hz</source><translation>Фильтры · Гц</translation></message>
+    <message><source>Humanize</source><translation>Разброс</translation></message>
+    <message><source>Move %1 earlier</source><translation>Переместить %1 раньше</translation></message>
+    <message><source>Move %1 later</source><translation>Переместить %1 позже</translation></message>
+    <message><source>Note length</source><translation>Нотная длительность</translation></message>
+    <message><source>One modulation cycle. Horizontal: time. Vertical: voice delay or filter frequency.</source><translation>Один цикл модуляции. По горизонтали — время, по вертикали — задержка голосов или частота фильтров.</translation></message>
+    <message><source>Project tempo</source><translation>Темп проекта</translation></message>
+    <message><source>Rate</source><translation>Частота</translation></message>
+    <message><source>Repeats · %1 ms</source><translation>Повторы · %1 мс</translation></message>
+    <message><source>Softness</source><translation>Мягкость</translation></message>
+    <message><source>Stereo repeats together; ping-pong alternates left and right.</source><translation>В стерео оба канала повторяются вместе, в пинг-понге — попеременно слева и справа.</translation></message>
+    <message><source>Stereo voices</source><translation>Голоса в стерео</translation></message>
+    <message><source>Time source</source><translation>Режим времени</translation></message>
+    <message><source>Voice delay · ms</source><translation>Задержки · мс</translation></message>
+    <message><source>Voice spread from left to right. Halos show humanization; the center is the original signal.</source><translation>Расположение голосов слева направо. Ореолы показывают разброс, в центре — исходный сигнал.</translation></message>
+    <message><source>Width</source><translation>Ширина</translation></message>
+    <message><source>Width %1% · Drift %2%</source><translation>Ширина %1% · Разброс %2%</translation></message>
+    <message><source>Compression curve and gain reduction</source><translation>Кривая компрессии и величина сжатия</translation></message>
+    <message><source>GR: gain reduction in dB. IN / OUT: input and output levels in dBFS.</source><translation>GR: величина сжатия в дБ. IN / OUT: уровни входа и выхода в dBFS.</translation></message>
+    <message><source>Gain reduction: %1 dB</source><translation>Сжатие: %1 дБ</translation></message>
     <message><source>Frequency</source><translation>Частота</translation></message>
     <message><source>Gain</source><translation>Усиление</translation></message>
     <message><source>Q</source><translation>Q</translation></message>
@@ -22081,6 +22539,10 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>RackDeviceCard</name>
+    <message><source>Collapse device</source><translation>Свернуть устройство</translation></message>
+    <message><source>Expand device</source><translation>Развернуть устройство</translation></message>
+    <message><source>Double-click to collapse device</source><translation>Двойной щелчок — свернуть устройство</translation></message>
+    <message><source>Double-click to expand device</source><translation>Двойной щелчок — развернуть устройство</translation></message>
     <message><source>Auto</source><translation>Авто</translation></message>
     <message><source>Bypass device</source><translation>Обойти устройство</translation></message>
     <message><source>Choose sidechain sources</source><translation>Выбрать источники сайдчейна</translation></message>
@@ -22157,6 +22619,10 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
     <message><source>Ungroup</source><translation>Разгруппировать</translation></message>
     <message><source>A channel holds one instrument. Use Copy to channel to duplicate it.</source><translation>Канал содержит один инструмент. Чтобы создать копию, выберите «Копировать на канал».</translation></message>
     <message><source>Replace device…</source><translation>Заменить устройство…</translation></message>
+    <message>
+        <source>Back to Pattern</source>
+        <translation>К паттерну</translation>
+    </message>
 </context>
 <context>
     <name>RackParameterBinding</name>
@@ -22207,6 +22673,438 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
     <message><source>The difference between channels. The shared center is removed.</source><translation>Разность каналов. Общий центр стереосигнала убран.</translation></message>
     <message><source>Left channel, sent equally to both outputs.</source><translation>Левый канал на обоих выходах.</translation></message>
     <message><source>Right channel, sent equally to both outputs.</source><translation>Правый канал на обоих выходах.</translation></message>
+</context>
+<context>
+    <name>MidiGeneratorDialog</name>
+    <message><source>Cancel</source><translation>Отмена</translation></message>
+    <message><source>Chord tones follow the selected harmony clip.</source><translation>Состав аккордов определяется выбранным клипом с гармонией.</translation></message>
+    <message><source>Chromatic</source><translation>Хроматический</translation></message>
+    <message><source>Major</source><translation>Мажор</translation></message>
+    <message><source>Natural Minor</source><translation>Натуральный минор</translation></message>
+    <message><source>Harmonic Minor</source><translation>Гармонический минор</translation></message>
+    <message><source>Melodic Minor</source><translation>Мелодический минор</translation></message>
+    <message><source>Dorian</source><translation>Дорийский</translation></message>
+    <message><source>Phrygian</source><translation>Фригийский</translation></message>
+    <message><source>Lydian</source><translation>Лидийский</translation></message>
+    <message><source>Mixolydian</source><translation>Миксолидийский</translation></message>
+    <message><source>Locrian</source><translation>Локрийский</translation></message>
+    <message><source>Pentatonic Major</source><translation>Мажорная пентатоника</translation></message>
+    <message><source>Pentatonic Minor</source><translation>Минорная пентатоника</translation></message>
+    <message><source>Blues</source><translation>Блюзовый</translation></message>
+    <message><source>Whole Tone</source><translation>Целотоновый</translation></message>
+    <message><source>MIDI Generator</source><translation>Генератор MIDI</translation></message>
+    <message><source>Generated MIDI preview</source><translation>Предпросмотр созданных нот</translation></message>
+    <message><source>Melody</source><translation>Мелодия</translation></message>
+    <message><source>Chords</source><translation>Аккорды</translation></message>
+    <message><source>Generate</source><translation>Создать</translation></message>
+    <message><source> bars</source><translation> такт.</translation></message>
+    <message><source>%1 bars</source><translation>%1 такт.</translation></message>
+    <message><source>Length in bars</source><translation>Длина в тактах</translation></message>
+    <message><source>Length</source><translation>Длина</translation></message>
+    <message><source>Key</source><translation>Тоника</translation></message>
+    <message><source>Scale</source><translation>Лад</translation></message>
+    <message><source>Key / scale</source><translation>Тональность / лад</translation></message>
+    <message><source>Singing</source><translation>Напевный</translation></message>
+    <message><source>Rhythmic</source><translation>Ритмичный</translation></message>
+    <message><source>Spacious</source><translation>Разреженный</translation></message>
+    <message><source>Character</source><translation>Характер</translation></message>
+    <message><source>Density</source><translation>Плотность</translation></message>
+    <message><source>Variation</source><translation>Вариативность</translation></message>
+    <message><source>From key and scale</source><translation>По тональности и ладу</translation></message>
+    <message><source>Use the selected clip's harmony at the same arrangement position. Outside it, use the selected key.</source><translation>Гармония выбранного клипа в той же позиции аранжировки. За его пределами используется выбранная тональность.</translation></message>
+    <message><source>Harmony</source><translation>Гармония</translation></message>
+    <message><source>More settings</source><translation>Дополнительные настройки</translation></message>
+    <message><source>Lowest note</source><translation>Нижняя нота</translation></message>
+    <message><source>Highest note</source><translation>Верхняя нота</translation></message>
+    <message><source>Pitch range</source><translation>Диапазон нот</translation></message>
+    <message><source>Swing</source><translation>Свинг</translation></message>
+    <message><source>Expression</source><translation>Выразительность</translation></message>
+    <message><source>Resolved phrase</source><translation>Завершённая фраза</translation></message>
+    <message><source>Loop</source><translation>Луп</translation></message>
+    <message><source>Ending</source><translation>Окончание</translation></message>
+    <message><source>Half a bar</source><translation>Каждые полтакта</translation></message>
+    <message><source>One bar</source><translation>Каждый такт</translation></message>
+    <message><source>Two bars</source><translation>Каждые два такта</translation></message>
+    <message><source>Chord changes</source><translation>Смена аккордов</translation></message>
+    <message><source>Triads</source><translation>Трезвучия</translation></message>
+    <message><source>Seventh chords</source><translation>Септаккорды</translation></message>
+    <message><source>Seed</source><translation>Сид</translation></message>
+    <message><source>Variant %1</source><translation>Вариант %1</translation></message>
+    <message><source>Generate more</source><translation>Ещё варианты</translation></message>
+    <message><source>Replace notes in generated range</source><translation>Заменить ноты в заданном диапазоне</translation></message>
+    <message><source>Add to existing notes</source><translation>Добавить к существующим нотам</translation></message>
+    <message><source>Insert mode</source><translation>Способ вставки</translation></message>
+    <message><source>Listen</source><translation>Слушать</translation></message>
+    <message><source>Apply</source><translation>Применить</translation></message>
+    <message><source>Stop</source><translation>Стоп</translation></message>
+    <message><source>Generating…</source><translation>Генерация…</translation></message>
+    <message><source>The target clip is no longer available.</source><translation>Целевой клип больше недоступен.</translation></message>
+    <message><source>Choose an available harmony clip.</source><translation>Выберите доступный клип с гармонией.</translation></message>
+    <message><source>Choose a valid pitch range containing notes from the scale.</source><translation>Выберите корректный диапазон с нотами выбранного лада.</translation></message>
+    <message><source>Generation failed. Try again.</source><translation>Не удалось создать варианты. Попробуйте ещё раз.</translation></message>
+    <message><source>No playable variants. Widen the pitch range and generate again.</source><translation>Нет подходящих вариантов. Расширьте диапазон нот и повторите генерацию.</translation></message>
+    <message><source>The project changed. Generate again to use the current clip.</source><translation>Проект изменился. Создайте новые варианты для текущего клипа.</translation></message>
+    <message><source>%1 bars · %2 notes · starts at beat %3</source><translation>%1 такт. · %2 нот · начало с доли %3</translation></message>
+    <message><source> · clip will be extended</source><translation> · клип будет продлён</translation></message>
+    <message><source>. Load an instrument on this track to listen.</source><translation>. Для прослушивания загрузите инструмент на дорожку.</translation></message>
+    <message><source>Could not prepare listening: %1</source><translation>Не удалось подготовить прослушивание: %1</translation></message>
+    <message><source>Could not start listening: %1</source><translation>Не удалось запустить прослушивание: %1</translation></message>
+    <message><source>Could not apply MIDI. Check that the project is editable and recording is stopped.</source><translation>Не удалось вставить MIDI. Проверьте, что проект доступен для редактирования и запись остановлена.</translation></message>
+</context>
+<context>
+    <name>Vlt1073Panel</name>
+    <message><source>VLT 1073 preamplifier and equalizer</source><translation>Предусилитель и эквалайзер VLT 1073</translation></message>
+    <message><source>Power</source><translation>Питание</translation></message>
+</context>
+<context>
+    <name>Vlt1073Control</name>
+    <message><source>Drag vertically; Shift for precision; Enter to enter a value; Escape to cancel. Right-click for automation.</source><translation>Перетаскивайте вертикально; Shift — точная настройка, Enter — ввод значения, Escape — отмена. Автоматизация — в контекстном меню.</translation></message>
+    <message><source>Frequency</source><translation>Частота</translation></message>
+    <message><source>Level in dB (−90 = −∞)</source><translation>Уровень в дБ (−90 = −∞)</translation></message>
+    <message><source>Enter value…</source><translation>Ввести значение…</translation></message>
+    <message><source>Create automation</source><translation>Создать автоматизацию</translation></message>
+    <message><source>Reset to default</source><translation>Сбросить значение</translation></message>
+</context>
+<context>
+    <name>MorphPanel</name>
+    <message><source>Image sound</source><translation>Звук из изображения</translation></message>
+    <message><source>Create a sound locally from the image's colors, contrast and texture. Mix stays at 100%.</source><translation>Создать звук локально по цветам, контрасту и фактуре изображения. Микс остаётся 100%.</translation></message>
+    <message><source>Create another sound from this image. Keeps the image and route; does not save a preset.</source><translation>Создать другой звук по этому изображению. Изображение и маршрут сохраняются; пресет не записывается.</translation></message>
+    <message><source>Random</source><translation>Рандом</translation></message>
+    <message><source>Randomized</source><translation>Случайное звучание</translation></message>
+    <message><source>Randomize Morph parameters</source><translation>Случайные параметры Morph</translation></message>
+    <message><source>New random sound, Mix 100%. Does not save a preset.</source><translation>Новое случайное звучание, микс 100%. Пресет не сохраняется.</translation></message>
+    <message><source>Previous preset</source><translation>Предыдущий пресет</translation></message>
+    <message><source>Next preset</source><translation>Следующий пресет</translation></message>
+    <message><source>Presets</source><translation>Пресеты</translation></message>
+    <message><source>Settings</source><translation>Настройки</translation></message>
+    <message><source>● Record</source><translation>● Запись</translation></message>
+    <message><source>Assign modulation</source><translation>Назначить модуляцию</translation></message>
+    <message><source>Assign Morph modulation</source><translation>Назначить модуляцию Morph</translation></message>
+    <message><source>Brush</source><translation>Кисть</translation></message>
+    <message><source>Brush size</source><translation>Размер кисти</translation></message>
+    <message><source>Brush size…</source><translation>Размер кисти…</translation></message>
+    <message><source>Canvas influence</source><translation>Влияние холста</translation></message>
+    <message><source>Category</source><translation>Категория</translation></message>
+    <message><source>Change generation locks</source><translation>Изменить защиту параметров</translation></message>
+    <message><source>Change Morph</source><translation>Изменить Morph</translation></message>
+    <message><source>Clear Canvas</source><translation>Очистить холст</translation></message>
+    <message><source>Clear Morph Canvas</source><translation>Очистить холст Morph</translation></message>
+    <message><source>Compare Morph A/B</source><translation>Сравнить Morph A/B</translation></message>
+    <message><source>Copy A → B</source><translation>Копировать A → B</translation></message>
+    <message><source>Copy B → A</source><translation>Копировать B → A</translation></message>
+    <message><source>Create automation</source><translation>Создать автоматизацию</translation></message>
+    <message><source>Custom color…</source><translation>Выбрать цвет…</translation></message>
+    <message><source>Delete</source><translation>Удалить</translation></message>
+    <message><source>Delete selected point</source><translation>Удалить выбранную точку</translation></message>
+    <message><source>Drag macro %1 to a control</source><translation>Перетащите макрос %1 на ручку</translation></message>
+    <message><source>Draw / edit route</source><translation>Рисовать / править маршрут</translation></message>
+    <message><source>Draw Morph Canvas</source><translation>Рисовать на холсте Morph</translation></message>
+    <message><source>Draw Morph orbit</source><translation>Создать орбиту Morph</translation></message>
+    <message><source>Edit Morph assignment</source><translation>Изменить назначение Morph</translation></message>
+    <message><source>Edit Morph route</source><translation>Изменить маршрут Morph</translation></message>
+    <message><source>Edit value…</source><translation>Ввести значение…</translation></message>
+    <message><source>Effect color</source><translation>Цвет эффекта</translation></message>
+    <message><source>Export .vltmorph…</source><translation>Экспорт .vltmorph…</translation></message>
+    <message><source>Export Morph preset</source><translation>Экспорт пресета Morph</translation></message>
+    <message><source>Factory</source><translation>Заводские</translation></message>
+    <message><source>Favorite</source><translation>Избранное</translation></message>
+    <message><source>Favorites</source><translation>Избранное</translation></message>
+    <message><source>Fit width</source><translation>По ширине</translation></message>
+    <message><source>Flow and Canvas. Drop an image, paint, or edit a route.</source><translation>Поток и холст. Перетащите фото, рисуйте кистью или изменяйте маршрут.</translation></message>
+    <message><source>Generation locks…</source><translation>Защита параметров…</translation></message>
+    <message><source>Import</source><translation>Импорт</translation></message>
+    <message><source>Import .vltmorph…</source><translation>Импорт .vltmorph…</translation></message>
+    <message><source>Import Canvas image</source><translation>Импорт изображения на холст</translation></message>
+    <message><source>Import Morph image</source><translation>Импорт изображения Morph</translation></message>
+    <message><source>Import Morph preset</source><translation>Импорт пресета Morph</translation></message>
+    <message><source>Interaction</source><translation>Взаимодействие</translation></message>
+    <message><source>Interface scale</source><translation>Масштаб интерфейса</translation></message>
+    <message><source>Invalid Morph preset.</source><translation>Некорректный пресет Morph.</translation></message>
+    <message><source>Link modulation phase</source><translation>Связать фазу модуляции</translation></message>
+    <message><source>Load</source><translation>Загрузить</translation></message>
+    <message><source>Load Morph preset</source><translation>Загрузить пресет Morph</translation></message>
+    <message><source>Modulation depth %1</source><translation>Глубина модуляции %1</translation></message>
+    <message><source>Modulation destination %1</source><translation>Цель модуляции %1</translation></message>
+    <message><source>Modulation source %1</source><translation>Источник модуляции %1</translation></message>
+    <message><source>Modules</source><translation>Модули</translation></message>
+    <message><source>Morph balance</source><translation>Баланс Morph</translation></message>
+    <message><source>Morph balance. Arrow keys move; menu edits coordinates.</source><translation>Баланс Morph. Стрелки перемещают точку; меню позволяет ввести координаты.</translation></message>
+    <message><source>Morph modulation effect</source><translation>Эффектор Morph</translation></message>
+    <message><source>Motion</source><translation>Движение</translation></message>
+    <message><source>Move Morph balance</source><translation>Переместить баланс Morph</translation></message>
+    <message><source>Name</source><translation>Название</translation></message>
+    <message><source>No user presets</source><translation>Нет пользовательских пресетов</translation></message>
+    <message><source>Opacity</source><translation>Непрозрачность</translation></message>
+    <message><source>Opacity…</source><translation>Непрозрачность…</translation></message>
+    <message><source>Orbit</source><translation>Орбита</translation></message>
+    <message><source>Output / Mix</source><translation>Выход / Микс</translation></message>
+    <message><source>Paint a color • Draw a route • Drop a photo</source><translation>Нарисуйте цвет • Задайте маршрут • Добавьте фото</translation></message>
+    <message><source>Preset category</source><translation>Категория пресета</translation></message>
+    <message><source>Record Morph motion</source><translation>Записать движение Morph</translation></message>
+    <message><source>Reduce motion</source><translation>Уменьшить анимацию</translation></message>
+    <message><source>Rename Morph preset</source><translation>Переименовать пресет Morph</translation></message>
+    <message><source>Rename preset</source><translation>Переименовать пресет</translation></message>
+    <message><source>Rename…</source><translation>Переименовать…</translation></message>
+    <message><source>Reset</source><translation>Сброс</translation></message>
+    <message><source>Reverse</source><translation>Развернуть</translation></message>
+    <message><source>Reverse Morph route</source><translation>Развернуть маршрут Morph</translation></message>
+    <message><source>Route</source><translation>Маршрут</translation></message>
+    <message><source>Save Morph preset</source><translation>Сохранить пресет Morph</translation></message>
+    <message><source>Save user preset…</source><translation>Сохранить пресет…</translation></message>
+    <message><source>Scan</source><translation>Сканер</translation></message>
+    <message><source>Smooth Morph route</source><translation>Сгладить маршрут Morph</translation></message>
+    <message><source>Smooth route</source><translation>Сгладить маршрут</translation></message>
+    <message><source>The image could not be decoded.</source><translation>Не удалось прочитать изображение.</translation></message>
+    <message><source>The preset could not be saved.</source><translation>Не удалось сохранить пресет.</translation></message>
+    <message><source>Use a PNG, JPEG or WebP image smaller than 20 MiB.</source><translation>Выберите PNG, JPEG или WebP размером до 20 МиБ.</translation></message>
+    <message><source>The decoded image must be no larger than 16 megapixels.</source><translation>Размер изображения не должен превышать 16 мегапикселей.</translation></message>
+    <message><source>All 16 assignments are in use. Clear a source in the matrix first.</source><translation>Все 16 назначений заняты. Сначала освободите источник в матрице.</translation></message>
+    <message><source>User presets</source><translation>Пользовательские пресеты</translation></message>
+    <message><source>Value</source><translation>Значение</translation></message>
+    <message><source>Variation</source><translation>Вариация</translation></message>
+    <message><source>Vary Morph Canvas</source><translation>Создать вариацию холста Morph</translation></message>
+    <message><source>FLOW</source><translation>ПОТОК</translation></message>
+    <message><source>CANVAS</source><translation>ХОЛСТ</translation></message>
+    <message><source>Canvas</source><translation>Холст</translation></message>
+    <message><source>CHORUS</source><translation>ХОРУС</translation></message>
+    <message><source>FLANGER</source><translation>ФЛЭНЖЕР</translation></message>
+    <message><source>PHASER</source><translation>ФАЗЕР</translation></message>
+    <message><source>DOUBLER</source><translation>ДАБЛЕР</translation></message>
+    <message><source>Chorus</source><translation>Хорус</translation></message>
+    <message><source>Flanger</source><translation>Флэнжер</translation></message>
+    <message><source>Phaser</source><translation>Фазер</translation></message>
+    <message><source>Doubler</source><translation>Даблер</translation></message>
+    <message><source>MODE MIX</source><translation>БАЛАНС ЭФФЕКТОВ</translation></message>
+    <message><source>INTERACTION</source><translation>СВЯЗЬ</translation></message>
+    <message><source>OUTPUT</source><translation>ВЫХОД</translation></message>
+    <message><source>MIX</source><translation>МИКС</translation></message>
+    <message><source>WIDTH</source><translation>ШИРИНА</translation></message>
+    <message><source>SOFT CLIP</source><translation>СОФТ-КЛИП</translation></message>
+    <message><source>AUTO GAIN</source><translation>АВТОУРОВЕНЬ</translation></message>
+    <message><source>RATE</source><translation>СКОРОСТЬ</translation></message>
+    <message><source>DEPTH</source><translation>ГЛУБИНА</translation></message>
+    <message><source>VOICES</source><translation>ГОЛОСА</translation></message>
+    <message><source>SPREAD</source><translation>РАЗБРОС</translation></message>
+    <message><source>DETUNE</source><translation>РАССТРОЙКА</translation></message>
+    <message><source>TONE</source><translation>ТЕМБР</translation></message>
+    <message><source>FEEDBACK</source><translation>ОБР. СВЯЗЬ</translation></message>
+    <message><source>DELAY</source><translation>ЗАДЕРЖКА</translation></message>
+    <message><source>COLOR</source><translation>ОКРАСКА</translation></message>
+    <message><source>STEREO</source><translation>СТЕРЕО</translation></message>
+    <message><source>STAGES</source><translation>СТУПЕНИ</translation></message>
+    <message><source>RESONANCE</source><translation>РЕЗОНАНС</translation></message>
+    <message><source>TIME</source><translation>ВРЕМЯ</translation></message>
+    <message><source>HUMANIZE</source><translation>ВАРИАЦИИ</translation></message>
+    <message><source>LEVEL</source><translation>УРОВЕНЬ</translation></message>
+    <message><source>SHAPE</source><translation>ФОРМА</translation></message>
+    <message><source>PHASE</source><translation>ФАЗА</translation></message>
+    <message><source>SMOOTH</source><translation>ПЛАВНОСТЬ</translation></message>
+    <message><source>MOD MATRIX</source><translation>МАТРИЦА МОДУЛЯЦИИ</translation></message>
+    <message><source>ENV FOLLOWER</source><translation>ОГИБАЮЩАЯ</translation></message>
+    <message><source>SENS</source><translation>ЧУВСТВ.</translation></message>
+    <message><source>ATTACK</source><translation>АТАКА</translation></message>
+    <message><source>RELEASE</source><translation>СПАД</translation></message>
+    <message><source>SOURCE</source><translation>ИСТОЧНИК</translation></message>
+    <message><source>MACROS</source><translation>МАКРОСЫ</translation></message>
+    <message><source>GLOBAL</source><translation>ОБЩЕЕ</translation></message>
+    <message><source>PRESETS</source><translation>ПРЕСЕТЫ</translation></message>
+    <message><source>MOVEMENT</source><translation>ДВИЖЕНИЕ</translation></message>
+    <message><source>TEXTURE</source><translation>ТЕКСТУРА</translation></message>
+    <message><source>CHARACTER</source><translation>ХАРАКТЕР</translation></message>
+    <message><source>SPACE</source><translation>ПРОСТРАНСТВО</translation></message>
+    <message><source>HPF</source><translation>ФВЧ</translation></message>
+    <message><source>LPF</source><translation>ФНЧ</translation></message>
+    <message><source>DRIVE</source><translation>НАСЫЩЕНИЕ</translation></message>
+    <message><source>DRY/WET</source><translation>МИКС</translation></message>
+    <message><source>FX +</source><translation>ЕЩЁ +</translation></message>
+    <message><source>ECHO</source><translation>ЭХО</translation></message>
+    <message><source>DAMPING</source><translation>ГЛУШЕНИЕ</translation></message>
+    <message><source>PING PONG</source><translation>ПИНГ-ПОНГ</translation></message>
+    <message><source>BLOOM</source><translation>ШЛЕЙФ</translation></message>
+    <message><source>DECAY</source><translation>ЗАТУХАНИЕ</translation></message>
+    <message><source>DENSITY</source><translation>ПЛОТНОСТЬ</translation></message>
+    <message><source>BREATHING</source><translation>ДЫХАНИЕ</translation></message>
+    <message><source>MOTION</source><translation>ДВИЖЕНИЕ</translation></message>
+    <message><source>REVERSE</source><translation>ОБРАТНО</translation></message>
+    <message><source>MODULATION FUSION ENGINE</source><translation>СЛИЯНИЕ ЭФФЕКТОВ И ДВИЖЕНИЯ</translation></message>
+    <message><source>ONE MOTION. MANY DIMENSIONS.</source><translation>ОДНО ДВИЖЕНИЕ. МНОГО ГРАНЕЙ.</translation></message>
+    <message><source>MODULATION WITHOUT BORDERS</source><translation>МОДУЛЯЦИЯ БЕЗ ГРАНИЦ</translation></message>
+    <message><source>Parallel</source><translation>Параллельно</translation></message>
+    <message><source>Serial</source><translation>Последовательно</translation></message>
+    <message><source>Warm</source><translation>Тёплый</translation></message>
+    <message><source>Tube</source><translation>Лампа</translation></message>
+    <message><source>Fold</source><translation>Складывание</translation></message>
+    <message><source>Wet input</source><translation>Вход обработки</translation></message>
+    <message><source>Input L+R</source><translation>Вход L+R</translation></message>
+    <message><source>Side</source><translation>Разность L−R</translation></message>
+    <message><source>Sidechain</source><translation>Сайдчейн</translation></message>
+    <message><source>Sine</source><translation>Синус</translation></message>
+    <message><source>Triangle</source><translation>Треугольник</translation></message>
+    <message><source>Saw</source><translation>Пила</translation></message>
+    <message><source>Square</source><translation>Меандр</translation></message>
+    <message><source>Free</source><translation>Свободно</translation></message>
+    <message><source>1 bar</source><translation>1 такт</translation></message>
+    <message><source>2 bars</source><translation>2 такта</translation></message>
+    <message><source>4 bars</source><translation>4 такта</translation></message>
+    <message><source>%1 bars</source><translation>%1 такт.</translation></message>
+    <message><source>Off</source><translation>Выкл.</translation></message>
+    <message><source>Envelope</source><translation>Огибающая</translation></message>
+    <message><source>Movement</source><translation>Движение</translation></message>
+    <message><source>Texture</source><translation>Текстура</translation></message>
+    <message><source>Character</source><translation>Характер</translation></message>
+    <message><source>Space</source><translation>Пространство</translation></message>
+    <message><source>Motion X</source><translation>Движение X</translation></message>
+    <message><source>Motion Y</source><translation>Движение Y</translation></message>
+    <message><source>Brightness</source><translation>Яркость</translation></message>
+    <message><source>Saturation</source><translation>Насыщенность</translation></message>
+    <message><source>Edges</source><translation>Границы</translation></message>
+    <message><source>Canvas X</source><translation>Холст X</translation></message>
+    <message><source>Canvas Y</source><translation>Холст Y</translation></message>
+    <message><source>Hz</source><translation>Гц</translation></message>
+    <message><source>kHz</source><translation>кГц</translation></message>
+    <message><source>ms</source><translation>мс</translation></message>
+    <message><source>ct</source><translation>цент</translation></message>
+    <message><source>deg</source><translation>°</translation></message>
+    <message><source>dB</source><translation>дБ</translation></message>
+    <message><source>s</source><translation>с</translation></message>
+    <message><source>Vocals</source><translation>Вокал</translation></message>
+    <message><source>Guitars</source><translation>Гитары</translation></message>
+    <message><source>Piano / Keys</source><translation>Пиано / Клавиши</translation></message>
+    <message><source>Drums</source><translation>Барабаны</translation></message>
+    <message><source>Bass</source><translation>Бас</translation></message>
+    <message><source>Synth / FX</source><translation>Синтезаторы / Эффекты</translation></message>
+    <message><source>Init</source><translation>Сброс</translation></message>
+    <message><source>Images (*.png *.jpg *.jpeg *.webp)</source><translation>Изображения (*.png *.jpg *.jpeg *.webp)</translation></message>
+    <message><source>LFO %1 — select or drag to assign</source><translation>LFO %1 — выберите или перетащите на параметр</translation></message>
+    <message><source>Envelope follower — drag to assign</source><translation>Огибающая — перетащите на параметр</translation></message>
+    <message><source>Routing</source><translation>Маршрутизация</translation></message>
+    <message><source>Elastic Weave</source><translation>Связь модуляций</translation></message>
+    <message><source>Breathing Bloom</source><translation>Дыхание пространства</translation></message>
+    <message><source>High pass</source><translation>Фильтр высоких частот</translation></message>
+    <message><source>Low pass</source><translation>Фильтр низких частот</translation></message>
+    <message><source>Drive</source><translation>Насыщение</translation></message>
+    <message><source>Drive mode</source><translation>Режим насыщения</translation></message>
+    <message><source>Drive position</source><translation>Позиция насыщения</translation></message>
+    <message><source>Echo</source><translation>Эхо</translation></message>
+    <message><source>Bloom</source><translation>Шлейф</translation></message>
+    <message><source>Width</source><translation>Ширина</translation></message>
+    <message><source>Dry / wet</source><translation>Исходный / обработанный</translation></message>
+    <message><source>Output</source><translation>Выход</translation></message>
+    <message><source>Auto gain</source><translation>Автоуровень</translation></message>
+    <message><source>Soft clip</source><translation>Мягкое ограничение</translation></message>
+    <message><source>Motion playback</source><translation>Воспроизведение движения</translation></message>
+    <message><source>Motion length (powers of two)</source><translation>Длина движения в тактах</translation></message>
+    <message><source>Motion depth</source><translation>Глубина движения</translation></message>
+    <message><source>Reverse motion</source><translation>Обратное движение</translation></message>
+    <message><source>Motion smooth</source><translation>Плавность движения</translation></message>
+    <message><source>Generation locks</source><translation>Защита параметров</translation></message>
+    <message><source>Drive / Echo / Bloom</source><translation>Насыщение / Эхо / Шлейф</translation></message>
+    <message><source>Chorus enabled</source><translation>Хорус: включение</translation></message>
+    <message><source>Chorus rate</source><translation>Хорус: скорость</translation></message>
+    <message><source>Chorus depth</source><translation>Хорус: глубина</translation></message>
+    <message><source>Chorus voices</source><translation>Хорус: голоса</translation></message>
+    <message><source>Chorus spread</source><translation>Хорус: разброс</translation></message>
+    <message><source>Chorus detune</source><translation>Хорус: расстройка</translation></message>
+    <message><source>Chorus tone</source><translation>Хорус: тембр</translation></message>
+    <message><source>Chorus link</source><translation>Хорус: связь фаз</translation></message>
+    <message><source>Chorus sync</source><translation>Хорус: синхронизация</translation></message>
+    <message><source>Flanger enabled</source><translation>Флэнжер: включение</translation></message>
+    <message><source>Flanger rate</source><translation>Флэнжер: скорость</translation></message>
+    <message><source>Flanger depth</source><translation>Флэнжер: глубина</translation></message>
+    <message><source>Flanger feedback</source><translation>Флэнжер: обр. связь</translation></message>
+    <message><source>Flanger delay</source><translation>Флэнжер: задержка</translation></message>
+    <message><source>Flanger color</source><translation>Флэнжер: окраска</translation></message>
+    <message><source>Flanger stereo</source><translation>Флэнжер: стерео</translation></message>
+    <message><source>Flanger link</source><translation>Флэнжер: связь фаз</translation></message>
+    <message><source>Flanger sync</source><translation>Флэнжер: синхронизация</translation></message>
+    <message><source>Phaser enabled</source><translation>Фазер: включение</translation></message>
+    <message><source>Phaser rate</source><translation>Фазер: скорость</translation></message>
+    <message><source>Phaser depth</source><translation>Фазер: глубина</translation></message>
+    <message><source>Phaser stages (pairs)</source><translation>Фазер: ступени</translation></message>
+    <message><source>Phaser resonance</source><translation>Фазер: резонанс</translation></message>
+    <message><source>Phaser spread</source><translation>Фазер: разброс</translation></message>
+    <message><source>Phaser mix</source><translation>Фазер: микс</translation></message>
+    <message><source>Phaser link</source><translation>Фазер: связь фаз</translation></message>
+    <message><source>Phaser sync</source><translation>Фазер: синхронизация</translation></message>
+    <message><source>Doubler enabled</source><translation>Даблер: включение</translation></message>
+    <message><source>Doubler time</source><translation>Даблер: время</translation></message>
+    <message><source>Doubler detune</source><translation>Даблер: расстройка</translation></message>
+    <message><source>Doubler voices</source><translation>Даблер: голоса</translation></message>
+    <message><source>Doubler spread</source><translation>Даблер: разброс</translation></message>
+    <message><source>Doubler humanize</source><translation>Даблер: вариации</translation></message>
+    <message><source>Doubler level</source><translation>Даблер: уровень</translation></message>
+    <message><source>Doubler link</source><translation>Даблер: связь фаз</translation></message>
+    <message><source>Envelope sensitivity</source><translation>Огибающая: чувствительность</translation></message>
+    <message><source>Envelope attack</source><translation>Огибающая: атака</translation></message>
+    <message><source>Envelope release</source><translation>Огибающая: спад</translation></message>
+    <message><source>Envelope source</source><translation>Огибающая: источник</translation></message>
+    <message><source>Echo level</source><translation>Эхо: уровень</translation></message>
+    <message><source>Echo time</source><translation>Эхо: время</translation></message>
+    <message><source>Echo feedback</source><translation>Эхо: обр. связь</translation></message>
+    <message><source>Echo damping</source><translation>Эхо: глушение</translation></message>
+    <message><source>Echo ping-pong</source><translation>Эхо: пинг-понг</translation></message>
+    <message><source>Echo sync</source><translation>Эхо: синхронизация</translation></message>
+    <message><source>Bloom level</source><translation>Шлейф: уровень</translation></message>
+    <message><source>Bloom decay</source><translation>Шлейф: затухание</translation></message>
+    <message><source>Bloom density</source><translation>Шлейф: плотность</translation></message>
+    <message><source>Bloom tone</source><translation>Шлейф: тембр</translation></message>
+    <message><source>LFO 1 Rate</source><translation>LFO 1: скорость</translation></message>
+    <message><source>LFO 1 Shape</source><translation>LFO 1: форма</translation></message>
+    <message><source>LFO 1 Phase</source><translation>LFO 1: фаза</translation></message>
+    <message><source>LFO 1 Smooth</source><translation>LFO 1: плавность</translation></message>
+    <message><source>LFO 1 Sync</source><translation>LFO 1: синхронизация</translation></message>
+    <message><source>LFO 2 Rate</source><translation>LFO 2: скорость</translation></message>
+    <message><source>LFO 2 Shape</source><translation>LFO 2: форма</translation></message>
+    <message><source>LFO 2 Phase</source><translation>LFO 2: фаза</translation></message>
+    <message><source>LFO 2 Smooth</source><translation>LFO 2: плавность</translation></message>
+    <message><source>LFO 2 Sync</source><translation>LFO 2: синхронизация</translation></message>
+    <message><source>DRIVE &amp; SYNC</source><translation>НАСЫЩЕНИЕ И ТЕМП</translation></message>
+    <message><source>MOTION &amp; BREATHING</source><translation>ДВИЖЕНИЕ И ДЫХАНИЕ</translation></message>
+  <message>
+    <source>More %1 controls</source>
+    <translation>Дополнительные параметры: %1</translation>
+  </message>
+  <message>
+    <source>Modulation and macros</source>
+    <translation>Модуляция и макросы</translation>
+  </message>
+  <message>
+    <source>Stereo output level</source>
+    <translation>Стереоуровень выхода</translation>
+  </message>
+  <message>
+    <source>Modulation assignments %1–%2 of 16</source>
+    <translation>Назначения модуляции %1–%2 из 16</translation>
+  </message>
+  <message>
+    <source>MODULATION FLOW</source>
+    <translation>ПОТОК МОДУЛЯЦИИ</translation>
+  </message>
+  <message>
+    <source>GLOBAL MODULATION</source>
+    <translation>ОБЩАЯ МОДУЛЯЦИЯ</translation>
+  </message>
+  <message>
+    <source>TONE &amp; WIDTH</source>
+    <translation>ТЕМБР И ШИРИНА</translation>
+  </message>
+  <message>
+    <source>WIDE &amp; LUSH</source>
+    <translation>ШИРОКИЙ И МЯГКИЙ</translation>
+  </message>
+  <message>
+    <source>SWEEP &amp; TEXTURE</source>
+    <translation>ДВИЖЕНИЕ И ТЕКСТУРА</translation>
+  </message>
+  <message>
+    <source>MOVEMENT &amp; COLOR</source>
+    <translation>ДВИЖЕНИЕ И ОКРАСКА</translation>
+  </message>
+  <message>
+    <source>SPACE &amp; WIDTH</source>
+    <translation>ОБЪЁМ И ШИРИНА</translation>
+  </message>
 </context>
 <context>
     <name>ui::ForumBrowserBridge</name>
@@ -22365,5 +23263,449 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
         <source>Could not save Morph user library</source>
         <translation>Не удалось сохранить пользовательскую библиотеку Morph</translation>
     </message>
+</context>
+<context>
+    <name>ReverbPanel</name>
+    <message><source>SPACES</source><translation>ПРОСТРАНСТВА</translation></message>
+    <message><source>PRESET</source><translation>ПРЕСЕТ</translation></message>
+    <message><source>Reverb</source><translation>Reverb</translation></message>
+    <message><source>Soft Hall</source><translation>Soft Hall</translation></message>
+    <message><source>Room</source><translation>Room</translation></message>
+    <message><source>Chamber</source><translation>Chamber</translation></message>
+    <message><source>Plate</source><translation>Plate</translation></message>
+    <message><source>Ambience</source><translation>Ambience</translation></message>
+    <message><source>Shimmer</source><translation>Shimmer</translation></message>
+    <message><source>Reverb presets</source><translation>Пресеты Reverb</translation></message>
+    <message><source>Copy</source><translation>Копия</translation></message>
+    <message><source>Compare settings A</source><translation>Сравнить настройки A</translation></message>
+    <message><source>Compare settings B</source><translation>Сравнить настройки B</translation></message>
+    <message><source>Copy current settings to the other comparison</source><translation>Копировать текущие настройки в другую сторону A/B</translation></message>
+    <message><source>Freeze</source><translation>Freeze</translation></message>
+    <message><source>Hold the current tail. New input is excluded; space changes take effect when released.</source><translation>Удерживать текущий хвост. Новый сигнал не поступает; изменения пространства применятся после отпускания.</translation></message>
+    <message><source>Advanced</source><translation>Дополнительно</translation></message>
+    <message><source>SPACE</source><translation>ПРОСТРАНСТВО</translation></message>
+    <message><source>Size</source><translation>Размер</translation></message>
+    <message><source>Brightness</source><translation>Яркость</translation></message>
+    <message><source>Early</source><translation>Ранние</translation></message>
+    <message><source>Tail</source><translation>Хвост</translation></message>
+    <message><source>Show early reflections</source><translation>Показать ранние отражения</translation></message>
+    <message><source>Show diffuse tail</source><translation>Показать диффузный хвост</translation></message>
+    <message><source>Custom</source><translation>Свои настройки</translation></message>
+    <message><source>Duck %1 dB</source><translation>Duck %1 дБ</translation></message>
+    <message><source>Factory</source><translation>Заводские</translation></message>
+    <message><source>User</source><translation>Пользовательские</translation></message>
+    <message><source>Save preset…</source><translation>Сохранить пресет…</translation></message>
+    <message><source>Save Reverb preset</source><translation>Сохранить пресет Reverb</translation></message>
+    <message><source>Preset name</source><translation>Название пресета</translation></message>
+    <message><source>Pre-delay</source><translation>Задержка</translation></message>
+    <message><source>Decay</source><translation>Затухание</translation></message>
+    <message><source>Width</source><translation>Ширина</translation></message>
+    <message><source>Mix</source><translation>Микс</translation></message>
+    <message><source>Bloom</source><translation>Нарастание</translation></message>
+    <message><source>Motion</source><translation>Движение</translation></message>
+    <message><source>Duck</source><translation>Duck</translation></message>
+    <message><source>Diffusion</source><translation>Диффузия</translation></message>
+    <message><source>Early / Late</source><translation>Ранние / хвост</translation></message>
+    <message><source>Low Cut</source><translation>Срез НЧ</translation></message>
+    <message><source>High Cut</source><translation>Срез ВЧ</translation></message>
+    <message><source>Shimmer Amount</source><translation>Shimmer</translation></message>
+</context>
+<context>
+    <name>ReverbCanvas</name>
+    <message><source>Space response</source><translation>Отклик пространства</translation></message>
+    <message><source>Space Field</source><translation>Поле пространства</translation></message>
+    <message><source>Early reflections and the decay envelope of the selected space.</source><translation>Ранние отражения и огибающая затухания выбранного пространства.</translation></message>
+    <message><source>Drag right for a larger space, up for more brightness. Arrow keys adjust; Shift gives fine control. Home resets.</source><translation>Перетащите вправо для увеличения пространства, вверх — для яркости. Стрелки меняют значение, Shift — точно, Home — сброс.</translation></message>
+    <message><source>Size %1 percent; brightness %2 percent.</source><translation>Размер %1 процентов; яркость %2 процентов.</translation></message>
+    <message><source>Reset space</source><translation>Сбросить пространство</translation></message>
+    <message><source>Automate Size</source><translation>Автоматизировать размер</translation></message>
+    <message><source>Automate Brightness</source><translation>Автоматизировать яркость</translation></message>
+    <message><source>SPACE RESPONSE</source><translation>ОТКЛИК ПРОСТРАНСТВА</translation></message>
+    <message><source>SPACE FIELD</source><translation>ПОЛЕ ПРОСТРАНСТВА</translation></message>
+    <message><source>Drag the onset for Pre-delay or the tail handle for Decay. Shift gives fine control.</source><translation>Перетащите начало отражений для изменения задержки или конец хвоста для затухания. Shift — точная настройка.</translation></message>
+    <message><source>%1 ms</source><translation>%1 мс</translation></message>
+    <message><source>PRE-DELAY</source><translation>ЗАДЕРЖКА</translation></message>
+    <message><source>DECAY</source><translation>ЗАТУХАНИЕ</translation></message>
+    <message><source>SIZE</source><translation>РАЗМЕР</translation></message>
+    <message><source>BRIGHTNESS</source><translation>ЯРКОСТЬ</translation></message>
+    <message><source>HELD</source><translation>FREEZE</translation></message>
+    <message><source>EARLY ENERGY</source><translation>ЭНЕРГИЯ ОТРАЖЕНИЙ</translation></message>
+    <message><source>TAIL ENERGY</source><translation>ЭНЕРГИЯ ХВОСТА</translation></message>
+    <message><source>%1 s</source><translation>%1 с</translation></message>
+    <message><source>Early reflections</source><translation>Ранние отражения</translation></message>
+    <message><source>Diffuse tail</source><translation>Диффузный хвост</translation></message>
+    <message><source>Size</source><translation>Размер</translation></message>
+    <message><source>Brightness</source><translation>Яркость</translation></message>
+</context>
+<context>
+    <name>ReverbSlider</name>
+    <message><source>Drag to shape the parameter. Shift for fine adjustment. Double-click resets; Enter edits the value.</source><translation>Перетаскивайте для настройки. Shift — точная настройка, двойной щелчок — сброс, Enter — ввод значения.</translation></message>
+    <message><source>Reset</source><translation>Сбросить</translation></message>
+    <message><source>Create automation</source><translation>Создать автоматизацию</translation></message>
+</context>
+<context>
+    <name>RackModulationPanel</name>
+    <message><source>Module menu</source><translation>Меню модуля</translation></message>
+    <message><source>Movement</source><translation>Движение</translation></message>
+    <message><source>One-sided starts at the base; two-sided moves above and below it.</source><translation>В одну сторону — от основного значения; в две стороны — выше и ниже него.</translation></message>
+    <message>
+        <source>%1 bars</source>
+        <translation>%1 такт.</translation>
+    </message>
+    <message>
+        <source>+ Source</source>
+        <translation>+ Источник</translation>
+    </message>
+    <message>
+        <source>Advanced…</source>
+        <translation>Дополнительно…</translation>
+    </message>
+    <message>
+        <source>After effects</source>
+        <translation>После эффектов</translation>
+    </message>
+    <message>
+        <source>After fader</source>
+        <translation>После фейдера</translation>
+    </message>
+    <message>
+        <source>Before effects</source>
+        <translation>До эффектов</translation>
+    </message>
+    <message>
+        <source>Assign this source to a parameter to hear its movement.</source>
+        <translation>Назначьте источник на параметр, чтобы услышать его движение.</translation>
+    </message>
+    <message>
+        <source>Assign</source>
+        <translation>Назначить</translation>
+    </message>
+    <message>
+        <source>Assignment unavailable</source>
+        <translation>Назначение недоступно</translation>
+    </message>
+    <message>
+        <source>Attack</source>
+        <translation>Атака</translation>
+    </message>
+    <message>
+        <source>Audio source unavailable</source>
+        <translation>Источник аудио недоступен</translation>
+    </message>
+    <message>
+        <source>Audio source</source>
+        <translation>Источник аудио</translation>
+    </message>
+    <message>
+        <source>Automate depth</source>
+        <translation>Автоматизация глубины</translation>
+    </message>
+    <message>
+        <source>Automate rate</source>
+        <translation>Автоматизация скорости</translation>
+    </message>
+    <message>
+        <source>Cancel · Esc</source>
+        <translation>Отмена · Esc</translation>
+    </message>
+    <message>
+        <source>Choose parameter</source>
+        <translation>Выбрать параметр</translation>
+    </message>
+    <message>
+        <source>Click a highlighted control, or move a knob in the plugin editor. Esc cancels.</source>
+        <translation>Нажмите подсвеченную ручку или поверните ручку в окне плагина. Esc — отмена.</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Depth</source>
+        <translation>Глубина</translation>
+    </message>
+    <message>
+        <source>Detector filter</source>
+        <translation>Фильтр детектора</translation>
+    </message>
+    <message>
+        <source>Device unavailable</source>
+        <translation>Устройство недоступно</translation>
+    </message>
+    <message>
+        <source>Duplicate</source>
+        <translation>Дублировать</translation>
+    </message>
+    <message>
+        <source>Enable %1</source>
+        <translation>Включить %1</translation>
+    </message>
+    <message>
+        <source>Enable all modulation</source>
+        <translation>Включить всю модуляцию</translation>
+    </message>
+    <message>
+        <source>Enable assignment</source>
+        <translation>Включить назначение</translation>
+    </message>
+    <message>
+        <source>High cutoff · Hz</source>
+        <translation>Верхняя граница · Гц</translation>
+    </message>
+    <message>
+        <source>Hz</source>
+        <translation>Гц</translation>
+    </message>
+    <message>
+        <source>Low cutoff · Hz</source>
+        <translation>Нижняя граница · Гц</translation>
+    </message>
+    <message>
+        <source>Master</source>
+        <translation>Мастер</translation>
+    </message>
+    <message>
+        <source>Maximum deviation as a percentage of the parameter range. Negative values reverse the movement.</source>
+        <translation>Максимальное отклонение в процентах полного хода ручки. Отрицательная глубина меняет направление.</translation>
+    </message>
+    <message>
+        <source>Missing audio source</source>
+        <translation>Источник аудио отсутствует</translation>
+    </message>
+    <message>
+        <source>Modulation</source>
+        <translation>Модуляция</translation>
+    </message>
+    <message>
+        <source>Moves parameters in a repeating pattern.</source>
+        <translation>Двигает параметры по повторяющейся форме.</translation>
+    </message>
+    <message>
+        <source>Name</source>
+        <translation>Название</translation>
+    </message>
+    <message>
+        <source>On</source>
+        <translation>Вкл.</translation>
+    </message>
+    <message>
+        <source>One-sided</source>
+        <translation>Одна сторона</translation>
+    </message>
+    <message>
+        <source>Own input</source>
+        <translation>Свой вход</translation>
+    </message>
+    <message>
+        <source>Parameter unavailable</source>
+        <translation>Параметр недоступен</translation>
+    </message>
+    <message>
+        <source>Parameters…</source>
+        <translation>Параметры…</translation>
+    </message>
+    <message>
+        <source>Period</source>
+        <translation>Период</translation>
+    </message>
+    <message>
+        <source>Phase · 0–1</source>
+        <translation>Фаза · 0–1</translation>
+    </message>
+    <message>
+        <source>Plugin identity changed</source>
+        <translation>Плагин заменён</translation>
+    </message>
+    <message>
+        <source>Ramp down</source>
+        <translation>Пила вниз</translation>
+    </message>
+    <message>
+        <source>Ramp up</source>
+        <translation>Пила вверх</translation>
+    </message>
+    <message>
+        <source>Rate</source>
+        <translation>Скорость</translation>
+    </message>
+    <message>
+        <source>Release</source>
+        <translation>Спад</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>Убрать</translation>
+    </message>
+    <message>
+        <source>Rename source</source>
+        <translation>Переименовать источник</translation>
+    </message>
+    <message>
+        <source>Rename</source>
+        <translation>Переименовать</translation>
+    </message>
+    <message>
+        <source>Search devices and parameters</source>
+        <translation>Поиск устройств и параметров</translation>
+    </message>
+    <message>
+        <source>Sensitivity</source>
+        <translation>Чувствительность</translation>
+    </message>
+    <message>
+        <source>Sine</source>
+        <translation>Синус</translation>
+    </message>
+    <message>
+        <source>Smoothing · ms</source>
+        <translation>Сглаживание · мс</translation>
+    </message>
+    <message>
+        <source>Source settings</source>
+        <translation>Настройки источника</translation>
+    </message>
+    <message>
+        <source>Square</source>
+        <translation>Прямоугольник</translation>
+    </message>
+    <message>
+        <source>Sync</source>
+        <translation>В темпе</translation>
+    </message>
+    <message>
+        <source>This connection is unavailable or would create a feedback loop. Choose an independent audio source.</source>
+        <translation>Связь недоступна или создаёт замкнутую цепь. Выберите независимый источник аудио.</translation>
+    </message>
+    <message>
+        <source>Triangle</source>
+        <translation>Треугольник</translation>
+    </message>
+    <message>
+        <source>Turns audio loudness into parameter movement.</source>
+        <translation>Преобразует громкость аудио в движение параметров.</translation>
+    </message>
+    <message>
+        <source>Two-sided</source>
+        <translation>Две стороны</translation>
+    </message>
+    <message>
+        <source>Waveform</source>
+        <translation>Форма волны</translation>
+    </message>
+    <message>
+        <source>Move left</source>
+        <translation>Переместить влево</translation>
+    </message>
+    <message>
+        <source>Move right</source>
+        <translation>Переместить вправо</translation>
+    </message>
+    <message>
+        <source>Expand or collapse module</source>
+        <translation>Развернуть или свернуть модуль</translation>
+    </message>
+    <message>
+        <source>Assignments: %1</source>
+        <translation>Назначений: %1</translation>
+    </message>
+    <message>
+        <source>Rate mode</source>
+        <translation>Режим скорости</translation>
+    </message>
+    <message>
+        <source>Audio tap</source>
+        <translation>Точка сигнала</translation>
+    </message>
+    <message>
+        <source>All modulation is bypassed. Enable it in the module menu.</source>
+        <translation>Вся модуляция выключена. Включите её в меню модуля.</translation>
+    </message>
+</context>
+<context>
+    <name>RackSamplerView</name>
+    <message><source>%1 ms</source><translation>%1 мс</translation></message>
+    <message><source>%1 s</source><translation>%1 с</translation></message>
+    <message><source>Sample waveform and volume envelope</source><translation>Волна сэмпла и огибающая громкости</translation></message>
+    <message><source>Drag the start and end flags to trim. Enable Envelope to edit its points.
+Shift: fine adjustment · Double-click a point: reset · Escape: cancel
+Sustain lasts until note-off; the dashed release is a preview.</source><translation>Перетаскивайте флажки начала и конца, чтобы обрезать сэмпл. Включите огибающую для редактирования её точек.
+Shift: точная настройка · Двойной щелчок по точке: сброс · Escape: отмена
+Уровень Sustain сохраняется до отпускания ноты; пунктир показывает пример затухания.</translation></message>
+    <message><source>Start</source><translation>Начало</translation></message>
+    <message><source>End</source><translation>Конец</translation></message>
+    <message><source>Dly</source><translation>Зад.</translation></message>
+    <message><source>Drop to replace sample</source><translation>Отпустите, чтобы заменить сэмпл</translation></message>
+    <message><source>Drop audio here
+or choose a file above</source><translation>Перетащите аудио сюда
+или выберите файл сверху</translation></message>
+    <message><source>Release after note-off</source><translation>Затухание после отпускания ноты</translation></message>
+    <message><source>Load or replace sample</source><translation>Загрузить или заменить сэмпл</translation></message>
+    <message><source>Envelope</source><translation>Огибающая</translation></message>
+    <message><source>Enable the volume envelope and edit its points on the sample</source><translation>Включить огибающую громкости и редактировать её точки прямо на сэмпле</translation></message>
+    <message><source>Playback</source><translation>Сэмпл</translation></message>
+    <message><source>Loop</source><translation>Цикл</translation></message>
+    <message><source>Pitch</source><translation>Тон</translation></message>
+    <message><source>Volume</source><translation>Громкость</translation></message>
+    <message><source>Pan</source><translation>Панорама</translation></message>
+    <message><source>Delay</source><translation>Задержка</translation></message>
+    <message><source>Attack</source><translation>Атака</translation></message>
+    <message><source>Hold</source><translation>Удержание</translation></message>
+    <message><source>Decay</source><translation>Спад</translation></message>
+    <message><source>Sustain</source><translation>Уровень</translation></message>
+    <message><source>Release</source><translation>Затухание</translation></message>
+    <message><source>Load sample…</source><translation>Загрузить сэмпл…</translation></message>
+    <message><source>Choose an audio file or drop it anywhere on this module</source><translation>Выберите аудиофайл или перетащите его в любую точку этого модуля</translation></message>
+    <message><source>Click to replace sample</source><translation>Нажмите, чтобы заменить сэмпл</translation></message>
+    <message><source>%1 · %2 kHz · %3</source><translation>%1 · %2 кГц · %3</translation></message>
+    <message><source>Mono</source><translation>Моно</translation></message>
+    <message><source>Stereo</source><translation>Стерео</translation></message>
+    <message><source>Audio files from the browser or your computer</source><translation>Аудиофайлы из браузера или с компьютера</translation></message>
+    <message><source>Loading sample…</source><translation>Загрузка сэмпла…</translation></message>
+    <message><source>Could not load sample. Choose another audio file.</source><translation>Не удалось загрузить сэмпл. Выберите другой аудиофайл.</translation></message>
+    <message><source>Load sample</source><translation>Загрузить сэмпл</translation></message>
+</context>
+<context>
+    <name>MasterPanel</name>
+    <message><source>Master output peak level</source><translation>Пиковый уровень выхода мастера</translation></message>
+    <message><source>Reset held peak</source><translation>Сбросить пиковый уровень</translation></message>
+    <message><source>MASTER</source><translation>МАСТЕР</translation></message>
+    <message><source>MAIN OUT</source><translation>ОСНОВНОЙ ВЫХОД</translation></message>
+    <message><source>Hide master panel</source><translation>Свернуть панель мастера</translation></message>
+    <message><source>Stereo VU meter</source><translation>Стереофонический VU-метр</translation></message>
+    <message><source>0 VU</source><translation>0 VU</translation></message>
+    <message><source>VU reference level</source><translation>Опорный уровень VU</translation></message>
+    <message><source>Sine-wave reference for the VU needles. Does not change audio gain.</source><translation>Опорный уровень синусоидального сигнала для стрелок VU. Не меняет громкость звука.</translation></message>
+    <message><source>Reset</source><translation>Сброс</translation></message>
+    <message><source>Reset integrated loudness and held peak</source><translation>Сбросить интегральную громкость и сохранённый пик</translation></message>
+    <message><source>M · LUFS</source><translation>M · LUFS</translation></message>
+    <message><source>S · LUFS</source><translation>S · LUFS</translation></message>
+    <message><source>I · LUFS</source><translation>I · LUFS</translation></message>
+    <message><source>Peak · dBFS</source><translation>Пик · dBFS</translation></message>
+    <message><source>RMS · dBFS</source><translation>RMS · dBFS</translation></message>
+    <message><source>Correlation</source><translation>Корреляция</translation></message>
+    <message><source>Momentary loudness · 400 ms</source><translation>Мгновенная громкость · 400 мс</translation></message>
+    <message><source>Short-term loudness · 3 s</source><translation>Кратковременная громкость · 3 с</translation></message>
+    <message><source>Integrated loudness since reset; measured during playback</source><translation>Интегральная громкость с момента сброса; измеряется при воспроизведении</translation></message>
+    <message><source>Highest sample peak since reset</source><translation>Максимальный пик сэмплов с момента сброса</translation></message>
+    <message><source>Unweighted stereo RMS level</source><translation>Среднеквадратический уровень стереосигнала без частотного взвешивания</translation></message>
+    <message><source>Stereo correlation: +1 mono, 0 uncorrelated, −1 opposite polarity</source><translation>Корреляция стерео: +1 — моно, 0 — независимые каналы, −1 — противоположная полярность</translation></message>
+    <message><source>OUTPUT</source><translation>ВЫХОД</translation></message>
+    <message><source>Master output gain</source><translation>Громкость мастер-выхода</translation></message>
+    <message><source>Master balance</source><translation>Баланс мастера</translation></message>
+    <message><source>MASTER INSERTS</source><translation>ИНСЕРТЫ МАСТЕРА</translation></message>
+    <message><source>Open master rack</source><translation>Открыть рэк мастера</translation></message>
+    <message><source>+ Add effect</source><translation>+ Добавить эффект</translation></message>
+    <message><source>Analysis inserts</source><translation>Анализаторы</translation></message>
+    <message><source>Expand analysis inserts</source><translation>Развернуть измерительные инсерты</translation></message>
+    <message><source>Hear the final output. Never change the sound.</source><translation>Получают итоговый сигнал и не меняют звук.</translation></message>
+    <message><source>+ Add analyzer</source><translation>+ Добавить анализатор</translation></message>
+    <message><source>Add plugin</source><translation>Добавить плагин</translation></message>
+    <message><source>Could not load %1.</source><translation>Не удалось загрузить %1.</translation></message>
+    <message><source>Enable %1</source><translation>Включить %1</translation></message>
+    <message><source>Plugin options</source><translation>Настройки плагина</translation></message>
+    <message><source>Move up</source><translation>Выше</translation></message>
+    <message><source>Move down</source><translation>Ниже</translation></message>
+    <message><source>Remove plugin</source><translation>Удалить плагин</translation></message>
+    <message><source>Your final processing chain</source><translation>Финальная цепочка обработки</translation></message>
 </context>
 </TS>

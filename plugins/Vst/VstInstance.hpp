@@ -131,6 +131,7 @@ private:
     std::vector<float*> m_outputPointers;
     std::array<VstMidiEvent, kMaxBlockEvents> m_midiEvents{};
     EventsBlock m_events;
+    std::size_t m_midiEventCursor = 0;
     VstTimeInfo m_timeInfo{};
     const PluginProcessContext* m_currentProcess = nullptr;
     EventSink* m_outputSink = nullptr;

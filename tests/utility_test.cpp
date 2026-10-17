@@ -52,6 +52,17 @@ PluginEvent event(unsigned at, unsigned index, double value) {
 bool near(double a, double b) { return std::abs(a-b) < 2e-6; }
 void dspChecks() {
     InternalFactory factory;
+    const auto builtins = factory.inspect("");
+    const bool hasReverb = std::any_of(builtins.begin(), builtins.end(),
+        [](const PluginDescriptor& descriptor) { return descriptor.uid == "daw.reverb"; });
+    check(hasReverb == bool(DAW_ENABLE_REVERB), "Reverb catalogue follows the build option");
+    PluginDescriptor reverb;
+    reverb.format = Format::Internal;
+    reverb.uid = reverb.path = "daw.reverb";
+    check(bool(factory.create(reverb)) == bool(DAW_ENABLE_REVERB),
+          "Reverb creation from a saved identity follows the build option");
+    check(!factory.inspect("daw.reverb").empty() == bool(DAW_ENABLE_REVERB),
+          "Reverb lookup follows the build option");
     for (const auto kind : {Kind::Gain, Kind::Stereo, Kind::Reverse}) {
         auto p=factory.create(descriptorFor(kind));
         check(p && p->descriptor().category == "Effect|Utility", "factory registers independent utility");

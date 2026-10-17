@@ -177,6 +177,10 @@ bool EngineController::warpPreviewActive() {
     return m_warpPreview.has_value();
 }
 
+bool EngineController::warpPreviewActiveFor(const std::string& trackId, const std::string& clipId) {
+    return warpPreviewActive() && m_warpPreview->trackId == trackId && m_warpPreview->clipId == clipId;
+}
+
 const ClipWarpModel* EngineController::warpPreviewMap() const {
     return validWarpPreview() ? &m_warpPreview->proposed : nullptr;
 }

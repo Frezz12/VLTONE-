@@ -189,21 +189,21 @@ void Cla2aInstance::render(const PluginProcessContext& c, unsigned offset, unsig
         }
         for (unsigned phase2 = 0; phase2 < 2; ++phase2) {
             for (unsigned ch = 0; ch < channels; ++ch)
-                at2[ch] = m_channels[ch].up2.tick(phase2 == 0 ? 2 * input[ch] : 0, m_filter);
+                at2[ch] = m_channels[ch].up2.upsample(input[ch], m_filter, phase2);
             std::array<double, 2> down4{};
             for (unsigned phase4 = 0; phase4 < 2; ++phase4) {
                 for (unsigned ch = 0; ch < channels; ++ch)
-                    at4[ch] = m_channels[ch].up4.tick(phase4 == 0 ? 2 * at2[ch] : 0, m_filter);
+                    at4[ch] = m_channels[ch].up4.upsample(at2[ch], m_filter, phase4);
                 const auto wet = tick4x(at4, channels);
                 for (unsigned ch = 0; ch < channels; ++ch) {
-                    const double down = m_channels[ch].down4.tick(wet[ch], m_filter);
-                    if (phase4 == 0) down4[ch] = down;
+                    if (phase4 == 0) down4[ch] = m_channels[ch].down4.tick(wet[ch], m_filter);
+                    else m_channels[ch].down4.push(wet[ch]);
                 }
                 m_blockPeaks[2] = std::max(m_blockPeaks[2], float(m_reduction));
             }
             for (unsigned ch = 0; ch < channels; ++ch) {
-                const double down = m_channels[ch].down2.tick(down4[ch], m_filter);
-                if (phase2 == 0) output[ch] = down;
+                if (phase2 == 0) output[ch] = m_channels[ch].down2.tick(down4[ch], m_filter);
+                else m_channels[ch].down2.push(down4[ch]);
             }
         }
         for (unsigned ch = 0; ch < channels; ++ch) {

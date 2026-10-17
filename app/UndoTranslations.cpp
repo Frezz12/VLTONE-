@@ -7,6 +7,13 @@ namespace ui {
 namespace {
 
 [[maybe_unused]] const char* const kUndoCommandNames[] = {
+    QT_TRANSLATE_NOOP("UndoCommands", "Change Rack Modulation"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Add LFO"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Add Envelope Follower"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Assign Modulation"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Duplicate Modulator"),
+
+    QT_TRANSLATE_NOOP("UndoCommands", "Generate MIDI"),
     QT_TRANSLATE_NOOP("UndoCommands", "Group Plugins"),
     QT_TRANSLATE_NOOP("UndoCommands", "Ungroup Plugins"),
     QT_TRANSLATE_NOOP("UndoCommands", "Rename Plugin Group"),
@@ -45,6 +52,7 @@ namespace {
     QT_TRANSLATE_NOOP("UndoCommands", "Restore Library Clip"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Modulation Parameter"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change VLT 2A"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Change VLT 1073"),
     QT_TRANSLATE_NOOP("UndoCommands", "Enable COLOR"),
     QT_TRANSLATE_NOOP("UndoCommands", "Bypass COLOR"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change COLOR Drive"),
@@ -57,6 +65,7 @@ namespace {
     QT_TRANSLATE_NOOP("UndoCommands", "Add Pattern Sample"),
     QT_TRANSLATE_NOOP("UndoCommands", "Add Track"),
     QT_TRANSLATE_NOOP("UndoCommands", "Remove Track"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Remove Folder"),
     QT_TRANSLATE_NOOP("UndoCommands", "Rename Track"),
     QT_TRANSLATE_NOOP("UndoCommands", "Set Volume"),
     QT_TRANSLATE_NOOP("UndoCommands", "Set Pan"),

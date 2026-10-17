@@ -31,13 +31,28 @@ struct HalfBandFir65 {
     // order stays identical to the original CLA-2A implementation.
     std::array<double, 130> history{};
     unsigned cursor = 0;
-    double tick(double input, const std::array<double, 65>& taps) noexcept {
+    // Decimation still needs every input in the history, but only every
+    // other convolution result. Advance discarded phases without computing it.
+    void push(double input) noexcept {
         history[cursor] = input;
         history[cursor + 65] = input;
-        double result = .5 * history[cursor + 65 - 32];
-        for (unsigned i = 1; i < 32; i += 2)
-            result += taps[i] * (history[cursor + 65 - i] + history[cursor + 65 - (64 - i)]);
         if (++cursor == 65) cursor = 0;
+    }
+    double tick(double input, const std::array<double, 65>& taps) noexcept {
+        const unsigned at = cursor;
+        push(input);
+        double result = .5 * history[at + 65 - 32];
+        for (unsigned i = 1; i < 32; i += 2)
+            result += taps[i] * (history[at + 65 - i] + history[at + 65 - (64 - i)]);
+        return result;
+    }
+    // A dedicated upsampler alternates phase 0 (input * 2) and phase 1
+    // (inserted zero), starting from a cleared history. On phase 0 every
+    // noncentral tap multiplies an inserted zero, leaving just the delay.
+    double upsample(double input, const std::array<double, 65>& taps, unsigned phase) noexcept {
+        if (phase != 0) return tick(0, taps);
+        const double result = .5 * history[cursor + 65 - 32];
+        push(2 * input);
         return result;
     }
 };

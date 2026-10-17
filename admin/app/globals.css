@@ -201,3 +201,19 @@
   .artifact-delete { grid-column: 3; grid-row: 1; }
   .chart-frame { height: 240px; }
 }
+.release-download-stats { margin-bottom: 20px; }
+.support-stats { margin-block: 20px; min-width: 0; }
+.support-stats > .vlt-row { flex-wrap: wrap; gap: 12px; }
+.download-total { margin: 16px 0; font-variant-numeric: tabular-nums; }
+.download-total strong { font-size: 24px; }
+.download-stats-table { overflow-x: auto; }
+.download-stats-table table { width: 100%; min-width: 420px; }
+.support-stats .download-stats-table table { min-width: 0; }
+@media (max-width: 600px) {
+  .support-stats .vlt-table th, .support-stats .vlt-table td { padding: 12px 8px; }
+  .support-stats .vlt-table th:first-child { width: 38%; }
+}
+.download-stats-table th { text-align: left; }
+.download-count { font-variant-numeric: tabular-nums; font-weight: 600; }
+.download-format-list { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.download-format-list li { display: flex; justify-content: space-between; gap: 20px; font-variant-numeric: tabular-nums; }

@@ -28,6 +28,7 @@
 #include "TransportSettingsPage.hpp"
 
 #include <QApplication>
+#include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -47,6 +48,7 @@
 #include <QJsonObject>
 #include <QInputDialog>
 #include <QKeySequenceEdit>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -60,15 +62,20 @@
 #include <QCheckBox>
 #include <QChildEvent>
 #include <QRadioButton>
+#include <QRegularExpression>
 #include <QSlider>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QScreen>
 #include <QSettings>
+#include <QSet>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QShortcut>
+#include <QStyle>
 #include <QSizePolicy>
 #include <QStackedWidget>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTimer>
 #include <QThreadPool>
@@ -80,6 +87,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -103,13 +111,56 @@ constexpr SettingsPageAppearance kPageAppearance[] = {
     {icons::Glyph::Users, QT_TRANSLATE_NOOP("SettingsWindow", "Your account and connected services.")},
     {icons::Glyph::Globe, QT_TRANSLATE_NOOP("SettingsWindow", "Interface language and installed translations.")},
     {icons::Glyph::Reload, QT_TRANSLATE_NOOP("SettingsWindow", "Automatic backups and project recovery.")},
-    {icons::Glyph::Image, QT_TRANSLATE_NOOP("SettingsWindow", "Palettes, backgrounds and timeline appearance.")},
+    {icons::Glyph::Image, QT_TRANSLATE_NOOP("SettingsWindow", "Choose a palette or manage complete saved themes.")},
     {icons::Glyph::Brush, QT_TRANSLATE_NOOP("SettingsWindow", "Create your own palette with a live preview.")},
     {icons::Glyph::Key, QT_TRANSLATE_NOOP("SettingsWindow", "Find commands and customize keyboard shortcuts.")},
-    {icons::Glyph::Gear, QT_TRANSLATE_NOOP("SettingsWindow", "Startup, graphics and editing preferences.")},
+    {icons::Glyph::Gear, QT_TRANSLATE_NOOP("SettingsWindow", "Project startup and everyday editing preferences.")},
     {icons::Glyph::Mixer, QT_TRANSLATE_NOOP("SettingsWindow", "Channel width and console layout.")},
+    {icons::Glyph::Image, QT_TRANSLATE_NOOP("SettingsWindow", "Images, video, visibility and blur for the timeline and header.")},
+    {icons::Glyph::Play, QT_TRANSLATE_NOOP("SettingsWindow", "Grid, waveforms, clip corners, playhead and track selection.")},
+    {icons::Glyph::Brush, QT_TRANSLATE_NOOP("SettingsWindow", "Interface typography and your track icon library.")},
+    {icons::Glyph::Gear, QT_TRANSLATE_NOOP("SettingsWindow", "Refresh rate, rendering quality and navigation motion.")},
+    {icons::Glyph::Plugin, QT_TRANSLATE_NOOP("SettingsWindow", "Plugin formats, search results and insertion behavior.")},
+    {icons::Glyph::Globe, QT_TRANSLATE_NOOP("SettingsWindow", "Home page, bookmarks and the browser start background.")},
 };
-static_assert(std::size(kPageAppearance) == SettingsWindow::kMixerTab + 1);
+static_assert(std::size(kPageAppearance) == SettingsWindow::kPageCount);
+
+class SettingsSearchDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        QStyleOptionViewItem row(option);
+        initStyleOption(&row, index);
+        const QString title = row.text;
+        const QIcon icon = row.icon;
+        row.text.clear();
+        row.icon = QIcon();
+        row.features.setFlag(QStyleOptionViewItem::HasDisplay, false);
+        row.features.setFlag(QStyleOptionViewItem::HasDecoration, false);
+        const QWidget* widget = option.widget;
+        (widget ? widget->style() : QApplication::style())->drawControl(QStyle::CE_ItemViewItem, &row, painter, widget);
+        painter->save();
+        const QRect bounds = option.rect.adjusted(12, 8, -12, -8);
+        icon.paint(painter, QRect(bounds.left(), bounds.top() + 4, 18, 18));
+        const QRect textBounds = bounds.adjusted(30, 0, 0, 0);
+        QFont titleFont = option.font;
+        titleFont.setWeight(QFont::DemiBold);
+        painter->setFont(titleFont);
+        painter->setPen(th().textPrimary);
+        const QFontMetrics titleMetrics(titleFont);
+        painter->drawText(textBounds, Qt::AlignTop | Qt::AlignLeft,
+                         titleMetrics.elidedText(title, Qt::ElideRight, textBounds.width()));
+        painter->setFont(option.font);
+        painter->setPen(th().textSecondary);
+        const QString path = index.data(Qt::UserRole + 1).toString();
+        painter->drawText(textBounds.adjusted(0, titleMetrics.height() + 3, 0, 0), Qt::AlignTop | Qt::AlignLeft,
+                         option.fontMetrics.elidedText(path, Qt::ElideRight, textBounds.width()));
+        painter->restore();
+    }
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const override {
+        return QSize(200, option.fontMetrics.height() * 2 + 22);
+    }
+};
 
 enum class ColorSection {
     Surfaces,
@@ -371,9 +422,14 @@ public:
         QWheelEvent pixels(point, global, QPoint(0, -24), {}, Qt::NoButton,
                            Qt::NoModifier, Qt::ScrollUpdate, false);
         QApplication::sendEvent(slider, &pixels);
-        return angle.isAccepted() && pixels.isAccepted() && afterAngle > 0 &&
-               scroll.verticalScrollBar()->value() > afterAngle &&
-               slider->value() == 50;
+        const bool scrolled = angle.isAccepted() && pixels.isAccepted() && afterAngle > 0 &&
+                              scroll.verticalScrollBar()->value() > afterAngle && slider->value() == 50;
+        scroll.resize(200, 800);
+        QApplication::processEvents();
+        QWheelEvent overShortPage(point, slider->mapToGlobal(point), {}, QPoint(0, -120), Qt::NoButton,
+                                 Qt::NoModifier, Qt::ScrollUpdate, false);
+        QApplication::sendEvent(slider, &overShortPage);
+        return scrolled && scroll.verticalScrollBar()->maximum() == 0 && slider->value() == 50;
     }
 
 protected:
@@ -389,6 +445,19 @@ protected:
                 (source == widget() || widget()->isAncestorOf(source));
             const bool vertical = wheel->pixelDelta().y() != 0 ||
                                   wheel->angleDelta().y() != 0;
+            bool valueControl = false;
+            for (auto* ancestor = source; ancestor && ancestor != widget(); ancestor = ancestor->parentWidget()) {
+                // Scrollable lists (palettes, folders, shortcuts) keep their
+                // own wheel behavior, including their native edge propagation.
+                if (qobject_cast<QAbstractItemView*>(ancestor))
+                    return QScrollArea::eventFilter(watched, event);
+                valueControl |= qobject_cast<QComboBox*>(ancestor) || qobject_cast<QAbstractSpinBox*>(ancestor) ||
+                                qobject_cast<QSlider*>(ancestor);
+            }
+            if (belongsToPage && vertical && valueControl && verticalScrollBar()->maximum() == 0) {
+                event->accept();
+                return true;
+            }
             if (belongsToPage && vertical &&
                 verticalScrollBar()->maximum() > verticalScrollBar()->minimum()) {
                 if (wheel->pixelDelta().y() != 0) {
@@ -512,7 +581,8 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                                ShortcutManager* shortcuts, QWidget* parent)
     : QDialog(parent, Qt::Widget), m_controller(controller), m_shortcuts(shortcuts) {
     setWindowTitle(tr("Settings — %1").arg(QApplication::applicationDisplayName()));
-    resize(960, 640);
+    setObjectName(QStringLiteral("SettingsWindow"));
+    resize(1020, 680);
     setSizeGripEnabled(false);
 
     m_pages = new QStackedWidget(this);
@@ -567,34 +637,71 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     m_pageFactories[kShortcutsTab] = [this] { return buildShortcutsTab(); };
     m_pageFactories[kInterfaceTab] = [this] { return buildInterfaceTab(); };
     m_pageFactories[kMixerTab] = [this] { return buildMixerTab(); };
+    m_pageFactories[kBackgroundsTab] = [this] { return buildBackgroundsTab(); };
+    m_pageFactories[kTimelineTab] = [this] { return buildTimelineTab(); };
+    m_pageFactories[kFontsTab] = [this] { return buildFontsTab(); };
+    m_pageFactories[kPerformanceTab] = [this] { return buildPerformanceTab(); };
+    m_pageFactories[kPluginsTab] = [this] {
+        auto* page = new ContextPanelPage(this, ContextPanelPage::Section::Plugins);
+        connect(page, &ContextPanelPage::changed, this, &SettingsWindow::contextPanelSettingsChanged);
+        return page;
+    };
+    m_pageFactories[kWebBrowserTab] = [this] {
+        auto* page = new BrowserSettingsPage(this, BrowserSettingsPage::Section::Web);
+        connect(page, &BrowserSettingsPage::changed, this, &SettingsWindow::browserSettingsChanged);
+        return page;
+    };
     for (const auto& factory : m_pageFactories) m_pages->addWidget(new QWidget(m_pages));
 
-    m_navigation = new QTreeWidget(this);
+    auto* sidebar = new QWidget(this);
+    sidebar->setObjectName(QStringLiteral("SettingsSidebar"));
+    sidebar->setFixedWidth(246);
+    auto* sidebarColumn = new QVBoxLayout(sidebar);
+    sidebarColumn->setContentsMargins(14, 18, 14, 12);
+    sidebarColumn->setSpacing(12);
+    auto* title = new QLabel(tr("Settings"), sidebar);
+    title->setProperty("role", "pageTitle");
+    sidebarColumn->addWidget(title);
+    m_search = new QLineEdit(sidebar);
+    m_search->setObjectName(QStringLiteral("SettingsSearch"));
+    m_search->setAccessibleName(tr("Search all settings"));
+    m_search->setPlaceholderText(tr("Search settings…"));
+    m_search->setClearButtonEnabled(true);
+    m_search->setMinimumHeight(34);
+    m_search->setToolTip(tr("Search all settings (%1)").arg(QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText)));
+    m_search->installEventFilter(this);
+    sidebarColumn->addWidget(m_search);
+    auto* find = new QShortcut(QKeySequence::Find, this);
+    find->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(find, &QShortcut::activated, this, [this] { m_search->setFocus(); m_search->selectAll(); });
+
+    m_navigation = new QTreeWidget(sidebar);
     m_navigation->setObjectName(QStringLiteral("SettingsNavigation"));
     m_navigation->setAccessibleName(tr("Settings sections"));
     m_navigation->setHeaderHidden(true);
     m_navigation->setRootIsDecorated(false);
-    m_navigation->setItemsExpandable(false);
+    m_navigation->setItemsExpandable(true);
+    m_navigation->setExpandsOnDoubleClick(false);
     m_navigation->setUniformRowHeights(false);
     m_navigation->setIndentation(0);
     m_navigation->setIconSize(QSize(18, 18));
     m_navigation->setMouseTracking(true);
     m_navigation->setFrameShape(QFrame::NoFrame);
     m_navigation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_navigation->setFixedWidth(218);
+    sidebarColumn->addWidget(m_navigation, 1);
     const auto addGroup = [this](
                               const QString& title,
                               std::initializer_list<std::pair<QString, Tab>> pages) {
         auto* group = new QTreeWidgetItem(m_navigation, QStringList{title});
-        group->setFlags(Qt::ItemIsEnabled);
+        group->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         QFont font = group->font(0);
         font.setBold(true);
         group->setFont(0, font);
-        group->setSizeHint(0, QSize(0, 28));
+        group->setSizeHint(0, QSize(0, 34));
         for (const auto& [label, page] : pages) {
             auto* item = new QTreeWidgetItem(group, QStringList{label});
             item->setData(0, Qt::UserRole, int(page));
-            item->setSizeHint(0, QSize(0, 28));
+            item->setSizeHint(0, QSize(0, 34));
             item->setToolTip(0, tr(kPageAppearance[int(page)].description));
             item->setData(0, Qt::AccessibleDescriptionRole, item->toolTip(0));
             m_navigationItems.insert(int(page), item);
@@ -604,29 +711,45 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
              {{tr("General"), kInterfaceTab},
               {tr("Language"), kLanguageTab},
               {tr("Keyboard Shortcuts"), kShortcutsTab},
+              {tr("Performance & Motion"), kPerformanceTab},
               {tr("Recovery"), kRecoveryTab}});
     addGroup(tr("Audio & Recording"),
              {{tr("Audio"), kAudioTab},
               {tr("Recording"), kRecordingTab},
               {tr("Transport"), kTransportTab}});
     addGroup(tr("Workspace"),
-             {{tr("Browser"), kBrowserTab},
+             {{tr("Files & Preview"), kBrowserTab},
               {tr("Quick Import"), kQuickImportTab},
+              {tr("Plugins"), kPluginsTab},
               {tr("Context Panel"), kContextPanelTab},
               {tr("Mixer"), kMixerTab},
-              {tr("Notebook"), kNotebookTab}});
+              {tr("Notebook"), kNotebookTab},
+              {tr("Web Browser"), kWebBrowserTab}});
     addGroup(tr("Appearance"),
              {{tr("Themes"), kThemesTab},
+              {tr("Timeline"), kTimelineTab},
+              {tr("Backgrounds"), kBackgroundsTab},
+              {tr("Fonts & Icons"), kFontsTab},
               {tr("Theme Editor"), kThemeEditorTab}});
     addGroup(tr("Account & AI"),
              {{tr("Account"), kAccountTab},
               {tr("AI"), kAiTab}});
-    m_navigation->expandAll();
+    connect(m_navigation, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* expanded) {
+        for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
+            auto* group = m_navigation->topLevelItem(i);
+            if (group != expanded) group->setExpanded(false);
+        }
+        refreshNavigationAppearance();
+    });
+    connect(m_navigation, &QTreeWidget::itemCollapsed, this, &SettingsWindow::refreshNavigationAppearance);
+    connect(m_navigation, &QTreeWidget::itemClicked, this, [](QTreeWidgetItem* item) {
+        if (item && !item->parent()) item->setExpanded(!item->isExpanded());
+    });
 
     auto* pageHeader = new QWidget(this);
     pageHeader->setObjectName(QStringLiteral("SettingsPageHeader"));
     auto* headerRow = new QHBoxLayout(pageHeader);
-    headerRow->setContentsMargins(12, 4, 12, 14);
+    headerRow->setContentsMargins(0, 0, 0, 14);
     headerRow->setSpacing(12);
     m_pageIcon = new QLabel(pageHeader);
     m_pageIcon->setObjectName(QStringLiteral("SettingsPageIcon"));
@@ -635,6 +758,9 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     headerRow->addWidget(m_pageIcon);
     auto* heading = new QVBoxLayout;
     heading->setSpacing(3);
+    m_pageCategory = new QLabel(pageHeader);
+    m_pageCategory->setProperty("role", "secondary");
+    heading->addWidget(m_pageCategory);
     m_pageTitle = new QLabel(pageHeader);
     m_pageTitle->setObjectName(QStringLiteral("SettingsPageTitle"));
     m_pageTitle->setProperty("role", "pageTitle");
@@ -652,9 +778,11 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                 bool valid = false;
                 const int page = current->data(0, Qt::UserRole).toInt(&valid);
                 if (!valid || page < 0 || page >= m_pages->count()) return;
+                if (!m_search->text().isEmpty()) m_search->clear();
                 ensurePage(page);
                 m_pages->setCurrentIndex(page);
                 refreshCurrentPage();
+                refreshSectionLinks();
                 refreshNavigationAppearance();
                 setWindowTitle(tr("Settings — %1 · %2")
                                    .arg(QApplication::applicationDisplayName(),
@@ -682,33 +810,102 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     buttons->button(QDialogButtonBox::Close)->setText(tr("Close"));
+    buttons->button(QDialogButtonBox::Close)->setAutoDefault(false);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
 
-    auto* body = new QHBoxLayout;
-    body->setSpacing(12);
-    body->addWidget(m_navigation);
-    auto* content = new QVBoxLayout;
+    m_sectionLinks = new QComboBox(this);
+    m_sectionLinks->setObjectName(QStringLiteral("SettingsSectionLinks"));
+    m_sectionLinks->setAccessibleName(tr("Jump to section"));
+    m_sectionLinks->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    connect(m_sectionLinks, &QComboBox::activated, this, [this](int index) {
+        if (index > 0 && index <= m_sections.size()) revealSetting(m_sections[index - 1]);
+        m_sectionLinks->setCurrentIndex(0);
+    });
+
+    auto* normalPage = new QWidget(this);
+    auto* content = new QVBoxLayout(normalPage);
+    content->setContentsMargins(22, 18, 22, 0);
     content->setSpacing(10);
     content->addWidget(pageHeader);
+    content->addWidget(m_sectionLinks);
     content->addWidget(m_pages, 1);
-    body->addLayout(content, 1);
+    m_content = new QStackedWidget(this);
+    m_content->addWidget(normalPage);
+    auto* searchPage = new QWidget(this);
+    auto* searchColumn = new QVBoxLayout(searchPage);
+    searchColumn->setContentsMargins(22, 18, 22, 0);
+    auto* searchTitle = new QLabel(tr("Search results"), searchPage);
+    searchTitle->setProperty("role", "pageTitle");
+    searchColumn->addWidget(searchTitle);
+    m_searchStatus = new QLabel(searchPage);
+    m_searchStatus->setObjectName(QStringLiteral("SettingsSearchStatus"));
+    m_searchStatus->setProperty("role", "secondary");
+    m_searchStatus->setWordWrap(true);
+    searchColumn->addWidget(m_searchStatus);
+    m_searchResults = new QTreeWidget(searchPage);
+    m_searchResults->setObjectName(QStringLiteral("SettingsSearchResults"));
+    m_searchResults->setAccessibleName(tr("Matching settings"));
+    m_searchResults->setHeaderHidden(true);
+    m_searchResults->setItemDelegate(new SettingsSearchDelegate(m_searchResults));
+    m_searchResults->setRootIsDecorated(false);
+    m_searchResults->setAlternatingRowColors(false);
+    m_searchResults->setFrameShape(QFrame::NoFrame);
+    m_searchResults->setUniformRowHeights(true);
+    m_searchResults->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_searchResults->installEventFilter(this);
+    searchColumn->addWidget(m_searchResults, 1);
+    connect(m_searchResults, &QTreeWidget::itemClicked, this, &SettingsWindow::activateSearchResult);
+    connect(m_searchResults, &QTreeWidget::itemActivated, this, &SettingsWindow::activateSearchResult);
+    m_content->addWidget(searchPage);
+    m_searchTimer = new QTimer(this);
+    m_searchTimer->setSingleShot(true);
+    m_searchTimer->setInterval(120);
+    connect(m_searchTimer, &QTimer::timeout, this, &SettingsWindow::updateSearch);
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString& text) {
+        if (text.trimmed().isEmpty()) {
+            m_searchTimer->stop();
+            m_content->setCurrentIndex(0);
+            refreshNavigationAppearance();
+        } else {
+            m_searchTimer->start();
+        }
+    });
 
-    auto* col = new QVBoxLayout(this);
-    col->setContentsMargins(10, 12, 10, 10);
-    col->addLayout(body, 1);
-    col->addWidget(buttons);
+    auto* footer = new QWidget(this);
+    footer->setObjectName(QStringLiteral("SettingsFooter"));
+    auto* footerRow = new QHBoxLayout(footer);
+    m_footerRow = footerRow;
+    footerRow->setContentsMargins(22, 10, 22, 12);
+    m_pageHint = new QLabel(footer);
+    m_pageHint->setProperty("role", "secondary");
+    m_pageHint->setWordWrap(true);
+    footerRow->addWidget(m_pageHint, 1);
+    footerRow->addWidget(buttons);
+    auto* right = new QVBoxLayout;
+    right->setSpacing(0);
+    right->addWidget(m_content, 1);
+    right->addWidget(footer);
+    auto* body = new QHBoxLayout(this);
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
+    body->addWidget(sidebar);
+    body->addLayout(right, 1);
 
     const int savedPage = QSettings().value(
         QStringLiteral("ui/settingsPage"), int(kInterfaceTab)).toInt();
-    showTab(std::clamp(savedPage, 0, int(kMixerTab)));
+    showTab(std::clamp(savedPage, 0, int(kPageCount) - 1));
 
     // The workspace supplies the final bounds after this dialog is embedded.
     // Standalone dialogs are constrained in showEvent once their host is known.
 }
 
 void SettingsWindow::refreshNavigationAppearance() {
-    for (int i = 0; i < m_navigation->topLevelItemCount(); ++i)
-        m_navigation->topLevelItem(i)->setForeground(0, th().textSecondary);
+    for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
+        auto* group = m_navigation->topLevelItem(i);
+        group->setForeground(0, th().textSecondary);
+        group->setIcon(0, icons::icon(group->isExpanded() ? icons::Glyph::Chevron : icons::Glyph::ChevronRight,
+                                    th().textSecondary));
+    }
     const int currentPage = m_pages->currentIndex();
     for (auto it = m_navigationItems.cbegin(); it != m_navigationItems.cend(); ++it) {
         const bool selected = it.key() == currentPage;
@@ -720,10 +917,285 @@ void SettingsWindow::refreshNavigationAppearance() {
         item->setFont(0, font);
         if (!selected) continue;
         m_pageTitle->setText(item->text(0));
+        m_pageCategory->setText(item->parent()->text(0));
         m_pageDescription->setText(item->toolTip(0));
         m_pageIcon->setPixmap(icons::icon(kPageAppearance[it.key()].icon, th().accent, 24)
                                   .pixmap(QSize(24, 24), devicePixelRatioF()));
     }
+    QString hint = tr("Changes apply as you edit.");
+    if (currentPage == kAudioTab)
+        hint = tr("Use Apply for device changes. The CPU display updates immediately.");
+    else if (currentPage == kAiTab)
+        hint = tr("Use Save model for connections. Other options apply as you edit.");
+    else if (currentPage == kLanguageTab || currentPage == kRecoveryTab)
+        hint = tr("Changes are saved for the next application launch.");
+    else if (currentPage == kPerformanceTab)
+        hint = tr("Changes apply immediately. Switching GPU rendering requires a restart.");
+    else if (currentPage == kThemesTab)
+        hint = tr("Palettes apply on selection. Use Apply for a saved theme.");
+    else if (currentPage == kAccountTab)
+        hint = tr("Account information is synchronized with VLTONE.");
+    if (m_pageHint) m_pageHint->setText(hint);
+    if (m_audioApply) m_audioApply->setVisible(currentPage == kAudioTab && m_content->currentIndex() == 0);
+}
+
+void SettingsWindow::preparePage(QWidget* page) {
+    auto* column = qobject_cast<QVBoxLayout*>(page->layout());
+    if (column) {
+        // Existing module pages use sectionLabel. Give those sections the same
+        // native group containers as the other settings, without rebinding controls.
+        QList<QLayoutItem*> items;
+        while (column->count()) items.push_back(column->takeAt(0));
+        QVBoxLayout* section = column;
+        for (auto* item : items) {
+            QWidget* widget = item->widget();
+            auto* label = qobject_cast<QLabel*>(widget);
+            if (label && label->property("role") == QLatin1String("section")) {
+                auto* group = new QGroupBox(label->text(), page);
+                column->addWidget(group);
+                section = new QVBoxLayout(group);
+                delete label;
+                delete item;
+            } else if (widget && widget->minimumHeight() == 1 && widget->maximumHeight() == 1) {
+                delete widget;
+                delete item;
+            } else if (auto* layout = item->layout()) {
+                layout->setParent(nullptr);
+                section->addLayout(layout);
+            } else if (widget) {
+                section->addWidget(widget);
+                delete item;
+            } else if (item->spacerItem() && item->expandingDirections().testFlag(Qt::Vertical)) {
+                column->addItem(item);
+            } else {
+                section->addItem(item);
+            }
+        }
+        column->setContentsMargins(0, 0, 4, 16);
+        column->setSpacing(16);
+    }
+    for (auto* group : page->findChildren<QGroupBox*>()) {
+        group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        if (group->layout()) {
+            group->layout()->setContentsMargins(16, 18, 16, 16);
+            group->layout()->setSpacing(12);
+        }
+    }
+    for (auto* form : page->findChildren<QFormLayout*>()) {
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        form->setHorizontalSpacing(18);
+        form->setVerticalSpacing(12);
+        for (int row = 0; row < form->rowCount(); ++row) {
+            auto* labelItem = form->itemAt(row, QFormLayout::LabelRole);
+            auto* fieldItem = form->itemAt(row, QFormLayout::FieldRole);
+            auto* label = labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr;
+            QWidget* field = fieldItem ? fieldItem->widget() : nullptr;
+            if (field && (!labelItem || (label && label->text().isEmpty())) &&
+                (qobject_cast<QCheckBox*>(field) || qobject_cast<QRadioButton*>(field))) {
+                const auto rowItems = form->takeRow(row);
+                if (rowItems.labelItem) { delete rowItems.labelItem->widget(); delete rowItems.labelItem; }
+                delete rowItems.fieldItem;
+                form->insertRow(row, field);
+                continue;
+            }
+            if (label && field) {
+                label->setWordWrap(true);
+                label->setBuddy(field);
+                if (field->accessibleName().isEmpty()) field->setAccessibleName(label->text());
+            }
+        }
+    }
+    for (auto* label : page->findChildren<QLabel*>()) {
+        if (!label->pixmap().isNull()) continue;
+        // Long explanatory copy must reflow instead of setting the window width.
+        if (label->text().size() > 90) {
+            label->setWordWrap(true);
+            label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        }
+    }
+    for (auto* button : page->findChildren<QPushButton*>()) button->setAutoDefault(false);
+    for (auto* spin : page->findChildren<QAbstractSpinBox*>()) {
+        spin->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        spin->setMinimumWidth(110);
+    }
+    for (auto* combo : page->findChildren<QComboBox*>()) {
+        combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo->setMinimumContentsLength(16);
+        combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+}
+
+void SettingsWindow::refreshSectionLinks() {
+    m_sections.clear();
+    m_sectionLinks->clear();
+    m_sectionLinks->addItem(tr("On this page…"));
+    auto* scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
+    if (scroll && scroll->widget()) {
+        for (auto* group : scroll->widget()->findChildren<QGroupBox*>()) {
+            if (group->title().isEmpty()) continue;
+            m_sections.push_back(group);
+            m_sectionLinks->addItem(group->title());
+        }
+    }
+    m_sectionLinks->setVisible(m_sections.size() > 1);
+}
+
+namespace {
+QString settingsSearchText(QString text) {
+    return text.remove(QLatin1Char('&')).replace(QRegularExpression(QStringLiteral("<[^>]+>")), QString())
+        .toCaseFolded().replace(QChar(0x451), QChar(0x435)).simplified();
+}
+}
+
+void SettingsWindow::buildSearchIndex() {
+    if (!m_searchIndex.isEmpty()) return;
+    const int selected = m_pages->currentIndex();
+    for (int page = 0; page < kPageCount; ++page) {
+        ensurePage(page);
+        auto* scroll = qobject_cast<QScrollArea*>(m_pages->widget(page));
+        auto* navigation = m_navigationItems.value(page);
+        const QString pagePath = navigation->parent()->text(0) + QStringLiteral(" / ") + navigation->text(0);
+        const auto add = [&](const QString& title, QWidget* target, const QString& extra = QString()) {
+            if (title.trimmed().isEmpty()) return;
+            QString section;
+            for (auto* parent = target; parent && parent != scroll->widget(); parent = parent->parentWidget()) {
+                if (auto* group = qobject_cast<QGroupBox*>(parent)) { section = group->title(); break; }
+            }
+            const QString path = pagePath + (section.isEmpty() ? QString() : QStringLiteral(" / ") + section);
+            const QString terms = settingsSearchText(title + QLatin1Char(' ') + path + QLatin1Char(' ') + extra);
+            m_searchIndex.push_back({page, title, path, terms, target});
+        };
+        add(navigation->text(0), scroll->widget(), navigation->toolTip(0) + QLatin1Char(' ') + QLatin1String(kPageAppearance[page].description));
+        QSet<QWidget*> indexed;
+        for (auto* label : scroll->widget()->findChildren<QLabel*>()) {
+            if (!label->buddy()) continue;
+            QWidget* field = label->buddy();
+            add(label->text(), field, field->accessibleName() + QLatin1Char(' ') + field->toolTip() + QLatin1Char(' ') + field->objectName());
+            indexed.insert(field);
+        }
+        for (auto* group : scroll->widget()->findChildren<QGroupBox*>()) add(group->title(), group);
+        for (auto* button : scroll->widget()->findChildren<QAbstractButton*>()) {
+            if (button->text().isEmpty() || indexed.contains(button)) continue;
+            add(button->text(), button, button->toolTip());
+        }
+        // Index names, never current values: URLs, credentials and user text
+        // are not search terms. This also covers non-form sliders and lists.
+        for (auto* control : scroll->widget()->findChildren<QWidget*>()) {
+            if (indexed.contains(control) || control->accessibleName().isEmpty() ||
+                qobject_cast<QAbstractButton*>(control) || qobject_cast<QLabel*>(control)) continue;
+            add(control->accessibleName(), control, control->objectName());
+        }
+    }
+    m_pages->setCurrentIndex(selected);
+}
+
+void SettingsWindow::updateSearch() {
+    const QString query = settingsSearchText(m_search->text());
+    if (query.isEmpty()) return;
+    buildSearchIndex();
+    m_searchResults->clear();
+    const QStringList words = query.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    QVector<std::pair<int, int>> matches;
+    for (int i = 0; i < m_searchIndex.size(); ++i) {
+        const auto& entry = m_searchIndex[i];
+        if (!std::all_of(words.begin(), words.end(), [&](const QString& word) { return entry.terms.contains(word); })) continue;
+        const QString title = settingsSearchText(entry.title);
+        matches.push_back({title == query ? 0 : title.contains(query) ? 1 : 2, i});
+    }
+    std::stable_sort(matches.begin(), matches.end(), [](auto a, auto b) { return a.first < b.first; });
+    for (const auto& match : matches) {
+        const auto& entry = m_searchIndex[match.second];
+        auto* item = new QTreeWidgetItem(m_searchResults, {entry.title});
+        item->setData(0, Qt::UserRole, match.second);
+        item->setData(0, Qt::UserRole + 1, entry.path);
+        item->setData(0, Qt::AccessibleDescriptionRole, entry.path);
+        item->setIcon(0, icons::icon(kPageAppearance[entry.page].icon, th().textSecondary));
+        item->setToolTip(0, entry.title + QLatin1Char('\n') + entry.path);
+    }
+    m_searchStatus->setText(matches.isEmpty()
+        ? tr("No settings found. Try a shorter word or a section name.")
+        : tr("%1 results. Select a setting to open its page.").arg(matches.size()));
+    if (!matches.isEmpty()) m_searchResults->setCurrentItem(m_searchResults->topLevelItem(0));
+    m_content->setCurrentIndex(1);
+    if (m_audioApply) m_audioApply->hide();
+    m_pageHint->setText(tr("Enter opens a result · Esc clears search"));
+}
+
+void SettingsWindow::activateSearchResult(QTreeWidgetItem* item) {
+    if (!item) return;
+    const int index = item->data(0, Qt::UserRole).toInt();
+    if (index < 0 || index >= m_searchIndex.size()) return;
+    const auto entry = m_searchIndex[index];
+    showTab(entry.page);
+    revealSetting(entry.target);
+}
+
+void SettingsWindow::revealSetting(QWidget* target) {
+    if (!target) return;
+    const QPointer<QWidget> guarded(target);
+    QTimer::singleShot(0, this, [this, guarded] {
+        if (!guarded) return;
+        auto* scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
+        if (!scroll) return;
+        if (guarded == scroll->widget()) { scroll->verticalScrollBar()->setValue(0); return; }
+        if (!scroll->widget()->isAncestorOf(guarded)) return;
+        QWidget* visible = guarded;
+        while (visible && !visible->isVisibleTo(scroll->widget())) visible = visible->parentWidget();
+        if (!visible) return;
+        if (qobject_cast<QGroupBox*>(visible))
+            scroll->verticalScrollBar()->setValue(visible->mapTo(scroll->widget(), QPoint()).y() - 12);
+        else
+            scroll->ensureWidgetVisible(visible, 0, 24);
+        QWidget* focus = visible;
+        if (focus->focusPolicy() == Qt::NoFocus)
+            for (auto* child : visible->findChildren<QWidget*>())
+                if (child->isVisible() && child->isEnabled() && child->focusPolicy() != Qt::NoFocus) { focus = child; break; }
+        if (focus->isEnabled() && focus->focusPolicy() != Qt::NoFocus) focus->setFocus(Qt::OtherFocusReason);
+        QWidget* highlight = visible;
+        for (auto* parent = visible; parent != scroll->widget() && parent; parent = parent->parentWidget())
+            if (qobject_cast<QGroupBox*>(parent)) { highlight = parent; break; }
+        highlight->setProperty("searchMatch", true);
+        highlight->style()->unpolish(highlight);
+        highlight->style()->polish(highlight);
+        highlight->update();
+        QTimer::singleShot(1800, highlight, [highlight] {
+            highlight->setProperty("searchMatch", false);
+            highlight->style()->unpolish(highlight);
+            highlight->style()->polish(highlight);
+            highlight->update();
+        });
+    });
+}
+
+bool SettingsWindow::eventFilter(QObject* watched, QEvent* event) {
+    if ((watched == m_search || watched == m_searchResults) &&
+        event->type() == QEvent::ShortcutOverride && !m_search->text().trimmed().isEmpty()) {
+        const int key = static_cast<QKeyEvent*>(event)->key();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape ||
+            (watched == m_search && key == Qt::Key_Down)) {
+            // Search navigation takes precedence over workspace shortcuts.
+            event->accept();
+            return true;
+        }
+    }
+    if ((watched == m_search || watched == m_searchResults) && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape && !m_search->text().isEmpty()) {
+            m_search->clear();
+            m_search->setFocus();
+            return true;
+        }
+        if (watched == m_search && !m_search->text().trimmed().isEmpty()) {
+            if (key->key() == Qt::Key_Down || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+                if (m_searchTimer->isActive()) { m_searchTimer->stop(); updateSearch(); }
+                if (key->key() == Qt::Key_Down) m_searchResults->setFocus();
+                else activateSearchResult(m_searchResults->currentItem());
+                return true;
+            }
+        }
+    }
+    return QDialog::eventFilter(watched, event);
 }
 
 void SettingsWindow::refreshTimelineBackgroundSource() {
@@ -758,8 +1230,8 @@ void SettingsWindow::constrainToScreen() {
     if (!target) return;
 
     constexpr int kScreenInset = 20;
-    constexpr int kPreferredHeight = 640;
-    constexpr int kAbsoluteHeightCap = 680;
+    constexpr int kPreferredHeight = 680;
+    constexpr int kAbsoluteHeightCap = 760;
     const QRect available =
         target->availableGeometry().adjusted(kScreenInset, kScreenInset,
                                              -kScreenInset, -kScreenInset);
@@ -790,7 +1262,15 @@ void SettingsWindow::ensurePage(int index) {
     if (index < 0 || index >= int(m_pageFactories.size()) || !m_pageFactories[index]) return;
     auto create = std::move(m_pageFactories[index]);
     QWidget* placeholder = m_pages->widget(index);
-    QWidget* page = scrollablePage(create());
+    QWidget* body = create();
+    preparePage(body);
+    if (index == kAudioTab) {
+        m_audioApply = body->findChild<QPushButton*>(QStringLiteral("ApplyAudioSettings"));
+        m_footerRow->insertWidget(1, m_audioApply);
+        m_audioApply->setAccessibleName(tr("Apply audio device settings"));
+        m_audioApply->setVisible(m_pages->currentIndex() == kAudioTab && m_search->text().isEmpty());
+    }
+    QWidget* page = scrollablePage(body);
     m_pages->removeWidget(placeholder);
     m_pages->insertWidget(index, page);
     placeholder->deleteLater();
@@ -800,7 +1280,10 @@ void SettingsWindow::refreshCurrentPage() {
     if (!m_pages) return;
     switch (m_pages->currentIndex()) {
     case kThemesTab: refreshThemeLibrary(); refreshThemeControls(); break;
-    case kThemeEditorTab: refreshThemeControls(); break;
+    case kThemeEditorTab:
+    case kTimelineTab:
+    case kBackgroundsTab:
+    case kFontsTab: refreshThemeControls(); break;
     case kInterfaceTab: refreshStartupTemplateOptions(); break;
     case kNotebookTab: if (m_notebookPage) m_notebookPage->refresh(); break;
     case kQuickImportTab: if (m_quickImportPage) m_quickImportPage->refresh(); break;
@@ -810,15 +1293,20 @@ void SettingsWindow::refreshCurrentPage() {
 
 void SettingsWindow::showTab(int index) {
     if (!m_pages || index < 0 || index >= m_pages->count()) return;
+    m_search->clear();
     ensurePage(index);
     m_pages->setCurrentIndex(index);
     if (QTreeWidgetItem* item = m_navigationItems.value(index)) {
+        item->parent()->setExpanded(true);
         m_navigation->setCurrentItem(item);
         m_navigation->scrollToItem(item);
         setWindowTitle(tr("Settings — %1 · %2")
                            .arg(QApplication::applicationDisplayName(),
                                 item->text(0)));
     }
+    refreshCurrentPage();
+    refreshNavigationAppearance();
+    refreshSectionLinks();
 }
 
 void SettingsWindow::reloadRecordingPage() {
@@ -834,31 +1322,128 @@ bool SettingsWindow::checkWheelRoutingForTest() {
     return SettingsScrollArea::checkWheelRoutingForTest();
 }
 
+bool SettingsWindow::checkOrganizationForTest() {
+    const auto fail = [this](const char* stage) {
+        std::fprintf(stderr, "settings organization failed: %s\n", stage);
+        const QString screenshot = qEnvironmentVariable("DAW_SETTINGS_SCREENSHOT");
+        if (!screenshot.isEmpty()) grab().save(screenshot + QStringLiteral("-failure.png"));
+        return false;
+    };
+    const int originalPage = m_pages->currentIndex();
+    const QString theme = ThemeManager::instance().themeId();
+    const auto pageContains = [this](int page, const char* object) {
+        ensurePage(page);
+        return m_pages->widget(page)->findChild<QWidget*>(QLatin1String(object)) != nullptr;
+    };
+    if (!pageContains(kPerformanceTab, "UiFrameMode") || pageContains(kInterfaceTab, "UiFrameMode") ||
+        !pageContains(kTimelineTab, "TimelineGridOpacity") || pageContains(kThemesTab, "TimelineGridOpacity") ||
+        !pageContains(kFontsTab, "CustomTrackIcons") || pageContains(kThemesTab, "CustomTrackIcons") ||
+        !pageContains(kWebBrowserTab, "WebBrowserHome") || pageContains(kBrowserTab, "WebBrowserHome") ||
+        !pageContains(kPluginsTab, "PluginSetting.contextPanel/pluginInsertPosition") ||
+        pageContains(kContextPanelTab, "PluginSetting.contextPanel/pluginInsertPosition")) return fail("page ownership");
+
+    const int opacity = m_gridOpacity->value();
+    m_search->setText(QStringLiteral("TimelineGridOpacity"));
+    m_searchTimer->stop();
+    updateSearch();
+    if (m_searchResults->topLevelItemCount() != 1) return fail("unique search result");
+    activateSearchResult(m_searchResults->topLevelItem(0));
+    QApplication::processEvents();
+    if (m_pages->currentIndex() != kTimelineTab || !m_search->text().isEmpty() ||
+        m_gridOpacity->value() != opacity || ThemeManager::instance().themeId() != theme) return fail("search navigation or preference preservation");
+    auto* scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
+    if (!scroll || !scroll->viewport()->rect().intersects(QRect(m_gridOpacity->mapTo(scroll->viewport(), QPoint()), m_gridOpacity->size()))) return fail("search target visibility");
+
+    m_search->setText(QStringLiteral("no-such-setting-937416"));
+    m_searchTimer->stop();
+    updateSearch();
+    if (m_searchResults->topLevelItemCount() != 0 || m_content->currentIndex() != 1) return fail("empty results");
+    m_search->setFocus();
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(m_search, &escape);
+    if (!m_search->text().isEmpty() || m_content->currentIndex() != 0) return fail("escape search");
+
+    // Native keyboard navigation opens a matching setting without changing it.
+    m_search->setFocus();
+    m_search->setText(QStringLiteral("ScrollMotionSpeed"));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(m_search, &enter);
+    if (m_pages->currentIndex() != kPerformanceTab) return fail("keyboard activation");
+
+    showTab(kAudioTab);
+    QApplication::processEvents();
+    if (!m_audioApply || !m_audioApply->isVisible() || m_pages->isAncestorOf(m_audioApply)) return fail("audio footer action");
+    for (const auto* name : {"AsioInputConfig", "AsioOutputConfig"}) {
+        auto* button = m_audioPage->findChild<QPushButton*>(QLatin1String(name));
+        if (button && button->isVisible() && !button->parentWidget()->rect().contains(button->geometry()))
+            return fail("audio channel button clipping");
+    }
+    showTab(kInterfaceTab);
+    if (m_audioApply->isVisible()) return fail("audio action page scope");
+
+    showTab(kBackgroundsTab);
+    if (m_sections.size() != 2) return fail("section links");
+    revealSetting(m_sections.back());
+    QApplication::processEvents();
+    scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
+    if (!scroll || scroll->verticalScrollBar()->value() == 0) return fail("section link scroll");
+
+    const QString screenshot = qEnvironmentVariable("DAW_SETTINGS_SCREENSHOT");
+    if (!screenshot.isEmpty()) {
+        const QList<std::pair<Tab, QString>> examples = {
+            {kInterfaceTab, QStringLiteral("general")}, {kAudioTab, QStringLiteral("audio")},
+            {kThemesTab, QStringLiteral("themes")}, {kTimelineTab, QStringLiteral("timeline")},
+            {kPerformanceTab, QStringLiteral("performance")}, {kPluginsTab, QStringLiteral("plugins")},
+            {kBrowserTab, QStringLiteral("files")}, {kRecordingTab, QStringLiteral("recording")},
+            {kAiTab, QStringLiteral("ai")}, {kWebBrowserTab, QStringLiteral("web")}};
+        for (const auto& [page, name] : examples) {
+            showTab(page);
+            QApplication::processEvents();
+            if (auto* area = qobject_cast<QScrollArea*>(m_pages->currentWidget())) area->verticalScrollBar()->setValue(0);
+            grab().save(screenshot + QLatin1Char('-') + name + QStringLiteral(".png"));
+        }
+        m_search->setText(tr("Background"));
+        m_searchTimer->stop();
+        updateSearch();
+        QApplication::processEvents();
+        grab().save(screenshot + QStringLiteral("-search.png"));
+    }
+    showTab(originalPage);
+    return true;
+}
+
 QWidget* SettingsWindow::buildLanguageTab() {
     auto* page = new QWidget;
     auto* column = new QVBoxLayout(page);
+    auto* languageGroup = new QGroupBox(tr("Application language"), page);
+    auto* languageColumn = new QVBoxLayout(languageGroup);
+    column->addWidget(languageGroup);
 
     auto* intro = new QLabel(
         tr("Choose the application language. A full workspace language change "
            "takes effect after restart."), page);
     intro->setWordWrap(true);
-    column->addWidget(intro);
+    languageColumn->addWidget(intro);
 
     m_languageList = new QComboBox(page);
     m_languageList->setObjectName(QStringLiteral("ApplicationLanguage"));
     m_languageList->setAccessibleName(tr("Application language"));
-    column->addWidget(m_languageList);
+    languageColumn->addWidget(m_languageList);
 
     m_languageStatus = new QLabel(page);
     m_languageStatus->setWordWrap(true);
     m_languageStatus->setObjectName(QStringLiteral("SettingsHint"));
-    column->addWidget(m_languageStatus);
+    languageColumn->addWidget(m_languageStatus);
+
+    auto* translations = new QGroupBox(tr("Translation files"), page);
+    auto* translationColumn = new QVBoxLayout(translations);
+    column->addWidget(translations);
 
     auto* help = new QLabel(
         tr("To make another language, export the JSON template, fill in the "
            "empty translations in any text editor, and import the file."), page);
     help->setWordWrap(true);
-    column->addWidget(help);
+    translationColumn->addWidget(help);
 
     auto* importButton = new QPushButton(tr("Import Language…"), page);
     auto* exportButton = new QPushButton(tr("Export Template…"), page);
@@ -869,7 +1454,7 @@ QWidget* SettingsWindow::buildLanguageTab() {
     buttons->addWidget(exportButton);
     buttons->addStretch(1);
     buttons->addWidget(m_removeLanguage);
-    column->addLayout(buttons);
+    translationColumn->addLayout(buttons);
     column->addStretch(1);
 
     connect(&ui::LocalizationManager::instance(),
@@ -1022,6 +1607,16 @@ QWidget* SettingsWindow::buildThemesTab() {
         tr("Choose a built-in palette, or apply a complete saved theme.")));
 
     m_themeList = new QListWidget(page);
+    m_themeList->setObjectName(QStringLiteral("ThemePaletteGallery"));
+    m_themeList->setAccessibleName(tr("Built-in palettes"));
+    m_themeList->setViewMode(QListView::IconMode);
+    m_themeList->setResizeMode(QListView::Adjust);
+    m_themeList->setMovement(QListView::Static);
+    m_themeList->setIconSize(QSize(132, 62));
+    m_themeList->setGridSize(QSize(158, 102));
+    m_themeList->setSpacing(4);
+    m_themeList->setMinimumHeight(230);
+    m_themeList->setMaximumHeight(340);
     {
         // Populated with the signal blocked, and the handler connected only
         // afterwards: `currentItemChanged` *persists* a theme, and no window
@@ -1034,6 +1629,22 @@ QWidget* SettingsWindow::buildThemesTab() {
             auto* item = new QListWidgetItem(presetDisplayName(preset),
                                              m_themeList);
             item->setData(Qt::UserRole, preset.id);
+            QPixmap thumbnail(264, 124);
+            thumbnail.setDevicePixelRatio(2.0);
+            thumbnail.fill(preset.background);
+            QPainter painter(&thumbnail);
+            painter.fillRect(QRect(0, 0, 132, 12), preset.headerBackground);
+            painter.fillRect(QRect(0, 12, 28, 50), preset.surface);
+            for (int lane = 0; lane < 3; ++lane) {
+                painter.fillRect(QRect(4, 17 + lane * 14, 19, 4), preset.textSecondary);
+                painter.fillRect(QRect(35 + lane * 9, 16 + lane * 14, 68 - lane * 8, 9),
+                                 lane == 1 ? preset.waveform : preset.accent);
+            }
+            painter.setPen(preset.cursor);
+            painter.drawLine(70, 12, 70, 61);
+            painter.end();
+            item->setIcon(QIcon(thumbnail));
+            item->setToolTip(presetDisplayName(preset));
             if (preset.id == ThemeManager::instance().themeId())
                 m_themeList->setCurrentItem(item);
         }
@@ -1134,6 +1745,13 @@ QWidget* SettingsWindow::buildThemesTab() {
             [this] { refreshThemeLibrary(); });
     refreshThemeLibrary();
 
+    col->addStretch();
+    return page;
+}
+
+QWidget* SettingsWindow::buildFontsTab() {
+    auto* page = new QWidget(this);
+    auto* col = new QVBoxLayout(page);
     m_trackIconGroup = new QGroupBox(tr("Track Icons"), page);
     m_trackIconGroup->setObjectName(QStringLiteral("TrackIconSettings"));
     auto* iconColumn = new QVBoxLayout(m_trackIconGroup);
@@ -1225,6 +1843,13 @@ QWidget* SettingsWindow::buildThemesTab() {
             &SettingsWindow::refreshFontStatus);
     refreshFontStatus();
 
+    col->addStretch();
+    return page;
+}
+
+QWidget* SettingsWindow::buildBackgroundsTab() {
+    auto* page = new QWidget(this);
+    auto* col = new QVBoxLayout(page);
     auto* backgroundGroup = new QGroupBox(tr("Timeline Background"), page);
     auto* backgroundColumn = new QVBoxLayout(backgroundGroup);
     auto* backgroundHint = new QLabel(
@@ -1617,6 +2242,18 @@ QWidget* SettingsWindow::buildThemesTab() {
                 emit themeBackgroundSettingsChanged();
             });
 
+    col->addStretch();
+    return page;
+}
+
+QWidget* SettingsWindow::buildTimelineTab() {
+    auto* page = new QWidget(this);
+    auto* col = new QVBoxLayout(page);
+    auto* preview = new ThemePreviewWidget([] { return th(); }, page);
+    preview->setObjectName(QStringLiteral("TimelineAppearancePreview"));
+    col->addWidget(preview);
+    connect(this, &SettingsWindow::timelineAppearanceChanged, preview, qOverload<>(&QWidget::update));
+    connect(&ThemeManager::instance(), &ThemeManager::changed, preview, qOverload<>(&QWidget::update));
     auto* gridGroup = new QGroupBox(tr("Timeline grid"), page);
     auto* gridCol = new QVBoxLayout(gridGroup);
     auto* gridWidthRow = new QHBoxLayout;
@@ -1664,7 +2301,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* gridHint = new QLabel(tr("0% hides the grid. Snapping stays unchanged."), gridGroup);
     gridHint->setWordWrap(true);
     gridCol->addWidget(gridHint);
-    col->insertWidget(3, gridGroup); // Keep grid and cursor just below the palette.
+    col->addWidget(gridGroup);
 
     auto* clipsGroup = new QGroupBox(tr("Timeline clips"), page);
     auto* clipsColumn = new QVBoxLayout(clipsGroup);
@@ -1690,7 +2327,7 @@ QWidget* SettingsWindow::buildThemesTab() {
         ui::setWaveformStyle(ui::WaveformStyle(waveformStyle->currentData().toInt()));
         emit timelineAppearanceChanged();
     });
-    col->insertWidget(4, clipsGroup);
+    col->addWidget(clipsGroup);
     connect(roundedClips, &QCheckBox::toggled, this, [this](bool enabled) {
         ui::setRoundedClipCorners(enabled);
         emit timelineAppearanceChanged();
@@ -1732,7 +2369,7 @@ QWidget* SettingsWindow::buildThemesTab() {
     trail->setChecked(ui::playheadTrail());
     trail->setAccessibleName(tr("Playhead motion trail"));
     headCol->addWidget(trail);
-    col->insertWidget(4, headGroup);
+    col->addWidget(headGroup);
 
     // How a selected track is washed. It belongs beside the palette because it
     // is a palette decision, and it is a real choice rather than a default:
@@ -1796,6 +2433,7 @@ QWidget* SettingsWindow::buildThemesTab() {
                 ui::setPlayheadTrail(on);
                 repaintSurfaces();
             });
+    col->addStretch();
     return page;
 }
 
@@ -1815,8 +2453,8 @@ void SettingsWindow::refreshTrackIcons() {
 }
 
 QString SettingsWindow::importTrackIconFile() {
-    showTab(kThemesTab);
-    if (auto* scroll = qobject_cast<QScrollArea*>(m_pages->widget(kThemesTab)))
+    showTab(kFontsTab);
+    if (auto* scroll = qobject_cast<QScrollArea*>(m_pages->widget(kFontsTab)))
         scroll->ensureWidgetVisible(m_trackIconGroup, 0, 20);
     const QString path = QFileDialog::getOpenFileName(this, tr("Add track icon"), QString(),
         tr("Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg *.ico);;All files (*)"));
@@ -2448,7 +3086,15 @@ QWidget* SettingsWindow::buildShortcutsTab() {
            "physical key, so they work in every keyboard layout. The same "
            "binding is shown as Command on macOS and Ctrl on Windows/Linux.")));
 
+    auto* filter = new QLineEdit(page);
+    filter->setObjectName(QStringLiteral("ShortcutFilter"));
+    filter->setAccessibleName(tr("Search keyboard shortcuts"));
+    filter->setPlaceholderText(tr("Find a command or category…"));
+    filter->setClearButtonEnabled(true);
+    col->addWidget(filter);
     auto* table = new QTableWidget(page);
+    table->setObjectName(QStringLiteral("ShortcutTable"));
+    table->setMinimumHeight(300);
     table->setColumnCount(3);
     table->setHorizontalHeaderLabels(
         {tr("Command"), tr("Category"), tr("Shortcut")});
@@ -2516,6 +3162,12 @@ QWidget* SettingsWindow::buildShortcutsTab() {
         table->setCellWidget(r, 2, edit);
     }
 
+    connect(filter, &QLineEdit::textChanged, table, [table](const QString& query) {
+        const QString needle = query.trimmed();
+        for (int row = 0; row < table->rowCount(); ++row)
+            table->setRowHidden(row, !table->item(row, 0)->text().contains(needle, Qt::CaseInsensitive) &&
+                                    !table->item(row, 1)->text().contains(needle, Qt::CaseInsensitive));
+    });
     auto* resetButton = new QPushButton(tr("Reset All to Defaults"));
     connect(resetButton, &QPushButton::clicked, this, [this] {
         for (auto it = m_editors.constBegin(); it != m_editors.constEnd(); ++it)
@@ -2640,6 +3292,32 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     startupForm->addRow(startupHint);
     layout->addWidget(startupGroup);
 
+    auto* editingGroup = new QGroupBox(tr("Editing"), page);
+    auto* editingLayout = new QVBoxLayout(editingGroup);
+    auto* duplicateClips = new QCheckBox(
+        tr("Include clips when duplicating tracks and folders"),
+        editingGroup);
+    duplicateClips->setObjectName(QStringLiteral("DuplicateTrackClips"));
+    duplicateClips->setAccessibleName(
+        tr("Include clips when duplicating tracks and folders"));
+    duplicateClips->setChecked(ui::duplicateTrackClips());
+    auto* duplicateHint = new QLabel(
+        tr("When off, Duplicate keeps the track hierarchy, instruments, "
+           "plugins, mixer settings and routing, but creates empty lanes."),
+        editingGroup);
+    duplicateHint->setWordWrap(true);
+    connect(duplicateClips, &QCheckBox::toggled, editingGroup,
+            [](bool enabled) { ui::setDuplicateTrackClips(enabled); });
+    editingLayout->addWidget(duplicateClips);
+    editingLayout->addWidget(duplicateHint);
+    layout->addWidget(editingGroup);
+    layout->addStretch();
+    return page;
+}
+
+QWidget* SettingsWindow::buildPerformanceTab() {
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
     auto* group = new QGroupBox(tr("Refresh rate"), page);
     auto* form = new QFormLayout(group);
     auto* mode = new QComboBox(group);
@@ -2656,7 +3334,7 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     limit->setSuffix(tr(" FPS"));
     limit->setAccessibleName(tr("Custom refresh rate"));
     auto& clock = ui::FrameClock::instance();
-    const auto reload = [mode, limit, &clock] {
+    const auto reload = [mode, limit, form, &clock] {
         const QSignalBlocker a(mode), b(limit);
         limit->setValue(clock.limit());
         const int data = clock.mode() == ui::FrameMode::Display ? -2 :
@@ -2664,13 +3342,16 @@ QWidget* SettingsWindow::buildInterfaceTab() {
         const int index = mode->findData(data);
         mode->setCurrentIndex(index >= 0 ? index : mode->findData(-1));
         limit->setEnabled(mode->currentData().toInt() == -1);
+        if (form->rowCount() > 1) form->setRowVisible(limit, limit->isEnabled());
     };
     reload();
     form->addRow(tr("Refresh rate"), mode);
     form->addRow(tr("Custom refresh rate"), limit);
-    const auto apply = [mode, limit, &clock] {
+    form->setRowVisible(limit, limit->isEnabled());
+    const auto apply = [mode, limit, form, &clock] {
         const int choice = mode->currentData().toInt();
         limit->setEnabled(choice == -1);
+        form->setRowVisible(limit, choice == -1);
         clock.setPreference(choice == -2 ? ui::FrameMode::Display :
                             choice == -3 ? ui::FrameMode::Unlimited : ui::FrameMode::Fixed,
                             choice > 0 ? choice : limit->value());
@@ -2773,25 +3454,6 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     graphicsForm->addRow(qualityHint);
     layout->addWidget(graphicsGroup);
 
-    auto* editingGroup = new QGroupBox(tr("Editing"), page);
-    auto* editingLayout = new QVBoxLayout(editingGroup);
-    auto* duplicateClips = new QCheckBox(
-        tr("Include clips when duplicating tracks and folders"),
-        editingGroup);
-    duplicateClips->setObjectName(QStringLiteral("DuplicateTrackClips"));
-    duplicateClips->setAccessibleName(
-        tr("Include clips when duplicating tracks and folders"));
-    duplicateClips->setChecked(ui::duplicateTrackClips());
-    auto* duplicateHint = new QLabel(
-        tr("When off, Duplicate keeps the track hierarchy, instruments, "
-           "plugins, mixer settings and routing, but creates empty lanes."),
-        editingGroup);
-    duplicateHint->setWordWrap(true);
-    connect(duplicateClips, &QCheckBox::toggled, editingGroup,
-            [](bool enabled) { ui::setDuplicateTrackClips(enabled); });
-    editingLayout->addWidget(duplicateClips);
-    editingLayout->addWidget(duplicateHint);
-    layout->addWidget(editingGroup);
     layout->addStretch();
     return page;
 }

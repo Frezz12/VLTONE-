@@ -15,6 +15,10 @@ double LoudnessMeter::Filter::tick(double x, std::size_t channel) noexcept {
 void LoudnessMeter::prepare(double rate) {
     if (!std::isfinite(rate) || rate < 8000) rate = 48000;
     m_sliceFrames = unsigned(std::llround(rate * .1));
+    // Two cascaded poles settle in about 300 ms; independent of block size
+    // and UI refresh rate. This is a VU-style display, not a peak needle.
+    m_vuCoefficient = 1 - std::exp(-1 / (rate * .045));
+    m_energyCoefficient = 1 - std::exp(-1 / (rate * .3));
     // Inverse/forward bilinear transform of the published 48 kHz biquads.
     // This preserves the analogue response when the device rate changes.
     const auto atRate = [rate](double b0, double b1, double b2, double a1, double a2) {
@@ -49,6 +53,10 @@ void LoudnessMeter::clear() noexcept {
     m_shelf.state = {}; m_highpass.state = {};
     std::fill(m_tree.begin(), m_tree.end(), Bin{});
     m_total = {}; m_integrating = false;
+    m_rectified = {}; m_vu = {}; m_rmsEnergy = {}; m_crossEnergy = 0;
+    for (auto& value : m_publishedVu) value.store(0, std::memory_order_relaxed);
+    for (auto& value : m_publishedRms) value.store(0, std::memory_order_relaxed);
+    m_correlation.store(0, std::memory_order_relaxed);
     m_integrated.store(std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
 }
 
@@ -61,7 +69,12 @@ LoudnessLevels LoudnessMeter::levels() const noexcept {
     if (m_reset.load(std::memory_order_acquire)) return {};
     return {m_momentary.load(std::memory_order_relaxed),
             m_shortTerm.load(std::memory_order_relaxed),
-            m_integrated.load(std::memory_order_relaxed)};
+            m_integrated.load(std::memory_order_relaxed),
+            m_publishedVu[0].load(std::memory_order_relaxed),
+            m_publishedVu[1].load(std::memory_order_relaxed),
+            m_publishedRms[0].load(std::memory_order_relaxed),
+            m_publishedRms[1].load(std::memory_order_relaxed),
+            m_correlation.load(std::memory_order_relaxed)};
 }
 
 LoudnessMeter::Bin LoudnessMeter::prefix(int bins) const noexcept {
@@ -118,13 +131,29 @@ void LoudnessMeter::process(const AudioBlock& audio, FrameCount frames, bool int
     const auto channels = std::min<ChannelCount>(2, audio.numChannels());
     frames = std::min(frames, audio.frames());
     for (FrameCount frame = 0; frame < frames; ++frame) {
+        std::array<double, 2> stereo{};
         for (ChannelCount ch = 0; ch < channels; ++ch) {
             const double raw = audio.data(ch)[frame];
-            const double sample = m_highpass.tick(m_shelf.tick(std::isfinite(raw) ? raw : 0, ch), ch);
+            stereo[ch] = std::isfinite(raw) ? raw : 0;
+            const double sample = m_highpass.tick(m_shelf.tick(stereo[ch], ch), ch);
             m_energy += sample * sample;
         }
+        if (channels == 1) stereo[1] = stereo[0];
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            m_rectified[ch] += m_vuCoefficient * (std::abs(stereo[ch]) - m_rectified[ch]);
+            m_vu[ch] += m_vuCoefficient * (m_rectified[ch] - m_vu[ch]);
+            m_rmsEnergy[ch] += m_energyCoefficient * (stereo[ch] * stereo[ch] - m_rmsEnergy[ch]);
+        }
+        m_crossEnergy += m_energyCoefficient * (stereo[0] * stereo[1] - m_crossEnergy);
         if (++m_frames == m_sliceFrames) finishSlice(integrating);
     }
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        m_publishedVu[ch].store(float(m_vu[ch] * 1.5707963267948966), std::memory_order_relaxed);
+        m_publishedRms[ch].store(float(std::sqrt(std::max(0., m_rmsEnergy[ch]))), std::memory_order_relaxed);
+    }
+    const double denominator = std::sqrt(m_rmsEnergy[0] * m_rmsEnergy[1]);
+    m_correlation.store(denominator > 1e-15 ? float(std::clamp(m_crossEnergy / denominator, -1., 1.)) : 0.f,
+                        std::memory_order_relaxed);
 }
 
 } // namespace daw::engine

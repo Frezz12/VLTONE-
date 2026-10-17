@@ -12,6 +12,7 @@ namespace {
 constexpr double pi = std::numbers::pi;
 constexpr int detectorRate = 12000, hop = 24, maxOrder = 64;
 constexpr int candidateCount = 6, lookaheadFrames = 11;
+constexpr double lowestHz = 60, highestHz = 4000;
 double safe(double x, double fallback = 0) noexcept {
     return std::isfinite(x) ? x : fallback;
 }
@@ -109,10 +110,11 @@ struct PitchCorrectorDSP::Impl {
     CandidateFrame pendingDetection;
     int detectionMinimum = 0, detectionMaximum = 0, detectionWindow = 0;
     int detectionLag = 0, detectionTicks = 0, detectionScan = 0;
-    int detectionBest = 0, detectionPrimary = -1;
+    int detectionPrimary = -1;
     double detectionRunning = 0;
+    bool hardDetection = false;
     double correction = 0, musicalCorrection = 0, baseline = 69;
-    double heldSeconds = 0, gain = 1, inputPower = 0, outputPower = 0;
+    double heldSeconds = 0, gain = 1, inputPower = 0, outputPower = 0, delayedPower = 0;
     double read = 0, alternateRead = 0, fade = 1, fadeStep = 1;
     double spliceLow = 0, spliceHigh = 0;
     double period = 48000.0/220, wet = 0, formantMix = 1;
@@ -236,53 +238,92 @@ struct PitchCorrectorDSP::Impl {
         const auto& first = candidateFrames[0];
         pushEstimate({first.time, first.hz[selected], first.hz[selected] > 0 ? first.confidence[selected] : 0});
     }
-    double refinePeriod(int lag, int window) const noexcept {
-        // CMND's sloping normalization biases a parabolic fit, particularly
-        // near the top of the vocal range (only 10--12 samples per period).
-        // Refine the candidate on the actual fractional-delay waveform error.
-        // This is a bounded local search, not a second pitch search.
-        const auto error = [&](double shift) {
-            const int integer = int(std::floor(shift));
-            const double t = shift-integer;
-            double result = 0;
-            for (int i = 1; i < window-4; ++i) {
-                const int j = i+integer;
-                const double a = ordered[j-1], b = ordered[j], c = ordered[j+1], d = ordered[j+2];
-                const double interpolated = b+t*(.5*(c-a)+t*(a-2.5*b+2*c-.5*d+t*(.5*(d-a)+1.5*(b-c))));
-                const double delta = ordered[i]-interpolated;
-                result += delta*delta;
-            }
-            return result;
-        };
-        constexpr double golden = .6180339887498948482;
-        double low = lag-.75, high = lag+.75;
-        double left = high-golden*(high-low), right = low+golden*(high-low);
-        double a = error(left), b = error(right);
-        for (int i = 0; i < 16; ++i) {
-            if (a < b) { high = right; right = left; b = a; left = high-golden*(high-low); a = error(left); }
-            else { low = left; left = right; a = b; right = low+golden*(high-low); b = error(right); }
+    int analysisWindow(int lag) const noexcept {
+        // At zero retune, high notes need only a few recent periods. Keeping
+        // the full bass window here erases short notes and octave changes.
+        return hardDetection ? std::min(detectionWindow, std::max(96, 2*lag)) : detectionWindow;
+    }
+    double snapshot() noexcept {
+        const int available = int(std::min<std::uint64_t>(detectorSamples, detectorSize));
+        const int start = detectorSize-available;
+        double mean = 0, energy = 0;
+        for (int i = 0; i < available; ++i) {
+            ordered[start+i] = detector[(detectorSamples-available+i)%detector.size()];
+            mean += ordered[start+i];
         }
-        return .5*(low+high);
+        mean /= std::max(1, available);
+        for (int i = 0; i < start; ++i) ordered[i] = 0;
+        for (int i = start; i < detectorSize; ++i) {
+            ordered[i] -= mean;
+            energy += ordered[i]*ordered[i];
+        }
+        return energy/std::max(1, available);
+    }
+    double trough(int lag) const noexcept {
+        // YIN's threshold applies to the interpolated minimum, not its nearest
+        // integer sample. The latter rejects high F0s halfway between samples.
+        const double a = difference[lag-1], b = difference[lag], c = difference[lag+1];
+        const double curvature = a-2*b+c;
+        return curvature > 1e-12 ? std::max(0.0, b-.125*(a-c)*(a-c)/curvature) : b;
+    }
+    double periodError(double shift, int window, bool normalized = false) const noexcept {
+        const int integer = int(std::floor(shift));
+        const double u = 1-(shift-integer);
+        double result = 0, energy = 0;
+        for (int i = detectorSize-window+3; i < detectorSize-3; ++i) {
+            const int j = i-integer-1;
+            const double a = ordered[j-1], b = ordered[j], c = ordered[j+1], d = ordered[j+2];
+            const double interpolated = b+u*(.5*(c-a)+u*(a-2.5*b+2*c-.5*d+u*(.5*(d-a)+1.5*(b-c))));
+            const double delta = ordered[i]-interpolated;
+            result += delta*delta;
+            if (normalized) energy += ordered[i]*ordered[i]+interpolated*interpolated;
+        }
+        return normalized ? result/std::max(energy, 1e-20) : result;
+    }
+    double refinePeriod(int lag, int window) const noexcept {
+        // CMND's sloping normalization biases a parabolic fit. Refine on
+        // the actual fractional-delay waveform error instead.
+        const auto error = [&](double shift) { return periodError(shift, window); };
+        const auto refine = [&](double center) {
+            constexpr double golden = .6180339887498948482;
+            double low = center-.75, high = center+.75;
+            double left = high-golden*(high-low), right = low+golden*(high-low);
+            double a = error(left), b = error(right);
+            for (int i = 0; i < 16; ++i) {
+                if (a < b) { high = right; right = left; b = a; left = high-golden*(high-low); a = error(left); }
+                else { low = left; left = right; a = b; right = low+golden*(high-low); b = error(right); }
+            }
+            return .5*(low+high);
+        };
+        const double first = refine(lag);
+        // Measure several cycles for short periods: interpolation error over
+        // one 3--12 sample cycle otherwise becomes several cents of bias.
+        const int available = int(std::min<std::uint64_t>(detectorSamples, detectorSize));
+        const double span = std::min(72.0, double(available-window-5));
+        const int cycles = lag < 24 ? std::clamp(int(span/first), 1, 12) : 1;
+        return cycles > 1 ? refine(first*cycles)/cycles : first;
+    }
+    double candidateConfidence(int lag, int window, double refined) const noexcept {
+        // Even an interpolated CMND overstates the error of a short period.
+        // Confirm its periodicity on the fractional waveform in both modes.
+        return std::clamp(1-(lag < 24 ? periodError(refined, window, true) : trough(lag)), 0.0, 1.0);
     }
     void beginHdDetection(const Settings& settings) noexcept {
-        double lo = 60, hi = 1200;
+        hardDetection = false;
+        double lo = lowestHz, hi = highestHz;
         if (settings.voice == 1) hi = 350;
         if (settings.voice == 2) { lo = 100; hi = 800; }
         if (settings.voice == 3) lo = 180;
         detectionMinimum = std::max(2, int(detectorRate/hi));
         detectionMaximum = std::min(200, int(std::ceil(detectorRate/lo)));
-        detectionWindow = detectorSize-detectionMaximum;
-        double energy = 0;
+        detectionWindow = detectorSize-detectionMaximum-4;
         // Freeze the same frame and source timestamp as the immediate detector.
         // The incoming ring may advance while this immutable snapshot is used.
-        for (int i = 0; i < detectorSize; ++i) {
-            ordered[i] = detector[(detectorSamples-detectorSize+i)%detector.size()];
-            energy += ordered[i]*ordered[i];
-        }
+        const double energy = snapshot();
         pendingDetection = {};
         pendingDetection.time = double(position)-.5*detectorSize*rate/detectorRate;
         pendingDetection.confidence[0] = 1;
-        if (energy/detectorSize < 1e-6) {
+        if (energy < 1e-10) {
             voicedFrames = 0; detectionLag = 0;
             selectPath(pendingDetection);
             return;
@@ -295,15 +336,14 @@ struct PitchCorrectorDSP::Impl {
         if (!detectionLag) return;
         if (detectionLag <= detectionMaximum+1) {
             // HD has over 17 ms between finalized analysis and playback. Use
-            // one millisecond of that slack to spread the exact original YIN
-            // sums across callbacks; neither arithmetic order nor F0 changes.
+            // one millisecond of that slack to spread YIN sums across callbacks.
             const int duration = std::max(1, int(std::ceil(.001*rate)));
             const int last = std::min(detectionMaximum+1,
                 ++detectionTicks*(detectionMaximum+1)/duration);
             for (; detectionLag <= last; ++detectionLag) {
                 double sum = 0;
-                for (int i = 0; i < detectionWindow-1; ++i) {
-                    const double d = ordered[i]-ordered[i+detectionLag];
+                for (int i = detectorSize-detectionWindow; i < detectorSize; ++i) {
+                    const double d = ordered[i]-ordered[i-detectionLag];
                     sum += d*d;
                 }
                 detectionRunning += sum;
@@ -311,31 +351,35 @@ struct PitchCorrectorDSP::Impl {
                     ? sum*detectionLag/detectionRunning : 1;
             }
             if (detectionLag <= detectionMaximum+1) return;
-            detectionBest = detectionMinimum;
-            for (int i = detectionMinimum+1; i <= detectionMaximum; ++i)
-                if (difference[i] < difference[detectionBest]) detectionBest = i;
             detectionScan = detectionMinimum;
             return;
         }
         // Each candidate's bounded fractional refinement runs on its own
         // sample. Even at 12 kHz all five candidates and path selection finish
         // before the next two-millisecond detector hop.
-        while (detectionScan <= detectionMaximum) {
+        while (detectionScan <= detectionMaximum && pendingDetection.count < candidateCount) {
             const int i = detectionScan++;
-            if (difference[i] > .25 || difference[i] > difference[i-1] ||
+            if (trough(i) > .3 || difference[i] > difference[i-1] ||
                 difference[i] > difference[i+1]) continue;
-            if (detectionPrimary < 0 && difference[i] <= .12) detectionPrimary = i;
-            if (pendingDetection.count < candidateCount) {
-                pendingDetection.hz[pendingDetection.count] = detectorRate/refinePeriod(i, detectionWindow);
-                pendingDetection.confidence[pendingDetection.count++] = std::clamp(1-difference[i], 0.0, 1.0);
-                return;
-            }
+            const double refined = refinePeriod(i, detectionWindow);
+            const double confidence = candidateConfidence(i, detectionWindow, refined);
+            const int c = pendingDetection.count++;
+            pendingDetection.hz[c] = detectorRate/refined;
+            pendingDetection.confidence[c] = confidence;
+            if (detectionPrimary < 0 && confidence >= .88) detectionPrimary = c;
+            return;
         }
-        if (detectionPrimary < 0 && difference[detectionBest] < .22) detectionPrimary = detectionBest;
+        if (detectionPrimary < 0) {
+            for (int c = 1; c < pendingDetection.count; ++c)
+                if (pendingDetection.confidence[c] >= .78 &&
+                    (detectionPrimary < 0 || pendingDetection.confidence[c] > pendingDetection.confidence[detectionPrimary]))
+                    detectionPrimary = c;
+        }
         const double confidence = detectionPrimary >= 0
-            ? std::clamp(1-difference[detectionPrimary], 0.0, 1.0) : 0;
+            ? pendingDetection.confidence[detectionPrimary] : 0;
         if (detectionPrimary >= 0) {
-            const double primaryHz = double(detectorRate)/detectionPrimary;
+            // Prefer the fundamental to longer, marginally cleaner periods.
+            const double primaryHz = pendingDetection.hz[detectionPrimary];
             for (int c = 1; c < pendingDetection.count; ++c) {
                 const double octavesBelow = std::max(0.0, std::log2(primaryHz/pendingDetection.hz[c]));
                 pendingDetection.confidence[c] *= std::exp(-.08*octavesBelow);
@@ -346,72 +390,60 @@ struct PitchCorrectorDSP::Impl {
         detectionLag = 0;
     }
     void detect(const Settings& settings) noexcept {
-        if (quality) { beginHdDetection(settings); return; }
-        double lo = 60, hi = 1200;
+        const bool nextHard = settings.tune >= 100;
+        if (nextHard != hardDetection) candidateFill = voicedFrames = 0;
+        hardDetection = nextHard;
+        if (quality && !hardDetection) { beginHdDetection(settings); return; }
+        detectionLag = 0;
+        double lo = lowestHz, hi = highestHz;
         if (settings.voice == 1) hi = 350;
         if (settings.voice == 2) { lo = 100; hi = 800; }
         if (settings.voice == 3) lo = 180;
         const int minimum = std::max(2, int(detectorRate/hi));
-        const int maximum = std::min(200, int(std::ceil(detectorRate/lo)));
-        const int window = detectorSize-maximum;
-        double energy = 0;
-        for (int i = 0; i < detectorSize; ++i) {
-            ordered[i] = detector[(detectorSamples-detectorSize+i)%detector.size()];
-            energy += ordered[i]*ordered[i];
-        }
-        CandidateFrame frame;
-        frame.time = double(position) - .5*detectorSize*rate/detectorRate;
-        frame.confidence[0] = 1;
-        if (energy/detectorSize < 1e-6) {
+        const int available = int(std::min<std::uint64_t>(detectorSamples, detectorSize));
+        const int maximum = std::min({200, int(std::ceil(detectorRate/lo)), available-100});
+        detectionWindow = available-maximum-4;
+        const double energy = snapshot();
+        // Date fast decisions at the newest analysed sample. Backdating a
+        // mixed transition window would retune the preceding note early,
+        // or overwrite it with a long-lag fallback in HD's history.
+        const double time = hardDetection ? double(position)
+            : double(position)-.5*detectorSize*rate/detectorRate;
+        if (energy < 1e-10) {
             voicedFrames = 0;
-            if (quality) selectPath(frame); else pushEstimate({frame.time, 0, 0});
+            pushEstimate({time, 0, 0});
             return;
         }
         difference[0] = 1;
         double running = 0;
         for (int lag = 1; lag <= maximum+1; ++lag) {
             double sum = 0;
-            for (int i = 0; i < window-1; ++i) {
-                const double d = ordered[i] - ordered[i+lag];
+            const int window = analysisWindow(lag);
+            for (int i = detectorSize-window; i < detectorSize; ++i) {
+                const double d = ordered[i] - ordered[i-lag];
                 sum += d*d;
             }
+            sum /= window;
             running += sum;
             difference[lag] = running > 1e-20 ? sum*lag/running : 1;
         }
-        int best = minimum;
-        for (int i = minimum+1; i <= maximum; ++i)
-            if (difference[i] < difference[best]) best = i;
-        int primary = -1;
+        double hz = 0, confidence = 0;
         for (int i = minimum; i <= maximum; ++i) {
-            if (difference[i] > .25 || difference[i] > difference[i-1] ||
+            if (trough(i) > .3 || difference[i] > difference[i-1] ||
                 difference[i] > difference[i+1]) continue;
-            if (primary < 0 && difference[i] <= .12) primary = i;
-            if (frame.count < candidateCount) {
-                frame.hz[frame.count] = detectorRate/refinePeriod(i, window);
-                frame.confidence[frame.count++] = std::clamp(1-difference[i], 0.0, 1.0);
-            }
+            const int window = analysisWindow(i);
+            const double refined = refinePeriod(i, window);
+            const double score = candidateConfidence(i, window, refined);
+            const double candidateHz = detectorRate/refined;
+            if (candidateHz < lo*.99 || candidateHz > hi*1.01) continue;
+            if (score > confidence) { confidence = score; hz = candidateHz; }
+            if (score >= .88) break;
         }
-        if (primary < 0 && difference[best] < .22) primary = best;
-        const double confidence = primary >= 0 ? std::clamp(1-difference[primary], 0.0, 1.0) : 0;
-        // Integer multiples of a period often have a slightly lower YIN error
-        // than its fundamental (a perfect sine is the simplest example).
-        // Preserve YIN's first-threshold preference in the lookahead lattice;
-        // otherwise the globally smooth path happily follows a subharmonic.
-        if (primary >= 0) {
-            const double primaryHz = double(detectorRate)/primary;
-            for (int c = 1; c < frame.count; ++c) {
-                const double octavesBelow = std::max(0.0, std::log2(primaryHz/frame.hz[c]));
-                frame.confidence[c] *= std::exp(-.08*octavesBelow);
-            }
+        if (!hz || confidence < .78) {
+            voicedFrames = 0; pushEstimate({time, 0, confidence}); return;
         }
-        frame.confidence[0] = std::clamp(1-confidence, .01, 1.0);
-        if (quality) { selectPath(frame); return; }
-        if (primary < 0 || confidence < .78) {
-            voicedFrames = 0; pushEstimate({frame.time, 0, confidence}); return;
-        }
-        const double hz = detectorRate/refinePeriod(primary, window);
         ++voicedFrames;
-        pushEstimate({frame.time, voicedFrames >= 2 ? hz : 0, confidence});
+        pushEstimate({time, hardDetection || voicedFrames >= 2 ? hz : 0, confidence});
     }
     void analyse(double sample, const Settings& settings) noexcept {
         const double filtered = analysisLowpass[1].process(analysisLowpass[0].process(sample));
@@ -423,7 +455,8 @@ struct PitchCorrectorDSP::Impl {
             detector[detectorSamples % detector.size()] = previousFiltered + fraction*(filtered-previousFiltered);
             ++detectorSamples;
             analysisPhase -= 1;
-            if (detectorSamples >= std::uint64_t(detectorSize) && detectorSamples % hop == 0) detect(settings);
+            const int required = settings.tune >= 100 ? 128 : detectorSize;
+            if (detectorSamples >= std::uint64_t(required) && detectorSamples % hop == 0) detect(settings);
         }
         previousFiltered = filtered;
         if (quality) advanceHdDetection();
@@ -446,20 +479,25 @@ struct PitchCorrectorDSP::Impl {
         if (fastPower > 1e-6 && fastPower > 4*slowPower)
             transientHold = int(.008*rate);
         if (transientHold > 0) --transientHold;
-        const bool noisy = highPower > .60*std::max(fastPower, 1e-10);
+        const bool periodic = current.hz > 0 && current.confidence >= .8 &&
+            mismatchPower < .3*std::max(fastPower, 1e-10);
+        const bool noisy = !periodic && highPower > .60*std::max(fastPower, 1e-10);
         const int quietThreshold = std::max(1, int(.0005*rate));
-        quietSamples = std::abs(sample) < .0001 ? std::min(quietSamples+1, quietThreshold) : 0;
+        // A quiet bass vowel spends longer near zero each cycle. Judge silence
+        // relative to its envelope so those crossings do not bypass correction.
+        const double quietLevel = std::clamp(.02*std::sqrt(slowPower), 1e-7, .0001);
+        quietSamples = std::abs(sample) < quietLevel ? std::min(quietSamples+1, quietThreshold) : 0;
         // Keep attacks and breath consonants on the fixed 10 ms timeline.
         // Pitch-confidence/period jitter deliberately does not request an
         // anchor: it must not repeatedly restart the synthesis phase.
         // A level accent inside a voiced vowel is not a new source onset.
         // Recentring its read head would abruptly rewind the waveform phase.
-        anchors[position&ringMask] = noisy || quietSamples >= quietThreshold;
+        anchors[position&ringMask] = (noisy ? 1 : 0) | (quietSamples >= quietThreshold ? 2 : 0);
         // HD's finalized F0 is intentionally old: comparing today's waveform
         // against that period falsely classifies ordinary vibrato as a new
         // transient. Its lookahead path already resolves those transitions.
         const bool changing = !quality && current.hz > 0 && mismatchPower > .7*std::max(fastPower, 1e-10);
-        return transientHold || noisy || changing || fastPower < 1e-8 ? 0 : 1;
+        return transientHold || noisy || changing || fastPower < 1e-10 ? 0 : 1;
     }
     void beginLpc() noexcept {
         for (std::uint32_t channel = 0; channel < channels; ++channel) {
@@ -581,22 +619,21 @@ struct PitchCorrectorDSP::Impl {
     }
     double control(const Estimate& e, const Settings& settings, double protectionAmount = 1) noexcept {
         const double q = std::clamp(safe(settings.tune, kDefaultTune)*.01, 0.0, 1.0);
-        // The last part of the dial is deliberately stepped. Only very clean
-        // periodic frames qualify for the faster note decision; uncertain
-        // consonant excursions keep the original confirmation protection.
+        // Zero retune deliberately removes note confirmation, hysteresis and
+        // the correction ramp. Nonzero settings retain the natural controls.
         const double hard = std::clamp((q-.95)/.05, 0.0, 1.0);
-        const double snap = e.confidence >= .98 ? hard : 0;
+        const double snap = hard >= 1 || e.confidence >= .98 ? hard : 0;
         const double amount = std::clamp(safe(settings.amount, 100)*.01, 0.0, 1.0);
         const double reference = std::clamp(safe(settings.a4Hz, 440), 400.0, 480.0);
         const auto mask = notes(settings);
-        const bool voiced = e.hz >= 50 && e.hz <= 1400 && e.confidence >= .75 && mask != 0;
+        const bool voiced = e.hz >= lowestHz*.99 && e.hz <= highestHz*1.01 && e.confidence >= .75 && mask != 0;
         double desired = 0;
         bool targetPending = false;
         if (voiced) {
             const double pitch = 69 + 12*std::log2(e.hz/reference);
-            const int next = closestNote(pitch, mask, target, .20-.16*snap);
+            const int next = closestNote(pitch, mask, target, .20*(1-snap));
             const bool previousAllowed = target != -1000 && (mask & (1u << ((target%12+12)%12)));
-            bool change = !pitchInitialised || !previousAllowed;
+            bool change = !pitchInitialised || !previousAllowed || (hard >= 1 && next != target);
             if (!change && next != target) {
                 if (pendingTarget != next || e.confidence < .85) {
                     pendingTarget = next;
@@ -658,7 +695,8 @@ struct PitchCorrectorDSP::Impl {
         // A consonant must not inherit Natural's long musical retune time.
         // Neutralise its applied ratio on the separate 1 ms artifact ramp,
         // while preserving the phrase's musical control state.
-        correction += (musicalCorrection*protectionAmount-correction)*(1-pole(.001, rate));
+        if (hard >= 1 && voiced) correction = musicalCorrection;
+        else correction += (musicalCorrection*protectionAmount-correction)*(1-pole(.001, rate));
         if (!amount) correction = musicalCorrection = 0;
         meter.inputHz = e.hz; meter.confidence = e.confidence;
         meter.voiced = voiced; meter.correctionCents = correction;
@@ -685,6 +723,9 @@ struct PitchCorrectorDSP::Impl {
     }
     std::array<double, 2> synthesise(const std::array<float, 2>& dry,
                                    const Settings& settings, const Estimate& estimate) noexcept {
+        double dryPower = 0;
+        for (std::uint32_t c = 0; c < channels; ++c) dryPower += double(dry[c])*dry[c]/channels;
+        delayedPower += (dryPower-delayedPower)*(1-pole(.010, rate));
         // Keep the source/filter histories warm even while Formants is off.
         // Re-enabling it otherwise reads stale excitation during its fade-in.
         if (lpcCountdown <= 0) {
@@ -706,7 +747,8 @@ struct PitchCorrectorDSP::Impl {
         updateWet(meter.voiced ? (wantedWet > 0 ? 2 : 1) : 0, settings.amount > 0);
         formantMix += ((settings.formants ? 1.0 : 0.0)-formantMix)*(1-pole(.005, rate));
         const auto anchorTime = std::int64_t(position)-latency+int(.008*rate);
-        const bool anchorRequest = anchorTime >= 0 && anchors[std::size_t(anchorTime)&ringMask];
+        const auto anchor = anchorTime >= 0 ? anchors[std::size_t(anchorTime)&ringMask] : 0;
+        const bool anchorRequest = (anchor & 2) || ((anchor & 1) && !(settings.tune >= 100 && meter.voiced));
         if (anchorRequest) anchorHold = int(.002*rate);
         else if (anchorHold > 0) --anchorHold;
         const bool anchorWanted = anchorRequest || anchorHold > 0;
@@ -724,7 +766,7 @@ struct PitchCorrectorDSP::Impl {
         const double ratio = anchorActive ? 1 : std::exp2(correction/1200);
         if (estimate.hz > 0)
             period += (rate/estimate.hz-period)*(1-pole(.005, rate));
-        period = std::clamp(period, rate/1200, rate/60);
+        period = std::clamp(period, rate/highestHz, rate/lowestHz);
         if (wet < 1e-5) {
             read = double(position)-latency; alternateRead = read; fade = 1;
             initialiseHead(read, synthesisState);
@@ -778,7 +820,11 @@ struct PitchCorrectorDSP::Impl {
             double processed = normal+(preserved-normal)*formantMix;
             // A pathological model should fall back to the delayed voice, not
             // clip every sample or send an unstable IIR burst to the output.
-            const double ceiling = std::max(2.0, 12*std::sqrt(inputPower));
+            // Instant retuning can excite a narrow LPC pole at a phoneme
+            // change. Fall back to the shifted waveform at the voice's level.
+            // Measure that level on the output timeline: HD may still be
+            // playing a loud syllable after the live input has gone silent.
+            const double ceiling = std::max(.1, 6*std::sqrt(delayedPower));
             if (!std::isfinite(processed) || std::abs(processed) > ceiling) {
                 synthesisState[c].fill(0); processed = normal;
             }
@@ -849,12 +895,13 @@ void PitchCorrectorDSP::reset() noexcept {
     p.detector = {}; p.ordered = {}; p.difference = {}; p.estimates = {};
     p.candidateFrames = {}; p.candidateFill = 0; p.current = {};
     p.pendingDetection = {}; p.detectionLag = p.detectionTicks = p.detectionScan = 0;
-    p.detectionMinimum = p.detectionMaximum = p.detectionWindow = p.detectionBest = 0;
+    p.detectionMinimum = p.detectionMaximum = p.detectionWindow = 0;
     p.detectionPrimary = -1; p.detectionRunning = 0;
+    p.hardDetection = false;
     p.analysisPhase = p.previousFiltered = 0;
     for (auto& filter : p.analysisLowpass) filter.z1 = filter.z2 = 0;
     p.correction = p.musicalCorrection = 0; p.baseline = p.lastPitch = 69;
-    p.heldSeconds = p.inputPower = p.outputPower = p.wet = 0;
+    p.heldSeconds = p.inputPower = p.outputPower = p.delayedPower = p.wet = 0;
     p.gain = p.formantMix = 1;
     p.read = p.alternateRead = -double(p.latency); p.fade = p.fadeStep = 1;
     p.period = p.rate/220; p.target = -1000; p.voicedFrames = p.lpcCountdown = 0;
@@ -894,7 +941,8 @@ void PitchCorrectorDSP::process(const float* const* input, float* const* output,
         p.analyse(mono, settings);
         p.protection[p.position&p.ringMask] = float(p.protect(mono));
         const auto dry = p.at(std::int64_t(p.position)-p.latency);
-        const Estimate estimate = p.quality ? p.estimateAt(double(p.position)-p.latency) : p.current;
+        const Estimate estimate = p.quality || settings.tune >= 100
+            ? p.estimateAt(double(p.position)-p.latency) : p.current;
         const auto processed = p.synthesise(dry, settings, estimate);
         p.gain = desiredGain+(p.gain-desiredGain)*gainPole;
         double outputPower = 0;

@@ -1,6 +1,9 @@
 #include "Icons.hpp"
 
 #include <QImage>
+#include <QCache>
+#include <QDataStream>
+#include <QIODevice>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -854,23 +857,13 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Knife: {
-        // A straight scalpel, aligned handle-to-tip so the tool never reads as
-        // bent when it becomes the arrangement cursor.
-        p.save();
-        p.translate(12, 12);
-        p.rotate(45);
-        p.setPen(Qt::NoPen);
-        p.setBrush(c);
-        p.drawRoundedRect(QRectF(-3.0, -10.0, 6.0, 11.0), 1.6, 1.6);
-        QPainterPath blade;
-        blade.moveTo(-2.5, 0.0);
-        blade.lineTo(2.5, 0.0);
-        blade.lineTo(2.5, 5.8);
-        blade.lineTo(0.0, 10.0);
-        blade.lineTo(-2.5, 5.8);
-        blade.closeSubpath();
-        p.drawPath(blade);
-        p.restore();
+        // Open scissors: two finger loops and blades meeting at the cursor hotspot.
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(6.0, 6.0), 3.0, 3.0);
+        p.drawEllipse(QPointF(6.0, 18.0), 3.0, 3.0);
+        p.drawLine(QPointF(8.2, 8.2), QPointF(20.5, 20.5));
+        p.drawLine(QPointF(8.2, 15.8), QPointF(20.5, 3.5));
         break;
     }
     case Glyph::Eraser: {
@@ -1062,17 +1055,12 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Crosshair: {
-        // A target reticle — a ring with four tick marks and a centre dot.
-        p.setPen(QPen(c, 1.7));
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPointF(12, 12), 6.0, 6.0);
-        p.drawLine(QPointF(12, 1.5), QPointF(12, 6));
-        p.drawLine(QPointF(12, 18), QPointF(12, 22.5));
-        p.drawLine(QPointF(1.5, 12), QPointF(6, 12));
-        p.drawLine(QPointF(18, 12), QPointF(22.5, 12));
-        p.setPen(Qt::NoPen);
-        p.setBrush(c);
-        p.drawEllipse(QPointF(12, 12), 1.4, 1.4);
+        // Four open ticks leave the exact region-selection point unobscured.
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(12, 3), QPointF(12, 9));
+        p.drawLine(QPointF(12, 15), QPointF(12, 21));
+        p.drawLine(QPointF(3, 12), QPointF(9, 12));
+        p.drawLine(QPointF(15, 12), QPointF(21, 12));
         break;
     }
     case Glyph::Automation: {
@@ -1361,6 +1349,34 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         p.drawEllipse(QPointF(12.0, 17.4), 1.05, 1.05);
         break;
     }
+    case Glyph::WarpQuantize: {
+        // Reuse the canvas's triangular marker, with an arrow to a beat line.
+        p.drawPolygon(QPolygonF({QPointF(3.5, 4), QPointF(9.5, 4), QPointF(6.5, 8)}));
+        QPainterPath timing;
+        timing.moveTo(6.5, 8); timing.lineTo(6.5, 20);
+        timing.moveTo(19, 4); timing.lineTo(19, 20);
+        timing.moveTo(10, 13); timing.lineTo(16, 13);
+        timing.moveTo(13.5, 10.5); timing.lineTo(16, 13); timing.lineTo(13.5, 15.5);
+        strokePath(p, timing, c, 1.8);
+        break;
+    }
+    case Glyph::WarpAlign: {
+        // An audio transient plus a sparkle: automatic timing, not automation.
+        QPainterPath waveform;
+        waveform.moveTo(3, 14); waveform.lineTo(5, 14);
+        waveform.lineTo(7, 7); waveform.lineTo(9.5, 20);
+        waveform.lineTo(12, 11); waveform.lineTo(14, 16);
+        waveform.lineTo(16, 14); waveform.lineTo(21, 14);
+        strokePath(p, waveform, c, 1.8);
+        QPainterPath sparkle;
+        sparkle.moveTo(17, 2.5); sparkle.lineTo(18.2, 5.8);
+        sparkle.lineTo(21.5, 7); sparkle.lineTo(18.2, 8.2);
+        sparkle.lineTo(17, 11.5); sparkle.lineTo(15.8, 8.2);
+        sparkle.lineTo(12.5, 7); sparkle.lineTo(15.8, 5.8);
+        sparkle.closeSubpath();
+        p.setPen(Qt::NoPen); p.setBrush(c); p.drawPath(sparkle);
+        break;
+    }
     case Glyph::Spinner: {
         // A three-quarter arc with a tapered tail. Callers rotate it; drawing
         // an animation here would tie the glyph to a timer it does not own.
@@ -1419,6 +1435,13 @@ bool checkGlyphCoverageForTest(QString* error) {
 
 QIcon icon(Glyph glyph, const QColor& color, int size) {
     if (size <= 0) return {};
+    // The same toolbar/slot glyph is requested by every channel. QIcon copies
+    // share their pixmaps, so retain the three authored DPI levels once.
+    static thread_local QCache<QByteArray, QIcon> cache(8 * 1024);
+    QByteArray key;
+    QDataStream stream(&key, QIODevice::WriteOnly);
+    stream << qint32(glyph) << color << size;
+    if (const auto* cached = cache.object(key)) return *cached;
     QIcon result;
     for (int scale = 1; scale <= 3; ++scale) {
         QPixmap pixmap(size * scale, size * scale);
@@ -1429,6 +1452,8 @@ QIcon icon(Glyph glyph, const QColor& color, int size) {
         painter.end();
         result.addPixmap(pixmap);
     }
+    const qint64 cost = qint64(size) * size * 4 * (1 + 4 + 9) / 1024 + 1;
+    if (cost <= cache.maxCost()) cache.insert(key, new QIcon(result), int(cost));
     return result;
 }
 

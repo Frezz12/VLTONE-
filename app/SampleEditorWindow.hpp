@@ -28,6 +28,7 @@ public:
     void setSnapProvider(std::function<double()> provider);
     void refresh();
     void showSampler();
+    void showWarp();
 
 signals:
     void closing(const QString& trackId, const QString& clipId);

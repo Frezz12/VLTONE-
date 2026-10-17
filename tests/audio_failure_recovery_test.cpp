@@ -275,6 +275,39 @@ void controllerCase(RecoveryTestControl& control, const plugins::PluginDescripto
     check(controller.takeAudioFailureNotices().empty() && !controller.retryInsertRecovery(track, slot, {generation, status.address.instance}),
           "project change cancels notifications and stale recovery actions");
 }
+void bufferReconfiguration(RecoveryTestControl& control, const plugins::PluginDescriptor& descriptor) {
+    control.mode = 0; control.target = 0;
+    AudioRuntimeOwner runtime;
+    auto original = session(descriptor, false);
+    if (!check(bool(runtime->prepare(48000, 64)) && bool(runtime.applySession(original)),
+               "buffer-change session prepares")) return;
+    runtime->setPluginParameter({"track", "slot"}, "0", .25);
+    runtime->advancePluginEdits();
+
+    // Saturate the obsolete document batch. The captured native checkpoint
+    // supersedes every one of these events before the replacement goes live.
+    original.pluginChains[0].slots[0].parameters.assign(4096, {"0", 2});
+    Block block;
+    audio::AudioCallbackContext context;
+    context.inputBuffer = &block.in; context.outputBuffer = &block.out;
+    context.numFrames = 64; context.sampleRate = 48000;
+    for (const auto frames : {128u, 256u, 64u}) {
+        if (!check(bool(runtime.replacePreparedSession(original, 48000, frames, false)),
+                   "buffer change restores the native checkpoint")) return;
+        runtime->transportCommand({AudioTransportCommand::Action::Play});
+        runtime->processDeviceBlock(context);
+        const auto serviced = runtime->servicePlugins();
+        check(context.renderStatus == audio::AudioCallbackContext::RenderStatus::Complete &&
+              std::none_of(serviced.notices.begin(), serviced.notices.end(), [](const auto& notice) {
+                  return notice.kind == AudioPluginNotice::Kind::Overload;
+              }), "buffer change processes the first block without a stale overload notice");
+        block.render(runtime.get(), 8);
+        check(block.equals(.0625f, .125f) && runtime->pluginParameter({"track", "slot"}, "0") == .25 &&
+              runtime->pluginRuntimeStatus("track", "slot").state == AudioPluginRuntimeState::Local,
+              "buffer change preserves the saved parameter, audio and healthy plugin");
+    }
+}
+
 void recoveryBudgetCase(RecoveryTestControl& control, const plugins::PluginDescriptor& descriptor) {
     control.mode = 0; control.target = 0;
     EngineController controller{};
@@ -329,6 +362,7 @@ int main() {
     runtimeCase(control, descriptors[0], 3, false, false, true);
     unavailableAndRollback(control, descriptors[0]);
     controllerCase(control, descriptors[0]);
+    bufferReconfiguration(control, descriptors[0]);
     recoveryBudgetCase(control, descriptors[0]);
     check(control.forbidden == 0, "no DSP, state or parameter calls reach a quarantined native instance");
     return failures ? 1 : 0;

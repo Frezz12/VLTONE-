@@ -298,7 +298,8 @@ int main(int argc, char** argv) try {
     // range and stems; a dropped block, stale delay or append would be audible.
     for (unsigned block : {8u, 64u, 512u, 2048u}) {
         for (const auto* uid : {"review.audio-latency", "review.once-restart",
-                                "review.redundant-restart"}) {
+                                "review.redundant-restart", "review.reset-latency",
+                                "review.recurrent-latency"}) {
             daw::EngineController c{};
             require(bool(initialize(c, block)), "initialize deferred restart");
             const auto a = track(c, source, "Effect");

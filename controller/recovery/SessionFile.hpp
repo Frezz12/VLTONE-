@@ -227,21 +227,20 @@ inline bool writeJsonAtomically(const nlohmann::json& root,
     {
         std::ofstream os(temporary, std::ios::binary | std::ios::trunc);
         if (!os) return false;
-        os << root.dump(2);
-        os.flush();
-        if (!os.good()) {
+        try {
+            os << root.dump(2);
+        } catch (const nlohmann::json::exception&) {
             os.close();
+            fs::remove(temporary, ec);
+            return false;
+        }
+        os.close();
+        if (!os.good()) {
             fs::remove(temporary, ec);
             return false;
         }
     }
     fs::rename(temporary, file, ec);
-    if (ec) {
-        std::error_code ignored;
-        fs::remove(file, ignored);
-        ec.clear();
-        fs::rename(temporary, file, ec);
-    }
     if (ec) {
         std::error_code ignored;
         fs::remove(temporary, ignored);

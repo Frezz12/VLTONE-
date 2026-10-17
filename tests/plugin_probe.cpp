@@ -8,9 +8,14 @@
 //
 //   plugin_probe <vst3|vst|au|clap> <path> [uid] [--blocks N] [--editor]
 //                [--params] [--set id plainValue] [--offline] [--sidechain-silent]
+//                [--block-size N] [--sample-rate Hz] [--activations N]
+//                [--host-cycles N] [--dense-automation]
 //
 // With no uid the first plugin the module advertises is used.
 #include "Host/PluginInstance.hpp"
+#include "Host/PluginNode.hpp"
+#include "ScopedNoDenormals.hpp"
+#include "PluginProbeMeasurement.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,7 +59,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "usage: plugin_probe <vst3|vst|au|clap|internal> <path> [uid] "
                      "[--blocks N] [--editor] [--params] [--set id plainValue] "
-                     "[--offline] [--sidechain-silent]\n");
+                     "[--offline] [--sidechain-silent] [--block-size N] [--sample-rate Hz] "
+                     "[--activations N] [--host-cycles N] [--dense-automation]\n");
         return 2;
     }
     const plugins::Format format = plugins::formatFromString(argv[1]);
@@ -65,12 +71,27 @@ int main(int argc, char** argv) {
     bool listParameters = false;
     bool offline = false, sidechainConnected = false;
     std::vector<std::pair<std::string, double>> edits;
+    std::string measurement;
+    double sampleRate = 48000, frequency = 0, amplitudeDb = -18, secondFrequency = 0;
+    unsigned blockSize = 512;
+    int activations = 1;
+    int hostCycles = 0;
+    bool denseAutomation = false;
     for (int i = 3; i < argc; ++i) {
         if (std::strcmp(argv[i], "--blocks") == 0 && i + 1 < argc) blocks = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--editor") == 0) wantEditor = true;
         else if (std::strcmp(argv[i], "--params") == 0) listParameters = true;
         else if (std::strcmp(argv[i], "--offline") == 0) offline = true;
         else if (std::strcmp(argv[i], "--sidechain-silent") == 0) sidechainConnected = true;
+        else if (std::strcmp(argv[i], "--measure") == 0 && i + 1 < argc) measurement = argv[++i];
+        else if (std::strcmp(argv[i], "--sample-rate") == 0 && i + 1 < argc) sampleRate = std::stod(argv[++i]);
+        else if (std::strcmp(argv[i], "--frequency") == 0 && i + 1 < argc) frequency = std::stod(argv[++i]);
+        else if (std::strcmp(argv[i], "--tone2") == 0 && i + 1 < argc) secondFrequency = std::stod(argv[++i]);
+        else if (std::strcmp(argv[i], "--amplitude-db") == 0 && i + 1 < argc) amplitudeDb = std::stod(argv[++i]);
+        else if (std::strcmp(argv[i], "--block-size") == 0 && i + 1 < argc) blockSize = unsigned(std::stoul(argv[++i]));
+        else if (std::strcmp(argv[i], "--activations") == 0 && i + 1 < argc) activations = std::max(1, std::atoi(argv[++i]));
+        else if (std::strcmp(argv[i], "--host-cycles") == 0 && i + 1 < argc) hostCycles = std::max(1, std::atoi(argv[++i]));
+        else if (std::strcmp(argv[i], "--dense-automation") == 0) denseAutomation = true;
         else if (std::strcmp(argv[i], "--set") == 0 && i + 2 < argc) {
             const std::string id = argv[++i];
             edits.emplace_back(id, std::stod(argv[++i]));
@@ -115,6 +136,24 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "create failed\n");
         return 1;
     }
+    if (!std::isfinite(sampleRate) || sampleRate < 8000 || sampleRate > 384000 ||
+        !std::isfinite(amplitudeDb) || amplitudeDb < -180 || amplitudeDb > 24 ||
+        !std::isfinite(frequency) || !std::isfinite(secondFrequency) || !blockSize || blockSize > 65536) return 2;
+    if (hostCycles) {
+        plugins::PluginNode node(descriptor.name, std::move(plugin));
+        daw::engine::PrepareInfo prepare{sampleRate, blockSize, 2, false};
+        node.prepare(prepare);
+        int reconfigurations = 0;
+        for (int cycle = 0; cycle < hostCycles; ++cycle) {
+            const bool latency = node.takeLatencyChanged();
+            const bool restart = node.takeRestartRequested();
+            node.instance()->pumpMainThread();
+            if (latency || restart) { ++reconfigurations; node.prepare(prepare); }
+        }
+        std::printf("  host service cycles=%d reconfigurations=%d ready=%d latency=%u\n",
+            hostCycles, reconfigurations, int(node.isReady()), node.latencySamples());
+        return node.isReady() ? 0 : 1;
+    }
     plugin->setListener(&listener);
 
     const plugins::PluginDescriptor& real = plugin->descriptor();
@@ -147,11 +186,22 @@ int main(int argc, char** argv) {
         std::printf("  set %s = %g (%s)\n", id.c_str(), value,
             plugin->parameterText(unsigned(index), value).c_str());
     }
+    if (denseAutomation) {
+        if (plugin->parameters().empty()) return 2;
+        const auto& parameter = plugin->parameters().front();
+        for (unsigned frame = 0; frame < blockSize; ++frame) {
+            plugins::PluginEvent event;
+            event.paramIndex = parameter.index; event.frameOffset = frame;
+            event.value = parameter.minValue + (parameter.maxValue - parameter.minValue) *
+                double(frame) / std::max(1u, blockSize - 1);
+            parameterEvents.push_back(event);
+        }
+    }
 
     plugins::PluginProcessInfo info;
-    info.sampleRate = 48000.0;
-    info.maxBlockSize = 512;
-    info.offline = offline;
+    info.sampleRate = sampleRate;
+    info.maxBlockSize = blockSize;
+    info.offline = offline || !measurement.empty();
     info.sidechainConnected = sidechainConnected;
     if (!plugin->activate(info)) {
         std::fprintf(stderr, "activate failed\n");
@@ -163,10 +213,27 @@ int main(int argc, char** argv) {
                 plugin->isProcessing() ? "yes" : "no",
                 plugin->latencySamples());
 
+    for (int cycle = 1; cycle < activations; ++cycle) {
+        const int restarts = listener.restarts, latencyChanges = listener.latencyChanges;
+        plugin->stopProcessing();
+        plugin->deactivate();
+        if (!plugin->activate(info)) return 1;
+        plugin->startProcessing();
+        std::printf("  activation %d: latency=%u, latency notices=%d, restart notices=%d\n",
+            cycle + 1, plugin->latencySamples(), listener.latencyChanges - latencyChanges,
+            listener.restarts - restarts);
+    }
+
     if (wantEditor) {
         std::printf("  openEditor(nullptr) → %s (no window: expect false)\n",
                     plugin->openEditor(nullptr, nullptr) ? "true" : "false");
         plugin->closeEditor();
+    }
+
+    if (!measurement.empty()) {
+        const bool measured = measurePlugin(*plugin, measurement, sampleRate, blockSize, amplitudeDb, frequency, secondFrequency, parameterEvents);
+        plugin->stopProcessing(); plugin->deactivate(); plugin->setListener(nullptr);
+        return measured ? 0 : 1;
     }
 
     // ── Run blocks with a rolling transport ──
@@ -174,7 +241,7 @@ int main(int argc, char** argv) {
     // A tempo-synced plugin (a step sequencer, a synced delay) only does
     // anything when the host tells it the transport is moving, so the probe
     // moves it exactly as the engine would: ppq advancing with sample time.
-    const std::uint32_t frames = 512;
+    const std::uint32_t frames = blockSize;
     std::vector<float> left(frames, 0.0f), right(frames, 0.0f);
     std::vector<float> outLeft(frames, 0.0f), outRight(frames, 0.0f);
     const float* inputs[2] = {left.data(), right.data()};
@@ -183,6 +250,9 @@ int main(int argc, char** argv) {
     std::printf("\n── %d blocks of %u frames, transport rolling at 120 BPM ──\n",
                 blocks, frames);
     std::int64_t sampleTime = 0;
+    std::vector<double> processTimes;
+    processTimes.reserve(std::max(blocks, 0));
+    const daw::rt::ScopedNoDenormals noDenormals;
     for (int block = 0; block < blocks; ++block) {
         // A steady tone in, so anything the plugin does to it shows up as a
         // changing output level rather than as silence either way.
@@ -201,8 +271,9 @@ int main(int argc, char** argv) {
         context.outputs = outputs;
         context.outputChannels = 2;
         context.frames = frames;
-        if (block == 0) context.inputEvents = parameterEvents;
+        if (block == 0 || denseAutomation) context.inputEvents = parameterEvents;
         context.sampleTime = sampleTime;
+        context.steadyTime = sampleTime;
         context.playing = true;
         context.offline = offline;
         context.transport.tempo = 120.0;
@@ -210,7 +281,11 @@ int main(int argc, char** argv) {
             double(sampleTime) / info.sampleRate * (120.0 / 60.0);
         context.transport.barStartPpq =
             std::floor(context.transport.ppqPosition / 4.0) * 4.0;
-        if (plugin->process(context) == plugins::PluginProcessDisposition::Error) {
+        const auto processStart = std::chrono::steady_clock::now();
+        const auto disposition = plugin->process(context);
+        processTimes.push_back(std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - processStart).count());
+        if (disposition == plugins::PluginProcessDisposition::Error) {
             std::fprintf(stderr, "process failed\n"); return 1;
         }
         plugin->pumpMainThread();
@@ -219,6 +294,16 @@ int main(int argc, char** argv) {
             std::printf("  block %2d  ppq %6.3f  in %.6f  out L %.6f R %.6f\n", block,
                         context.transport.ppqPosition, rms(left), rms(outLeft), rms(outRight));
         sampleTime += frames;
+    }
+
+    if (!processTimes.empty()) {
+        std::sort(processTimes.begin(), processTimes.end());
+        const double budget = 1e6 * frames / info.sampleRate;
+        std::printf("  process us: median=%.2f p99=%.2f max=%.2f budget=%.2f over-budget=%zu/%zu\n",
+            processTimes[processTimes.size() / 2], processTimes[(processTimes.size() - 1) * 99 / 100],
+            processTimes.back(), budget,
+            std::size_t(std::count_if(processTimes.begin(), processTimes.end(), [=](double t) { return t > budget; })),
+            processTimes.size());
     }
 
     plugin->stopProcessing();

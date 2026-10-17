@@ -3,6 +3,8 @@
 #include "BounceInPlaceDialog.hpp"
 #include "ExportPrefs.hpp"
 #include "PreviewLoader.hpp"
+#include "PreviewThreadPool.hpp"
+#include <QSemaphore>
 #include <QApplication>
 #include <QDialogButtonBox>
 #include <QCheckBox>
@@ -407,6 +409,13 @@ int main(int argc, char** argv) {
         invalidWriter.close();
     }
 
+    auto* backgroundPool = QThreadPool::globalInstance();
+    check(backgroundPool->waitForDone(10000), "background work finishes before preview isolation check");
+    const int backgroundThreads = backgroundPool->maxThreadCount();
+    backgroundPool->setMaxThreadCount(1);
+    QSemaphore entered, resume;
+    backgroundPool->start([&] { entered.release(); resume.acquire(); });
+    check(entered.tryAcquire(1, 10000), "background worker is occupied");
     PreviewLoader loader;
     QEventLoop loop;
     int loaded = 0, failed = 0;
@@ -421,9 +430,12 @@ int main(int argc, char** argv) {
         loader.request(i % 2 ? source : temporary.filePath("missing.wav"));
     QTimer::singleShot(10000, &loop, &QEventLoop::quit);
     loop.exec();
-    check(loaded == 1 && failed == 0, "preview requests coalesce without obsolete failures");
+    check(loaded == 1 && failed == 0, "preview requests coalesce while the background pool is occupied");
     loader.cancel();
-    check(QThreadPool::globalInstance()->waitForDone(10000), "preview worker finishes");
+    check(ui::previewThreadPool().waitForDone(10000), "preview worker finishes");
+    resume.release();
+    check(backgroundPool->waitForDone(10000), "background worker finishes");
+    backgroundPool->setMaxThreadCount(backgroundThreads);
     return failures ? 1 : 0;
 }
 

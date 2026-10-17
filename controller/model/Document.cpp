@@ -322,6 +322,8 @@ std::string toString(AutomationTargetKind kind) {
         case AutomationTargetKind::TrackMute: return "mute";
         case AutomationTargetKind::SendLevel: return "send";
         case AutomationTargetKind::PluginParameter: return "parameter";
+        case AutomationTargetKind::ModulatorRate: return "modulatorRate";
+        case AutomationTargetKind::ModulationDepth: return "modulationDepth";
     }
     return "volume";
 }
@@ -331,6 +333,8 @@ AutomationTargetKind automationTargetKindFromString(const std::string& s) {
     if (s == "mute") return AutomationTargetKind::TrackMute;
     if (s == "send") return AutomationTargetKind::SendLevel;
     if (s == "parameter") return AutomationTargetKind::PluginParameter;
+    if (s == "modulatorRate") return AutomationTargetKind::ModulatorRate;
+    if (s == "modulationDepth") return AutomationTargetKind::ModulationDepth;
     return AutomationTargetKind::TrackVolume;
 }
 

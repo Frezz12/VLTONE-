@@ -333,12 +333,6 @@ private:
     bool m_folderMode = false;
 };
 
-QString panText(double pan) {
-    if (std::abs(pan) < 0.01) return QStringLiteral("C");
-    return (pan < 0 ? QStringLiteral("L") : QStringLiteral("R")) +
-           QString::number(int(std::round(std::abs(pan) * 100.0)));
-}
-
 /// The track's kind in words, for the icon's tooltip. The document's own
 /// `toString` is the on-disk spelling ("midi", "bus") and is not for reading.
 QString trackKindName(daw::TrackKind kind) {
@@ -653,9 +647,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
 
     ui::MsrButton* patternButton = nullptr;
     if (pattern) {
-        patternButton = chip("P", color, tr("Open Pattern editor"));
+        patternButton = chip("P", color, tr("Open Pattern in Rack"));
         patternButton->setCheckable(false);
-        patternButton->setAccessibleName(tr("Open Pattern editor"));
+        patternButton->setAccessibleName(tr("Open Pattern in Rack"));
         connect(patternButton, &QAbstractButton::clicked, this,
                 [this, id] { emit openPatternRequested(id); });
     }
@@ -709,9 +703,9 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
         pan->installEventFilter(this);
         pan->setFixedSize(kPanWidth, kPanHeight);
         pan->setPan(track.pan);
-        pan->setToolTip(tr("Pan  %1").arg(panText(track.pan)));
+        pan->setToolTip(tr("Pan  %1").arg(ui::formatPan(track.pan)));
         connect(pan, &ui::PanKnob::panChanged, this, [this, id, pan](double v) {
-            pan->setToolTip(tr("Pan  %1").arg(panText(v)));
+            pan->setToolTip(tr("Pan  %1").arg(ui::formatPan(v)));
             applyGroupPan(id, float(v));
         });
         connect(pan, &ui::PanKnob::editFinished, this, [this] {
@@ -813,7 +807,7 @@ void TrackListWidget::syncTrackValues(const QStringList& trackIds) {
             row.displayedPan = t->pan;
             QSignalBlocker block(row.pan);
             row.pan->setPan(t->pan);
-            row.pan->setToolTip(tr("Pan  %1").arg(panText(t->pan)));
+            row.pan->setToolTip(tr("Pan  %1").arg(ui::formatPan(t->pan)));
         }
         if (row.mute) {
             QSignalBlocker block(row.mute);
@@ -871,7 +865,7 @@ void TrackListWidget::refreshAutomationValues() {
             std::abs(row.pan->pan() - pan) > 1.0e-7) {
             const QSignalBlocker blocker(row.pan);
             row.pan->setPan(pan);
-            row.pan->setToolTip(tr("Pan  %1").arg(panText(pan)));
+            row.pan->setToolTip(tr("Pan  %1").arg(ui::formatPan(pan)));
         }
     }
 }
@@ -986,12 +980,8 @@ void TrackListWidget::rebuild() {
 
 void TrackListWidget::refreshMeters() {
     if (!isVisible() || !m_viewport) return;
-    const QRect visible = m_viewport->rect();
     for (const auto& row : m_rows) {
-        if (!row.meter || !row.container->isVisible()) continue;
-        const QRect rowRect(row.container->mapTo(m_viewport, QPoint{}),
-                            row.container->size());
-        if (visible.intersects(rowRect)) {
+        if (ui::isVisibleInViewport(row.meter)) {
             const auto levels = m_controller->meterSnapshot(row.id);
             row.meter->setPeaks(levels.left, levels.right);
         }
@@ -2233,6 +2223,7 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
     case QEvent::MouseMove: {
         auto* me = static_cast<QMouseEvent*>(ev);
         if (m_resizingHeight) {
+            const auto heightRevision = m_controller->trackHeightRevision();
             const int dy = me->globalPosition().toPoint().y() - m_resizeStartY;
             const int h = std::clamp(m_resizeStartH + dy, ui::kMinLaneHeight,
                                      ui::kMaxLaneHeight);
@@ -2247,6 +2238,7 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
                                                     ui::kMinLaneHeight,
                                                     ui::kMaxLaneHeight)));
             }
+            if (m_controller->trackHeightRevision() == heightRevision) return true;
             // Re-read every row through laneHeightForTrack instead of forcing
             // this header to the base height. An open comp editor contributes
             // extra height to the lane; dropping that part here made this row
@@ -2273,7 +2265,7 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
         }
         m_dragging = true;
         m_clickSelectionOnRelease.clear();
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeVerCursor);
         updateDropTarget(pos);
         return true;
     }
@@ -2600,8 +2592,8 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
         selected > 1 ? tr("Move %1 Tracks into a Folder").arg(selected)
                      : tr("Move into a Folder"));
     QAction* packSumming = menu.addAction(
-        selected > 1 ? tr("Move %1 Tracks into a Summing Folder").arg(selected)
-                     : tr("Move into a Summing Folder"));
+        selected > 1 ? tr("Move %1 Tracks into a Bus Folder").arg(selected)
+                     : tr("Move into a Bus Folder"));
     menu.addSeparator();
 
     QAction* del = menu.addAction(

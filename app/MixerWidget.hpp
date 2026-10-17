@@ -19,8 +19,8 @@ class QScrollArea;
 class QToolButton;
 namespace ui { class FrameTimer; }
 
-/// The mixer console: a scrolling row of channel strips with the master strip
-/// pinned on the right and sharing the row's vertical scroll, under a command bar. It lives in
+/// The mixer console: a scrolling row of track strips under a command bar.
+/// The master lives in its own right sidebar. The console lives in
 /// the centre column below the timeline.
 class MixerWidget : public QWidget {
     Q_OBJECT
@@ -86,15 +86,17 @@ private:
     void contextMenuEvent(QContextMenuEvent*) override;
     bool eventFilter(QObject* object, QEvent* event) override;
     void syncVisibleStrips();
+    void positionStrips();
     void applyChannelWidth(int width);
     void setMasterVisible(bool visible);
-    void updateMasterGeometry();
-    void setMasterRevealWidth(int width);
     void updateMasterToggle();
-    int masterExpandedWidth() const;
     void wireStrip(ChannelStrip* strip);
     QStringList m_channels;
     std::vector<ChannelStrip*> m_slots;
+    // Sorted slot indices for materialised channels; scroll work must scale
+    // with the resident viewport budget, not the whole project.
+    std::vector<int> m_residentSlots;
+    std::vector<ChannelStrip*> m_recycledStrips;
     bool m_syncingStrips = false;
     bool m_stripLayoutDirty = true;
     bool m_deferredRackChange = false;
@@ -119,19 +121,10 @@ private:
     QWidget* m_headerAccent = nullptr;
     QWidget* m_header = nullptr;
     QScrollArea* m_scroll = nullptr;
-    QScrollArea* m_masterScroll = nullptr;
-    QWidget* m_masterDock = nullptr;
-    QWidget* m_masterColumn = nullptr;
-    QWidget* m_masterEdge = nullptr;
     QToolButton* m_masterToggle = nullptr;
     bool m_masterVisible = true;
-    bool m_masterDragging = false;
-    int m_masterDragStartWidth = 0;
     int m_channelWidth = ChannelStrip::kWidth;
     QWidget* m_stripsHost = nullptr;
-    QHBoxLayout* m_stripsLayout = nullptr;
-    QWidget* m_masterHost = nullptr;
-    QWidget* m_masterBottomGap = nullptr;
     ChannelStrip::RackHeights m_rackHeights{};
     int m_insertSlotCount = 2;
     quint64 m_colorHeightRevision = ~quint64(0), m_colorHeightGeneration = 0;

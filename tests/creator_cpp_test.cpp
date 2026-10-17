@@ -112,7 +112,30 @@ struct Audio {
 };
 int main(int argc, char **argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
+  if (argc == 2 && std::string_view(argv[1]) == "--compiler-workdir-probe")
+    return readCreatorText("compiler-workdir.input", 64) == "Creator scratch" &&
+                   writeCreatorText("compiler-workdir.output", "Creator scratch")
+               ? 0
+               : 1;
   try {
+    const auto job = creatorJobDirectory();
+    const auto work =
+        job / std::filesystem::path(u8"compiler work \u0442\u0435\u0441\u0442");
+    std::filesystem::create_directory(work);
+    check(writeCreatorText(work / "compiler-workdir.input", "Creator scratch"),
+          "create compiler working-directory probe");
+    const auto executable =
+        creatorExecutableDirectory() / fromUtf8(argv[0]).filename();
+    for (bool ownProcessGroup : {true, false}) {
+      std::string error;
+      const bool ran = runCreatorProcess(
+          executable, {"--compiler-workdir-probe"}, work / "probe.log", 10000,
+          nullptr, error, ownProcessGroup);
+      check(ran && readCreatorText(work / "compiler-workdir.output", 64) ==
+                       "Creator scratch",
+            "compiler scratch files use the job directory with spaces and Unicode");
+    }
+    std::filesystem::remove_all(job);
     check(creatorCompilerAvailable(), "bundled compiler is installed");
     auto f = function("vlt::AudioFrame process(vlt::AudioFrame input,float "
                       "drive=.5f){return input*drive;}");

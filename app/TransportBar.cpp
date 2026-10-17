@@ -160,7 +160,7 @@ protected:
         m_fineMode = event->modifiers() & Qt::ShiftModifier;
         m_pressed = true;
         m_dragging = false;
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeVerCursor);
         event->accept();
     }
 
@@ -303,7 +303,7 @@ protected:
         m_pointer.begin(event->globalPosition());
         m_pressed = true;
         m_dragging = false;
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeVerCursor);
         event->accept();
     }
 
@@ -405,10 +405,10 @@ QString tempoText(double bpm) {
 struct ToolDef { icons::Glyph glyph; const char* name; };
 const ToolDef kTools[] = {
     {icons::Glyph::Pointer, QT_TRANSLATE_NOOP("TransportBar", "Select")},
-    {icons::Glyph::Knife, QT_TRANSLATE_NOOP("TransportBar", "Knife")},
+    {icons::Glyph::Knife, QT_TRANSLATE_NOOP("TransportBar", "Scissors")},
     {icons::Glyph::Eraser, QT_TRANSLATE_NOOP("TransportBar", "Eraser")},
     {icons::Glyph::Crosshair, QT_TRANSLATE_NOOP("TransportBar", "Region")},
-    {icons::Glyph::Power, QT_TRANSLATE_NOOP("TransportBar", "Mute")},
+    {icons::Glyph::Close, QT_TRANSLATE_NOOP("TransportBar", "Mute")},
     {icons::Glyph::Brush, QT_TRANSLATE_NOOP("TransportBar", "Draw")},
     {icons::Glyph::ResizeHorizontal,
      QT_TRANSLATE_NOOP("TransportBar", "Stretch")},
@@ -800,7 +800,6 @@ QWidget* TransportBar::buildLeftDock() {
     m_warpButton = panelButton(
         icons::Glyph::Waveform, tr("Open Warp for the selected audio clip (W)"),
         "HeaderWarpButton");
-    m_warpButton->setCheckable(true);
     connect(m_warpButton, &QAbstractButton::clicked, this,
             &TransportBar::warpRequested);
     panel->addAction(m_warpButton);
@@ -859,6 +858,14 @@ QWidget* TransportBar::buildRightDock() {
     connect(m_notebookPanelButton, &QAbstractButton::toggled, this,
             &TransportBar::notebookToggled);
     panel->addAction(m_notebookPanelButton);
+
+    m_masterPanelButton = new HeaderDockButton(icons::Glyph::Volume, tr("Master panel (Alt+M)"), panel);
+    m_masterPanelButton->setObjectName("HeaderMasterButton");
+    m_masterPanelButton->setAccessibleName(tr("Master panel"));
+    m_masterPanelButton->setFocusPolicy(Qt::StrongFocus); m_masterPanelButton->setCheckable(true);
+    m_masterPanelButton->setButtonSize(kButtonSize, kButtonSize);
+    connect(m_masterPanelButton, &QAbstractButton::toggled, this, &TransportBar::masterToggled);
+    panel->addAction(m_masterPanelButton);
 
     m_aiPanelButton = new HeaderDockButton(
         icons::Glyph::Assistant, tr("Open the AI assistant"), panel);
@@ -2018,10 +2025,6 @@ void TransportBar::setMixerVisible(bool visible) {
     reflectToggle(m_mixerPanelButton, visible);
 }
 
-void TransportBar::setWarpVisible(bool visible) {
-    reflectToggle(m_warpButton, visible);
-}
-
 void TransportBar::setInspectorVisible(bool visible) {
     reflectToggle(m_inspectorPanelButton, visible);
 }
@@ -2037,6 +2040,8 @@ void TransportBar::setWebVisible(bool visible) {
 void TransportBar::setNotebookVisible(bool visible) {
     reflectToggle(m_notebookPanelButton, visible);
 }
+
+void TransportBar::setMasterVisible(bool visible) { reflectToggle(m_masterPanelButton, visible); }
 
 void TransportBar::setAiVisible(bool visible) {
     reflectToggle(m_aiPanelButton, visible);
@@ -2054,6 +2059,10 @@ void TransportBar::setMixerDetached(bool detached) {
 
 void TransportBar::syncTempo() {
     if (!m_tempoEdit) return;
+    if (m_tempoEditing) {
+        m_controller->collapseUndo(m_tempoUndoGroup, "Set Tempo");
+        m_tempoUndoGroup = {};
+    }
     m_tempoEditing = false;
     const QString text = tempoText(m_controller->tempo());
     if (m_tempoEdit->text() != text) m_tempoEdit->setText(text);
@@ -2187,7 +2196,8 @@ bool TransportBar::checkHeaderInteractionForTest(const QString& screenshotPath) 
     if (!bar.m_recordButton->isChecked()) return fail(__LINE__);
     bar.setRecordEngaged(false);
     bar.setGridIndex(0); if (bar.gridIndex() != 0) return fail(__LINE__);
-    bar.setTimeDisplayBars(false); if (bar.showsBars()) return fail(__LINE__);
+    bar.setTimeDisplayBars(false);
+    if (!bar.showsBars() || !bar.showsTime() || bar.positionShowsBars()) return fail(__LINE__);
     bar.setPositionDisplayBars(false); if (bar.positionShowsBars()) return fail(__LINE__);
     if (!screenshotPath.isEmpty()) {
         bar.setToolIndex(0); bar.setSecondaryToolIndex(1);
@@ -2330,6 +2340,40 @@ bool TransportBar::checkTempoInteractionForTest() {
     QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
     if (edit->text() != QStringLiteral("143.5") || !edit->isReadOnly()) return fail(__LINE__);
 
+    // A bounded history must still treat a scrub or multi-keystroke edit as
+    // one action, including when an external sync interrupts the input.
+    for (std::size_t i = 0; i <= controller.undoLimit(); ++i)
+        controller.setTempo((i & 1) ? 120.0 : 121.0);
+    bar.syncTempo();
+    const double fullHistoryTempo = controller.tempo();
+    send(QEvent::MouseButtonPress, origin);
+    send(QEvent::MouseMove, origin - QPointF(0, 20));
+    send(QEvent::MouseMove, origin - QPointF(0, 40));
+    send(QEvent::MouseButtonRelease, origin - QPointF(0, 40));
+    if (!near(fullHistoryTempo + 4) || controller.undoDepth() != controller.undoLimit()) return fail(__LINE__);
+    controller.undo(); bar.syncTempo();
+    if (!near(fullHistoryTempo)) return fail(__LINE__);
+    controller.redo(); bar.syncTempo();
+    if (!near(fullHistoryTempo + 4)) return fail(__LINE__);
+    const auto typeTempo = [&](const QString& text) {
+        edit->setText(text);
+        QMetaObject::invokeMethod(edit, "textEdited", Qt::DirectConnection, Q_ARG(QString, text));
+    };
+    for (bool interrupted : {false, true}) {
+        const double beforeTyping = controller.tempo();
+        send(QEvent::MouseButtonDblClick, origin);
+        typeTempo(QStringLiteral("150"));
+        typeTempo(QStringLiteral("151"));
+        if (interrupted) bar.syncTempo();
+        else typeTempo(QStringLiteral("1")); // Finish with invalid partial input.
+        QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+        if (!near(151) || controller.undoDepth() != controller.undoLimit() || bar.m_tempoEditing) return fail(__LINE__);
+        controller.undo(); bar.syncTempo();
+        if (!near(beforeTyping)) return fail(__LINE__);
+        controller.redo(); bar.syncTempo();
+    }
+    std::puts("PASS tempo Undo at history capacity: scrub, typing, invalid input and external sync");
+
     auto* position = bar.m_positionValue;
     const QPointF positionLocal = position->rect().center();
     const QPointF positionOrigin = position->mapToGlobal(positionLocal.toPoint());
@@ -2400,7 +2444,7 @@ void TransportBar::previewTempo(const QString& text) {
     if (!ok || bpm < 20.0 || bpm > 300.0 || bpm == m_controller->tempo()) return;
     if (!m_tempoEditing) {
         m_tempoEditing = true;
-        m_tempoUndoDepth = m_controller->undoDepth();
+        m_tempoUndoGroup = m_controller->beginUndoGroup();
     }
     emit tempoChanged(bpm);
 }
@@ -2412,15 +2456,10 @@ void TransportBar::commitTempo() {
     bool ok = false;
     const double bpm = m_tempoEdit->text().replace(',', '.').toDouble(&ok);
     if (!ok || bpm < 20.0 || bpm > 300.0) {
-        if (m_tempoEditing)
-            m_controller->collapseUndo(m_tempoUndoDepth, "Set Tempo");
         syncTempo();
         return;
     }
     m_tempoEdit->setText(tempoText(bpm));
     if (bpm != m_controller->tempo()) emit tempoChanged(bpm);
-    if (m_tempoEditing) {
-        m_controller->collapseUndo(m_tempoUndoDepth, "Set Tempo");
-        m_tempoEditing = false;
-    }
+    syncTempo();
 }

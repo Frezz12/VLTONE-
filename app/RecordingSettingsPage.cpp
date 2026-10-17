@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
@@ -161,7 +162,13 @@ RecordingSettingsPage::RecordingSettingsPage(daw::EngineController* controller,
     form->addRow(tr("When loop recording"), m_loopMode);
     form->addRow(QString(), m_trimTakes);
     form->addRow(QString(), m_autoExpand);
-    form->addRow(m_autoSilence, m_silenceSettings);
+    auto* silenceRow = new QWidget(this);
+    auto* silenceLayout = new QHBoxLayout(silenceRow);
+    silenceLayout->setContentsMargins(0, 0, 0, 0);
+    silenceLayout->addWidget(m_autoSilence);
+    silenceLayout->addStretch();
+    silenceLayout->addWidget(m_silenceSettings);
+    form->addRow(silenceRow);
     form->addRow(tr("Comp crossfade"), m_crossfade);
     form->addRow(tr("MIDI comp mode"), m_midiComp);
 
@@ -183,12 +190,14 @@ RecordingSettingsPage::RecordingSettingsPage(daw::EngineController* controller,
     hint->setWordWrap(true);
 
     auto* layout = new QVBoxLayout(this);
-    layout->addLayout(form);
-    layout->addSpacing(8);
-    layout->addWidget(new QLabel(tr("<b>Recording start and monitoring</b>")));
-    layout->addLayout(monitorForm);
-    layout->addSpacing(8);
-    layout->addWidget(hint);
+    auto* takes = new QGroupBox(tr("Recording and takes"), this);
+    takes->setLayout(form);
+    layout->addWidget(takes);
+    auto* monitoring = new QGroupBox(tr("Recording start and monitoring"), this);
+    auto* monitoringColumn = new QVBoxLayout(monitoring);
+    monitoringColumn->addLayout(monitorForm);
+    monitoringColumn->addWidget(hint);
+    layout->addWidget(monitoring);
     layout->addStretch(1);
 
     reload();

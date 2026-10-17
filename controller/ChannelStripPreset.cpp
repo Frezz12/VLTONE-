@@ -1,6 +1,8 @@
 #include "model/MiniModules.hpp"
 #include "ChannelStripPreset.hpp"
+#include "ProjectSerializer.hpp"
 #include "serialization/RackJson.hpp"
+#include "serialization/ModulationJson.hpp"
 
 #include "serialization/InsertJson.hpp"
 #include "platform/PathUtils.hpp"
@@ -38,22 +40,13 @@ audio::Result writeAtomically(const std::vector<std::uint8_t>& bytes,
     }
     stream.write(reinterpret_cast<const char*>(bytes.data()),
                  std::streamsize(bytes.size()));
-    stream.flush();
+    stream.close();
     if (!stream.good()) {
-        stream.close();
         fs::remove(temporary, ec);
         return audio::Result::fail(audio::EngineError::FileWriteError,
                                    "failed to write preset");
     }
-    stream.close();
-
     fs::rename(temporary, file, ec);
-    if (ec) {
-        std::error_code removeError;
-        fs::remove(file, removeError);
-        ec.clear();
-        fs::rename(temporary, file, ec);
-    }
     if (ec) {
         const std::string reason = ec.message();
         std::error_code cleanupError;
@@ -105,6 +98,11 @@ audio::Result ChannelStripPreset::save(
         {"pan", snapshot.pan},
         {"plugins", std::move(plugins)},
     };
+    root["modulation"] = snapshot.modulation;
+    ProjectModel automation; automation.tracks = snapshot.modulationAutomation;
+    std::string automationText;
+    if (auto result = ProjectSerializer::serializeDocument(automation, automationText); !result) return result;
+    root["modulationAutomation"] = json::parse(automationText);
     root["rackGroups"] = serialization::rackGroupsToJson(snapshot.rackGroups);
     root["miniModules"]=json::array();
     for(const auto& module:snapshot.miniModules) {
@@ -146,6 +144,19 @@ audio::Result ChannelStripPreset::load(EngineController::ChannelSnapshot& out,
         }
 
         EngineController::ChannelSnapshot loaded;
+        loaded.modulation = modulation::fromJson(root);
+        if (root.contains("modulationAutomation")) {
+            ProjectModel automation;
+            if (auto result = ProjectSerializer::deserializeDocument(automation, root.at("modulationAutomation").dump()); !result) return result;
+            for (const auto& lane : automation.tracks) {
+                if (lane.kind != TrackKind::Automation || std::any_of(lane.clips.begin(), lane.clips.end(), [](const auto& clip) {
+                    return clip.kind != ClipKind::Automation ||
+                        (clip.automation.target.kind != AutomationTargetKind::ModulatorRate &&
+                         clip.automation.target.kind != AutomationTargetKind::ModulationDepth);
+                })) return audio::Result::fail(audio::EngineError::UnsupportedFormat, "Invalid modulation automation in preset");
+            }
+            loaded.modulationAutomation = std::move(automation.tracks);
+        }
         loaded.sourceName = root.value("name", std::string());
         loaded.hasSettings = true;
         loaded.volume = root.value("volume", 1.0f);
@@ -199,7 +210,7 @@ audio::Result ChannelStripPreset::load(EngineController::ChannelSnapshot& out,
         loaded.rackGroups = serialization::rackGroupsFromJson(root, "rackGroups", rackInserts);
         out = std::move(loaded);
         return audio::Result::ok();
-    } catch (const json::exception& error) {
+    } catch (const std::exception& error) {
         return audio::Result::fail(audio::EngineError::UnsupportedFormat,
                                    std::string("cannot read VLTS preset: ") +
                                        error.what());

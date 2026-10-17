@@ -56,6 +56,9 @@ void BackgroundExecutor::worker() {
         Handle task;
         {
             std::unique_lock lock(m_mutex);
+            // No admission change matters when there is no pending work.
+            // submit/shutdown already notify under the same mutex protocol.
+            m_changed.wait(lock, [&] { return m_stopping || !m_queue.empty(); });
             m_changed.wait_for(lock, std::chrono::milliseconds(2), [&] {
                 return m_stopping || (!m_queue.empty() && m_active < concurrencyLimit());
             });

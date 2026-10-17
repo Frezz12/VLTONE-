@@ -12,6 +12,7 @@
 #include "Nodes/PlaybackNodes.hpp"
 #include "Nodes/PreviewPlayerNode.hpp"
 #include "DSP/Window.hpp"
+#include "ScopedNoDenormals.hpp"
 #include "Transport/Transport.hpp"
 
 #include <algorithm>
@@ -37,6 +38,12 @@ static void check(bool condition, const char* what) {
 }
 
 namespace {
+
+template <typename T>
+struct SeparateBufferNode : T {
+    using T::T;
+    bool supportsInPlace() const noexcept override { return false; }
+};
 
 /// A source that writes a constant value, so sums are trivial to predict.
 struct ConstantSource {
@@ -338,6 +345,33 @@ int main() {
             }
         }
         check(detectsInput, "exact silence wakes on denormals, NaN and SIMD tail input");
+        bool finiteMatches = true;
+        {
+            const daw::rt::ScopedNoDenormals noDenormals;
+            // Invalid sentinels outside each span catch overreads as well as
+            // missing tail samples. Exercise every lane at unaligned starts.
+            std::array<float, 72> storage;
+            for (std::size_t offset = 0; offset < 4; ++offset) {
+                for (std::size_t count : {0, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65}) {
+                    storage.fill(std::numeric_limits<float>::infinity());
+                    const auto samples = std::span(storage).subspan(offset, count);
+                    std::fill(samples.begin(), samples.end(), .25f);
+                    finiteMatches &= dsp::allFinite(samples);
+                    for (std::uint32_t bits : {0u, 0x80000000u, 1u, 0x80000001u,
+                            0x007fffffu, 0x00800000u, 0x7f7fffffu, 0xff7fffffu,
+                            0x7f800000u, 0xff800000u, 0x7fc00001u, 0x7f800001u, 0xff800001u}) {
+                        const float value = std::bit_cast<float>(bits);
+                        const bool expected = std::isfinite(value);
+                        for (auto& sample : samples) {
+                            sample = value;
+                            finiteMatches &= dsp::allFinite(samples) == expected;
+                            sample = .25f;
+                        }
+                    }
+                }
+            }
+        }
+        check(finiteMatches, "finite scan checks every SIMD lane/tail without overread under FTZ, including signaling NaNs");
         double error = 0.0, complementError = 0.0;
         for (int i = 0; i <= 100000; ++i) {
             const double phase = double(i) / 100000.0;
@@ -421,6 +455,84 @@ int main() {
         // Buffer reuse: a chain this shape must not need one buffer per node.
         check((*compiled)->arena.bufferCount() <= 4,
               "buffers are recycled rather than one per node");
+    }
+
+    // Compare aliased chains with a separate-buffer reference under parallel
+    // execution. Fan-out/PDC, mono folding, ramps, sends and meters must retain
+    // exactly the same samples, including non-SIMD block tails.
+    for (const auto channels : {ChannelCount(1), ChannelCount(2), ChannelCount(4)}) {
+        for (const auto frames : {FrameCount(8), FrameCount(31), FrameCount(256)}) {
+            auto make = [&](bool inPlace) {
+                AudioGraph graph;
+                auto add = [&]<typename T>(const char* name) {
+                    return graph.addNode(inPlace ? std::unique_ptr<Node>(std::make_unique<T>(name))
+                        : std::unique_ptr<Node>(std::make_unique<SeparateBufferNode<T>>(name)));
+                };
+                const auto master = add.operator()<SumNode>("master");
+                for (int track = 0; track < 32; ++track) {
+                    const auto source = graph.addNode(std::make_unique<SourceNode>(
+                        "asymmetric signal", +[](void*, const AudioBlock& output, FrameCount count, SamplePos position) {
+                            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch)
+                                for (FrameCount frame = 0; frame < count; ++frame)
+                                    output.data(ch)[frame] = float((position + frame) % 197 - 98) * (.0123f * (ch + 1));
+                        }, nullptr));
+                    const auto gain = add.operator()<GainNode>("gain");
+                    auto* fader = static_cast<GainNode*>(graph.node(gain));
+                    fader->setGain(.375f); fader->setPan(.2f); fader->setMono(track % 2 == 0);
+                    if (track % 5 == 0) {
+                        auto automation = std::make_shared<LevelAutomation>();
+                        automation->gain.active = true;
+                        automation->gain.points = {{0, .5}, {.125, .25}};
+                        fader->setAutomation(std::move(automation));
+                    }
+                    const auto meter = add.operator()<MeterNode>("meter");
+                    const auto send = add.operator()<SendNode>("send");
+                    graph.connect(source, gain); graph.connect(gain, meter);
+                    graph.connect(meter, send); graph.connect(send, master);
+                    if (track % 3 == 0) {
+                        const auto delay = graph.addNode(std::make_unique<LatencyNode>("PDC", 19));
+                        graph.connect(source, delay); graph.connect(delay, master);
+                    }
+                }
+                graph.setSink(master);
+                return graph.compile({48000, frames, channels});
+            };
+            auto aliased = make(true), separate = make(false);
+            check(aliased && separate, "in-place and reference graphs compile");
+            if (!aliased || !separate) continue;
+            check((*aliased)->arena.bufferCount() < (*separate)->arena.bufferCount(),
+                  "in-place chains reduce the audio arena");
+            check((*aliased)->pending.size() == 1,
+                  "only the multi-input master allocates a dependency counter");
+            GraphProcessor parallel(8), serial(1);
+            parallel.setGraph(*aliased); serial.setGraph(*separate);
+            OutputBuffer actual(channels, frames), expected(channels, frames);
+            bool identical = true;
+            for (int block = 0; block < 32; ++block) {
+                parallel.setTaskFusion(block % 2 == 0);
+                TransportInfo transport; transport.ppqPosition = double(block * frames) / 24000;
+                identical &= bool(parallel.process(actual.block(), frames, block * frames, true, false, transport));
+                identical &= bool(serial.process(expected.block(), frames, block * frames, true, false, transport));
+                identical &= actual.storage == expected.storage;
+            }
+            check(identical, "in-place parallel PDC mix equals separate-buffer reference exactly");
+        }
+    }
+
+    // A graph sink may also feed an analysis branch; that branch must never
+    // overwrite the signal which writeSink copies after the whole graph ends.
+    {
+        AudioGraph graph;
+        ConstantSource source{.5f};
+        const auto input = graph.addNode(std::make_unique<SourceNode>("sink", &ConstantSource::render, &source));
+        auto gain = std::make_unique<GainNode>(); gain->setGain(0.f); gain->reset();
+        const auto analysis = graph.addNode(std::move(gain));
+        graph.connect(input, analysis); graph.setSink(input);
+        auto compiled = graph.compile(info);
+        GraphProcessor processor(1); processor.setGraph(*compiled);
+        OutputBuffer output(2, kBlock);
+        check(bool(processor.process(output.block(), kBlock, 0, true)) && output.storage.front() == .5f,
+              "a downstream in-place node cannot overwrite the graph sink");
     }
 
     // ── Cycles are rejected, not deadlocked ──
@@ -1239,6 +1351,37 @@ int main() {
               "no block was reconfigured while it was being rendered");
     }
 
+    // A reset can rebuild an offline graph before its first block. Reuse the
+    // pass when timing is unchanged, but invalidate capture windows when any
+    // branch moves, including a stem that does not feed the master sink.
+    for (unsigned mode = 0; mode < 3; ++mode) {
+        struct ResetReconfigure : CountingNode {
+            FrameCount reported = 0, next = 0;
+            bool changed = false;
+            FrameCount latencySamples() const noexcept override { return reported; }
+            void reset() override {
+                if (!changed) {
+                    changed = true; reported = next; invalidatePrepare();
+                }
+            }
+        };
+        RealtimeEngine engine(1);
+        auto node = std::make_shared<ResetReconfigure>();
+        node->next = mode ? 23 : 0;
+        auto& graph = engine.graph();
+        const auto id = graph.adoptNode(node);
+        graph.setSink(mode == 2 ? graph.addNode(std::make_unique<CountingNode>()) : id);
+        check(bool(engine.prepare(48000, 64, 2, true)), "prepare reset reconfiguration");
+        unsigned writes = 0;
+        const auto status = engine.renderOffline(0, 128, 64, [&](const auto&, auto) {
+            ++writes; return true;
+        });
+        check(mode == 0 ? bool(status) && writes == 2
+                       : !status && status.error() == EngineError::RenderRestartRequired && writes == 0,
+              mode == 0 ? "unchanged offline timing does not need another export pass"
+                        : "changed offline branch timing invalidates capture before the first write");
+    }
+
     // Downstream automation follows the source audio through plugin latency.
     // Exercise the live processor, ordinary export and the offline pipeline.
     for (int mode = 0; mode < 3; ++mode) {
@@ -1703,6 +1846,26 @@ int main() {
               "and a seek near the end still ends where the file does");
     }
 
+
+    // Random access into dense automation retains exact values at duplicate
+    // corners, including the first sample after a late loop or snapshot edit.
+    {
+        LevelCurve curve; curve.defaultValue = -1; curve.active = true;
+        for (unsigned i = 0; i <= 100000; ++i) {
+            curve.points.emplace_back(double(i), double(i));
+            if (i == 50000) curve.points.emplace_back(double(i), 1234.);
+        }
+        std::size_t cursor = 0;
+        bool correct = true;
+        for (const auto [beat, expected] : std::array<std::pair<double, double>, 8>{{
+            {80000.25, 80000.25}, {2.5, 2.5}, {50000., 1234.},
+            {50000.5, (1234. + 50001.) / 2}, {-1., -1.}, {100001., 100000.},
+            {99999.75, 99999.75}, {0., 0.}}})
+            correct &= std::abs(levelAt(curve, beat, cursor) - expected) < 1e-9;
+        cursor = curve.points.size() - 1;
+        correct &= levelAt(curve, 20.5, cursor) == 20.5;
+        check(correct, "dense level automation seeks, wraps and duplicate corners remain exact");
+    }
 
     // Curves retain intra-block corners; switches crossfade from the last sample.
     {

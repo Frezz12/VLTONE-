@@ -257,6 +257,26 @@ int main() {
         auto cancelled = pool.submit([&] { ++started; }); pool.cancelAndWait(cancelled);
         check(started == 2, "stopped transport admits two workers and cancels queued destruction");
         release.set_value(); pool.cancelAndWait(a); pool.cancelAndWait(b);
+
+        // A queue can remain nonempty while playback restricts admission. Stop
+        // must admit its second task without relying on another submit/finish.
+        playing.setPlaying(true);
+        std::promise<void> finish; auto finishWait = finish.get_future().share();
+        started = 0;
+        auto held = pool.submit([&] { ++started; finishWait.wait(); });
+        for (int n = 0; n < 1000 && started != 1; ++n) std::this_thread::sleep_for(1ms);
+        auto pending = pool.submit([&] { ++started; });
+        std::this_thread::sleep_for(10ms);
+        check(started == 1, "queued background work respects active playback admission");
+        playing.setPlaying(false);
+        for (int n = 0; n < 1000 && started != 2; ++n) std::this_thread::sleep_for(1ms);
+        check(started == 2, "stopping playback admits queued work while another task is still running");
+        finish.set_value(); pool.cancelAndWait(held); pool.cancelAndWait(pending);
+        std::this_thread::sleep_for(10ms);
+        auto afterIdle = pool.submit([&] { ++started; });
+        for (int n = 0; n < 1000 && started != 3; ++n) std::this_thread::sleep_for(1ms);
+        pool.cancelAndWait(afterIdle);
+        check(started == 3, "a sleeping empty executor wakes for its next submission");
     }
     for (double rate : {48000., 96000.}) for (unsigned frames : {8u, 16u, 32u, 256u, 512u}) {
         AudioGraph graph; const auto sink = graph.addNode(std::make_unique<SumNode>()); graph.setSink(sink);

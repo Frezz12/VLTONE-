@@ -142,12 +142,14 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
         m_instance->startProcessing();
         const bool ready = m_instance->isProcessing();
         m_ready.store(ready, std::memory_order_release);
+        // Clear activation notifications before the snapshot. A new latency
+        // arriving during the read or buffer allocation must remain pending.
+        (void)takeLatencyChanged();
         const engine::FrameCount latency = ready ? m_instance->latencySamples() : 0;
         m_latency.store(latency, std::memory_order_relaxed);
         m_dryDelaySamples = latency;
         m_dryDelayPosition = 0;
         m_dryDelayStorage.assign(std::size_t(info.channels) * latency, 0.0f);
-        m_latencyChanged.store(false, std::memory_order_release);
     } else {
         m_latency.store(0, std::memory_order_relaxed);
         m_dryDelaySamples = 0;
@@ -173,9 +175,11 @@ void PluginNode::prepare(const engine::PrepareInfo& info) {
     m_blockEvents.reserve(eventCapacity);
     m_pitchDelivery.prepare(m_wantsMidi ? eventCapacity : 0);
     m_pitchCapabilities = m_instance->pitchCapabilities();
+    m_modulation.prepare(m_blockEvents.capacity());
 }
 
 void PluginNode::reset() {
+    m_modulation.reset();
     m_pitchDelivery.reset();
     m_processFailed.store(false, std::memory_order_relaxed);
     // A bypassed insert may have declined activation. CLAP reset requires an
@@ -229,7 +233,11 @@ engine::Status PluginNode::serviceOffline() {
         // activation. Honour it once, then keep the replacement pass when the
         // host-visible configuration is unchanged; a real change still gets a
         // fresh pass and remains protected by the controller's retry limit.
-        if (!m_hasLastOfflineConfiguration ||
+        // A reactivation may expose an initial latency again before DSP
+        // reports the final one. Deduplication must also match the delay lines
+        // we actually prepared, even when the notification itself repeats.
+        if (current.latency != m_latency.load(std::memory_order_relaxed) ||
+            !m_hasLastOfflineConfiguration ||
             current != m_lastOfflineConfiguration) {
             m_lastOfflineConfiguration = current;
             m_hasLastOfflineConfiguration = true;
@@ -314,7 +322,15 @@ void PluginNode::Sink::push(const PluginEvent& event) noexcept {
     }
     // Dropping is correct when the control thread has not drained in a while:
     // a full ring must never stall the audio thread.
-    if (m_owner.m_outbound.push(event)) m_owner.requestMainThreadPump();
+    auto notice = event;
+    if (event.kind == PluginEvent::Kind::ParamGestureBegin) m_owner.m_editorGesture.store(event.paramIndex);
+    if (event.kind == PluginEvent::Kind::ParamGestureEnd) m_owner.m_editorGesture.store(-1);
+    if (event.kind == PluginEvent::Kind::ParamValue) {
+        notice.userGesture = event.userGesture || m_owner.m_editorGesture.load() == std::int32_t(event.paramIndex);
+        if (m_owner.m_modulation.mapped(event.paramIndex) && !notice.userGesture) return;
+        if (notice.userGesture) m_owner.m_modulation.edit(event.paramIndex, event.value);
+    }
+    if (m_owner.m_outbound.push(notice)) m_owner.requestMainThreadPump();
 }
 
 void PluginNode::rememberMidiOutput(const engine::MidiEvent& event) noexcept {
@@ -354,6 +370,9 @@ void PluginNode::requestMainThreadPump() noexcept {
 
 void PluginNode::onParameterChanged(std::uint32_t index, double plainValue) noexcept {
     if(processingPlugin==this)return;
+    if (m_editorGesture.load() == std::int32_t(index)) { onParameterEdited(index, plainValue); return; }
+    if (m_modulation.mapped(index)) return;
+    m_modulation.edit(index, plainValue);
     PluginEvent event;
     event.kind = PluginEvent::Kind::ParamValue;
     event.paramIndex = index;
@@ -361,7 +380,16 @@ void PluginNode::onParameterChanged(std::uint32_t index, double plainValue) noex
     if (m_outbound.push(event)) requestMainThreadPump();
 }
 
+void PluginNode::onParameterEdited(std::uint32_t index, double value) noexcept {
+    if (processingPlugin == this) return;
+    m_modulation.edit(index, value);
+    PluginEvent event; event.kind = PluginEvent::Kind::ParamValue;
+    event.paramIndex = index; event.value = value; event.userGesture = true;
+    if (m_outbound.push(event)) requestMainThreadPump();
+}
+
 void PluginNode::onParameterGesture(std::uint32_t index, bool begin) noexcept {
+    m_editorGesture.store(begin ? std::int32_t(index) : -1, std::memory_order_relaxed);
     PluginEvent event;
     event.kind = begin ? PluginEvent::Kind::ParamGestureBegin
                        : PluginEvent::Kind::ParamGestureEnd;
@@ -414,6 +442,9 @@ void PluginNode::process(const engine::ProcessContext& context) {
         return index < context.inputRoles.size() &&
                context.inputRoles[index] == engine::InputRole::Sidechain;
     };
+    auto isModulation = [&](std::size_t index) noexcept {
+        return index < context.inputRoles.size() && context.inputRoles[index] == engine::InputRole::Modulation;
+    };
     // Whatever happens below, this block must be fully defined: the arena
     // recycles buffers and hands them over holding the previous owner's audio.
     auto passThrough = [&] {
@@ -421,7 +452,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
             const std::span<float> out = context.output.channel(ch).first(frames);
             bool wrote = false;
             for (std::size_t index = 0; index < context.inputs.size(); ++index) {
-                if (isSidechain(index)) continue;
+                if (isSidechain(index) || isModulation(index)) continue;
                 const engine::AudioBlock& input = context.inputs[index];
                 if (ch >= input.numChannels()) continue;
                 const std::span<const float> in = input.channel(ch).first(frames);
@@ -456,13 +487,21 @@ void PluginNode::process(const engine::ProcessContext& context) {
                                 std::uint16_t(m_inputPointers.size()));
     const bool preferMono =
         m_preferredChannelCount.load(std::memory_order_acquire) == 1;
-    for (std::uint16_t ch = 0; ch < inChannels; ++ch) {
-        float* destination = m_inputStorage.data() + std::size_t(ch) * m_maxBlockSize;
-        m_inputPointers[ch] = destination;
+    auto sumBus = [&](std::vector<float>& storage, std::vector<const float*>& pointers,
+                      std::uint16_t channels, bool sidechain, bool foldMono) {
+      for (std::uint16_t ch = 0; ch < channels; ++ch) {
+        float* destination = storage.data() + std::size_t(ch) * m_maxBlockSize;
+        pointers[ch] = destination;
         const std::span<float> out(destination, frames);
+        // A stereo-only plugin on a mono track receives the same fold in
+        // both channels. Compute it once, preserving contributor order.
+        if (foldMono && ch != 0) {
+            dsp::copy(out, std::span<const float>(storage.data(), frames));
+            continue;
+        }
         bool wrote = false;
         for (std::size_t index = 0; index < context.inputs.size(); ++index) {
-            if (isSidechain(index)) continue;
+            if (isModulation(index) || isSidechain(index) != sidechain) continue;
             const engine::AudioBlock& input = context.inputs[index];
             if (input.numChannels() == 0) continue;
 
@@ -471,7 +510,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
             // identical L/R rather than processing an accidental left-only
             // signal. A natively mono plugin gets the same correct fold even
             // when it was inserted on a stereo track.
-            if (preferMono || inChannels == 1) {
+            if (foldMono) {
                 const float scale = 1.0f / float(input.numChannels());
                 for (engine::ChannelCount source = 0;
                      source < input.numChannels(); ++source) {
@@ -500,7 +539,9 @@ void PluginNode::process(const engine::ProcessContext& context) {
             }
         }
         if (!wrote) dsp::clear(out);
-    }
+      }
+    };
+    sumBus(m_inputStorage, m_inputPointers, inChannels, false, preferMono || inChannels == 1);
 
     // ── Sum the first auxiliary input bus ──
     //
@@ -510,28 +551,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
     const std::uint16_t sidechainChannels =
         std::min<std::uint16_t>(m_pluginSidechainChannels,
                                 std::uint16_t(m_sidechainPointers.size()));
-    for (std::uint16_t ch = 0; ch < sidechainChannels; ++ch) {
-        float* destination = m_sidechainStorage.data() +
-                             std::size_t(ch) * m_maxBlockSize;
-        m_sidechainPointers[ch] = destination;
-        const std::span<float> out(destination, frames);
-        bool wrote = false;
-        for (std::size_t index = 0; index < context.inputs.size(); ++index) {
-            if (!isSidechain(index)) continue;
-            const engine::AudioBlock& input = context.inputs[index];
-            if (input.numChannels() == 0) continue;
-            const engine::ChannelCount source =
-                ch < input.numChannels() ? ch : engine::ChannelCount(0);
-            const std::span<const float> in = input.channel(source).first(frames);
-            if (!wrote) {
-                dsp::copyScaled(out, in, 1.0f);
-                wrote = true;
-            } else {
-                dsp::addScaled(out, in, 1.0f);
-            }
-        }
-        if (!wrote) dsp::clear(out);
-    }
+    sumBus(m_sidechainStorage, m_sidechainPointers, sidechainChannels, true, false);
 
     const bool hostEventPending = !m_inbound.empty();
     const bool failed = faultBypassed();
@@ -659,7 +679,7 @@ void PluginNode::process(const engine::ProcessContext& context) {
         }
     }
     auto automation = m_automation.read();
-    const bool automationActive = automation && !automation->empty();
+    const bool automationActive = (automation && !automation->empty()) || m_modulation.active();
 
     // Track only transport properties that are expected to stay constant from
     // one uninterrupted block to the next. PPQ and bar position advance during
@@ -1001,13 +1021,18 @@ void PluginNode::process(const engine::ProcessContext& context) {
     }
     // std::sort is allocation-free introsort: O(n log n) even for dense
     // automation, with sortOrder preserving the former stable semantics.
-    std::sort(m_blockEvents.begin(), m_blockEvents.end(),
-              [](const PluginEvent& a, const PluginEvent& b) {
+    const auto eventBefore = [](const PluginEvent& a, const PluginEvent& b) {
                   if (a.frameOffset != b.frameOffset) {
                       return a.frameOffset < b.frameOffset;
                   }
                   return a.sortOrder < b.sortOrder;
-              });
+              };
+    // A single dense automation curve and ordinary MIDI are already ordered.
+    // Keep sample-accurate events, but avoid sorting that common case again.
+    if (!std::is_sorted(m_blockEvents.begin(), m_blockEvents.end(), eventBefore))
+        std::sort(m_blockEvents.begin(), m_blockEvents.end(), eventBefore);
+
+    if (!m_modulation.apply(context, *m_instance, m_blockEvents)) noteOverload();
 
     PluginProcessContext processContext;
     processContext.inputs = inChannels > 0 ? m_inputPointers.data() : nullptr;
@@ -1072,6 +1097,7 @@ void PluginNode::rememberTransport(const engine::ProcessContext& context) noexce
 }
 
 void PluginNode::latchFault(Fault reason) noexcept {
+    m_processFailed.store(true, std::memory_order_relaxed);
     if (m_fault.exchange(reason, std::memory_order_acq_rel) == Fault::None) {
         m_faultGroup->sides.fetch_or(1u << m_faultSide, std::memory_order_release);
         if (m_masterMute) m_masterMute->store(true, std::memory_order_release);
@@ -1117,15 +1143,19 @@ void PluginNode::finishAudio(const BlockState& block, PluginProcessDisposition d
     const bool bypassed = block.bypassed, needsDry = block.needsDry;
     const float targetWet = block.targetWet;
     m_bypassWarmupRemaining -= std::min(m_bypassWarmupRemaining, frames);
-    bool finiteOutput = true;
-    for (engine::ChannelCount ch = 0; ch < outCount; ++ch) {
-        // Surround channels can live in our scratch beyond the graph's width.
-        const auto samples = std::span<const float>(m_outputPointers[ch], frames);
-        finiteOutput &= std::all_of(samples.begin(), samples.end(), [](float x) { return std::isfinite(x); });
+    auto failure = disposition == PluginProcessDisposition::Error ? Fault::ProcessError : Fault::None;
+    if (failure == Fault::None) {
+        for (engine::ChannelCount ch = 0; ch < outCount; ++ch) {
+            // Include surround scratch beyond the graph's width. A reported
+            // error already rejects the whole block and needs no sample scan.
+            if (!dsp::allFinite({m_outputPointers[ch], frames})) {
+                failure = Fault::NonFiniteOutput;
+                break;
+            }
+        }
     }
-    if (disposition == PluginProcessDisposition::Error || !finiteOutput) {
-        latchFault(finiteOutput ? Fault::ProcessError : Fault::NonFiniteOutput);
-        m_processFailed.store(true, std::memory_order_relaxed);
+    if (failure != Fault::None) {
+        latchFault(failure);
         renderFaultFallback(context, needsDry || m_dryDelaySamples > 0);
         return;
     }

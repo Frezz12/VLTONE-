@@ -19,6 +19,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
 #endif
 
 using namespace daw::engine;
@@ -211,6 +213,45 @@ static void engineChecks() {
             active = false;
         }
     };
+#elif defined(__APPLE__)
+    struct MessageNode : Node {
+        CFRunLoopRef loop = CFRunLoopGetCurrent();
+        CFRunLoopSourceRef source = nullptr;
+        std::thread::id owner = std::this_thread::get_id();
+        bool ready = false, wrongThread = false;
+        std::atomic<bool> active{false};
+        unsigned messages = 0, blocks = 0;
+        std::string_view name() const noexcept override { return "native callback processor"; }
+        static void receive(void* info) {
+            auto& self = *static_cast<MessageNode*>(info);
+            self.wrongThread |= std::this_thread::get_id() != self.owner || self.active.load();
+            self.ready = true; ++self.messages;
+        }
+        void prepare(const PrepareInfo&) override {
+            CFRunLoopSourceContext context{};
+            context.info = this; context.perform = receive;
+            source = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &context);
+            require(source != nullptr, "create native callback source");
+            CFRunLoopAddSource(loop, source, kCFRunLoopDefaultMode);
+            CFRunLoopSourceSignal(source);
+        }
+        ~MessageNode() override {
+            if (source) {
+                CFRunLoopRemoveSource(loop, source, kCFRunLoopDefaultMode);
+                CFRelease(source);
+            }
+        }
+        void process(const ProcessContext& c) override {
+            require(ready && !wrongThread, "native callback was not serviced between blocks");
+            active = true; ready = false; ++blocks;
+            for (unsigned ch = 0; ch < c.output.numChannels(); ++ch)
+                std::fill_n(c.output.data(ch), c.frames, 0.25f);
+            CFRunLoopSourceSignal(source);
+            active = false;
+        }
+    };
+#endif
+#if defined(_WIN32) || defined(__APPLE__)
     {
         RealtimeEngine engine(4);
         auto node = std::make_shared<MessageNode>();

@@ -162,7 +162,7 @@
         "points": [
           "Select an input, arm and monitor the required track, and record against the metronome and project tempo.",
           "Layer multiple takes while keeping the source material available so you can build the strongest performance.",
-          "Import and preview samples, trim and move clips, and use Stretch, Loop, Vocal, Complex, or Resample modes."
+          "Audition and edit audio fragments, add fades and Warp markers, and use Stretch, Loop, Vocal, Complex or Resample modes."
         ],
         "manualAnchor": "recording"
       },
@@ -173,14 +173,14 @@
         "lead": "Draw melodies in the Piano Roll, build beats, or play a MIDI keyboard. Give your samples a voice of their own.",
         "highlights": [
           "Piano Roll",
-          "Patterns",
-          "Sampler"
+          "MIDI Generator",
+          "Sequence / Slicer"
         ],
         "caption": "Warm Keys: chords and note velocity",
         "points": [
-          "Use the Piano Roll to create, select, move, and edit notes inside a MIDI clip.",
-          "Program rhythms in the Pattern editor and manage sound sources directly from each row.",
-          "Turn an audio file into a playable instrument with the built-in sampler while preserving its connection to project MIDI."
+          "Piano Roll with local ranges, repeats and MIDI Generator for previewing melodies and chords.",
+          "Sequence edits steps directly inside MIDI clips; Pattern Editor builds rhythms and opens each source’s rack.",
+          "Sampler works inside the rack; Slicer maps sample slices to MIDI pads and exports MIDI or WAV."
         ],
         "manualAnchor": "piano-roll"
       },
@@ -190,15 +190,15 @@
         "title": "Every sound in place.",
         "lead": "Shape the balance, effects, and automation. Export a finished mix or individual stems.",
         "highlights": [
-          "Bus / Send",
-          "Automation",
-          "Mix / Stems"
+          "Rack",
+          "LFO / Follower",
+          "VU / LUFS"
         ],
         "caption": "Night Bloom: channels, effects and shared sends",
         "points": [
-          "Channel strips include gain, inserts, sends, pan, fader, meters, mute, solo, record, and monitoring states.",
-          "Bus and Send tracks plus summing folders support group and parallel processing without duplicating identical chains.",
-          "Automate volume, pan, and plugin parameters, then export a full mix or stems with format, sample rate, bit depth, and channel controls."
+          "Mixer and horizontal rack with instruments, effect groups, Mix, sends and device reordering.",
+          "LFO and Envelope Follower modulate parameters; automation can be retargeted and shaped over a selected range.",
+          "A separate master panel shows VU, LUFS, RMS and correlation. Export the full mix or stems."
         ],
         "manualAnchor": "mixer"
       },
@@ -206,7 +206,7 @@
         "tag": "Plugins",
         "nav": "Plugins",
         "title": "Plugins and effects.",
-        "lead": "Your favorite instruments, external effects, and a built-in equalizer, together in your project.",
+        "lead": "External plugins, new built-in effects and your own Creator mini-modules in one chain.",
         "highlights": [
           "VST / VST3",
           "CLAP",
@@ -216,7 +216,7 @@
         "points": [
           "Use CLAP, VST, and VST3 plugins; Audio Unit is also available on macOS.",
           "Plugin Manager controls search paths, scanning, rescanning, and the blacklist for unstable modules.",
-          "Find and replace plugins from the channel strip, automate exposed parameters, and shape sound with the built-in VLTone Equalizer."
+          "VLTone Equalizer, Flux, Reverb, Morph, CLA-2A and VLT 1073 extend the chain; Creator builds custom mini-modules."
         ],
         "manualAnchor": "plugin-manager"
       },
@@ -414,7 +414,8 @@
               "The context panel adapts to available width. If a secondary button is hidden, widen the window or narrow the browser.",
               "Select a track, then a clip: the inspector and context panel follow the current selection.",
               "Hide unused panels through View to gain space. Timeline zoom and track height are separate settings.",
-              "Closing an instrument window does not disable its sound; bypass and closing an editor are different actions."
+              "Closing an instrument window does not disable its sound; bypass and closing an editor are different actions.",
+              "Tab switches between the mixer and selected channel’s rack; Alt+M shows the separate master panel on the right. Drag panel edges to resize."
             ]
           },
           {
@@ -460,7 +461,8 @@
             "notes": [
               "Time signature is separate from BPM. Set both before recording so the grid matches the phrase.",
               "For comparisons, set a cycle slightly wider than the phrase so effect onsets and tails remain audible.",
-              "Returning to the start moves the playhead, not clips. If playback is silent, check that the playhead crosses actual material."
+              "Returning to the start moves the playhead, not clips. If playback is silent, check that the playhead crosses actual material.",
+              "In Settings → Transport, choose Resume to continue from the playhead or Restart to return to the run’s start on the next Space press. You can also choose a custom metronome sound and Accent / Monochrome top-panel appearance."
             ]
           },
           {
@@ -538,7 +540,8 @@
               "Closing a changed session offers Save, Cancel, or an explicit discard.",
               "Keep the project and media in a permanent folder. The project stores structure and settings; deleting source audio may break file references.",
               "Use Save As with a new name before major changes. Undo supports the current session; a separate copy preserves an independent version.",
-              "After moving to another computer, check media, plugins and presets. An unavailable third-party plugin is not automatically replaced."
+              "After moving to another computer, check media, plugins and presets. An unavailable third-party plugin is not automatically replaced.",
+              "The save dialog lets you choose a project cover. Without a custom cover, a snapshot of the entire app window helps identify the project when reopening it."
             ],
             "problems": [
               {
@@ -619,7 +622,8 @@
               "Shift extends a range; Ctrl/Cmd toggles individual items.",
               "Moving changes a clip’s position; trimming an edge changes its visible range. Use stretching to change speed, rather than ordinary trimming.",
               "Check the entire selection before bulk operations. Undo restores the last completed action; Redo repeats an undone action.",
-              "Zoom in and adjust a short fade to soften a boundary. Listen to the transition with adjacent clips."
+              "Zoom in and adjust a short fade to soften a boundary. Listen to the transition with adjacent clips.",
+              "MIDI clips offer MIDI / Sequence switches. Sequence lets you add steps and adjust velocity in the arrangement; both views share the same notes."
             ]
           },
           {
@@ -705,7 +709,8 @@
               "Lower preview level first. Browser preview level and track fader are separate controls.",
               "Use browser collections for references to frequently used files; adding a reference does not move the source on disk.",
               "Assign colors to folders; subfolders can inherit a color or use their own. This helps distinguish drums, vocals and effects.",
-              "After import, check the clip start and tempo. Choose an appropriate stretch mode if the file should follow project BPM."
+              "After import, check the clip start and tempo. Choose an appropriate stretch mode if the file should follow project BPM.",
+              "Settings → Browser controls ignored extensions, preview level and looping. Imported MIDI can ask each time, keep the project tempo or use the file tempo."
             ]
           },
           {
@@ -860,6 +865,23 @@
               "Undo restores the original clip layout. Save settings for later recordings; Auto Strip Silence applies them after recording stops."
             ],
             "result": "The timeline contains separate active regions and the source file is preserved."
+          },
+          {
+            "id": "audio-fragments",
+            "title": "Editing inside a sample",
+            "intro": "The sample editor’s Edit tab works on individual waveform fragments in audio clips and Sampler.",
+            "steps": [
+              "Open an audio clip or a Sampler containing a file, then select Edit.",
+              "Drag across the waveform to select a range. Ctrl+wheel zooms; the lower strip moves the view through the material.",
+              "Use Copy, Cut, Paste, Silence or Reverse on the selection. Move repositions a segment, Split cuts it, and Slip shifts the trim window.",
+              "Adjust Gain or Normalize for the selected range. Fade In and Fade Out use the chosen length and curve.",
+              "Trim to Selection sets the clip bounds; Fit Clip to Content restores the full content window. Listen and undo the edit if needed."
+            ],
+            "result": "Edited material stays in the project; the original file on disk is not overwritten.",
+            "notes": [
+              "Flatten take layers first. Audio fragment editing is not yet available in cloud projects.",
+              "Linked identifies shared copies: check which clips use the same content before editing."
+            ]
           }
         ]
       },
@@ -906,7 +928,10 @@
               }
             ],
             "preparation": "Create a MIDI or instrument track and assign an instrument. MIDI notes contain no audio by themselves.",
-            "notes": []
+            "notes": [
+              "The local ruler range is for copying and repeating notes; it does not change the arrangement loop. Double-click to clear it. Repeat is available with Ctrl+B / Ctrl+D.",
+              "Generate… opens the new MIDI Generator. Mute, Solo and track audition controls help check a part in the project context."
+            ]
           },
           {
             "id": "midi-tools",
@@ -954,7 +979,8 @@
               "The editor represents a Pattern track: MIDI operations target the source’s first MIDI clip. If there is none, one is created at the first Pattern instance.",
               "A step enables a hit at its position; loop the pattern and balance source levels before overall processing.",
               "Fill rhythm fills a rhythm using the chosen settings. Check selected sources, density and length before applying.",
-              "Open a source’s Piano Roll for a more complex phrase. Dropping a sample on its grid replaces the sound only for a built-in Sampler."
+              "Open a source’s Piano Roll for a more complex phrase. Dropping a sample on its grid replaces the sound only for a built-in Sampler.",
+              "Each source offers Open sound rack. Use it to adjust the selected row’s instrument and processing without changing the pattern structure."
             ]
           },
           {
@@ -983,7 +1009,8 @@
             "notes": [
               "The waveform and file actions sit above the Playback, Envelope and Processing tabs. Instrument controls are grouped by purpose.",
               "Drag controls to adjust parameters; wheel events over knobs and mode selectors do not change their values. The audio-clip editor shows only applicable controls.",
-              "To set Start or End precisely, double-click the number, type a value and press Enter. For a small adjustment, hold the left mouse button on the number and drag up or down; scrolling does not change its value."
+              "To set Start or End precisely, double-click the number, type a value and press Enter. For a small adjustment, hold the left mouse button on the number and drag up or down; scrolling does not change its value.",
+              "Sampler is also available directly in its rack card. In the separate editor, Edit lets you split, move and process sample fragments alongside envelopes and playback controls."
             ]
           },
           {
@@ -1117,6 +1144,55 @@
               "Check and save the result. The buffer covers up to the last ten minutes, clears on project change and cannot recover an older session."
             ],
             "result": "Notes and recorded parameters are saved in the project for normal editing, copying and undo."
+          },
+          {
+            "id": "midi-generator",
+            "title": "MIDI Generator: melodies and chords",
+            "intro": "The local generator offers MIDI variations with listening previews. It is a Piano Roll tool and does not use an AI quota.",
+            "steps": [
+              "Open a MIDI clip in Piano Roll and choose Generate… / MIDI Generator…. Load an instrument on the track to listen.",
+              "Choose Melody or Chords, a length in bars, key and scale. Character, Density and Variation shape the phrase.",
+              "For Harmony, use the selected key or another MIDI clip at the same arrangement position.",
+              "Under More settings, set pitch range, Swing, Expression and a resolved or looping ending. Chords also offer a change rate and triad or seventh-chord voicings.",
+              "Compare variants with Listen. Generate more produces another set; Seed makes the result repeatable.",
+              "Choose Replace notes in generated range or Add to existing notes, then Apply. Until then, the current part is preserved."
+            ],
+            "result": "The chosen variation becomes editable MIDI notes. The clip extends if necessary, and applying the result can be undone.",
+            "notes": [
+              "Regenerate if the project changes while generation is running. Outside a harmony clip, the selected key is used."
+            ]
+          },
+          {
+            "id": "midi-sequence",
+            "title": "Sequence: steps on the timeline",
+            "intro": "A regular MIDI clip can switch between notes and a step sequencer. Both views edit the same notes.",
+            "steps": [
+              "Select the Sequence icon beside the MIDI icon in a clip header.",
+              "Choose the pitch for new steps and the step division. This grid is independent of the arrangement grid.",
+              "Click an empty cell to add a note or an occupied cell to remove it. Drag to paint a run of steps.",
+              "Drag the top edge of an occupied cell vertically to change velocity. Choosing a new step pitch does not transpose existing notes.",
+              "Set the sequence length using its field or the clip edge. Return to MIDI view or double-click the header to open Piano Roll."
+            ],
+            "result": "The rhythm is editable directly in the arrangement and immediately available in Piano Roll.",
+            "notes": [
+              "Sequence is available for regular MIDI clips without take layers."
+            ]
+          },
+          {
+            "id": "slicer",
+            "title": "Slicer: a sample on MIDI pads",
+            "intro": "Slicer divides an audio file into fragments that can be played with MIDI notes and processed individually.",
+            "steps": [
+              "Add Slicer as an instrument and use Load sample or drop a file into it.",
+              "Choose Transients, Grid, Random or Manual and press Chop. Drag the ruler to set the slicing range.",
+              "Double-click the waveform to add a boundary; use Split / Merge to refine it. Pads audition slices, and dragging pads exchanges MIDI assignments.",
+              "Under Settings → Slice, Playback and Process, adjust slices, reverse, loops and processing. The XY pad controls two parameters of the chosen effect.",
+              "Use Export to create a MIDI clip, save MIDI or export original/processed WAV files. Prepare WAV drag prepares a file to drag into the arrangement."
+            ],
+            "result": "The source becomes a set of playable slices with saved settings.",
+            "notes": [
+              "Use Shift/Ctrl to select multiple pads. Save a portable preset from File / preset."
+            ]
           }
         ]
       },
@@ -1148,7 +1224,8 @@
               "Input determines where a signal comes from; output determines its destination. Instruments respond to MIDI, while audio tracks play clips or input.",
               "Inserts process the signal in order from top to bottom. A send routes a copy to another channel with its own level.",
               "Right-click a channel for automation, presets and timeline navigation. Master exposes its own parameters.",
-              "Use bypass to compare processing at matched loudness. Scrolling over a fader should not accidentally change the balance."
+              "Use bypass to compare processing at matched loudness. Scrolling over a fader should not accidentally change the balance.",
+              "Master is also available in a separate panel with VU, LUFS, RMS and correlation. Tab switches between the mixer and horizontal rack; hiding COLOR does not disable its processing."
             ],
             "problems": [
               {
@@ -1247,7 +1324,8 @@
               "All Pass bands remain saved but are temporarily inactive in Linear Phase mode.",
               "Processing mode and Linear Phase resolution are intentionally not automatable because they change plugin latency.",
               "Start with modest boosts or cuts and compare with bypass at matched level. Narrow and broad bands solve different problems.",
-              "Assign a sidechain source in the plugin menu before using an external detector. The Sidechain analyzer line helps verify the signal."
+              "Assign a sidechain source in the plugin menu before using an external detector. The Sidechain analyzer line helps verify the signal.",
+              "The updated editor places selected-band controls beside the graph and configures the analyzer separately. For Low Cut / High Cut, check frequency and slope; for dynamic bands, check the detector source."
             ],
             "problems": [
               {
@@ -1312,7 +1390,9 @@
               "Cmd/Ctrl+Shift+A still deselects in Piano Roll. The automation mode shortcut can be reassigned in Keyboard Shortcuts.",
               "Check the target before drawing: channel, plugin and parameter. Selecting another track does not retarget an existing curve.",
               "Add nodes at key positions, then adjust segment curvature. Also check playback started from the middle of the curve.",
-              "For Master, open its mixer menu and create automation. A Master track appears on the timeline with child curves for volume, pan or master-plugin parameters."
+              "For Master, open its mixer menu and create automation. A Master track appears on the timeline with child curves for volume, pan or master-plugin parameters.",
+              "The Automates row can retarget the channel, control type and plugin parameter. Check the label and value range after changing the target.",
+              "Region selects a time range: drag inside it to raise or lower the curve. Shape tools operate on that range while preserving values outside it."
             ]
           },
           {
@@ -1386,6 +1466,137 @@
               "Save the preset and project. Standalone Chorus, Doubler, Flanger and Phaser are available when only one effect is needed."
             ],
             "result": "Modules process the signal in the selected order and shared filters shape its spectrum."
+          },
+          {
+            "id": "device-rack",
+            "title": "Instrument and effects rack",
+            "intro": "Rack displays the selected channel’s chain horizontally: instrument, mini-modules, effects and sends.",
+            "steps": [
+              "Select a track and switch Mixer / Rack from View or with Tab. X shows or hides the lower panel.",
+              "Use “+” to add a device. Expand its card to adjust the embedded editor; Sampler is available directly in the rack.",
+              "Drag devices by their headers to reorder them. Check the highlighted insertion point before dropping.",
+              "Group devices, adjust bypass and Mix, then compare at matched loudness.",
+              "Set up sends and save a chain preset for reuse. Chain changes support Undo."
+            ],
+            "result": "The full channel processing chain stays beside the arrangement.",
+            "notes": [
+              "Collapsing cards or hiding the rack changes the view only; processing continues.",
+              "In Pattern Editor, Open sound rack opens the selected row source’s chain."
+            ]
+          },
+          {
+            "id": "rack-modulation",
+            "title": "Rack modulation: LFO and Envelope Follower",
+            "intro": "Dedicated control modules move device parameters. They are separate from the Modulation Rack audio effect.",
+            "steps": [
+              "Add an LFO or Envelope Follower from the rack’s “+” menu.",
+              "For LFO, choose a shape and rate in hertz or project tempo. For Follower, set sensitivity, attack and release.",
+              "Press Assign, then select a rack knob. Use the searchable Parameters… list for other available controls; Esc cancels assignment.",
+              "Adjust depth and direction. An arc shows the range and a separate marker shows the result; the knob’s base value is preserved.",
+              "For Follower, choose its own input or another track before effects, after effects or after its fader. Save the project or chain preset."
+            ],
+            "result": "Parameters move on top of their base values and automation.",
+            "notes": [
+              "Modulation does not write its movement into automation. Assignments keep running when the rack is hidden.",
+              "Rack modulation is not yet available in cloud projects. An external Follower restricts independent track freezing; circular assignments are rejected."
+            ]
+          },
+          {
+            "id": "master-panel",
+            "title": "Master panel and loudness meters",
+            "intro": "The right panel combines project output, master effects, VU, LUFS, RMS, peaks and stereo correlation.",
+            "steps": [
+              "Choose View → Show Master Panel or press Alt+M. Drag its left edge to resize.",
+              "Play the project and compare loudness readings: M covers 400 ms, S covers 3 seconds, and I integrates playback since the last reset.",
+              "Choose the 0 VU reference: −20, −18 or −14 dBFS. This calibrates the meter without changing audio gain.",
+              "Adjust master inserts, balance and the output fader. Watch Peak, RMS and Correlation; negative correlation indicates an opposite-polarity component.",
+              "Press Reset before a new measurement to clear integrated loudness and the held peak."
+            ],
+            "result": "Master output controls remain available without opening the full mixer.",
+            "notes": [
+              "Peak is a sample-peak reading in dBFS, not a separate true-peak measurement."
+            ]
+          },
+          {
+            "id": "flux",
+            "title": "Flux: rhythmic processing and scenes",
+            "intro": "Flux combines an effect chain, Motion curves, a sequencer, scenes, macros and XY control.",
+            "steps": [
+              "Insert Flux and start with a factory preset. Search, favorites and recent sounds are in the preset browser.",
+              "Add effects with “+”, reorder cards and choose Serial, Parallel A/B or Multiband on Routing.",
+              "Draw parameter movement in Motion A/B; set steps, probability, swing and repeats in the sequencer.",
+              "Switch scenes with beat or bar quantization. Shift-click selects a scene for editing independently of the playing scene.",
+              "Set up macros and XY. The dice button creates a new variation of the entire chain; lock parameters you want to retain.",
+              "Check Mix and Output, then save a .fluxpreset or the project. Choose Live/Studio explicitly; the selected quality is saved."
+            ],
+            "result": "Processing follows the project rhythm and switches between prepared scenes.",
+            "notes": [
+              "Random is one Undo action and does not overwrite a preset file. Panic clears effect history and releases freeze.",
+              "Studio may increase latency and processing load. Export does not switch quality automatically."
+            ]
+          },
+          {
+            "id": "reverb",
+            "title": "Reverb: space, Duck and Freeze",
+            "intro": "The built-in Reverb offers Hall, Room, Chamber, Plate, Ambience and Shimmer with an XY space control.",
+            "steps": [
+              "Insert Reverb or add it to a Send track, then choose a space or preset.",
+              "Drag the Space Field point: right increases Size, up increases Brightness. Decay is independent; hold Shift for precision.",
+              "Set Pre-delay, Decay, Width and Mix. On Space Response, drag the reflection start or tail.",
+              "Use Bloom and Motion to shape the tail and Duck to attenuate it from the input signal. Advanced includes filters, Diffusion and Early / Late.",
+              "Compare A/B settings. Freeze holds the late tail and excludes new input; release it to return to normal processing."
+            ],
+            "result": "The reverberation is shaped by size, brightness and decay.",
+            "notes": [
+              "With an external sidechain connected, Duck listens to it even when silent. Shimmer Amount is available only in Shimmer.",
+              "Use Enter or the context menu for numeric input. Space Response is a calculated shape, not an output waveform."
+            ]
+          },
+          {
+            "id": "character-effects",
+            "title": "COLOR, CLA-2A and VLT 1073",
+            "intro": "Built-in color processors complement the standard compressor and equalizer.",
+            "steps": [
+              "Find COLOR in the mixer and adjust the selected channel’s character. Its visibility is controlled in mixer settings.",
+              "Add CLA-2A for optical compression. Start with modest Peak Reduction and use Gain to match comparison levels.",
+              "Add VLT 1073 for preamplification and equalization. Adjust input, band frequencies and gains, then the output level.",
+              "Use Enter or the context menu for exact values; Shift reduces drag sensitivity.",
+              "Compare bypass in the full mix and save the project."
+            ],
+            "result": "Color and dynamics are adjusted alongside the track balance.",
+            "notes": [
+              "Hiding the COLOR row does not disable processing; use its bypass for comparison."
+            ]
+          },
+          {
+            "id": "morph",
+            "title": "Morph: movement and spatial processing",
+            "intro": "Morph is a modulation effect with a Canvas, macros and spatial processing sections.",
+            "steps": [
+              "Insert Morph and choose a starting preset.",
+              "Move the Canvas point and adjust its influence while listening to changes in tone and space.",
+              "Open Modulation and macros to set sources and movement depth.",
+              "Adjust the Chorus, Doubler, Drive, Echo and Bloom sections you need, then Dry/Wet and output level.",
+              "Use A/B to compare and save the chosen state with the project."
+            ],
+            "result": "Movement and space become a controllable part of the channel’s processing."
+          },
+          {
+            "id": "creator",
+            "title": "Creator: your own mini-modules",
+            "intro": "Creator builds rack mini-modules from nodes or C++ code. It has its own project and Undo history.",
+            "steps": [
+              "Open View → Creator and create a project or open Gentle Tremolo. New projects already contain Input, Output and Interface.",
+              "Double-click nodes in the library or press Tab on the canvas. Connect outputs to inputs of matching types.",
+              "In Interface, set the module’s name, appearance and external controls. Stable IDs connect those controls to the graph.",
+              "Save the editable .vltcreator project and choose Compile / Ctrl+Enter.",
+              "The compiled .vltmini appears in Documents/VLTONE/MiniModules. Add it to the rack or share the file; use the Creator SDK reference for C++ authoring."
+            ],
+            "result": "The mini-module can be used in projects and imported through the rack.",
+            "notes": [
+              "Creator does not export VST plugins. Recompiling updates matching modules in the open project; a failed build leaves the previous working version.",
+              "Detailed documentation and examples are available on the website’s Creator page."
+            ]
           }
         ]
       },
@@ -1603,7 +1814,9 @@
               "Recovery: journal frequency and retention.",
               "Themes: ready-made light and dark palettes.",
               "Theme Editor: individual colours and custom font.",
-              "Keyboard Shortcuts: search, rebind, and reset."
+              "Keyboard Shortcuts: search, rebind, and reset.",
+              "Audio shows one buffer’s duration in milliseconds, not total input-to-output latency. Reconnect reconnects the selected device. The status-bar audio CPU indicator can be enabled separately.",
+              "Transport offers Resume / Restart, a metronome audio file and top-panel style. Browser includes ignored extensions and MIDI import tempo behavior."
             ]
           },
           {
@@ -1664,11 +1877,29 @@
               "Listen to the new clip with the project. Make sure original sources do not double it where they should be muted.",
               "Check the region boundaries. One Undo reverses the operation; Redo restores the result."
             ],
-            "result": "The project contains one audio clip of the selected sources, ready for ordinary editing and processing."
+            "result": "The project contains one audio clip of the selected sources, ready for ordinary editing and processing.",
+            "notes": [
+              "For a project fragment, check the time range and selected sources: the summary determines what enters the combined audio clip."
+            ]
+          },
+          {
+            "id": "portable-themes",
+            "title": "Themes and portable appearance",
+            "intro": "A .vlttheme file transfers the palette and appearance together with local backgrounds and custom fonts.",
+            "steps": [
+              "Open Settings → Themes and choose a starting theme. Dark uses neutral surfaces with a rose accent; Monochrome retains a neutral alternative.",
+              "Adjust colors and fonts in Theme Editor, plus the timeline background and other appearance settings.",
+              "Export to .vlttheme. Local images, GIFs, videos and fonts are embedded in the file.",
+              "Import the .vlttheme on another computer and check sizing, readability and animated backgrounds."
+            ],
+            "result": "Appearance transfers as one file without manually copying local resources.",
+            "notes": [
+              "Themes do not contain the project or notebook text. Web video still requires a network connection."
+            ]
           }
         ]
       }
     ],
-    "versionNote": "Updated 9 October 2026. A guide to the current VLTone interface, with step-by-step workflows, control names and troubleshooting. Available installers are listed on the Releases page."
+    "versionNote": "Updated October 17, 2026. Checked against the current interface: rack, master panel, MIDI Generator, Sequence, audio fragment editing and new effects. Availability depends on the installed build. This guide is text only, without screenshots."
   }
 }

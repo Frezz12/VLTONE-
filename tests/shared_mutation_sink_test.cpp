@@ -516,6 +516,68 @@ void verifyFolderDuplicateBatch(daw::collab::SharedMutationResult result) {
           "folder-duplicate sink detaches");
 }
 
+void verifyFolderRemovalBatch(daw::collab::SharedMutationResult result) {
+    for (const bool summing : {false, true}) {
+        daw::EngineController controller{};
+        controller.initialize(48000.0, 512, false);
+        const auto folder = controller.addFolder(summing, "Folder");
+        const auto nested = controller.addFolder(!summing, "Nested");
+        const auto first = controller.addTrack(daw::TrackKind::Midi, "First");
+        const auto second = controller.addTrack(daw::TrackKind::Midi, "Second");
+        const auto outside = controller.addTrack(daw::TrackKind::Audio, "Outside");
+        controller.moveTrackToFolder(nested, folder);
+        controller.moveTrackToFolder(first, nested);
+        controller.moveTrackToFolder(second, nested);
+        const auto clip = controller.addMidiClip(first, 0.0, 2.0);
+        const auto bus = summing ? folder : nested;
+        controller.setTrackOutputBus(outside, bus);
+        const auto send = controller.addSend(outside, bus);
+        const auto before = controller.project();
+        const auto depth = controller.undoDepth();
+        FakeSharedMutationSink sink;
+        sink.result = result;
+        controller.attachSharedMutationSink(sink);
+        controller.removeTrack(folder);
+        check(sink.genericCalls == 1 && allBatches(sink, 0) &&
+                  controller.project().tracks.size() == before.tracks.size() &&
+                  controller.undoDepth() == depth,
+              "shared folder removal submits one batch without local mutation, even when blocked");
+        if (!sink.genericBodies.empty()) {
+            daw::collab::SharedProjectDocument projected;
+            projected.project = before;
+            daw::collab::ProjectCommand command;
+            command.meta.operationId = daw::newUuid();
+            command.body = sink.genericBodies.back();
+            const auto applied = daw::collab::ProjectReducer::apply(projected, command);
+            const auto* remaining = projected.project.findTrack(outside);
+            check(applied.accepted() && projected.project.tracks.size() == 1 &&
+                      remaining && remaining->outputBusId.empty() && remaining->sends.empty(),
+                  "shared folder removal deletes all descendants and clears incoming routing");
+            if (check(bool(applied.inverse), "shared folder removal has an inverse")) {
+                auto inverse = *applied.inverse;
+                inverse.meta.operationId = daw::newUuid();
+                const auto restored = daw::collab::ProjectReducer::apply(projected, inverse);
+                check(restored.accepted() &&
+                          projected.project.tracks.size() == before.tracks.size() &&
+                          std::equal(before.tracks.begin(), before.tracks.end(),
+                              projected.project.tracks.begin(), [](const auto& a, const auto& b) {
+                                  return a.id == b.id && a.parentId == b.parentId &&
+                                         a.outputBusId == b.outputBusId;
+                              }),
+                      "one shared inverse restores the complete folder in its original order");
+                const auto* restoredChild = projected.project.findTrack(first);
+                const auto* restoredOutside = projected.project.findTrack(outside);
+                check(restoredChild && restoredChild->clips.size() == 1 &&
+                          restoredChild->clips.front().id == clip && restoredOutside &&
+                          restoredOutside->sends.size() == 1 &&
+                          restoredOutside->sends.front().id == send,
+                      "shared folder undo restores clips and incoming sends");
+            }
+        }
+        controller.detachSharedMutationSink(sink);
+    }
+}
+
 daw::AssetRef sharedAudioAsset() {
     daw::AssetRef asset;
     asset.assetId = daw::newUuid();
@@ -2381,6 +2443,11 @@ void verifySessionControlsAndStateUpload() {
           "expired mixer leases restore preview values without publishing an unauthorized edit");
     controller.setSharedGestureLeaseCheck({});
     controller.queuePluginStateSync(track, insert);
+    controller.play();
+    controller.pumpPluginStateSync();
+    check(controller.isPlaying() && assets.requests.empty(),
+          "cloud state capture remains queued while the audio transport is playing");
+    controller.stop();
     controller.pumpPluginStateSync();
     if (check(assets.requests.size() == 1, "opaque plugin state is staged through the verified asset pipeline")) {
         const auto request = assets.requests.back();
@@ -2532,6 +2599,8 @@ int main() {
     verifyFolderDuplicateBatch(
         daw::collab::SharedMutationResult::Submitted);
     verifyFolderDuplicateBatch(daw::collab::SharedMutationResult::Blocked);
+    verifyFolderRemovalBatch(daw::collab::SharedMutationResult::Submitted);
+    verifyFolderRemovalBatch(daw::collab::SharedMutationResult::Blocked);
     verifyScratchBatchMutators(daw::collab::SharedMutationResult::Submitted);
     verifyScratchBatchMutators(daw::collab::SharedMutationResult::Blocked);
     verifySharedChannelBatchMutators(

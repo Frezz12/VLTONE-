@@ -13,6 +13,7 @@
 option(DAW_ENABLE_CLAP "Host CLAP plugins" ON)
 option(DAW_ENABLE_VST3 "Host VST3 plugins" ON)
 option(DAW_ENABLE_VST "Host legacy VST 1.x/2.x plugins" ON)
+option(DAW_ENABLE_REVERB "Build the internal Reverb effect and editor" ON)
 # Audio Units exist only on macOS; there is nothing to switch on elsewhere.
 if(APPLE)
     option(DAW_ENABLE_AU "Host Audio Unit plugins" ON)
@@ -24,9 +25,11 @@ set(DAW_PLUGINHOST_SOURCES
     Host/Registry.cpp
     Host/HostedPluginFactory.cpp
     Host/PluginNode.cpp
+    Host/PluginModulation.cpp
     Internal/EqualizerInstance.cpp
     Internal/CompressorInstance.cpp
     Internal/Cla2aInstance.cpp
+    Internal/Vlt1073Instance.cpp
     Internal/ChannelColorInstance.cpp
     Creator/FunctionDefinition.cpp
     Internal/MiniModuleDefinition.cpp
@@ -46,6 +49,10 @@ set(DAW_PLUGINHOST_SOURCES
     Internal/ModulationRackInstance.cpp
     Internal/MorphInstance.cpp
     Internal/MorphProgram.cpp
+    Internal/FluxProgram.cpp
+    Internal/FluxPresets.cpp
+    Internal/FluxDsp.cpp
+    Internal/FluxInstance.cpp
     Internal/GraphitInstance.cpp
     Internal/GravityInstance.cpp
     Internal/InternalFactory.cpp
@@ -57,6 +64,10 @@ set(DAW_PLUGINHOST_SOURCES
     Internal/SlicerParams.cpp
     Internal/SlicerVoice.cpp
     Scan/ScanProtocol.cpp)
+
+if(DAW_ENABLE_REVERB)
+    list(APPEND DAW_PLUGINHOST_SOURCES Internal/ReverbInstance.cpp)
+endif()
 
 if(DAW_ENABLE_CLAP)
     list(APPEND DAW_PLUGINHOST_SOURCES
@@ -90,8 +101,10 @@ if(DAW_ENABLE_AU)
 endif()
 
 add_library(daw_pluginhost STATIC ${DAW_PLUGINHOST_SOURCES})
+target_compile_definitions(daw_pluginhost PUBLIC DAW_ENABLE_REVERB=$<BOOL:${DAW_ENABLE_REVERB}>)
 
 target_include_directories(daw_pluginhost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(daw_pluginhost SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/signalsmith)
 target_compile_features(daw_pluginhost PUBLIC cxx_std_23)
 target_link_libraries(daw_pluginhost PUBLIC daw_engine daw_platform_paths daw_json daw_creator_model daw_creator_wamr)
 

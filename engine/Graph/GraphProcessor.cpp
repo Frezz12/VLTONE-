@@ -1,4 +1,5 @@
 #include "Graph/GraphProcessor.hpp"
+#include "Graph/GraphProcessContext.hpp"
 #include "DSP/Simd.hpp"
 #include "ScopedNoDenormals.hpp"
 #include "Memory/PcmReadCache.hpp"
@@ -65,11 +66,10 @@ FrameCount GraphProcessor::latencySamples() const {
 }
 
 void GraphProcessor::prepareBlockState(const CompiledGraph& graph) noexcept {
-    for (std::size_t i = 0; i < graph.nodes.size(); ++i) {
-        if (m_fuseBlock && graph.nodes[i].inlineTask) continue;
-        graph.pending[i].value.store(graph.pendingTemplate[i],
-                                     std::memory_order_relaxed);
-    }
+    // A single predecessor hands off through its own call stack or the
+    // release/acquire work queue; only joins need a shared counter.
+    for (auto& counter : graph.pending)
+        counter.value.store(counter.initial, std::memory_order_relaxed);
 }
 
 void GraphProcessor::prepareMidiTimeline(const CompiledGraph& graph,
@@ -110,64 +110,18 @@ void GraphProcessor::prepareMidiTimeline(const CompiledGraph& graph,
 ProcessContext GraphProcessor::makeContext(
     const CompiledGraph& graph,
     const CompiledGraph::CompiledNode& entry) const noexcept {
-    // Gather the inputs: each is the producer's output buffer, run through this
-    // edge's delay line when the path needed compensating. MIDI rides the same
-    // edge and takes the same shift — compensating one and not the other would
-    // play an instrument early by exactly the effect's latency.
-    const std::uint32_t first = entry.firstInput;
-    for (std::uint32_t i = 0; i < entry.inputCount; ++i) {
-        const auto& edge = graph.inputEdges[first + i];
-        const AudioBlock produced =
-            graph.arena.block(graph.nodes[edge.producer].outputBuffer, m_frames);
-        const MidiBuffer* producedMidi =
-            edge.midiBuffer != kInvalidNode
-                ? &graph.midiBuffers[edge.midiBuffer]
-                : nullptr;
-        if (edge.delayIndex == kInvalidNode) {
-            graph.inputScratch[first + i] = produced;
-            graph.midiInputScratch[first + i] = producedMidi;
-        } else {
-            const AudioBlock delayed =
-                graph.arena.block(edge.scratchBuffer, m_frames);
-            graph.delays[edge.delayIndex]->process(produced, delayed, m_frames);
-            graph.inputScratch[first + i] = delayed;
-
-            if (edge.midiDelayIndex != kInvalidNode && producedMidi) {
-                MidiBuffer& delayedMidi =
-                    graph.midiDelayBuffers[edge.midiDelayIndex];
-                graph.midiDelays[edge.midiDelayIndex]->process(
-                    *producedMidi, delayedMidi, m_frames);
-                graph.midiInputScratch[first + i] = &delayedMidi;
-            } else {
-                graph.midiInputScratch[first + i] = nullptr;
-            }
-        }
-    }
-
-    // The node's own MIDI output starts empty, so a node that writes nothing
-    // does not hand its successors the previous block's notes.
-    MidiBuffer* midiOutput = nullptr;
-    if (entry.midiOutputBuffer != kInvalidNode) {
-        midiOutput = &graph.midiBuffers[entry.midiOutputBuffer];
-        midiOutput->clear();
-    }
-
     ProcessContext context;
     context.output = graph.arena.block(entry.outputBuffer, m_frames);
-    context.inputs = std::span<const AudioBlock>(
-        graph.inputScratch.data() + first, entry.inputCount);
-    context.inputRoles = std::span<const InputRole>(
-        graph.inputRoles.data() + first, entry.inputCount);
     context.frames = m_frames;
     context.timelinePosition = m_position;
-    context.sampleRate = graph.sampleRate;
     context.playing = m_playing;
     context.offline = m_offline;
     context.transport = m_transport;
-    context.compensateInputLatency(entry.inputLatency, m_sourcesEnd);
-    context.midiInputs = std::span<const MidiBuffer* const>(
-        graph.midiInputScratch.data() + first, entry.inputCount);
-    context.midiOutput = midiOutput;
+    prepareGraphProcessContext(graph, entry, context,
+        {graph.inputScratch, graph.midiInputScratch, graph.midiBuffers},
+        [&](auto producer) { return graph.arena.block(graph.nodes[producer].outputBuffer, m_frames); },
+        [&](auto input) { return graph.arena.block(graph.inputEdges[input].scratchBuffer, m_frames); },
+        m_sourcesEnd);
     return context;
 }
 
@@ -204,7 +158,8 @@ std::uint32_t GraphProcessor::runNode(const CompiledGraph& graph,
         // every node still builds and processes its own full context.
         if (entry.successorCount == 1) {
             const auto successor = graph.successors[entry.firstSuccessor];
-            if (graph.pending[successor].value.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            if (graph.nodes[successor].dependencies == 1 ||
+                graph.pending[graph.nodes[successor].dependencyCounter].value.fetch_sub(1, std::memory_order_acq_rel) == 1) {
                 nodeIndex = successor;
                 ++completed;
                 continue;
@@ -225,7 +180,7 @@ void GraphProcessor::releaseSuccessors(const CompiledGraph& graph,
     unsigned newlyReady = 0;
     for (std::uint32_t i = 0; i < entry.successorCount; ++i) {
         const std::uint32_t successor = graph.successors[firstSuccessor + i];
-        if (graph.pending[successor].value.fetch_sub(
+        if (graph.nodes[successor].dependencies == 1 || graph.pending[graph.nodes[successor].dependencyCounter].value.fetch_sub(
                 1, std::memory_order_acq_rel) == 1) {
             m_jobs.submit(workerIndex, successor);
             ++newlyReady;

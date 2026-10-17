@@ -1,4 +1,5 @@
 #pragma once
+#include "Modulation/Modulation.hpp"
 
 #include "DSP/Curve.hpp"
 #include "model/AudioEditDocument.hpp"
@@ -242,6 +243,8 @@ enum class AutomationTargetKind : uint8_t {
     TrackMute = 2,
     SendLevel = 3,
     PluginParameter = 4,
+    ModulatorRate = 5,
+    ModulationDepth = 6,
 };
 
 std::string toString(AutomationTargetKind kind);
@@ -754,6 +757,10 @@ struct InsertModel {
     std::string name;              ///< display name; survives even a free slot
     bool bypassed = false;
 
+    /// Receives a copy of the completed channel signal. Its output is never
+    /// routed back into the audible mix (master metering / analysis inserts).
+    bool analysisOnly = false;
+
     /// Edge-only readiness flag: never serialized into a project or command.
     bool runtimeStateBlocked = false;
 
@@ -907,6 +914,9 @@ struct TrackModel {
     std::vector<SendModel> sends;
     std::vector<InsertModel> inserts;
     std::vector<RackGroupModel> rackGroups;
+    modulation::Rack modulation;
+    bool renderControlOnly = false; // Transient render dependency; never serialized.
+
     std::vector<ClipModel> clips;
     TrackFreezeState freeze;
     /// Stable appearance key; custom image bytes belong to local theme settings.
@@ -989,6 +999,7 @@ struct ProjectMetadata {
     float masterPan = 0.0f;
     std::vector<InsertModel> masterInserts;
     std::vector<RackGroupModel> masterRackGroups;
+    modulation::Rack masterModulation;
     std::vector<InsertModel> masterMiniModules;
 };
 

@@ -1,4 +1,8 @@
 #include "Controls.hpp"
+#include "ScrollMotion.hpp"
+#include <QScopeGuard>
+#include <QWheelEvent>
+#include "EqualizerPanel.hpp"
 #include "FileTypes.hpp"
 #include "PluginPickerMenu.hpp"
 #include "Internal/CompressorInstance.hpp"
@@ -7,12 +11,16 @@
 #include "Internal/MiniModuleDefinition.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "MixerWidget.hpp"
+#include "MiniModuleRack.hpp"
 #include "RackBuiltinView.hpp"
+#include "RackSamplerView.hpp"
 #include "RackDeviceCard.hpp"
 #include "RackDrag.hpp"
 #include "RackParameterBinding.hpp"
 #include "UtilityPanel.hpp"
 #include "RackWidget.hpp"
+#include "RackModulationPanel.hpp"
+#include "PatternWindow.hpp"
 #include "Theme.hpp"
 #include "plugins/PluginManager.hpp"
 #include <QApplication>
@@ -23,13 +31,19 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QDialog>
+#include <QListWidget>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMimeData>
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -37,7 +51,9 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <cstdio>
+#include <cmath>
 
 bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
     const auto fail = [&](const QString& text) {
@@ -111,12 +127,209 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
     mixer.show();
     mixer.activateWindow();
     QApplication::processEvents();
+    QApplication::setActiveWindow(&mixer);
     auto* rack = mixer.rack();
+    if (!rack->m_mini || rack->m_mini->findChildren<QPushButton*>("AddMiniModule").size() != 1)
+        return fail("one insertion area for empty mini modules");
     rack->setFocus();
     QApplication::processEvents();
     auto* eqCard = rack->m_cards.value(QString::fromStdString(eq)).data();
     if (!eqCard || eqCard->width() != 420)
         return fail("compact equalizer width");
+    {
+        auto& prefs = ui::ScrollPreferences::instance();
+        const bool smooth = prefs.enabled();
+        const auto restore = qScopeGuard([&] { prefs.setEnabled(smooth); });
+        prefs.setEnabled(false);
+        const QSize originalSize = mixer.size();
+        mixer.resize(760, mixer.height());
+        QApplication::processEvents();
+        auto* bar = rack->m_scroll->horizontalScrollBar();
+        if (bar->maximum() <= 0) return fail("rack wheel fixture must overflow horizontally");
+        bar->setValue(0);
+        const auto wheel = [&](int angle) {
+            auto* viewport = rack->m_scroll->viewport();
+            const QPointF at = viewport->rect().center();
+            QWheelEvent event(at, viewport->mapToGlobal(at), {}, {0, angle},
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(viewport, &event);
+        };
+        wheel(-120);
+        if (bar->value() <= 0) return fail("ordinary mouse wheel scrolls the rack horizontally");
+        const int right = bar->value();
+        wheel(120);
+        if (bar->value() >= right) return fail("rack wheel reverses without Shift");
+        mixer.resize(originalSize);
+        QApplication::processEvents();
+    }
+    if (qEnvironmentVariableIsSet("DAW_SELFTEST_RACK_MODULATION_ONLY")) {
+        mixer.resize(1340, 370);
+        QTimer::singleShot(0, [&] {
+            if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget()))
+                for (auto* action : menu->actions()) if (action->text() == "LFO") { action->trigger(); menu->close(); break; }
+        });
+        rack->addDevice(rack->mapToGlobal(QPoint(20, 20)));
+        if (controller.rackModulation(a).sources.empty()) return fail("LFO is available in the ordinary Rack add menu");
+        const auto source = controller.rackModulation(a).sources.front().id;
+        const auto follower = controller.addRackModulator(a, daw::modulation::Kind::Follower);
+        rack->m_modulation->setChannel(QString::fromStdString(a));
+        QApplication::processEvents(); rack->refresh(); QApplication::processEvents();
+        auto* control = eqCard->findChild<ui::Knob*>("RackParameter.output.gain");
+        if (!control) {
+            for (auto* knob : eqCard->findChildren<ui::Knob*>())
+                if (knob->property("modulationEligible").toBool()) { control = knob; break; }
+        }
+        if (!control || !control->isVisible() || source.empty() || follower.empty()) return fail("modulation test controls available");
+        const auto parameter = control->property("modulationParameter").toString().toStdString();
+        const auto before = controller.insertParameter(a, eq, parameter);
+        const auto begin = [&] {
+            auto* assign = rack->m_modulation->findChild<QToolButton*>("ModulationAssign");
+            if (!assign || !assign->isEnabled()) return false;
+            assign->click(); QApplication::processEvents(); return rack->m_modulation->assigning();
+        };
+        if (!begin()) return fail("assignment enters selection mode");
+        const QPointF point(control->rect().center());
+        QMouseEvent press(QEvent::MouseButtonPress, point, QPointF(control->mapToGlobal(point.toPoint())), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, QPointF(control->mapToGlobal(point.toPoint())), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(control, &press); QApplication::sendEvent(control, &release);
+        QApplication::processEvents(); rack->refresh();
+        if (rack->m_modulation->assigning() || controller.rackModulation(a).routes.size() != 1 || controller.insertParameter(a, eq, parameter) != before)
+            return fail("assignment click creates a route without changing the knob base");
+        const auto undo = controller.undoDepth();
+        if (!begin()) return fail("assignment restarts");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier); QApplication::sendEvent(control, &escape);
+        if (rack->m_modulation->assigning() || controller.undoDepth() != undo) return fail("Escape cancels without Undo");
+        if (!begin()) return fail("keyboard assignment starts");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier); QApplication::sendEvent(control, &enter);
+        if (controller.rackModulation(a).routes.size() != 1 || controller.undoDepth() != undo) return fail("repeat keyboard assignment reuses route");
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        controller.seekSeconds(.125); controller.play();
+        for (int i = 0; i < 64; ++i) {
+            if (!controller.processDeviceBlockForTest(input, output, 256)) return fail("modulation UI audio processing");
+            rack->refresh(); QApplication::processEvents();
+        }
+        if (rack->m_modulation->parentWidget() != rack->m_chain || rack->m_modulation->findChildren<QWidget*>("RackModulatorCard").size() != 2)
+            return fail("sources are individual cards inside the device chain");
+        capture("modulation");
+        bool parameterSearch = false;
+        QTimer::singleShot(0, [&] {
+            if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+                auto* search = dialog->findChild<QLineEdit*>(); auto* list = dialog->findChild<QListWidget*>();
+                if (search && list) { search->setText("Frequency"); for (int i = 0; i < list->count(); ++i) parameterSearch |= !list->item(i)->isHidden(); }
+                dialog->reject();
+            }
+        });
+        rack->m_modulation->findChild<QToolButton*>("ModulationParameters")->click();
+        if (!parameterSearch || controller.undoDepth() != undo) return fail("searchable parameter list cancels without changes");
+        const auto collapse = [&] { rack->m_modulation->findChild<ui::IconButton*>("ModulationFold")->click(); QApplication::processEvents(); };
+        collapse();
+        const auto phase = controller.rackModulationValue(a, source);
+        for (int i = 0; i < 20; ++i) controller.processDeviceBlockForTest(input, output, 256);
+        if (controller.rackModulationValue(a, source) == phase) return fail("collapsed module continues processing");
+        collapse();
+        mixer.resize(700, 380); QApplication::processEvents(); capture("modulation-narrow");
+        if (rack->m_scroll->horizontalScrollBar()->maximum() <= 0) return fail("narrow Rack scrolls to all module cards");
+        mixer.hide(); const auto hiddenPhase = controller.rackModulationValue(a, source);
+        for (int i = 0; i < 20; ++i) controller.processDeviceBlockForTest(input, output, 256);
+        if (controller.rackModulationValue(a, source) == hiddenPhase) return fail("hidden Rack keeps processing");
+        mixer.show(); QApplication::processEvents();
+        controller.stop();
+        controller.undo(); rack->refresh(); QApplication::processEvents();
+        if (!controller.rackModulation(a).routes.empty()) return fail("assignment Undo after audio processing");
+        controller.redo(); rack->refresh(); QApplication::processEvents();
+        if (controller.rackModulation(a).routes.size() != 1) return fail("assignment Redo");
+        const auto deviceCount = controller.channelInserts(a)->size();
+        rack->selectDevices({QString::fromStdString(eq)});
+        auto* sourceTitle = rack->m_modulation->findChild<QToolButton*>("ModulationSourceTitle");
+        sourceTitle->setFocus();
+        QKeyEvent duplicateKey(QEvent::KeyPress, Qt::Key_D, Qt::ControlModifier); QApplication::sendEvent(sourceTitle, &duplicateKey);
+        QApplication::processEvents(); rack->refresh(); QApplication::processEvents();
+        if (controller.rackModulation(a).sources.size() != 3 || controller.channelInserts(a)->size() != deviceCount)
+            return fail("duplicate shortcut acts on the focused module, not a stale device selection");
+        controller.undo(); rack->refresh(); QApplication::processEvents();
+        sourceTitle = rack->m_modulation->findChild<QToolButton*>("ModulationSourceTitle"); sourceTitle->setFocus();
+        QKeyEvent deleteKey(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier); QApplication::sendEvent(sourceTitle, &deleteKey);
+        QApplication::processEvents(); rack->refresh(); QApplication::processEvents();
+        if (controller.rackModulation(a).sources.size() != 1 || !controller.hasInsert(a, eq))
+            return fail("Delete acts on the focused module and preserves the plugin");
+        controller.undo();
+        std::fprintf(stderr, "PASS modulation modules UI: Rack add menu, individual cards, click without base movement, keyboard, Esc, parameter search, hidden processing, narrow scrolling, Undo/Redo\n");
+        return true;
+    }
+    {
+        auto* display = eqCard->findChild<QWidget*>("RackPlot");
+        rack->refresh();
+        const auto analyzerEnabled = [&] {
+            const auto state = controller.equalizerSnapshot(a, eq);
+            return state && state->analyzer.enabled;
+        };
+        if (!display || !analyzerEnabled()) return fail("visible rack starts the EQ analyzer");
+        eqCard->hide();
+        if (analyzerEnabled()) return fail("hidden EQ views stop analyzer processing");
+        EqualizerPanel editor(&controller, QString::fromStdString(a), QString::fromStdString(eq));
+        editor.resize(1080, 640);
+        editor.show();
+        QApplication::processEvents();
+        if (!analyzerEnabled()) return fail("full editor starts analyzer while rack is hidden");
+        eqCard->show();
+        editor.hide();
+        if (!analyzerEnabled()) return fail("closing editor must keep rack spectrum live");
+
+        auto config = controller.equalizerSnapshot(a, eq)->analyzer;
+        config.pre = config.post = true;
+        config.frozen = false;
+        controller.setEqualizerAnalyzer(a, eq, config);
+        controller.setTrackInputRouting(a, 0, 1, true);
+        controller.setTrackMonitor(a, true);
+        rack->refresh();
+        const auto silent = display->grab().toImage();
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        unsigned sample = 0;
+        std::uint32_t noise = 42;
+        const auto feed = [&](double frequency) {
+            for (int block = 0; block < 64; ++block) {
+                for (unsigned i = 0; i < 256; ++i, ++sample) {
+                    const double phase = 6.283185307179586 * sample / 48000.;
+                    noise = noise * 1664525u + 1013904223u;
+                    input.getChannel(0)[i] = input.getChannel(1)[i] = float(
+                        .18 * std::sin(phase * frequency) + .10 * std::sin(phase * 2400.) +
+                        .06 * std::sin(phase * 6200.) + .025 * (double(noise) / 2147483648. - 1.));
+                }
+                if (!controller.processDeviceBlockForTest(input, output, 256)) return false;
+            }
+            rack->refresh();
+            QApplication::processEvents();
+            return true;
+        };
+        if (!feed(180.)) return fail("rack spectrum audio callback");
+        const auto active = controller.equalizerSnapshot(a, eq);
+        if (!active || *std::max_element(active->telemetry.pre.begin(), active->telemetry.pre.end()) < -40.f ||
+            display->grab().toImage() == silent)
+            return fail("rack spectrum must paint incoming audio without opening the editor");
+        capture("eq-spectrum");
+        if (!feed(880.) || controller.equalizerSnapshot(a, eq)->telemetry.pre == active->telemetry.pre)
+            return fail("rack spectrum must update when incoming frequencies change");
+        controller.setTrackMonitor(a, false);
+        eqCard->hide();
+        if (analyzerEnabled()) return fail("last hidden EQ view releases analyzer");
+        eqCard->show();
+    }
+    mixer.activateWindow();
+    QApplication::setActiveWindow(&mixer);
+    rack->setFocus();
+    if (qEnvironmentVariableIsSet("DAW_SELFTEST_RACK_EQ_ONLY")) {
+        namespace eqp = daw::plugins::equalizer;
+        for (unsigned band = 0; band < eqp::kBandCount; ++band)
+            controller.setInsertParameter(a, eq,
+                eqp::parameterId(eqp::bandParameter(band, eqp::BandParam::Enabled)), 0.);
+        controller.pumpPreviewPluginEvents();
+        rack->refresh();
+        auto* view = eqCard->findChild<RackBuiltinView*>();
+        if (!view || !view->checkEqualizerForTest(error))
+            return fail(error ? *error : "rack EQ gestures");
+        std::fprintf(stderr, "PASS rack EQ: spectrum, neutral cuts, manual Q, drag and undo\n");
+        return true;
+    }
     const auto identity = controller.insertIdentity(a, eq);
     auto* unchanged = eqCard;
     controller.setInsertParameter(a, eq, "output.gain", -3);
@@ -128,6 +341,84 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
     QApplication::processEvents();
     if (controller.insertIdentity(a, eq) != identity)
         return fail("view switch reconstructed processor");
+    const auto checkCollapse = [&](RackDeviceCard* card, const QString& suffix) {
+        auto* header = card->findChild<QWidget*>("RackDeviceHeader");
+        auto* body = card->findChild<QWidget*>("RackDeviceBody");
+        auto* footer = card->findChild<QWidget*>("RackDeviceFooter");
+        auto* power = card->findChild<ui::IconButton*>("RackDevicePower");
+        auto* open = card->findChild<ui::IconButton*>("RackDeviceOpen");
+        auto* fold = card->findChild<ui::IconButton*>("RackDeviceFold");
+        if (!header || !body || !footer || !power || !open || !fold || !fold->isHidden())
+            return false;
+        const auto slot = card->slotId().toStdString();
+        const auto processor = controller.insertIdentity(a, slot);
+        const int width = card->width();
+        const int mixerHeight = mixer.height();
+        const bool expanded = card->expanded();
+        auto* expand = card->findChild<ui::IconButton*>("RackDeviceExpandParameters");
+        if (!expand) return false;
+        const bool expandHidden = expand->isHidden();
+        int editorRequests = 0;
+        QObject receiver;
+        QObject::connect(card, &RackDeviceCard::editorRequested, &receiver,
+                         [&](const QString&, const QString&) { ++editorRequests; });
+        const auto doubleClick = [&] {
+            for (auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
+                              QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease}) {
+                const QPointF at = header->rect().center();
+                QMouseEvent event(type, at, header->mapToGlobal(at.toPoint()), Qt::LeftButton,
+                                  type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                                  Qt::NoModifier);
+                QApplication::sendEvent(header, &event);
+            }
+            QApplication::processEvents();
+        };
+        doubleClick();
+        mixer.resize(mixer.width(), 280);
+        rack->sync();
+        rack->refresh();
+        rack->m_scroll->ensureWidgetVisible(card);
+        QApplication::processEvents();
+        if (!card->collapsed() || fold->isHidden() || !expand->isHidden() || card->width() != 36 || !body->isHidden() || !footer->isHidden() ||
+            editorRequests || card->findChild<QWidget*>("RackDeviceBody") != body)
+            return false;
+        if (open->y() <= power->y() || fold->y() <= open->y()) return false;
+        for (auto* button : header->findChildren<ui::IconButton*>())
+            if (button->isVisible() && !card->rect().contains(QRect(button->mapTo(card, QPoint()), button->size())))
+                return false;
+        capture("collapsed-" + suffix);
+        power->click();
+        if (!controller.insertModel(a, slot)->bypassed || !card->collapsed()) return false;
+        power->click();
+        open->click();
+        if (editorRequests != 1 || !card->collapsed()) return false;
+        {
+            RackDeviceCard restored(&controller, QString::fromStdString(a), card->slotId());
+            if (!restored.collapsed() || restored.width() != 36) return false;
+        }
+        doubleClick();
+        if (card->collapsed() || !fold->isHidden() || expand->isHidden() != expandHidden || card->width() != width || body->isHidden() || footer->isHidden() ||
+            card->expanded() != expanded || editorRequests != 1 ||
+            controller.insertIdentity(a, slot) != processor)
+            return false;
+        doubleClick();
+        if (!card->collapsed() || fold->isHidden()) return false;
+        fold->setFocus();
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+        QApplication::sendEvent(fold, &press);
+        QApplication::sendEvent(fold, &release);
+        if (card->collapsed() || !fold->isHidden() || QApplication::focusWidget() != card) return false;
+        footer->findChild<QDoubleSpinBox*>()->setFocus();
+        card->setCollapsed(true);
+        if (QApplication::focusWidget() != fold) return false;
+        card->setCollapsed(false);
+        mixer.resize(mixer.width(), mixerHeight);
+        QApplication::processEvents();
+        return true;
+    };
+    if (!checkCollapse(eqCard, "equalizer"))
+        return fail("device collapse preserves controls, editor action, processor and saved state");
     rack->selectDevices({QString::fromStdString(eq), QString::fromStdString(comp)});
     rack->setFocus();
     rack->command("group");
@@ -182,6 +473,8 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         if (card->findChildren<ui::Knob*>().size() > 32)
             return fail("expanded parameter list is not virtualized");
         capture("expanded");
+        if (!checkCollapse(card, "external"))
+            return fail("expanded external device restores its controls and width after collapse");
         auto* search = card->findChild<QLineEdit*>("RackParameterSearch");
         if (!search)
             return fail("expanded search");
@@ -254,10 +547,27 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         return fail("fixed edges in narrow window");
     capture("narrow");
     mixer.resize(1340, 320);
-    for (const auto* module : {"color", "doubler", "chorus"})
+    mixer.setSelectedTrack(QString::fromStdString(b));
+    int miniCount = 0;
+    for (const auto* module : {"color", "doubler", "chorus"}) {
         controller.addMiniModule(b, daw::plugins::mini::builtin(module));
+        rack->sync();
+        QApplication::processEvents();
+        const auto cards = rack->m_mini->findChildren<QWidget*>("MiniModuleCard");
+        if (cards.size() != ++miniCount || cards.front()->y() != 1)
+            return fail("mini modules fill from the top in insertion order");
+        for (int i = 1; i < cards.size(); ++i)
+            if (cards[i]->y() != cards[i - 1]->geometry().bottom() + 2)
+                return fail("mini modules remain adjacent without empty gaps");
+        const auto* add = rack->m_mini->findChild<QPushButton*>("AddMiniModule");
+        if (miniCount < 3 && (!add || add->y() <= cards.back()->geometry().bottom()))
+            return fail("mini module insertion area stays below loaded cards");
+        capture(QStringLiteral("mini-%1").arg(miniCount));
+    }
     const auto sendTrack = controller.addTrack(daw::TrackKind::Aux, "Reverb");
-    controller.addSend(b, sendTrack);
+    const auto sendId = controller.addSend(b, sendTrack);
+    for (const auto* name : {"Delay", "Room"})
+        controller.addSend(b, controller.addTrack(daw::TrackKind::Aux, name));
     mixer.setSelectedTrack(QString::fromStdString(b));
     QApplication::processEvents();
     rack->refresh();
@@ -265,7 +575,92 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
     if (rack->m_cards.size() != 2 || rack->m_groups.size() != 1 ||
         !rack->m_groups.begin().value()->isVisible())
         return fail("group remains visible when returning to its channel");
+    const auto miniCards = rack->m_mini->findChildren<QWidget*>("MiniModuleCard");
+    if (miniCards.size() != 3 || !rack->m_mini->findChildren<QPushButton*>("AddMiniModule").isEmpty())
+        return fail("three mini modules occupy the shared insertion area");
+    for (const int height : {320, 480, 280}) {
+        mixer.resize(1340, height);
+        QApplication::processEvents();
+        if (miniCards.front()->y() != 1)
+            return fail("full mini rack remains anchored at the top when resized");
+        for (int i = 1; i < miniCards.size(); ++i)
+            if (miniCards[i]->y() != miniCards[i - 1]->geometry().bottom() + 2 ||
+                std::abs(miniCards[i]->height() - miniCards.front()->height()) > 1)
+                return fail("three mini modules evenly fill the height without gaps");
+        const auto* last = miniCards.back();
+        if (std::abs(last->mapTo(rack, QPoint(0, last->height())).y() - (rack->height() - 7)) > 2)
+            return fail("last mini module stays on the bottom edge");
+        if (rack->m_sendScroll->verticalScrollBar()->maximum() != 0 ||
+            rack->m_sendScroll->horizontalScrollBar()->maximum() <= 0)
+            return fail("vertical sends fit compact height and scroll horizontally");
+        if (height == 480) capture("mini-expanded");
+    }
+    const auto sendLevel = [&] { return controller.project().findTrack(b)->sends.front().level; };
+    const auto fader = [&] { return rack->m_sendFaders.value(QString::fromStdString(sendId)).data(); };
+    const auto dragSend = [&] {
+        auto* control = fader();
+        if (!control) return false;
+        const QPoint press = control->rect().center(), move = press - QPoint(0, 16);
+        QMouseEvent down(QEvent::MouseButtonPress, press, control->mapToGlobal(press),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(control, &down);
+        QMouseEvent drag(QEvent::MouseMove, move, control->mapToGlobal(move),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(control, &drag);
+        return control->isEditing();
+    };
+    const float sendBefore = sendLevel();
+    const auto sendUndo = controller.undoDepth();
+    if (!dragSend() || sendLevel() <= sendBefore || controller.undoDepth() != sendUndo)
+        return fail("send fader changes level live during drag");
+    const auto draggedLevel = sendLevel();
+    // Switching channels must finish the old route's gesture before its widget is removed.
+    mixer.setSelectedTrack(QString::fromStdString(a));
+    if (controller.undoDepth() != std::min(sendUndo + 1, controller.undoLimit()))
+        return fail("send fader commits once when switching channels");
+    controller.undo();
+    if (std::abs(sendLevel() - sendBefore) > 1e-5)
+        return fail("send fader undo");
+    controller.redo();
+    if (std::abs(sendLevel() - draggedLevel) > 1e-5)
+        return fail("send fader redo");
+    mixer.setSelectedTrack(QString::fromStdString(b));
+    rack->refresh();
+    QApplication::processEvents();
+    if (!fader() || std::abs(fader()->gain() - sendLevel()) > 1e-5)
+        return fail("send fader restores current route level");
+    QKeyEvent maximum(QEvent::KeyPress, Qt::Key_End, Qt::NoModifier);
+    QApplication::sendEvent(fader(), &maximum);
+    if (std::abs(20.0 * std::log10(sendLevel()) - 6.0) > 1e-4 ||
+        sendLevel() > daw::EngineController::kMaxSendLevel)
+        return fail("keyboard send edit respects maximum gain");
+    controller.undo();
+    rack->refresh();
+    bool automated = false;
+    const auto automation = QObject::connect(rack, &RackWidget::sendAutomationRequested,
+        [&](const QString& channel, const QString& route) {
+            automated = channel == QString::fromStdString(b) && route == QString::fromStdString(sendId);
+        });
+    const bool creation = ui::automationCreationMode();
+    ui::setAutomationCreationMode(true);
+    const QPoint center = fader()->rect().center();
+    QMouseEvent doubleClick(QEvent::MouseButtonDblClick, center, fader()->mapToGlobal(center),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(fader(), &doubleClick);
+    ui::setAutomationCreationMode(creation);
+    QObject::disconnect(automation);
+    if (!automated || std::abs(sendLevel() - draggedLevel) > 1e-5)
+        return fail("send automation gesture preserves the level");
     capture();
+    mixer.resize(680, 280);
+    QApplication::processEvents();
+    rack->m_sendScroll->horizontalScrollBar()->setValue(rack->m_sendScroll->horizontalScrollBar()->maximum());
+    const auto sendFrames = rack->m_sendScroll->findChildren<QFrame*>("RackSend");
+    if (sendFrames.size() != 3 ||
+        sendFrames.back()->mapTo(rack->m_sendScroll->viewport(), sendFrames.back()->rect().bottomRight()).x() >=
+            rack->m_sendScroll->viewport()->width())
+        return fail("last send remains reachable in a narrow rack");
+    capture("sends-narrow");
     const auto gallery = controller.addTrack(daw::TrackKind::Instrument, "Device gallery");
     const QString samplePath = catalog.path() + "/rack-voice.wav";
     {
@@ -288,9 +683,15 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
     }
     for (const auto* uid :
          {"daw.gain", "daw.stereo-utility", "daw.reverse",
-          "daw.equalizer", "daw.compressor", "daw.cla2a", "daw.delay", "daw.pitch-corrector", "daw.graphit",
+          "daw.equalizer", "daw.compressor", "daw.cla2a", "daw.1073", "daw.delay",
+#if DAW_ENABLE_REVERB
+          "daw.reverb",
+#endif
+          "daw.pitch-corrector", "daw.graphit",
           "daw.gravity", "daw.modulation", "daw.doubler", "daw.doubler-pro", "daw.chorus", "daw.flanger",
           "daw.phaser", "daw.sampler", "daw.slicer"}) {
+        if (qEnvironmentVariableIsSet("DAW_SELFTEST_RACK_SAMPLER_ONLY") && QString::fromUtf8(uid) != "daw.sampler")
+            continue;
         const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, uid);
         if (!descriptor)
             return fail(QString("missing builtin ") + uid);
@@ -313,17 +714,33 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
             controller.createRackGroup(gallery, {slot, neighbour}, "Rack group");
         }
         mixer.setSelectedTrack(QString::fromStdString(gallery));
-        mixer.resize(1340, 280);
         rack->sync();
+        // Minimum-size changes propagate through the scroll area and mixer in
+        // queued layout requests. Measure after Qt completes that layout turn.
+        QEventLoop layoutTurn;
+        QTimer::singleShot(10, &layoutTurn, &QEventLoop::quit);
+        layoutTurn.exec();
+        // The previous card's minimum no longer applies after layout settles.
+        // QWidget does not shrink itself when that minimum is lowered.
+        mixer.resize(1340, 280);
         QApplication::processEvents();
-        if (!rack->m_sendKnobs.isEmpty())
+        if (!rack->m_sendFaders.isEmpty())
             return fail("previous channel sends leaked into an empty destination");
         auto* card = rack->m_cards.value(QString::fromStdString(slot)).data();
-        if (!card || card->width() != RackBuiltinView::preferredWidth(uid))
+        const bool universal = QStringList{"daw.1073", "daw.cla2a", "daw.gravity"}.contains(QString::fromUtf8(uid));
+        if (!card || card->width() != (universal ? 288 : RackBuiltinView::preferredWidth(uid)))
             return fail(QString("native width: ") + uid);
-        if (mixer.height() != 280 || card->mapTo(rack->m_scroll->viewport(), QPoint()).y() + card->height() >
+        if (universal && (card->findChild<RackBuiltinView*>() || card->findChildren<ui::Knob*>().size() !=
+                std::min<std::size_t>(8, controller.insertParameters(gallery, slot).size())))
+            return fail(QString("universal compact parameter card: ") + uid);
+        // A card can require more than the requested 280 px. The panel must
+        // propagate that minimum without growing beyond it or clipping controls.
+        if (mixer.height() > std::max(280, mixer.minimumSizeHint().height()) || card->mapTo(rack->m_scroll->viewport(), QPoint()).y() + card->height() >
                                          rack->m_scroll->viewport()->height())
-            return fail(QString("native group exceeds minimum panel height: ") + uid);
+            return fail(QString("native group exceeds minimum panel height: %1 (panel %2, card bottom %3, viewport %4, chain min %5, hint %6, scroll min %7)")
+                .arg(uid).arg(mixer.height()).arg(card->mapTo(rack->m_scroll->viewport(), QPoint()).y() + card->height())
+                .arg(rack->m_scroll->viewport()->height()).arg(rack->m_chain->minimumHeight())
+                .arg(rack->m_chain->minimumSizeHint().height()).arg(rack->m_scroll->minimumHeight()));
         rack->m_scroll->ensureWidgetVisible(card, 0, 0);
         rack->refresh();
         QApplication::processEvents();
@@ -334,6 +751,149 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
                                                                 knob->mapTo(card, QPoint()), knob->size()))))
                 return fail(QString("native control unavailable or clipped: ") + uid + "/" +
                             knob->objectName());
+        if (QString::fromUtf8(uid) == "daw.sampler") {
+            auto* sampler = card->findChild<RackSamplerView*>();
+            capture("sampler");
+            if (!sampler || !sampler->checkForTest(error)) return fail(error ? *error : "rack sampler interactions");
+            capture("sampler-envelope");
+            sampler->findChild<QAbstractButton*>("RackSamplerEnvelope")->click();
+            rack->refresh();
+            if (qEnvironmentVariableIsSet("DAW_SELFTEST_RACK_SAMPLER_ONLY")) {
+                capture("sampler");
+                std::fprintf(stderr, "PASS rack Sampler: file drops, replacement undo/redo, envelope gestures, keyboard, bounds, layout\n");
+                return true;
+            }
+        }
+        if (QString::fromUtf8(uid) == "daw.reverb") {
+            auto* mode = card->findChild<QComboBox*>("RackReverbSpace");
+            auto* mix = card->findChild<ui::Knob*>("RackParameter.mix");
+            if (!mode || mode->count() != 6 || !mix) return fail("Reverb compact space and Mix controls");
+            mix->editValue(41);
+            if (controller.insertParameter(gallery, slot, "mix") != 41) return fail("Reverb rack Mix reaches instance");
+            controller.undo();card->refresh();
+            if (mix->value() != 25) return fail("Reverb rack Mix follows undo");
+            controller.setInsertParameter(gallery, slot, "mode", 3);card->refresh();
+            if (mode->currentIndex() != 3) return fail("Reverb rack space follows editor changes");
+            mode->setCurrentIndex(0);QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, 0));
+            if (controller.insertParameter(gallery, slot, "mode") != 0) return fail("Reverb rack space selection reaches instance");
+        }
+        if (QString::fromUtf8(uid) == "daw.compressor") {
+            auto* display = card->findChild<QWidget*>("RackCompressorDisplay");
+            auto* threshold = card->findChild<QSlider*>("RackParameter.threshold");
+            auto* readout = card->findChild<QLabel*>("RackParameterValue.threshold");
+            if (!display || !threshold || !readout || display->width() != display->height())
+                return fail("compressor display stays square at the minimum rack height");
+            for (const auto* id : {"threshold", "ratio", "knee", "attack", "release", "makeup"}) {
+                auto* slider = card->findChild<QSlider*>(QStringLiteral("RackParameter.") + id);
+                if (!slider || slider->height() < 24 || slider->accessibleName().isEmpty() ||
+                    slider->mapTo(card, QPoint()).x() <= display->mapTo(card, display->rect().topRight()).x() ||
+                    !card->rect().contains(QRect(slider->mapTo(card, QPoint()), slider->size())))
+                    return fail("compressor sliders fit to the right of the display");
+            }
+            const double original = controller.insertParameter(gallery, slot, "threshold");
+            const QString originalReading = readout->text();
+            const auto undoMark = controller.undoDepth();
+            const auto pointer = [&](QEvent::Type type, double fraction) {
+                const QPointF at(threshold->width() * fraction, threshold->height() / 2.);
+                QMouseEvent event(type, at, threshold->mapToGlobal(at),
+                    type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                    type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(threshold, &event);
+            };
+            pointer(QEvent::MouseButtonPress, .25);
+            pointer(QEvent::MouseMove, .45);
+            const double edited = controller.insertParameter(gallery, slot, "threshold");
+            if (edited == original || controller.undoDepth() != undoMark)
+                return fail("compressor slider updates audio continuously without splitting undo");
+            pointer(QEvent::MouseButtonRelease, .45);
+            if (controller.undoDepth() != std::min(undoMark + 1, controller.undoLimit()))
+                return fail("compressor slider drag commits once");
+            controller.undo();
+            card->refresh();
+            if (controller.insertParameter(gallery, slot, "threshold") != original ||
+                threshold->value() != int(std::lround(original * 10)) || readout->text() != originalReading)
+                return fail("compressor slider and readout follow undo");
+            controller.redo();
+            card->refresh();
+            if (controller.insertParameter(gallery, slot, "threshold") != edited ||
+                threshold->value() != int(std::lround(edited * 10)))
+                return fail("compressor slider follows redo");
+            controller.undo();
+            card->refresh();
+            mixer.resize(1340, 340);
+            QApplication::processEvents();
+            capture("compressor-tall");
+            mixer.resize(1340, 280);
+            QApplication::processEvents();
+            if (mixer.height() != std::max(280, mixer.minimumSizeHint().height()) || display->width() != display->height())
+                return fail("compressor can return to the compact rack height after resizing");
+        }
+        if (QStringList{"daw.chorus", "daw.flanger", "daw.phaser", "daw.doubler"}.contains(uid)) {
+            auto* display = card->findChild<QWidget*>("RackModulationDisplay." + QString::fromUtf8(uid).mid(4));
+            const QString parameter = QString::fromUtf8(uid) == "daw.doubler" ? "width" : "depth";
+            auto* number = card->findChild<QDoubleSpinBox*>("RackNumber." + parameter);
+            if (!display || !number || display->accessibleName().isEmpty()) return fail("modulation display and precise controls");
+            const auto before = display->grab().toImage();
+            controller.setInsertParameter(gallery, slot, parameter.toStdString(), .9);
+            card->refresh();
+            if (display->grab().toImage() == before || std::abs(number->value() - 90.) > .001)
+                return fail("modulation display and percentage readout follow the processor");
+            const auto depth = controller.undoDepth();
+            number->setValue(25);
+            card->finishEdits();
+            if (std::abs(controller.insertParameter(gallery, slot, parameter.toStdString()) - .25) > .001 ||
+                controller.undoDepth() != std::min(depth + 1, controller.undoLimit()))
+                return fail("percentage input commits one parameter edit within the history limit");
+            card->refresh();
+        }
+        if (QString::fromUtf8(uid) == "daw.modulation") {
+            auto* chorus = card->findChild<QWidget*>("RackModulationDisplay.chorus");
+            auto* flanger = card->findChild<QWidget*>("RackModulationDisplay.flanger");
+            auto* earlier = card->findChild<ui::IconButton*>("RackModuleMove.chorus.left");
+            auto* later = card->findChild<ui::IconButton*>("RackModuleMove.chorus.right");
+            if (!chorus || !flanger || !earlier || !later || earlier->isEnabled() || !later->isEnabled())
+                return fail("modulation module headers expose valid reorder directions");
+            const auto chorusBefore = chorus->grab().toImage(), flangerBefore = flanger->grab().toImage();
+            controller.setInsertParameter(gallery, slot, "flanger.depth", .95);
+            card->refresh();
+            if (chorus->grab().toImage() != chorusBefore || flanger->grab().toImage() == flangerBefore)
+                return fail("each modulation display reads only its own prefixed parameters");
+            later->click();
+            card->refresh();
+            QApplication::processEvents();
+            if (controller.insertParameter(gallery, slot, "order") == 0 || !earlier->isEnabled())
+                return fail("modulation header reorders the actual processing chain");
+        }
+        if (QString::fromUtf8(uid) == "daw.delay") {
+            auto* division = card->findChild<QComboBox*>("RackChoice.division");
+            auto* milliseconds = card->findChild<QDoubleSpinBox*>("RackNumber.timeMs");
+            auto* tempo = card->findChild<QDoubleSpinBox*>("RackNumber.bpm");
+            auto* display = card->findChild<QWidget*>("RackDelayDisplay");
+            if (!division || !milliseconds || !tempo || !display || division->count() != 23 ||
+                !division->isVisible() || milliseconds->isVisible() || tempo->isVisible())
+                return fail("delay starts with note choices and only the active timing controls");
+            const auto before = display->grab().toImage();
+            controller.setInsertParameter(gallery, slot, "timeMode", 1);
+            card->refresh();
+            if (!tempo->isVisible() || !division->isVisible()) return fail("delay exposes local tempo");
+            controller.setInsertParameter(gallery, slot, "timeMode", 2);
+            controller.setInsertParameter(gallery, slot, "mode", 1);
+            card->refresh();
+            milliseconds->setValue(450);
+            card->finishEdits();
+            card->refresh();
+            if (!milliseconds->isVisible() || division->isVisible() || tempo->isVisible() ||
+                controller.insertParameter(gallery, slot, "timeMs") != 450 || display->grab().toImage() == before)
+                return fail("delay milliseconds and ping-pong preview follow edits");
+            QApplication::processEvents();
+            capture("delay-ms");
+            controller.setInsertParameter(gallery, slot, "timeMode", 0);
+            card->refresh();
+        }
+        QApplication::processEvents();
+        for (auto* number : card->findChildren<QDoubleSpinBox*>())
+            if (number->isVisible() && !card->rect().contains(QRect(number->mapTo(card, QPoint()), number->size())))
+                return fail(QString("numeric control clipped: ") + uid + "/" + number->objectName());
         capture(QString::fromUtf8(uid).mid(4));
         if (auto* panel = card->findChild<UtilityPanel*>()) {
             const auto utilityFits = [&] {
@@ -428,7 +988,8 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         auto* search = picker->findChild<QLineEdit*>("PluginPickerSearch");
         if (!search) return fail("plugin picker search");
         for (const auto* uid : {"daw.sampler", "daw.equalizer"}) {
-            search->setText(QString::fromUtf8(uid).mid(4));
+            search->setText(QString::fromUtf8(uid) == QStringLiteral("daw.equalizer")
+                                ? QStringLiteral("EQ") : QString::fromUtf8(uid).mid(4));
             QApplication::processEvents();
             bool found = false;
             for (auto* action : picker->findChildren<QAction*>())
@@ -441,6 +1002,157 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
     QApplication::processEvents();
     if (browserDrop("daw.sampler") || browserDrop("missing-plugin"))
         return fail("audio racks reject instruments and stale browser references");
+    const auto pattern = controller.addPattern("Drum pattern");
+    const auto firstPattern = controller.project().findTrack(pattern)->clips.front().id;
+    const auto secondPattern = controller.addPatternClip(pattern, 8.0);
+    const auto sampler = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
+    if (!sampler) return fail("Pattern Sampler descriptor");
+    const auto kick = controller.addPatternInstrument(pattern, *sampler, 0.0, firstPattern);
+    const auto hat = controller.addPatternInstrument(pattern, *sampler, 8.0, secondPattern);
+    controller.renameTrack(kick, "Kick");
+    controller.renameTrack(hat, "Hi-hat");
+    const auto patternFx = controller.addInsert(pattern, daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
+    // The gallery above opens independent editor windows. Re-establish the
+    // keyboard target explicitly after those test windows have been destroyed.
+    QApplication::setActiveWindow(&mixer);
+    rack->setPattern(QString::fromStdString(pattern), QString::fromStdString(firstPattern));
+    QApplication::processEvents();
+    auto* module = rack->patternEditor();
+    const auto sourceRows = [&] {
+        QList<QWidget*> rows;
+        for (auto* row : module->findChildren<QWidget*>("PatternSourceRow"))
+            if (row->isVisible()) rows.push_back(row);
+        return rows;
+    };
+    auto* patternEffect = rack->m_cards.value(QString::fromStdString(patternFx)).data();
+    capture("pattern-initial");
+    if (!module || module->isWindow() || !module->isVisible() || !rack->isAncestorOf(module) ||
+        sourceRows().size() != 1 || !patternEffect ||
+        module->geometry().right() >= patternEffect->geometry().left()) {
+        std::fprintf(stderr, "Pattern layout: window=%d visible=%d child=%d rows=%lld right=%d fx=%d clip=%s\n",
+            module->isWindow(), module->isVisible(), rack->isAncestorOf(module), qlonglong(sourceRows().size()),
+            module->geometry().right(), patternEffect ? patternEffect->geometry().left() : -1,
+            module->patternClipId().toUtf8().constData());
+        return fail("Pattern is an embedded source module before its bus effects, filtered to the selected clip");
+    }
+    auto* picker = module->findChild<QComboBox*>("PatternClipSelector");
+    if (!picker || picker->count() != 3) return fail("Pattern clip selector");
+    picker->setCurrentIndex(0);
+    QMetaObject::invokeMethod(picker, "activated", Q_ARG(int, 0));
+    QApplication::processEvents();
+    if (sourceRows().size() != 2) return fail("all MIDI shows sounds from every Pattern clip");
+    auto* row = sourceRows().front();
+    const auto source = row->property("trackId").toString();
+    const auto originalSlot = controller.project().findTrack(source.toStdString())->instrument.id;
+    const auto originalNotes = controller.project().findTrack(source.toStdString())->clips.front().notes;
+    auto* level = row->findChild<ui::FaderWidget*>("PatternSourceLevel");
+    const auto beforeLevel = controller.undoDepth();
+    level->setGain(.65);
+    QMetaObject::invokeMethod(level, "gainChanged", Q_ARG(double, .65));
+    QMetaObject::invokeMethod(level, "editFinished");
+    rack->sync();
+    if (std::abs(controller.project().findTrack(source.toStdString())->volume - .65) > .001 ||
+        controller.undoDepth() != std::min(beforeLevel + 1, controller.undoLimit()) || sourceRows().front() != row)
+        return fail("Pattern volume edits the existing sound without recreating rows");
+    QString openedTrack, openedClip;
+    connect(module, &PatternWindow::openPianoRollRequested, &mixer,
+        [&](const QString& track, const QString& clip) { openedTrack = track; openedClip = clip; });
+    row->findChild<QAbstractButton*>("PatternSourceSketch")->click();
+    if (openedTrack != source || openedClip != QString::fromStdString(controller.project().findTrack(source.toStdString())->clips.front().id))
+        return fail("Pattern MIDI opens the individual editable clip");
+    row->findChild<QAbstractButton*>("PatternSourceRack")->click();
+    QApplication::processEvents();
+    if (rack->channelId() != source || module->isVisible() || !rack->m_patternBack->isVisible() ||
+        !rack->m_cards.contains(QString::fromStdString(originalSlot)))
+        return fail("sound rack opens its instrument and retains a return to Pattern");
+    rack->m_patternBack->click();
+    QApplication::processEvents();
+    if (rack->channelId() != QString::fromStdString(pattern) || !module->isVisible())
+        return fail("return from sound rack");
+    rack->setPattern(QString::fromStdString(pattern), QString::fromStdString(secondPattern));
+    QApplication::processEvents();
+    QMimeData sound;
+    sound.setUrls({QUrl::fromLocalFile(samplePath)});
+    const auto dropAt = sourceRows().front()->mapTo(module, sourceRows().front()->rect().center());
+    const auto tracksBefore = controller.project().tracks.size(), beforeDrop = controller.undoDepth();
+    QDragEnterEvent enterSound(dropAt, Qt::CopyAction, &sound, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(module, &enterSound);
+    QDropEvent dropSound(dropAt, Qt::CopyAction, &sound, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(module, &dropSound);
+    QApplication::processEvents();
+    const auto newSource = module->selectedSourceTrackId().toStdString();
+    const auto* added = controller.project().findTrack(newSource);
+    if (!enterSound.isAccepted() || !dropSound.isAccepted() || !added ||
+        controller.project().tracks.size() != tracksBefore + 1 ||
+        controller.undoDepth() != std::min(beforeDrop + 1, controller.undoLimit()) ||
+        added->parentId != pattern || added->outputBusId != pattern || added->instrument.uid != "daw.sampler" ||
+        added->clips.empty() || added->clips.front().patternClipId != secondPattern ||
+        controller.project().findTrack(source.toStdString())->instrument.id != originalSlot ||
+        controller.project().findTrack(source.toStdString())->clips.front().notes != originalNotes)
+        return fail("audio dropped on a Pattern row adds a routed sound in the selected clip without replacing another sound");
+    module->setFocus();
+    QApplication::setActiveWindow(&mixer);
+    if (!rack->command("undo")) return fail("Pattern undo routing");
+    QApplication::processEvents();
+    if (controller.project().findTrack(newSource) || controller.project().tracks.size() != tracksBefore)
+        return fail("Pattern audio drop undoes in one step");
+    if (!rack->command("redo")) return fail("Pattern redo routing");
+    QApplication::processEvents();
+    if (!controller.project().findTrack(newSource)) return fail("Pattern audio drop redo");
+    QMimeData instrument;
+    instrument.setData(ui::kPluginDragMime,
+        ui::encodePluginRef(int(daw::plugins::Format::Internal), "daw.sampler"));
+    const auto instrumentAt = sourceRows().front()->mapTo(module, QPoint(10, 4));
+    QDragEnterEvent enterInstrument(instrumentAt, Qt::CopyAction, &instrument, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(module, &enterInstrument);
+    QDropEvent dropInstrument(instrumentAt, Qt::CopyAction, &instrument, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(module, &dropInstrument);
+    const auto droppedInstrument = module->selectedSourceTrackId().toStdString();
+    const auto* droppedTrack = controller.project().findTrack(droppedInstrument);
+    if (!enterInstrument.isAccepted() || !dropInstrument.isAccepted() || !droppedTrack ||
+        droppedTrack->parentId != pattern || droppedTrack->clips.front().patternClipId != secondPattern)
+        return fail("instrument dropped directly on the Pattern module creates a sound in its selected MIDI clip");
+    controller.undo();
+    rack->sync();
+    QApplication::processEvents();
+    if (controller.project().findTrack(droppedInstrument) || !controller.project().findTrack(newSource))
+        return fail("inserting a Pattern instrument undoes in one step even at the history limit");
+    if (!browserDrop("daw.sampler") || module->selectedSourceTrackId().isEmpty())
+        return fail("browser instrument drop adds a new Pattern sound");
+    rack->selectDevices({QString::fromStdString(patternFx)});
+    module->setFocus();
+    QKeyEvent sourceDelete(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    const auto deleted = module->selectedSourceTrackId().toStdString();
+    const auto deletedClip = controller.project().findTrack(deleted)->clips.front().id;
+    QApplication::sendEvent(module, &sourceDelete);
+    QApplication::processEvents();
+    const auto hasDeletedClip = [&] {
+        const auto* track = controller.project().findTrack(deleted);
+        return track && std::any_of(track->clips.begin(), track->clips.end(),
+            [&](const auto& clip) { return clip.id == deletedClip; });
+    };
+    // A specific Pattern clip removes only its part; All MIDI removes the
+    // whole source. The module retains the existing per-clip editing semantics.
+    if (hasDeletedClip() || !controller.project().findTrack(deleted) ||
+        !controller.insertModel(pattern, patternFx))
+        return fail("Delete in a Pattern clip removes the selected MIDI part, preserving the instrument and bus effects");
+    capture("pattern");
+    mixer.resize(860, 280);
+    QApplication::processEvents();
+    auto* patternScroll = module->findChild<QScrollArea*>("PatternScroll");
+    if (module->width() > 620 || patternScroll->horizontalScrollBar()->maximum() != 0 ||
+        module->height() > rack->m_scroll->viewport()->height())
+        return fail("compact Pattern module fits the rack height and scrolls vertically");
+    capture("pattern-narrow");
+    mixer.resize(1340, 320);
+    controller.undo();
+    rack->sync();
+    QApplication::processEvents();
+    if (!hasDeletedClip()) return fail("Pattern source deletion undo");
+    controller.removeTrack(pattern);
+    rack->sync();
+    QApplication::processEvents();
+    if (module->isVisible()) return fail("deleted Pattern leaves no stale rack module");
     const auto folder = controller.addTrack(daw::TrackKind::Folder, "Folder");
     rack->setChannel(QString::fromStdString(folder));
     QApplication::processEvents();

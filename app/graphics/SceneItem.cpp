@@ -1,4 +1,5 @@
 #include "SceneItem.hpp"
+#include "TextureStore.hpp"
 #include <QQuickWindow>
 #include <QSGClipNode>
 #include <QSGFlatColorMaterial>
@@ -20,51 +21,6 @@ QTransform pixelAlignedTranslation(const QTransform& transform, qreal dpr) {
     return QTransform::fromTranslate(std::round(transform.dx() * dpr) / dpr,
                                      std::round(transform.dy() * dpr) / dpr);
 }
-// Each window owns this cache in its render thread. Active nodes hold shared
-// references; unused textures are evicted in LRU order before allocating more.
-class TextureStore {
-    struct Entry { std::shared_ptr<QSGTexture> texture; quint64 used; qint64 bytes; };
-    std::unordered_map<qint64, Entry> entries;
-    qint64 bytes = 0;
-    quint64 clock = 0;
-public:
-    static constexpr qint64 budget = 128 * 1024 * 1024;
-    static std::shared_ptr<TextureStore> forWindow(QQuickWindow* window) {
-        static thread_local std::unordered_map<QQuickWindow*, std::weak_ptr<TextureStore>> stores;
-        if (auto store = stores[window].lock()) return store;
-        for (auto it = stores.begin(); it != stores.end();)
-            if (it->second.expired()) it = stores.erase(it); else ++it;
-        auto store = std::make_shared<TextureStore>();
-        stores[window] = store;
-        return store;
-    }
-    std::shared_ptr<QSGTexture> get(const QImage& image, QQuickWindow* window) {
-        const auto key = image.cacheKey();
-        if (auto found = entries.find(key); found != entries.end()) {
-            found->second.used = ++clock;
-            return found->second.texture;
-        }
-        const qint64 cost = qint64(image.width()) * image.height() * 4;
-        while (bytes + cost > budget) {
-            auto oldest = entries.end();
-            for (auto it = entries.begin(); it != entries.end(); ++it)
-                if (it->second.texture.use_count() == 1 &&
-                    (oldest == entries.end() || it->second.used < oldest->second.used)) oldest = it;
-            if (oldest == entries.end()) return {};
-            bytes -= oldest->second.bytes;
-            entries.erase(oldest);
-        }
-        // Small glyphs and controls can share one GPU texture and therefore
-        // one material batch. Large images retain their own texture.
-        auto texture = std::shared_ptr<QSGTexture>(window->createTextureFromImage(image, QQuickWindow::TextureCanUseAtlas));
-        if (texture) {
-            texture->setFiltering(QSGTexture::Linear);
-            entries.emplace(key, Entry{texture, ++clock, cost});
-            bytes += cost;
-        }
-        return texture;
-    }
-};
 struct MeshNode final : QSGOpacityNode {
     QSGGeometryNode* drawing = nullptr;
     QSGClipNode* clip = nullptr;
@@ -129,7 +85,8 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
         delete node->clip; node->clip = nullptr;
         node->appendChildNode(node->transform);
     }
-    const QMatrix4x4 matrix(pixelAlignedTranslation(mesh.transform, window->devicePixelRatio()));
+    const QMatrix4x4 matrix(mesh.snapTranslation
+        ? pixelAlignedTranslation(mesh.transform, window->devicePixelRatio()) : mesh.transform);
     if (node->transform->matrix() != matrix) node->transform->setMatrix(matrix);
     if (mesh.group) {
         if (node->drawing) { delete node->drawing; node->drawing = nullptr; node->texture.reset(); }

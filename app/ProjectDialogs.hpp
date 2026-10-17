@@ -29,7 +29,7 @@ public:
                       const QString& coverPath, const QString& parentDirectory,
                       QWidget* parent = nullptr);
 
-    void setTimelinePreview(const QImage& image);
+    void setWindowPreview(const QImage& image);
     ProjectSaveOptions options() const;
     bool checkForTest() const;
 
@@ -48,7 +48,7 @@ private:
     QPushButton* m_removeCover = nullptr;
     QPushButton* m_save = nullptr;
     QString m_coverPath;
-    QImage m_timelinePreview;
+    QImage m_windowPreview;
     QLabel* m_previewHint = nullptr;
 };
 

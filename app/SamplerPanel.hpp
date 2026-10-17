@@ -135,6 +135,7 @@ public:
                  QString ownerId, QString objectId, QWidget* parent = nullptr);
     ~SamplerPanel() override;
     static bool checkLayoutForTest();
+    static bool checkMeterForTest();
 
     /// How wide the arrangement's grid is, in seconds, or 0 when snapping is
     /// off. Asked every time it is needed rather than stored, so changing the snap
@@ -147,6 +148,7 @@ public:
     /// another surface such as the Context Panel.
     void refresh();
     void showDefaultPage();
+    void showWarpPage();
 
 signals:
     /// Nested editors still go through MainWindow's one-window registry.
@@ -177,6 +179,7 @@ private:
     QWidget* buildWaveformSection();
     void detectPitch();
     void refreshPitchAnalysis();
+    void refreshMeter();
     void applyDetectedPitch(bool setRoot);
     void rebuildFxSlots();
     void showOfflineHistory();
@@ -221,6 +224,7 @@ private:
     QLabel* m_infoLabel = nullptr;
     SamplerWaveform* m_waveform = nullptr;
     class AudioEditPanel* m_audioEditor = nullptr;
+    class WarpEditorWidget* m_warpEditor = nullptr;
     SamplerEnvelopeView* m_envelope = nullptr;
     SamplerKeyboard* m_keyboard = nullptr;
     QScrollArea* m_keyboardScroll = nullptr;
@@ -234,6 +238,7 @@ private:
     QLabel* m_fxPanLabel = nullptr;
     QLabel* m_fxGainLabel = nullptr;
     QTimer* m_poll = nullptr;
+    ui::FrameTimer* m_meterTimer = nullptr;
     ui::Knob* m_formantKnob = nullptr;
     QDoubleSpinBox* m_fineTune = nullptr;
     QPushButton* m_detectPitch = nullptr;

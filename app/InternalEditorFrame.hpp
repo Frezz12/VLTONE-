@@ -10,6 +10,9 @@
 
 class QLabel;
 class QHideEvent;
+class QMoveEvent;
+class QPainter;
+class QRasterWindow;
 class QResizeEvent;
 class QShowEvent;
 namespace ui::graphics { class WorkspaceSurface; }
@@ -53,6 +56,7 @@ public:
     void raiseEditor();
     void activateEditor();
     bool isEditorActive() const { return m_active; }
+    bool isInteracting() const { return m_dragging || m_resizing; }
     /// Plugin windows keep only Close; also disable title double-click and
     /// ignore an old maximized placement when expansion is disabled.
     void setExpansionEnabled(bool enabled);
@@ -79,6 +83,7 @@ signals:
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -93,6 +98,8 @@ private:
     };
 
     void applyTheme();
+    void paintChrome(QPainter& painter);
+    void updateClipping();
     void setEditorActive(bool active);
     void restorePlacement();
     void savePlacement();
@@ -120,6 +127,7 @@ private:
     ui::IconButton* m_closeButton = nullptr;
     ui::IconButton* m_detachButton = nullptr;
     QPointer<ui::graphics::WorkspaceSurface> m_detachedSurface;
+    QPointer<QRasterWindow> m_nativeChrome;
     QRect m_dockedGeometry;
     bool m_detached = false;
     QPointer<QWidget> m_content;

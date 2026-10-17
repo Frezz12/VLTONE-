@@ -137,6 +137,9 @@ public:
     /// The sink returns false to end the pass early — the one mechanism behind
     /// both cancelling an export and stopping a tail once it has decayed. A
     /// pass stopped that way still reports success; the caller knows it asked.
+    /// With an already prepared offline graph, RenderRestartRequired means
+    /// its configuration changed: discard this pass and recompute capture
+    /// windows/delays from the newly prepared graph before retrying.
     Status renderOffline(SamplePos startSample, SamplePos endSample,
                          FrameCount blockSize,
                          const std::function<bool(const AudioBlock&, FrameCount)>& sink,

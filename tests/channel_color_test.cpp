@@ -87,6 +87,42 @@ int main() {
         oldCursor=(oldCursor+1)%65; identicalFir&=sharedFir.tick(x,taps)==old;
     }
     check(identicalFir,"shared FIR is bit-identical to the original CLA-2A filter");
+    {
+        using Fir = daw::engine::dsp::HalfBandFir65;
+        std::array<Fir,4> reference{}, optimized{};
+        bool identical = true;
+        unsigned position = 0;
+        // Include block boundaries, ring wraps, resets and a silent tail.
+        for (unsigned frames : {1u,8u,16u,32u,64u,128u,257u}) {
+            reference = {}; optimized = {};
+            for (unsigned block = 0; block < 40; ++block) for (unsigned f = 0; f < frames; ++f, ++position) {
+                const double input = block < 30 ? std::sin(position*.173)+.23*std::cos(position*.541) : 0;
+                for (unsigned p2 = 0; p2 < 2; ++p2) {
+                    const double up2 = reference[0].tick(p2 ? 0 : 2*input,taps);
+                    const double fast2 = optimized[0].upsample(input,taps,p2);
+                    identical &= up2 == fast2;
+                    double down4 = 0, fastDown4 = 0;
+                    for (unsigned p4 = 0; p4 < 2; ++p4) {
+                        const double up4 = reference[1].tick(p4 ? 0 : 2*up2,taps);
+                        const double fast4 = optimized[1].upsample(fast2,taps,p4);
+                        identical &= up4 == fast4;
+                        const double wet = up4/(1+std::abs(up4));
+                        const double down = reference[2].tick(wet,taps);
+                        if (!p4) { down4 = down; fastDown4 = optimized[2].tick(wet,taps); }
+                        else optimized[2].push(wet);
+                    }
+                    identical &= down4 == fastDown4;
+                    const double down = reference[3].tick(down4,taps);
+                    if (!p2) identical &= down == optimized[3].tick(fastDown4,taps);
+                    else optimized[3].push(fastDown4);
+                }
+            }
+            for (unsigned stage = 0; stage < reference.size(); ++stage)
+                identical &= reference[stage].history == optimized[stage].history &&
+                             reference[stage].cursor == optimized[stage].cursor;
+        }
+        check(identical,"4x polyphase FIR preserves every retained sample and filter history at small buffers");
+    }
     InternalFactory factory; auto plugin=factory.create(ChannelColorInstance::staticDescriptor());
     check(plugin && plugin->parameters().size()==2 && plugin->descriptor().uid=="daw.channel-color", "COLOR factory, stable parameters and fixed stage identity");
     ChannelColorInstance c; c.setProfileSeed(0x123456789abcdef0ULL);

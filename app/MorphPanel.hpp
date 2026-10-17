@@ -23,6 +23,7 @@ public:
   daw::plugins::morph::State currentState() const;
 signals:
   void projectEdited();
+  void preferredHeightChanged(int height);
   void automationRequested(const QString &parameterId);
   void imageImportFinished(bool success);
 

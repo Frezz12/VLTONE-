@@ -3,11 +3,15 @@
 #include "Internal/Cla2aInstance.hpp"
 #include "Internal/CompressorInstance.hpp"
 #include "Internal/DelayInstance.hpp"
+#if DAW_ENABLE_REVERB
+#include "Internal/ReverbInstance.hpp"
+#endif
 #include "Internal/GraphitInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/GravityInstance.hpp"
 #include "Internal/ModulationRackInstance.hpp"
 #include "Internal/MorphInstance.hpp"
+#include "Internal/FluxInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SlicerInstance.hpp"
@@ -134,7 +138,10 @@ double AudioRuntime::pluginParameter(const AudioPluginAddress& address, const st
     const auto* plugin = pluginInstance(address);
     if (!plugin) return 0;
     const auto index = parameterIndex(*plugin, plugin->parameters(), parameterId);
-    return index >= 0 ? plugin->parameterValue(std::uint32_t(index)) : 0;
+    if (index < 0) return 0;
+    const auto value = plugin->parameterValue(std::uint32_t(index));
+    const auto* node = pluginNode(address);
+    return node ? node->modulation().base(std::uint32_t(index), value) : value;
 }
 
 bool AudioRuntime::setPluginParameter(const AudioPluginAddress& address,
@@ -144,6 +151,7 @@ bool AudioRuntime::setPluginParameter(const AudioPluginAddress& address,
     if (!plugin || safetyStopped.load(std::memory_order_acquire) || node->faultBypassed() || !std::isfinite(value)) return false;
     const auto index = parameterIndex(*plugin, plugin->parameters(), parameterId);
     if (index < 0) return false;
+    if (plugin->parameters()[std::size_t(index)].isReadOnly) return false;
     plugins::PluginEvent event;
     event.kind = plugins::PluginEvent::Kind::ParamValue;
     event.paramIndex = std::uint32_t(index);
@@ -165,6 +173,14 @@ void AudioRuntime::readPluginParameters(const AudioPluginAddress& address,
         value.index = plugin ? parameterIndex(*plugin, parameters, value.id, value.index) : -1;
         value.available = value.index >= 0;
         value.value = value.available ? plugin->parameterValue(std::uint32_t(value.index)) : 0;
+        value.effectiveValue = value.value; value.modulated = false;
+        if (value.available) if (const auto* node = pluginNode(address)) {
+            value.effectiveValue = node->modulation().effective(value.index, value.value);
+            value.value = node->modulation().base(value.index, value.value);
+            value.modulated = node->modulation().mapped(value.index);
+            value.baseNormalized = plugin->parameterToNormalized(value.index, value.value);
+            value.effectiveNormalized = plugin->parameterToNormalized(value.index, value.effectiveValue);
+        }
     }
 }
 
@@ -285,7 +301,7 @@ SamplerSnapshot AudioRuntime::samplerSnapshot(const AudioPluginAddress& address)
     auto* plugin = dynamic_cast<plugins::sampler::SamplerInstance*>(pluginInstance(address));
     if (!plugin) return {};
     return {true, plugin->precomputePending(), plugin->samplePath(),
-            plugin->sampleName(), plugin->sample(), bool(plugin->rawSample())};
+            plugin->sampleName(), plugin->sample(), bool(plugin->rawSample()), plugin->playbackPositionSeconds()};
 }
 
 std::optional<SlicerSnapshot> AudioRuntime::slicerSnapshot(const AudioPluginAddress& address, bool includeActivity) const {
@@ -304,7 +320,7 @@ std::optional<EqualizerSnapshot> AudioRuntime::equalizerSnapshot(const AudioPlug
     EqualizerSnapshot out;
     for (std::uint32_t band = 0; band < out.bands.size(); ++band) out.bands[band] = plugin->bandState(band);
     out.analyzer = plugin->analyzerConfig();
-    if (consumeMeters) out.telemetry = plugin->consumeTelemetry();
+    out.telemetry = plugin->telemetry(consumeMeters);
     out.comparison = plugin->activeComparison();
     out.preset = plugin->presetReference();
     return out;
@@ -346,15 +362,37 @@ bool AudioRuntime::setInsertPresetReference(const AudioPluginAddress& address, s
     auto* instance = pluginInstance(address);
     if (auto* plugin = dynamic_cast<plugins::equalizer::EqualizerInstance*>(instance))
         plugin->setPresetReference(std::move(kind), std::move(name));
+#if DAW_ENABLE_REVERB
+    else if (auto* plugin = dynamic_cast<plugins::reverb::ReverbInstance*>(instance))
+        plugin->setPresetReference(std::move(kind), std::move(name));
+#endif
     else if (auto* plugin = dynamic_cast<plugins::gravity::GravityInstance*>(instance))
         plugin->setPresetReference(std::move(kind), std::move(name));
     else if (auto* plugin = dynamic_cast<plugins::modulation::ModulationInstance*>(instance))
         plugin->setPresetReference(std::move(kind), std::move(name));
     else if (auto* plugin = dynamic_cast<plugins::morph::MorphInstance*>(instance))
         plugin->setPresetReference(std::move(kind), std::move(name));
+    else if (auto* plugin = dynamic_cast<plugins::flux::FluxInstance*>(instance))
+        plugin->setPresetReference(std::move(kind), std::move(name));
     else return false;
     return true;
 }
+
+#if DAW_ENABLE_REVERB
+std::optional<ReverbSnapshot> AudioRuntime::reverbSnapshot(const AudioPluginAddress& address) const {
+    auto* plugin = dynamic_cast<plugins::reverb::ReverbInstance*>(pluginInstance(address));
+    if (!plugin) return std::nullopt;
+    return ReverbSnapshot{plugin->state(), plugin->telemetry()};
+}
+
+bool AudioRuntime::setReverbComparisonState(const AudioPluginAddress& address, const plugins::reverb::State& state) {
+    auto* plugin = dynamic_cast<plugins::reverb::ReverbInstance*>(pluginInstance(address));
+    if (!plugin) return false;
+    plugin->setComparisonState(state);
+    return true;
+}
+
+#endif
 
 bool AudioRuntime::setEqualizerAnalyzer(const AudioPluginAddress& address, const plugins::equalizer::AnalyzerConfig& config) {
     auto* plugin = dynamic_cast<plugins::equalizer::EqualizerInstance*>(pluginInstance(address));
@@ -384,6 +422,20 @@ std::optional<MorphSnapshot> AudioRuntime::morphSnapshot(const AudioPluginAddres
     if(!plugin)return std::nullopt;
     return MorphSnapshot{plugin->state(),plugin->telemetry()};
 }
+std::optional<FluxSnapshot> AudioRuntime::fluxSnapshot(const AudioPluginAddress& address) const {
+    const auto* plugin=dynamic_cast<const plugins::flux::FluxInstance*>(pluginInstance(address));
+    if(!plugin)return std::nullopt;
+    return FluxSnapshot{plugin->state(),plugin->telemetry()};
+}
+std::optional<plugins::flux::FluxTelemetry> AudioRuntime::fluxTelemetry(const AudioPluginAddress& address) const {
+    const auto* plugin=dynamic_cast<const plugins::flux::FluxInstance*>(pluginInstance(address));
+    if(!plugin)return std::nullopt;
+    return plugin->telemetry();
+}
+bool AudioRuntime::setFluxState(const AudioPluginAddress& address,const plugins::flux::State& state) {
+    auto* plugin=dynamic_cast<plugins::flux::FluxInstance*>(pluginInstance(address));
+    return plugin&&plugin->setState(state);
+}
 bool AudioRuntime::setMorphCanvas(const AudioPluginAddress& address,const plugins::morph::MorphCanvasProgram& program,const std::string& category) {
     auto* plugin=dynamic_cast<plugins::morph::MorphInstance*>(pluginInstance(address));
     return plugin&&plugin->setCanvas(program,&category);
@@ -410,8 +462,9 @@ std::vector<InsertParameter> AudioRuntime::pluginParameterValues(const AudioPlug
     const auto parameters = plugin->parameters();
     values.reserve(parameters.size());
     for (const auto& parameter : parameters) {
-        if (parameter.id.empty()) continue;
-        const auto value = plugin->parameterValue(parameter.index);
+        if (parameter.id.empty() || parameter.isReadOnly) continue;
+        const auto* node = pluginNode(address);
+        const auto value = node ? node->modulation().manual(parameter.index, plugin->parameterValue(parameter.index)) : plugin->parameterValue(parameter.index);
         if (std::isfinite(value))
             values.push_back({parameter.id, value, false});
     }

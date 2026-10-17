@@ -58,9 +58,9 @@ void Envelope::noteOn() noexcept {
     m_releaseFrom = 0.0;
 }
 
-void Envelope::noteOff() noexcept {
+void Envelope::noteOff(double from) noexcept {
     if (m_stage == Stage::Idle || m_stage == Stage::Done) return;
-    m_releaseFrom = m_value;
+    m_releaseFrom = from;
     m_stage = Stage::Release;
     m_time = 0.0;
 }
@@ -230,7 +230,9 @@ void Voice::start(int key, int channel, float velocity, float notePan,
     m_notePan = std::clamp(notePan, -1.0f, 1.0f);
     m_cutRemaining = -1;
     m_cutLength = std::max(1, int(sampleRate * 0.005));
-    m_fadeInRemaining = smoothStart ? m_cutLength : 0;
+    m_fadeInRemaining = (smoothStart || m_beginSteal) ? m_cutLength : 0;
+    m_ampGain = settings.ampEnvOn ? 0.0 : 1.0;
+    m_ampRampLength = std::max(1, int(std::ceil(sampleRate * kAmpRampSeconds)));
 
     const Region region = regionFor(settings, sample);
     m_position = region.start;
@@ -252,7 +254,7 @@ void Voice::release(bool cutWhenEnvelopeOff) noexcept {
     const double heldPitch = m_pitch.at(m_pitchFrame)+(m_correctionRemaining?m_pitchCorrection*double(m_correctionRemaining)/m_correctionFrames:0);
     m_correctionRemaining=0;
     m_pitch.from = m_pitch.to = heldPitch; m_pitch.frames = 0;
-    m_amp.noteOff();
+    m_amp.noteOff(m_ampGain);
     for (Envelope& env : m_modEnv) env.noteOff();
     // With the amplitude envelope switched off a one-shot is meant to play to
     // its end after the key is released — but a *looping* one never reaches an
@@ -395,8 +397,11 @@ double Voice::fadeGain(const SamplerSettings& settings, const Region& region,
 
 engine::FrameCount Voice::fillResampled(const SampleData& sample,
                                         const SamplerSettings& settings,
-                                        const Region& region, float* left, float* right,
+                                        const Region& region, float* left, float* right, float* endFade,
                                         engine::FrameCount count, double rate) noexcept {
+    // An exact sub-block boundary must not replay the final source frame on
+    // the next call before reporting the end of the sample.
+    if (!region.loopMode && m_position >= region.end) return 0;
     const engine::SampleBuffer& audio = *sample.audio;
     const bool stereo = audio.channels() > 1;
     const double baseStep = std::abs(rate);
@@ -408,6 +413,8 @@ engine::FrameCount Voice::fillResampled(const SampleData& sample,
     for (engine::FrameCount i = 0; i < count; ++i) {
         const double delta = nextPitch();
         const double step = baseStep * (delta == 0 ? 1.0 : std::exp2(delta / 12.0));
+        endFade[i] = region.loopMode ? 1.0f : float(std::clamp(
+            (region.end - m_position) / (step * m_ampRampLength), 0.0, 1.0));
         const double fade = fadeGain(settings, region, m_position);
         left[i] = readSample(audio, 0, m_position) * float(fade);
         right[i] = stereo ? readSample(audio, 1, m_position) * float(fade) : left[i];
@@ -442,7 +449,7 @@ engine::FrameCount Voice::fillResampled(const SampleData& sample,
 
 engine::FrameCount Voice::fillStretched(const SampleData& sample,
                                         const SamplerSettings& settings,
-                                        const Region& region, float* left, float* right,
+                                        const Region& region, float* left, float* right, float* endFade,
                                         engine::FrameCount count, double pitch,
                                         double timeRate, engine::dsp::TimeStretch& stretcher) noexcept {
     if (m_resetStretch || m_lastStretcher != &stretcher) {
@@ -459,6 +466,8 @@ engine::FrameCount Voice::fillStretched(const SampleData& sample,
                      pitch, settings.formant, left, right, produced);
     for (engine::FrameCount i = 0; i < produced; ++i) {
         double position = m_position + i * timeRate;
+        endFade[i] = region.loopMode ? 1.0f : float(std::clamp(
+            (region.end - position) / (timeRate * m_ampRampLength), 0.0, 1.0));
         const double length = region.loopEnd - region.loopStart;
         if (region.loopMode && position >= region.loopEnd) {
             if (region.loopMode == 2) {
@@ -490,6 +499,8 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
 
     float sourceLeft[kModBlock];
     float sourceRight[kModBlock];
+    float endFade[kModBlock];
+    const double ampStep = 1.0 / m_ampRampLength;
 
     engine::FrameCount done = 0;
     while (done < frames && m_active) {
@@ -548,11 +559,11 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
             double delta = 0;
             for (engine::FrameCount i = 0; i < count; ++i) delta += nextPitch();
             delta /= count;
-            produced = fillStretched(sample, settings, region, sourceLeft, sourceRight,
+            produced = fillStretched(sample, settings, region, sourceLeft, sourceRight, endFade,
                                      count, semitones + settings.stretchPitch + delta, timeRate, *stretcher);
         } else {
             m_resetStretch = true;
-            produced = fillResampled(sample, settings, region, sourceLeft, sourceRight,
+            produced = fillResampled(sample, settings, region, sourceLeft, sourceRight, endFade,
                                      count, rateScale * semitonesToRatio(semitones));
         }
 
@@ -574,12 +585,15 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
 
         for (engine::FrameCount i = 0; i < produced && m_cutRemaining != 0; ++i) {
             double gain = staticGain;
-            if (settings.ampEnvOn) {
-                // Hold the outgoing envelope at its current level so a zero
-                // release cannot bypass the choke's smoothing ramp.
-                gain *= m_cutRemaining >= 0 ? m_amp.value()
-                                           : m_amp.advance(1.0 / sampleRate, settings.ampEnv);
+            if (m_cutRemaining < 0) {
+                const double target = settings.ampEnvOn
+                    ? m_amp.advance(1.0 / sampleRate, settings.ampEnv) : 1.0;
+                // Bound only fast amplitude edges, including Hold -> Sustain
+                // and note-off. Slower curves keep their exact timing/shape.
+                m_ampGain += std::clamp(target - m_ampGain, -ampStep, ampStep);
             }
+            // A choke holds the audible (already smoothed) envelope level.
+            gain *= m_ampGain;
             if (m_fadeInRemaining > 0) {
                 gain *= 1.0 - double(m_fadeInRemaining) / double(m_cutLength);
                 --m_fadeInRemaining;
@@ -623,6 +637,10 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
                 outputLeft += m_stealCorrection[0] * fade;
                 outputRight += m_stealCorrection[1] * fade;
             }
+            // Taper a non-looping source in output time, after the filter and
+            // voice-steal correction, so a trimmed/nonzero endpoint cannot click.
+            outputLeft *= endFade[i];
+            outputRight *= endFade[i];
             m_lastOutput[0] = outputLeft; m_lastOutput[1] = outputRight;
             if (outRight) {
                 outLeft[done + i] += outputLeft;
@@ -637,7 +655,8 @@ void Voice::render(const SampleData& sample, const SamplerSettings& settings,
         // Three ways a voice ends: the sample ran out, the amplitude envelope
         // finished its release, or the short cut ramp completed.
         const bool sampleEnded = produced < count;
-        const bool envelopeEnded = settings.ampEnvOn && !m_amp.active();
+        const bool envelopeEnded = settings.ampEnvOn && !m_amp.active() &&
+                                   m_ampGain == 0.0 && m_stealRemaining == 0;
         const bool cutEnded = m_cutRemaining == 0;
         if (sampleEnded || envelopeEnded || cutEnded) {
             m_active = false;

@@ -45,6 +45,7 @@ std::vector<InsertParameter> parametersFromJson(const json& parent,
 
 json insertToJson(const InsertModel& i) {
     json j{{"id", i.id}, {"name", i.name}, {"bypassed", i.bypassed}};
+    if (i.analysisOnly) j["analysisOnly"] = true;
     // A free slot is written in exactly the shape every pre-hosting project
     // already has, so older project readers still see a harmless empty slot.
     if (i.format == PluginFormat::None) return j;
@@ -107,6 +108,7 @@ InsertModel insertFromJson(const json& j) {
     i.id = j.value("id", newUuid());
     i.name = j.value("name", "");
     i.bypassed = j.value("bypassed", false);
+    i.analysisOnly = j.value("analysisOnly", false);
 
     i.format = pluginFormatFromString(j.value("format", std::string()));
     i.uid = j.value("uid", "");

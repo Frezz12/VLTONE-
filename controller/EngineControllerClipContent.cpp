@@ -35,22 +35,59 @@ std::string EngineController::splitLinkedClip(const ClipAddress& address, double
     const double length = effectiveClipLength(*original);
     const double leftLength = at - original->startSeconds;
     if (leftLength < .001 || length - leftLength < .001) return {};
+    const auto syncTracks = [this](const std::unordered_set<std::string>& ids) {
+        for (const auto& id : ids) if (const auto* track = m_project.findTrack(id)) {
+            syncTrackClips(*track);
+            syncTrackNotes(*track);
+            syncTrackAutomation(*track);
+        }
+        updateTimelineDuration();
+    };
     if(auto* definition=m_project.patternPart(*original)) {
-        const auto before=m_project;
-        auto right=*original;right.id=newUuid();right.patternPartId=newUuid();
+        // Only this composition entry changes. A project snapshot would also
+        // restore unrelated live edits and copy every other clip's note data.
+        const auto before = *definition;
+        auto left = before;
+        left.durationBeats = secondsToBeats(leftLength, tempo());
+        ClipInstanceModel right = *original;
+        right.id=newUuid();right.patternPartId=newUuid();
         right.startSeconds=at;right.durationSeconds=length-leftLength;
         right.contentOffsetBeats=definition->offsetBeats+secondsToBeats(leftLength,tempo());
         right.offsetSeconds=beatsToSeconds(right.contentOffsetBeats,tempo());
         auto tail=*definition;tail.id=right.patternPartId;
         tail.startBeats+=secondsToBeats(leftLength,tempo());tail.durationBeats=secondsToBeats(length-leftLength,tempo());
         tail.offsetBeats=right.contentOffsetBeats;
-        definition->durationBeats=secondsToBeats(leftLength,tempo());
         const auto rightId=right.id;
-        m_project.patternOwner(*original)->contentStorage()->patternParts.push_back(tail);
-        right.bindContent(original->contentStorage());
-        m_project.findTrack(address.trackId)->clips.push_back(std::move(right));
-        m_project.resolveClipContents();rebuildGraph();updateTimelineDuration();
-        pushProjectSnapshotUndo(before,"Split Pattern Part");
+        const auto apply = [this, address, before, left, tail, right, syncTracks](bool split) {
+            const auto* source = findClip(address.trackId, address.clipId);
+            const auto* owner = source ? m_project.patternOwner(*source) : nullptr;
+            if (!owner) return;
+            const auto ownerContentId = owner->contentId;
+            const auto sourceContent = source->contentStorage();
+            auto& definitions = owner->contentStorage()->patternParts;
+            const auto part = std::find_if(definitions.begin(), definitions.end(),
+                [&](const auto& item) { return item.id == before.id; });
+            if (part == definitions.end()) return;
+            *part = split ? left : before;
+            std::erase_if(definitions, [&](const auto& item) { return item.id == tail.id; });
+            if (split) definitions.push_back(tail);
+            std::unordered_set<std::string> affected{address.trackId};
+            for (auto& track : m_project.tracks) {
+                for (const auto& clip : track.clips)
+                    if (clip.contentId == ownerContentId) affected.insert(track.id);
+                std::erase_if(track.clips, [&](const auto& clip) { return clip.patternPartId == tail.id; });
+            }
+            if (split) {
+                ClipModel view;
+                static_cast<ClipInstanceModel&>(view) = right;
+                view.bindContent(sourceContent);
+                m_project.findTrack(address.trackId)->clips.push_back(std::move(view));
+            }
+            m_project.resolveClipContents();
+            syncTracks(affected);
+        };
+        apply(true);
+        m_undo.push("Split Pattern Part", [apply] { apply(false); }, [apply] { apply(true); });
         return rightId;
     }
     struct Part { ClipAddress address; ClipInstanceModel before, left; ClipModel right; };
@@ -89,10 +126,13 @@ std::string EngineController::splitLinkedClip(const ClipAddress& address, double
                 part.right.patternClipId = rightId;
                 parts.push_back(std::move(part));
             }
-    const auto apply = [this, parts](bool split) {
+    const bool pattern = original->kind == ClipKind::Pattern;
+    const auto apply = [this, parts, pattern, syncTracks](bool split) {
+        std::unordered_set<std::string> affected;
         for (const auto& part : parts) {
             auto* track = m_project.findTrack(part.address.trackId);
             if (!track) continue;
+            affected.insert(track->id);
             std::erase_if(track->clips, [&](const auto& c) { return c.id == part.right.id; });
             auto* left = findClip(part.address.trackId, part.address.clipId);
             if (!left) continue;
@@ -103,10 +143,13 @@ std::string EngineController::splitLinkedClip(const ClipAddress& address, double
                 track->clips.push_back(std::move(right));
             }
         }
-        m_project.resolveClipContents(); rebuildGraph(); updateTimelineDuration();
+        m_project.resolveClipContents();
+        if (pattern) syncTracks(affected);
+        else { rebuildGraph(); updateTimelineDuration(); }
     };
     apply(true);
-    m_undo.push("Split Linked Clip", [apply] { apply(false); }, [apply] { apply(true); });
+    m_undo.push(pattern ? "Split Pattern Clip" : "Split Linked Clip",
+                [apply] { apply(false); }, [apply] { apply(true); });
     return rightId;
 }
 

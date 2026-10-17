@@ -41,6 +41,8 @@ find_package(Threads REQUIRED)
 target_link_libraries(daw_engine PUBLIC Threads::Threads)
 if(WIN32)
     target_link_libraries(daw_engine PRIVATE avrt)
+elseif(APPLE)
+    target_link_libraries(daw_engine PRIVATE "-framework CoreFoundation")
 endif()
 
 if(MSVC)

@@ -14,6 +14,7 @@ param(
     [string] $ReleaseChannel = "beta",
     [string] $SignPfxPath = "",
     [switch] $DisableCollaboration,
+    [switch] $DisableReverb,
     [switch] $RequireSignature,
     [switch] $SkipTests,
     [switch] $SkipInstaller
@@ -229,6 +230,7 @@ if (-not (Test-Path -LiteralPath $dumpbinPath -PathType Leaf)) {
 }
 Resolve-QtRoot
 $collaboration = if ($DisableCollaboration) { "OFF" } else { "ON" }
+$reverb = if ($DisableReverb) { "OFF" } else { "ON" }
 # Coverage is a release gate only when collaboration is included.
 if (-not $DisableCollaboration) {
     Invoke-Checked cmake -P (Join-Path $repository "cmake\CheckCollaborationMutationCoverage.cmake")
@@ -242,6 +244,7 @@ Invoke-Checked cmake --preset windows-vcpkg -B $BuildDirectory `
     "-DCMAKE_INSTALL_PREFIX:PATH=$stageDirectory" `
     "-DCMAKE_PREFIX_PATH:PATH=$QtRoot" `
     "-DDAW_ENABLE_COLLABORATION=$collaboration" `
+    "-DDAW_ENABLE_REVERB=$reverb" `
     "-DDAW_ENFORCE_COLLABORATION_RELEASE_GATES=$collaboration" `
     "-DVLTONE_BUILD_NUMBER=$BuildNumber" `
     "-DVLTONE_RELEASE_CHANNEL=$ReleaseChannel" `

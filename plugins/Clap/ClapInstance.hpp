@@ -2,6 +2,8 @@
 
 #include "Clap/ClapModule.hpp"
 #include "Host/PluginInstance.hpp"
+#include "Host/PluginAudioBuffers.hpp"
+#include <unordered_map>
 
 #include <atomic>
 #include <memory>
@@ -147,6 +149,7 @@ private:
     /// CLAP addresses parameters by an opaque `clap_id`, not by index, and the
     /// two are unrelated. Kept index-parallel with `m_parameters`.
     std::vector<clap_id> m_parameterIds;
+    std::unordered_map<clap_id, std::uint32_t> m_parameterIndexById;
 
     /// Owned by pointer, not by value: the plugin was handed this address at
     /// creation and keeps it, so it must not move when the instance does.
@@ -188,13 +191,7 @@ private:
     /// effects declare a sidechain input they are perfectly happy to receive as
     /// silence, and passing one bus to a plugin that declared two is a
     /// segfault, not a missing feature.
-    struct AudioBus {
-        std::uint32_t channels = 0;
-        /// Exactly `channels` entries, so the plugin can read them all.
-        std::vector<float*> pointers;
-        /// Backing for channels the host did not supply. Planar, per channel.
-        std::vector<float> storage;
-    };
+    using AudioBus = PluginAudioBus;
     std::vector<AudioBus> m_inputBuses;
     std::vector<AudioBus> m_outputBuses;
     /// Handed to the plugin as-is; only bus 0's `data32` changes per block.

@@ -30,6 +30,7 @@ struct AudioContentSpec {
         // Timeline beats and normalized values. Runtime resolves stable IDs
         // and converts to each instance's plain units, including Dual Mono.
         std::vector<std::pair<double, double>> points;
+        AutomationTargetKind kind = AutomationTargetKind::PluginParameter;
     };
     using PluginCurves = std::vector<PluginCurve>;
     struct Levels {

@@ -12,6 +12,7 @@
 #include "SlicerPanel.hpp"
 #include "OfflineRenderDialog.hpp"
 #include "PluginBatchDialog.hpp"
+#include "MidiGeneratorDialog.hpp"
 #include "PluginEditorWindow.hpp"
 #include "TrackIcons.hpp"
 #include "TransportBar.hpp"
@@ -713,6 +714,17 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_AUTOMATION_EDITOR_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.populateDemo();
+        window.resize(1280, 900);
+        window.show();
+        QApplication::processEvents();
+        const bool ok = window.checkAutomationEditorForTest();
+        std::fprintf(stderr, "%s Automation UI: automation editor\n", ok ? "PASS" : "FAIL");
+        window.endRecoverySessionForTest();
+        return ok ? 0 : 23;
+    }
     // Focused AI checks should exercise the panel even when an unrelated
     // collaboration fixture fails before the main window is constructed.
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_AI_ONLY")) {
@@ -732,6 +744,8 @@ int main(int argc, char** argv) {
         MainWindow window(/*openDevice=*/false);
         return window.checkProjectPreviewForTest() ? 0 : 40;
     }
+    if (pianoWorkflowCheck && qEnvironmentVariableIsSet("DAW_MIDI_GENERATOR_CHECK_ONLY"))
+        return MidiGeneratorDialog::checkForTest(qEnvironmentVariable("DAW_MIDI_GENERATOR_CHECK_DIR")) ? 0 : 86;
     if (pianoWorkflowCheck && qEnvironmentVariableIsSet("DAW_SEQUENCE_CHECK_ONLY"))
         return TimelineWidget::checkMidiSequenceForTest(qEnvironmentVariable("DAW_SEQUENCE_CHECK_DIR")) ? 0 : 85;
     if (pianoWorkflowCheck) return PianoRollWindow::checkWorkflowsForTest(qEnvironmentVariable("DAW_PIANO_WORKFLOW_DIR")) ? 0 : 81;
@@ -787,6 +801,22 @@ int main(int argc, char** argv) {
             return 78;
         }
         return 0;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_MASTER_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.populateDemo();
+        return window.checkMasterPanelForTest() ? 0 : 79;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_EQUALIZER_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.resize(1440, 1000);
+        window.show();
+        window.populateDemo();
+        QApplication::processEvents();
+        const bool passed = window.checkEqualizerPanelForTest();
+        std::fprintf(stderr, "%s EQ: controls, Q response, undo and inspector layout\n",
+                     passed ? "PASS" : "FAIL");
+        return passed ? 0 : 31;
     }
     if (trackCreationCheck) {
         daw::EngineController controller{};
@@ -1798,7 +1828,10 @@ int main(int argc, char** argv) {
                         return;
                     }
                     if (!editor->requiresNativeSurface()) {
-                        if (auto* surface = window.findChild<ui::graphics::WorkspaceSurface*>())
+                        if (qEnvironmentVariableIsSet("DAW_SHOT_PLUGIN_FRAME") && editor->parentWidget() &&
+                            editor->parentWidget()->property("dawInternalEditor").toBool())
+                            editor->parentWidget()->grab().save(QString::fromUtf8(screenshotPath));
+                        else if (auto* surface = window.findChild<ui::graphics::WorkspaceSurface*>())
                             surface->quickWindow()->grabWindow().save(QString::fromUtf8(screenshotPath));
                         else
                             editor->grab().save(QString::fromUtf8(screenshotPath));
@@ -2059,13 +2092,6 @@ int main(int argc, char** argv) {
             if (!window.checkGravityPanelForTest()) {
                 std::fprintf(stderr, "Gravity panel UI invariants failed\n");
                 return 30;
-            }
-            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
-        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_EQUALIZER_ONLY")) {
-            window.populateDemo();
-            if (!window.checkEqualizerPanelForTest()) {
-                std::fprintf(stderr, "Equalizer panel UI invariants failed\n");
-                return 31;
             }
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if(qEnvironmentVariableIsSet("DAW_SELFTEST_MIDI_ONLY")) {

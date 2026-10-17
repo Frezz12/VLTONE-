@@ -249,7 +249,7 @@ void ChannelColorInstance::render(const PluginProcessContext& c,unsigned offset,
             auto& s=m_channels[ch]; dry[ch]=s.dry[m_dryCursor]; s.dry[m_dryCursor]=input[ch];
         }
         for (unsigned phase2=0;phase2<2;++phase2) {
-            for (unsigned ch=0;ch<channels;++ch) at2[ch]=m_channels[ch].up2.tick(phase2?0:2*input[ch],m_taps);
+            for (unsigned ch=0;ch<channels;++ch) at2[ch]=m_channels[ch].up2.upsample(input[ch],m_taps,phase2);
             std::array<double,2> down4{};
             for (unsigned phase4=0;phase4<2;++phase4) {
                 m_drive=m_driveTarget+m_smoothing*(m_drive-m_driveTarget);
@@ -262,20 +262,20 @@ void ChannelColorInstance::render(const PluginProcessContext& c,unsigned offset,
                 const auto pre=interpolate(m_pre,m_tone),post=interpolate(m_post,m_tone);
                 for (unsigned ch=0;ch<channels;++ch) {
                     auto& s=m_channels[ch];
-                    at4[ch]=s.up4.tick(phase4?0:2*at2[ch],m_taps);
+                    at4[ch]=s.up4.upsample(at2[ch],m_taps,phase4);
                     const double x=s.pre.tick(at4[ch],pre);
                     const double m=magnetize(s,.5*std::tanh(.4*gain*x));
                     double wet=std::lerp(m,triode(m),tube)/(m_linear*.2*gain);
                     wet=s.loss.tick(s.bump.tick(s.post.tick(wet,post),m_bump),m_loss);
                     const double dc=clean(wet-s.dcInput+m_dcPole*s.dcOutput);
                     s.dcInput=wet; s.dcOutput=dc;
-                    const double down=s.down4.tick(dc,m_taps);
-                    if (!phase4) down4[ch]=down;
+                    if (!phase4) down4[ch]=s.down4.tick(dc,m_taps);
+                    else s.down4.push(dc);
                 }
             }
             for (unsigned ch=0;ch<channels;++ch) {
-                const double down=m_channels[ch].down2.tick(down4[ch],m_taps);
-                if (!phase2) output[ch]=down;
+                if (!phase2) output[ch]=m_channels[ch].down2.tick(down4[ch],m_taps);
+                else m_channels[ch].down2.push(down4[ch]);
             }
         }
         const double amount=softDrive(m_drive);

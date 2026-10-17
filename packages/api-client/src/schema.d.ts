@@ -232,6 +232,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/releases/{version}/download/{kind}/click": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records a website download button click. Requires an allowed website Origin. No visitor identity is stored; file GET and Range requests are not counted. */
+        post: operations["recordReleaseDownloadClick"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/releases/{version}/screenshots/{screenshotId}": {
         parameters: {
             query?: never;
@@ -1610,6 +1627,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/support/boosty/click/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Count an explicit Boosty link activation without visitor identifiers */
+        post: operations["recordSupportClick"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/dashboard/support-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminSupportStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/dashboard": {
         parameters: {
             query?: never;
@@ -1941,6 +1991,22 @@ export interface paths {
         get: operations["adminListReleases"];
         put?: never;
         post: operations["adminCreateRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/releases/download-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminReleaseDownloadStats"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8626,7 +8692,7 @@ export interface components {
             /** @constant */
             format: "internal";
             /** @enum {unknown} */
-            uid: "daw.gain" | "daw.stereo-utility" | "daw.reverse" | "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
+            uid: "daw.gain" | "daw.stereo-utility" | "daw.reverse" | "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.1073" | "daw.channel-color";
             vendor: string;
             pluginVersion: string;
             stateSchemaVersion: number;
@@ -9902,7 +9968,7 @@ export interface components {
                     /** @constant */
                     format: "internal";
                     /** @enum {unknown} */
-                    uid: "daw.gain" | "daw.stereo-utility" | "daw.reverse" | "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.channel-color";
+                    uid: "daw.gain" | "daw.stereo-utility" | "daw.reverse" | "daw.sampler" | "daw.delay" | "daw.compressor" | "daw.equalizer" | "daw.gravity" | "daw.graphit" | "daw.doubler" | "daw.doubler-pro" | "daw.chorus" | "daw.flanger" | "daw.phaser" | "daw.pitch-corrector" | "daw.modulation" | "daw.cla2a" | "daw.1073" | "daw.channel-color";
                     vendor: string;
                     pluginVersion: string;
                     stateSchemaVersion: number;
@@ -10539,6 +10605,30 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+        };
+    };
+    recordReleaseDownloadClick: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: components["parameters"]["ReleaseVersion"];
+                kind: components["parameters"]["ArtifactKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Click recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     getReleaseScreenshot: {
@@ -12816,6 +12906,61 @@ export interface operations {
             401: components["responses"]["Error"];
         };
     };
+    recordSupportClick: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: "home" | "footer";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Click recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    adminSupportStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aggregate Boosty clicks by placement, including zero counts. Requires dashboard.read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        clicks: {
+                            /** @enum {string} */
+                            source: "home" | "footer";
+                            /** Format: int64 */
+                            clicks: number;
+                            /** Format: date-time */
+                            last_clicked_at: string | null;
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
     adminDashboard: {
         parameters: {
             query?: never;
@@ -13314,6 +13459,40 @@ export interface operations {
                 };
             };
             422: components["responses"]["Error"];
+        };
+    };
+    adminReleaseDownloadStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Website click counts per published version and installer format, including removed formats with historical clicks. Requires releases.read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        downloads: {
+                            /** Format: uuid */
+                            release_id: string;
+                            version: string;
+                            kind: string;
+                            /** Format: int64 */
+                            clicks: number;
+                            /** Format: date-time */
+                            last_clicked_at: string | null;
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     adminGetRelease: {

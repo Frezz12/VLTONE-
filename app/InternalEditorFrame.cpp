@@ -1,4 +1,6 @@
 #include "InternalEditorFrame.hpp"
+#include "PluginEditorChrome.hpp"
+#include "EqualizerStyle.hpp"
 
 #include "Controls.hpp"
 #include "Icons.hpp"
@@ -14,9 +16,11 @@
 #include <QHideEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QQuickWindow>
+#include <QRasterWindow>
 #include <QEventLoop>
 #include <QResizeEvent>
 #include <QRegion>
@@ -30,7 +34,13 @@
 #include <cstdio>
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <utility>
+
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 namespace {
 
@@ -42,6 +52,46 @@ constexpr int kMinimumWidth = 420;
 constexpr int kMinimumHeight = 300;
 constexpr int kInteractiveResizeFrameMs = 16;
 
+// Give the antialiased fringe its own alpha backing store. Both native windows
+// move in the same input turn, without waiting for a busy workspace to render.
+class EditorChrome final : public QRasterWindow {
+public:
+    EditorChrome(QWindow* parent, std::function<void(QPainter&)> paint)
+        : m_paint(std::move(paint)) {
+        setFlags(Qt::FramelessWindowHint | Qt::WindowTransparentForInput |
+                 Qt::WindowDoesNotAcceptFocus);
+        auto alphaFormat = format();
+        alphaFormat.setAlphaBufferSize(8);
+        setFormat(alphaFormat);
+        setParent(parent);
+    }
+protected:
+#ifdef Q_OS_WIN
+    bool nativeEvent(const QByteArray&, void* message, qintptr* result) override {
+        // Qt 6.8 only applies WS_EX_TRANSPARENT to top-level windows.
+        // This child fringe must also pass resize/drag hits to its editor.
+        if (static_cast<MSG*>(message)->message == WM_NCHITTEST) {
+            *result = HTTRANSPARENT;
+            return true;
+        }
+        return false;
+    }
+#endif
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(QRect(QPoint(), size()), Qt::transparent);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        m_paint(painter);
+    }
+private:
+    std::function<void(QPainter&)> m_paint;
+};
+
+int titleHeight(const QWidget* content) {
+    return content && content->property("vlt.pluginChrome").toBool() ? 26 : kTitleHeight;
+}
+
 QSize minimumFrameSize(const QWidget* content, const QRect& bounds) {
     QSize minimum(kMinimumWidth, kMinimumHeight);
     if (content && content->property("vlt.compactEditor").toBool()) minimum = QSize(340, 220);
@@ -50,7 +100,7 @@ QSize minimumFrameSize(const QWidget* content, const QRect& bounds) {
     if (content && (content->property("vlt.nativeEditor").toBool() ||
                     content->property("vlt.contentSizedEditor").toBool())) minimum = QSize(0, 0);
     if (content)
-        minimum = minimum.expandedTo(content->minimumSize() + QSize(2, kTitleHeight + 2));
+        minimum = minimum.expandedTo(content->minimumSize() + QSize(2, titleHeight(content) + 2));
     return minimum.boundedTo(bounds.size());
 }
 
@@ -76,10 +126,9 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     : QFrame(parent), m_settingsKey(std::move(settingsKey)) {
     setObjectName(QStringLiteral("InternalEditorFrame"));
     setProperty("dawInternalEditor", true);
-    // paintEvent fills the entire masked surface.
-    // Without this, every native editor update also damages the mixer and
-    // timeline underneath, even while the frame itself stays in one place.
-    setAttribute(Qt::WA_OpaquePaintEvent);
+    // A widget mask is binary, even at fractional DPI. Keep the outer contour
+    // in the painter so its partially covered pixels survive compositing.
+    setAttribute(Qt::WA_TranslucentBackground);
     setMinimumSize(kMinimumWidth, kMinimumHeight);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
@@ -90,7 +139,7 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
     m_titleBar = new QWidget(this);
     m_titleBar->setObjectName(QStringLiteral("InternalEditorTitleBar"));
     m_titleBar->setFixedHeight(kTitleHeight);
-    m_titleBar->setCursor(Qt::OpenHandCursor);
+    m_titleBar->setCursor(Qt::SizeAllCursor);
     m_titleBar->installEventFilter(this);
     auto* titleRow = new QHBoxLayout(m_titleBar);
     titleRow->setContentsMargins(8, 1, 8, 1);
@@ -168,6 +217,8 @@ InternalEditorFrame::InternalEditorFrame(QString settingsKey, QWidget* parent)
 }
 
 InternalEditorFrame::~InternalEditorFrame() {
+    setProperty("vlt.nativeOverlayChrome", QVariant());
+    delete m_nativeChrome.data();
     delete m_detachedSurface.data();
     cancelPendingInteractiveResize();
     uninstallApplicationEventFilter();
@@ -183,10 +234,19 @@ void InternalEditorFrame::setContent(QWidget* content) {
         disconnect(m_content, nullptr, this, nullptr);
         disconnect(m_content, nullptr, m_title, nullptr);
         m_column->removeWidget(m_content);
+        m_content->clearMask();
         m_content->setParent(nullptr);
     }
 
     m_content = content;
+    const bool pluginChrome = content->property("vlt.pluginChrome").toBool();
+    const int inset = !pluginChrome && content->property("vlt.eqChrome").toBool() ? 0 : 1;
+    m_column->setContentsMargins(inset, inset, inset, inset);
+    m_titleBar->setFixedHeight(titleHeight(content));
+    m_titleBar->layout()->setContentsMargins(8, 1, pluginChrome ? 4 : 8, 1);
+    m_closeButton->setButtonSize(24, pluginChrome ? 24 : 20);
+    m_closeButton->setGlyphSize(pluginChrome ? 10 : 14);
+    m_closeButton->setProperty("pluginWindowClose", pluginChrome);
     // Only this application-owned editor opts into one continuous dark shell.
     // Placement, resize, detach and close continue to use the common host.
     m_pitchChrome = content->property("vlt.pitchChrome").toBool();
@@ -196,14 +256,19 @@ void InternalEditorFrame::setContent(QWidget* content) {
         ? content->size() : content->size().expandedTo(QSize(640, 360));
     content->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     m_column->addWidget(content, 1);
-    m_title->setText(content->windowTitle().isEmpty()
-                         ? tr("Editor")
-                         : content->windowTitle());
-    connect(content, &QWidget::windowTitleChanged, m_title, &QLabel::setText);
+    const auto syncTitle = [this, pluginChrome](const QString& title) {
+        const auto name = title.isEmpty() ? tr("Editor") : title;
+        m_title->setText(pluginChrome ? QString() : name);
+        setWindowTitle(name);
+        setAccessibleName(name);
+    };
+    syncTitle(content->windowTitle());
+    connect(content, &QWidget::windowTitleChanged, this, syncTitle);
     connect(content, &QObject::destroyed, this, [this] {
         m_content = nullptr;
         m_lastContentFocus = nullptr;
     });
+    updateClipping();
 }
 
 void InternalEditorFrame::setAccessoryWidget(QWidget* accessory) {
@@ -216,12 +281,24 @@ void InternalEditorFrame::setWorkspaceArea(QWidget* area) {
 }
 
 void InternalEditorFrame::prepareForNativeSurface() {
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_NoSystemBackground, false);
     // This must precede WA_NativeWindow. Otherwise QWidget promotes every
     // ancestor to a native view, an irreversible change for the lifetime of
     // the main window which leaves the Quick scene in a broken stacking tree.
     setAttribute(Qt::WA_DontCreateNativeAncestors);
     setAttribute(Qt::WA_NativeWindow);
     setProperty("vlt.nativeOverlay", true);
+    if (!m_nativeChrome) {
+        m_nativeChrome = new EditorChrome(nativeParentWidget()->windowHandle(), [this](QPainter& painter) {
+            painter.setClipRegion(QRegion(rect()).subtracted(mask()));
+            paintChrome(painter);
+        });
+        m_nativeChrome->setObjectName(QStringLiteral("InternalEditorNativeChrome"));
+        setProperty("vlt.nativeOverlayChrome", QVariant::fromValue<QWindow*>(m_nativeChrome));
+    }
+    updateClipping();
+    applyTheme();
 }
 
 void InternalEditorFrame::present() {
@@ -234,12 +311,10 @@ void InternalEditorFrame::present() {
 
 void InternalEditorFrame::raiseEditor() {
     if (!isVisible()) return;
-    raise();
     // QWidget::raise() returns early when its QObject sibling order already
     // looks correct. Native activation can change the actual HWND/NSView order
     // independently, so explicitly restore that order too.
-    if (testAttribute(Qt::WA_NativeWindow) && windowHandle())
-        windowHandle()->raise();
+    ui::graphics::raiseNativeOverlay(this);
 }
 
 void InternalEditorFrame::activateEditor() {
@@ -300,8 +375,10 @@ void InternalEditorFrame::setDetached(bool detached) {
     if (detached) { savePlacement(); m_dockedGeometry = geometry(); }
     hide();
     m_detached = detached;
+    setAttribute(Qt::WA_TranslucentBackground, detached || !m_nativeChrome);
     setParent(parentWidget(), detached ? Qt::Window | Qt::FramelessWindowHint : Qt::Widget);
     setGeometry(detached ? QRect(global, size()) : m_dockedGeometry);
+    updateClipping();
     if (!detached) m_restoreGeometry = m_dockedGeometry;
     m_detachButton->setToolTip(detached ? tr("Return editor to workspace") : tr("Detach editor"));
     m_detachButton->setAccessibleName(m_detachButton->toolTip());
@@ -324,7 +401,7 @@ void InternalEditorFrame::resizeForContent(const QSize& contentSize) {
     m_preferredContentSize = contentSize;
     if (m_maximized) return;
 
-    const QSize chrome(2, kTitleHeight + 2);
+    const QSize chrome(2, titleHeight(m_content) + 2);
     setMinimumSize(minimumFrameSize(m_content, availableRect()));
     QRect wanted(geometry().topLeft(), contentSize + chrome);
     QRect constrained = constrainedGeometry(wanted);
@@ -332,7 +409,7 @@ void InternalEditorFrame::resizeForContent(const QSize& contentSize) {
     // fully visible before. An intentionally parked editor keeps its title in
     // place when the plugin requests another content size.
     const QRect bounds = availableRect();
-    if (bounds.contains(geometry()) && constrained.bottom() > bounds.bottom())
+    if (!isInteracting() && bounds.contains(geometry()) && constrained.bottom() > bounds.bottom())
         constrained.moveBottom(bounds.bottom());
     setGeometry(constrained);
     m_restoreGeometry = constrained;
@@ -341,7 +418,7 @@ void InternalEditorFrame::resizeForContent(const QSize& contentSize) {
 }
 
 QSize InternalEditorFrame::maximumContentSize() const {
-    const QSize chrome(2, kTitleHeight + 2);
+    const QSize chrome(2, titleHeight(m_content) + 2);
     const QSize outer = availableRect().size();
     return QSize(std::max(1, outer.width() - chrome.width()),
                  std::max(1, outer.height() - chrome.height()));
@@ -380,6 +457,7 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         if (m_dragging || m_resizing) {
             cancelPendingInteractiveResize();
             m_dragging = m_resizing = false;
+            if (QWidget::mouseGrabber() == m_titleBar) m_titleBar->releaseMouse();
             m_resizeEdges = NoEdge;
             updateMaximizeButton();
             m_restoreGeometry = geometry();
@@ -408,7 +486,8 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
                 m_dragging = true;
                 m_pressGlobal = mouse->globalPosition().toPoint();
                 m_pressGeometry = geometry();
-                m_titleBar->setCursor(Qt::ClosedHandCursor);
+                m_titleBar->setCursor(Qt::SizeAllCursor);
+                if (testAttribute(Qt::WA_NativeWindow)) m_titleBar->grabMouse();
             }
             mouse->accept();
             return true;
@@ -416,15 +495,19 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
         if (mouse && event->type() == QEvent::MouseMove && m_dragging &&
             (mouse->buttons() & Qt::LeftButton)) {
             const QPoint delta = mouse->globalPosition().toPoint() - m_pressGlobal;
-            moveWithinWorkspace(m_pressGeometry.topLeft() + delta);
+            moveWithinWorkspace(pos() + delta);
+            // A late editor resize or a workspace edge must not leave a dead
+            // zone measured from the old opening geometry on direction change.
+            m_pressGlobal = mouse->globalPosition().toPoint();
             mouse->accept();
             return true;
         }
         if (mouse && event->type() == QEvent::MouseButtonRelease && m_dragging &&
             mouse->button() == Qt::LeftButton) {
-            moveWithinWorkspace(m_pressGeometry.topLeft() + mouse->globalPosition().toPoint() - m_pressGlobal);
+            moveWithinWorkspace(pos() + mouse->globalPosition().toPoint() - m_pressGlobal);
             m_dragging = false;
-            m_titleBar->setCursor(Qt::OpenHandCursor);
+            if (QWidget::mouseGrabber() == m_titleBar) m_titleBar->releaseMouse();
+            m_titleBar->setCursor(Qt::SizeAllCursor);
             m_restoreGeometry = geometry();
             savePlacement();
             mouse->accept();
@@ -501,6 +584,7 @@ bool InternalEditorFrame::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void InternalEditorFrame::hideEvent(QHideEvent* event) {
+    if (m_nativeChrome) m_nativeChrome->hide();
     // A hidden frame must not remain on QApplication's global filter list, and
     // no delayed resize is allowed to wake it after it has left the workspace.
     uninstallApplicationEventFilter();
@@ -508,73 +592,140 @@ void InternalEditorFrame::hideEvent(QHideEvent* event) {
     m_resizing = false;
     m_resizeEdges = NoEdge;
     m_dragging = false;
+    if (QWidget::mouseGrabber() == m_titleBar) m_titleBar->releaseMouse();
     if (m_titleBar && !m_maximized)
-        m_titleBar->setCursor(Qt::OpenHandCursor);
+        m_titleBar->setCursor(Qt::SizeAllCursor);
     setEditorActive(false);
     QFrame::hideEvent(event);
 }
 
-void InternalEditorFrame::paintEvent(QPaintEvent*) {
-    const Theme& theme = ThemeManager::instance().theme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+void InternalEditorFrame::moveEvent(QMoveEvent* event) {
+    QFrame::moveEvent(event);
+    if (m_nativeChrome && !m_detached)
+        m_nativeChrome->setPosition(parentWidget()->mapTo(nativeParentWidget(), pos()));
+}
 
-    if (m_pitchChrome) {
+void InternalEditorFrame::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    paintChrome(painter);
+}
+
+void InternalEditorFrame::paintChrome(QPainter& painter) {
+    const Theme& theme = ThemeManager::instance().theme();
+    const bool pluginChrome = m_content && m_content->property("vlt.pluginChrome").toBool();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const qreal radius = pluginChrome ? 10 : kCornerRadius;
+    QPainterPath outline;
+    outline.addRoundedRect(QRectF(rect()), radius, radius);
+    const int headerBottom = m_titleBar ? m_titleBar->geometry().bottom() + 1 : 0;
+    // Header and body own disjoint parts of one circular outline. Clipping a
+    // rectangular fill with a path loses coverage in the retained renderer.
+    painter.save();
+    painter.setClipRect(QRect(0, headerBottom, width(), height() - headerBottom), Qt::IntersectClip);
+    const bool eqCanvas = m_content && m_content->property("vlt.eqChrome").toBool();
+    if (pluginChrome) {
+        painter.fillPath(outline, pluginEditorChromeSurface(theme));
+    } else if (eqCanvas) {
+        painter.fillPath(outline, eqUi::canvas());
+    } else if (m_pitchChrome) {
         QLinearGradient shell(rect().topLeft(), rect().bottomLeft());
         const QColor top = mixColors(QColor("#2b2d31"), theme.accent, .06);
         shell.setColorAt(0, top); shell.setColorAt(.18, top);
         shell.setColorAt(1, mixColors(QColor("#24262b"), theme.accent, .06));
-        painter.fillRect(rect(), shell);
+        painter.fillPath(outline, shell);
     } else {
-        painter.fillRect(rect(), theme.surface);
+        painter.fillPath(outline, theme.surface);
     }
+    painter.restore();
 
     if (m_titleBar) {
         const QRect title = m_titleBar->geometry();
         QLinearGradient header(title.topLeft(), title.bottomLeft());
-        header.setColorAt(0, mixColors(theme.toolbarBackground, theme.surfaceElevated, 0.40));
-        header.setColorAt(1, theme.toolbarBackground);
-        painter.fillRect(title, header);
-        painter.setPen(theme.edgeLight(theme.toolbarBackground));
-        painter.drawLine(title.topLeft(), title.topRight());
-        painter.setPen(theme.edgeDark(theme.toolbarBackground));
+        const QColor base = pluginChrome ? pluginEditorChromeSurface(theme) : theme.toolbarBackground;
+        header.setColorAt(0, mixColors(base, theme.surfaceElevated, pluginChrome ? .025 : .40));
+        header.setColorAt(1, base);
+        painter.save();
+        painter.setClipRect(QRect(0, 0, width(), headerBottom), Qt::IntersectClip);
+        painter.fillPath(outline, header);
+        painter.restore();
+        if (!pluginChrome) {
+            painter.setPen(theme.edgeLight(theme.toolbarBackground));
+            painter.drawLine(QPoint(int(radius), title.top()), QPoint(width() - int(radius), title.top()));
+        }
+        painter.setPen(pluginChrome ? mixColors(base, theme.textPrimary, .08) : theme.edgeDark(theme.toolbarBackground));
         painter.drawLine(m_titleBar->geometry().bottomLeft(),
                          m_titleBar->geometry().bottomRight());
     }
 
+    if (eqCanvas && !pluginChrome) return;
     painter.setBrush(Qt::NoBrush);
-    // Focus remains visible through the title text and button states. The
-    // contour itself is deliberately neutral so plugin artwork is not boxed
-    // in by the application's accent colour.
-    painter.setPen(QPen(theme.edgeDark(theme.surface), 1.0));
+    // Plugin frames indicate focus through a slightly stronger neutral contour.
+    const QColor edge = pluginChrome
+        ? mixColors(pluginEditorChromeSurface(theme), theme.textPrimary, m_active ? .36 : .24)
+        : theme.edgeDark(theme.surface);
+    painter.setPen(QPen(edge, 1.0));
     painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
-                            kCornerRadius - 0.5, kCornerRadius - 0.5);
+                            radius - 0.5, radius - 0.5);
 }
 
 void InternalEditorFrame::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
-    // Clip child artwork and native plugin surfaces as well as the frame paint.
-    QPainterPath outline;
-    outline.addRoundedRect(QRectF(rect()), kCornerRadius, kCornerRadius);
-    setMask(QRegion(outline.toFillPolygon().toPolygon()));
+    updateClipping();
     updateResizeHandles();
+}
+
+void InternalEditorFrame::updateClipping() {
+    // Only the child artwork needs a hard clip; it stays inside the opaque
+    // part of the shell and must never trim the shell's antialiased exterior.
+    const int radius = m_content && m_content->property("vlt.pluginChrome").toBool() ? 10 : kCornerRadius;
+    QRegion interior(rect().adjusted(1, 1, -1, -1));
+    // QRegion(path.toPolygon()) rounds the curve through pixel centres and
+    // can let opaque child pixels spill into the exterior at fractional DPI.
+    // Keep whole logical cells inside the inset circle, with half a logical
+    // pixel for independent child-layer snapping at fractional DPI. There are
+    // at most nine short rows per corner; the rectangle stays unchanged.
+    for (int y = 1; y < radius; ++y) {
+        const qreal dy = radius - y;
+        const qreal innerRadius = radius - 1.5;
+        const int cut = qCeil(radius - std::sqrt(std::max(0., innerRadius * innerRadius - dy * dy))) - 1;
+        for (const int row : {y, height() - 1 - y}) {
+            interior -= QRect(1, row, cut, 1);
+            interior -= QRect(width() - 1 - cut, row, cut, 1);
+        }
+    }
+    if (m_nativeChrome && !m_detached) {
+        // The opaque view and alpha fringe are native siblings. Neither is
+        // recorded into the workspace's asynchronously presented scene.
+        setMask(interior);
+        m_nativeChrome->setGeometry(QRect(parentWidget()->mapTo(nativeParentWidget(), pos()), size()));
+        m_nativeChrome->setVisible(isVisible());
+        raiseEditor();
+        m_nativeChrome->update();
+    } else {
+        clearMask();
+        if (m_nativeChrome) m_nativeChrome->hide();
+    }
+    if (m_content) {
+        m_column->activate();
+        m_content->setMask(interior.translated(-m_content->pos()));
+    }
 }
 
 void InternalEditorFrame::showEvent(QShowEvent* event) {
     // While hidden the parent may have changed size. Re-constrain before the
     // first exposed paint, then opt into the global focus/activation stream.
     if (m_placementRestored) constrainToParent();
+    updateClipping();
     installApplicationEventFilter();
     QFrame::showEvent(event);
 }
 
 void InternalEditorFrame::applyTheme() {
     const Theme& theme = ThemeManager::instance().theme();
-    // Custom themes may intentionally supply alpha; only declare opacity when
-    // the complete background is actually filled with opaque colour.
-    setAttribute(Qt::WA_OpaquePaintEvent,
+    setAttribute(Qt::WA_OpaquePaintEvent, m_nativeChrome && !m_detached &&
                  (m_pitchChrome ? theme.accent : theme.surface).alpha() == 255);
+    if (m_nativeChrome) m_nativeChrome->update();
     if (m_title) {
         QPalette palette = m_title->palette();
         palette.setColor(QPalette::WindowText,
@@ -610,7 +761,7 @@ void InternalEditorFrame::restorePlacement() {
         m_restoreGeometry = constrainedGeometry(saved);
     } else {
         const QRect bounds = workspaceRect();
-        const QSize chrome(2, kTitleHeight + 2);
+        const QSize chrome(2, titleHeight(m_content) + 2);
         const QSize minimum = minimumFrameSize(m_content, bounds);
         QSize wanted = m_preferredContentSize + chrome;
         wanted.setWidth(std::clamp(wanted.width(),
@@ -687,7 +838,7 @@ QRect InternalEditorFrame::constrainedGeometry(const QRect& wanted) const {
     const int maxX = bounds.x() + bounds.width() - width;
     // The entire title bar (including its buttons) remains recoverable. Only
     // the body may disappear below the application viewport.
-    const int visibleTitleHeight = std::min(kTitleHeight + 2, bounds.height());
+    const int visibleTitleHeight = std::min(titleHeight(m_content) + 2, bounds.height());
     const int maxY = bounds.y() + bounds.height() - visibleTitleHeight;
     const int x = std::clamp(wanted.x(), bounds.x(), maxX);
     const int y = std::clamp(wanted.y(), bounds.y(), maxY);
@@ -740,12 +891,12 @@ void InternalEditorFrame::updateMaximizeButton() {
     m_maximizeButton->setAccessibleName(label);
     if (m_titleBar)
         m_titleBar->setCursor(m_maximized ? Qt::ArrowCursor
-                                          : Qt::OpenHandCursor);
+                                          : Qt::SizeAllCursor);
 }
 
 void InternalEditorFrame::restoreContentFocus() {
     QTimer::singleShot(0, this, [this] {
-        if (!isVisible() || !m_content) return;
+        if (!isVisible() || !m_content || isInteracting()) return;
         if (m_lastContentFocus && m_lastContentFocus->isVisible()) {
             m_lastContentFocus->setFocus(Qt::OtherFocusReason);
         } else {
@@ -807,7 +958,7 @@ QRect InternalEditorFrame::interactiveResizeGeometry(
     }
     if (m_resizeEdges & TopEdge) {
         const int latestTitleTop = bounds.y() + bounds.height() -
-                                   std::min(kTitleHeight + 2, bounds.height());
+                                   std::min(titleHeight(m_content) + 2, bounds.height());
         top = std::clamp(pressGeometry.top() + delta.y(),
                          std::max(bounds.top(), bottom - bounds.height()),
                          std::min(bottom - minH, latestTitleTop));
@@ -868,9 +1019,120 @@ bool InternalEditorFrame::checkPlacementForTest() {
                   nativeFrame.property("vlt.nativeOverlay").toBool() &&
                   !overlayHost.testAttribute(Qt::WA_NativeWindow),
               "a native plugin frame does not promote the shared workspace");
+        const auto chromeGeometry = [&] {
+            return QRect(nativeFrame.parentWidget()->mapTo(nativeFrame.nativeParentWidget(), nativeFrame.pos()), nativeFrame.size());
+        };
+        check(nativeFrame.m_nativeChrome && nativeFrame.m_nativeChrome->isVisible() &&
+                  nativeFrame.m_nativeChrome->geometry() == chromeGeometry() &&
+                  nativeFrame.m_nativeChrome->mask().isEmpty() &&
+                  nativeFrame.m_nativeChrome->requestedFormat().hasAlpha() &&
+                  nativeFrame.m_nativeChrome->flags().testFlag(Qt::WindowTransparentForInput),
+              "native editor has an alpha, input-transparent native fringe");
+        nativeFrame.moveWithinWorkspace(QPoint(35, 45));
+        check(nativeFrame.m_nativeChrome->geometry() == chromeGeometry(),
+              "native editor fringe moves without a workspace presentation turn");
         nativeFrame.hide();
+        check(!nativeFrame.m_nativeChrome->isVisible(), "hiding a native editor also hides its fringe");
     }
     overlayHost.hide();
+    // Opt-in hardware check: compare the exterior against QPainter coverage,
+    // including the fringe below a native child. Keep it outside offscreen runs.
+    if (qEnvironmentVariableIntValue("DAW_EDITOR_GPU_CHECK")) {
+        const QColor backdrop(17, 133, 231);
+        auto palette = host.palette(); palette.setColor(QPalette::Window, backdrop);
+        host.setPalette(palette); host.setAutoFillBackground(true);
+        host.raise(); host.activateWindow();
+        ui::graphics::WorkspaceSurface surface(&host);
+        bool failed = false;
+        connect(&surface, &ui::graphics::WorkspaceSurface::failed, &host,
+                [&failed](const QString&) { failed = true; });
+        const auto settle = [] {
+            QEventLoop loop; QTimer::singleShot(200, &loop, &QEventLoop::quit); loop.exec();
+        };
+        for (const bool native : {false, true}) {
+            InternalEditorFrame frame(key + (native ? "/gpu-native" : "/gpu"), &host);
+            auto* content = new QWidget;
+            content->setProperty("vlt.pluginChrome", true);
+            content->setStyleSheet("background: #dc3050;");
+            frame.setContent(content);
+            if (native) frame.prepareForNativeSurface();
+            frame.present();
+            for (const QSize size : {QSize(440, 310), QSize(520, 360)}) {
+                frame.resize(size); frame.moveWithinWorkspace(QPoint(60, 70));
+                settle();
+                if (native) {
+                    // A pure move must preserve the cached native pixels, and
+                    // a workspace resize must raise the fringe with the view.
+                    frame.moveWithinWorkspace(QPoint(110, 95));
+                    host.resize(host.width() + 1, host.height());
+                    settle();
+                }
+                const QImage actual = native
+                    ? host.screen()->grabWindow(0,
+                        host.mapToGlobal(QPoint()).x() - host.screen()->geometry().x(),
+                        host.mapToGlobal(QPoint()).y() - host.screen()->geometry().y(),
+                        host.width(), host.height()).toImage()
+                    : surface.quickWindow()->grabWindow();
+                check(!failed && !actual.isNull() && surface.quickWindow()->isExposed(),
+                      "rounded editor reaches the hardware compositor");
+                if (actual.isNull()) continue;
+                const qreal dpr = actual.devicePixelRatio();
+                QImage expected(frame.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+                expected.setDevicePixelRatio(dpr); expected.fill(Qt::transparent);
+                { QPainter painter(&expected); frame.paintChrome(painter); }
+                const QColor rim = expected.pixelColor(qRound(30 * dpr), 0);
+                const QColor shell = expected.pixelColor(expected.rect().center());
+                int smoothCorners = 0;
+                bool coverageMatches = true;
+                const QPoint origin(qRound(frame.x() * dpr), qRound(frame.y() * dpr));
+                if (native)
+                    check(actual.pixelColor(origin + QPoint(qRound(100 * dpr), qRound(100 * dpr))) == QColor("#dc3050"),
+                          "native content survives movement and workspace restacking");
+                for (const bool right : {false, true}) for (const bool bottom : {false, true}) {
+                    int smoothPixels = 0;
+                    for (int y = 0; y < qCeil(10 * dpr); ++y)
+                        for (int x = 0; x < qCeil(10 * dpr); ++x) {
+                            const qreal distance = std::hypot(10 - (x + .5) / dpr, 10 - (y + .5) / dpr);
+                            if (distance < 10 - 1 / dpr) continue;
+                            const QPoint point(right ? expected.width() - 1 - x : x,
+                                               bottom ? expected.height() - 1 - y : y);
+                            const QColor pixel = actual.pixelColor(origin + point);
+                            int contrast = 0;
+                            qreal coverage = 0;
+                            for (const auto channel : {&QColor::red, &QColor::green, &QColor::blue}) {
+                                const int value = (pixel.*channel)();
+                                const int background = (backdrop.*channel)();
+                                const int edge = (rim.*channel)();
+                                const int body = (shell.*channel)();
+                                const int delta = edge - background;
+                                if (std::abs(delta) > contrast) {
+                                    contrast = std::abs(delta);
+                                    coverage = qreal(value - background) / delta;
+                                }
+                                coverageMatches &= value >= std::min({background, edge, body}) - 3 &&
+                                                   value <= std::max({background, edge, body}) + 3;
+                                if (distance > 10 + 1 / dpr)
+                                    coverageMatches &= std::abs(value - background) <= 2;
+                            }
+                            smoothPixels += coverage > .05 && coverage < .85;
+                        }
+                    smoothCorners += smoothPixels >= 2;
+                }
+                // MSAA and raster coverage differ. Require actual blending at
+                // every corner, no artwork in the fringe and no paint outside
+                // the circle, rather than requiring identical edge samples.
+                if (!coverageMatches || smoothCorners != 4)
+                    std::fprintf(stderr, "editor GPU corner native=%d DPR=%.2f coverage=%d smoothCorners=%d\n",
+                                 native, double(dpr), coverageMatches, smoothCorners);
+                check(coverageMatches && smoothCorners == 4,
+                      "GPU editor corners retain smooth coverage after movement and resize");
+                const auto shot = qEnvironmentVariable("DAW_EDITOR_CHECK_SCREENSHOT");
+                if (!shot.isEmpty()) actual.save(shot + QString("-gpu-%1-%2.png").arg(native).arg(size.width()));
+            }
+        }
+        settings.remove(key);
+        return ok;
+    }
     {
         InternalEditorFrame rounded(key + QStringLiteral("/corners"), &host);
         auto* content = new QWidget;
@@ -888,12 +1150,9 @@ bool InternalEditorFrame::checkPlacementForTest() {
             if (!screenshot.isEmpty())
                 image.save(screenshot + QStringLiteral("-%1x%2.png")
                     .arg(size.width()).arg(size.height()));
-            check(!rounded.mask().isEmpty(), "editor clips its rounded corners");
-            check(rounded.mask().contains(QPoint(kCornerRadius, 0)) &&
-                  !rounded.mask().contains(QPoint(0, 0)),
-                  "editor keeps an eight-pixel corner radius after resizing");
-            check(rounded.testAttribute(Qt::WA_OpaquePaintEvent),
-                  "a filled editor does not repaint the workspace behind it");
+            check(rounded.mask().isEmpty(), "editor exterior is not quantized to a binary mask");
+            check(!rounded.testAttribute(Qt::WA_OpaquePaintEvent),
+                  "editor preserves partial coverage at its exterior");
             check(rounded.m_closeButton->visibleRegion() == QRegion(rounded.m_closeButton->rect()),
                   "the complete close button stays visible inside the rounded header");
             for (const QPoint point : {image.rect().topLeft(), image.rect().topRight(),
@@ -902,6 +1161,59 @@ bool InternalEditorFrame::checkPlacementForTest() {
                       "rounded editor clips all four corners and child artwork");
             check(image.pixelColor(image.rect().center()) == QColor("#dc3050"),
                   "rounded editor preserves its content");
+            for (const bool right : {false, true}) for (const bool bottom : {false, true}) {
+                bool antialiased = false;
+                const int reach = qCeil(kCornerRadius * image.devicePixelRatio());
+                for (int y = 0; y < reach; ++y) for (int x = 0; x < reach; ++x) {
+                    const int alpha = image.pixelColor(right ? image.width() - 1 - x : x,
+                        bottom ? image.height() - 1 - y : y).alpha();
+                    antialiased |= alpha > 0 && alpha < 255;
+                }
+                check(antialiased, "all four editor corners retain subpixel coverage");
+            }
+        }
+    }
+    for (const bool equalizer : {false, true}) {
+        InternalEditorFrame plugin(key + (equalizer ? "/eq-shell" : "/plugin-shell"), &host);
+        auto* content = new QWidget;
+        content->setProperty("vlt.pluginChrome", true);
+        content->setProperty("vlt.eqChrome", equalizer);
+        content->setWindowTitle("Reverb test editor");
+        content->setStyleSheet("background: #dc3050;");
+        plugin.setContent(content);
+        plugin.setExpansionEnabled(false);
+        plugin.present();
+        plugin.resize(440, 310);
+        QApplication::processEvents();
+        check(plugin.m_title->text().isEmpty() && plugin.windowTitle() == "Reverb test editor" &&
+                  plugin.accessibleName() == "Reverb test editor", "plugin title is semantic only");
+        check(plugin.m_titleBar->height() == 26 && plugin.m_closeButton->size() == QSize(24, 24),
+              "plugin drag strip and close hit target follow shell metrics");
+        check(plugin.m_column->contentsMargins() == QMargins(1, 1, 1, 1), "EQ shares continuous plugin border inset");
+        check(!content->mask().isEmpty(), "plugin artwork leaves the curved contour visible");
+        check(plugin.mask().isEmpty(), "plugin exterior retains antialiasing");
+        check(plugin.m_closeButton->visibleRegion() == QRegion(plugin.m_closeButton->rect()), "plugin close target remains unclipped");
+        check(plugin.width() - (plugin.m_closeButton->mapTo(&plugin, QPoint()).x() +
+                  plugin.m_closeButton->width()) == 5, "plugin close target sits four pixels inside the contour");
+        content->setWindowTitle("Renamed plugin");
+        check(plugin.m_title->text().isEmpty() && plugin.accessibleName() == "Renamed plugin", "plugin semantic title follows renaming");
+        QImage image(plugin.size() * plugin.devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(plugin.devicePixelRatioF());image.fill(Qt::transparent);plugin.render(&image);
+        const double dpr = image.devicePixelRatio();
+        check(image.pixelColor(int(220*dpr), image.height() - 1) != QColor("#dc3050"), "content does not paint over lower plugin contour");
+        const QPointF closeCenter = QPointF(plugin.m_closeButton->mapTo(&plugin, QPoint())) + QPointF(12, 12);
+        const QColor backdrop = image.pixelColor(qRound((closeCenter.x() - 8) * dpr), qRound(closeCenter.y() * dpr));
+        for (const QPointF tip : {QPointF(-3.5, -3.5), QPointF(3.5, -3.5), QPointF(-3.5, 3.5), QPointF(3.5, 3.5)}) {
+            const QPointF at = (closeCenter + tip) * dpr;
+            bool inked = false;
+            const int reach = int(std::ceil(dpr));
+            for (int y = qRound(at.y()) - reach; y <= qRound(at.y()) + reach; ++y)
+                for (int x = qRound(at.x()) - reach; x <= qRound(at.x()) + reach; ++x) {
+                    const QColor pixel = image.pixelColor(x, y);
+                    inked |= std::abs(pixel.red() - backdrop.red()) + std::abs(pixel.green() - backdrop.green()) +
+                        std::abs(pixel.blue() - backdrop.blue()) > 90;
+                }
+            check(inked, "all four close-glyph tips remain visible in the plugin frame");
         }
     }
     {
@@ -976,6 +1288,22 @@ bool InternalEditorFrame::checkPlacementForTest() {
               Qt::LeftButton, Qt::NoButton);
         check(first.geometry() == beforeDrag && !first.m_dragging,
               "title release applies its final position");
+
+        mouse(title, QEvent::MouseButtonPress, origin, Qt::LeftButton, Qt::LeftButton);
+        mouse(title, QEvent::MouseMove, origin + QPoint(20, 10), Qt::NoButton, Qt::LeftButton);
+        // Opening a plugin can asynchronously grow and clamp its frame while
+        // the title is already held. The next sample starts at that live frame.
+        first.resizeForContent(QSize(950, 500));
+        const QPoint loadedPosition = first.pos();
+        mouse(title, QEvent::MouseMove, origin + QPoint(21, 11), Qt::NoButton, Qt::LeftButton);
+        check(first.pos() == first.constrainedGeometry(QRect(loadedPosition + QPoint(1, 1), first.size())).topLeft(),
+              "editor loading during a title drag preserves one-pixel tracking");
+        mouse(title, QEvent::MouseMove, origin + QPoint(-2000, 11), Qt::NoButton, Qt::LeftButton);
+        const QPoint edgePosition = first.pos();
+        mouse(title, QEvent::MouseMove, origin + QPoint(-1999, 11), Qt::NoButton, Qt::LeftButton);
+        check(first.pos() == edgePosition + QPoint(1, 0),
+              "title drag reverses immediately after reaching a workspace edge");
+        mouse(title, QEvent::MouseButtonRelease, origin + QPoint(-1999, 11), Qt::LeftButton, Qt::NoButton);
 
         QWidget* handle = first.m_resizeHandles[7];
         const QPoint corner = handle->mapToGlobal(handle->rect().center());

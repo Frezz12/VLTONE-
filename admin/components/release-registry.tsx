@@ -1,5 +1,6 @@
 "use client";
 
+import { ReleaseDownloadStats } from "./release-download-stats";
 import releaseTemplate from "../release-template.json";
 import type { APIError } from "@vlt/api-client";
 import { api } from "@vlt/api-client";
@@ -265,6 +266,7 @@ export function ReleaseRegistry() {
     {error && <div className="vlt-error">{error}</div>}
     {recovery && <div className="release-recovery" role="status"><div><Undo2 size={20} aria-hidden /><span><strong>Есть несохранённый текст{recovery.content.version ? ` версии ${recovery.content.version}` : ""}</strong><small>Восстановите его после перезагрузки или продолжите с данными сервера.</small></span></div><div className="vlt-row"><button className="vlt-button" onClick={restoreRecovery} disabled={!canWrite || !releases || locked}>Восстановить</button><button className="vlt-button vlt-button-secondary" onClick={clearRecovery}>Удалить копию</button></div></div>}
     {Object.keys(fieldErrors).length > 0 && <div className="vlt-error release-error-summary" ref={errorSummary} tabIndex={-1} role="alert"><strong>Исправьте поля перед продолжением:</strong><ul>{Object.entries(fieldErrors).map(([name, message]) => <li key={name}><a href={`#release-${name}`}>{message}</a></li>)}</ul></div>}
+    <ReleaseDownloadStats />
     <div className="release-registry-grid">
       <section className="vlt-card vlt-card-pad release-version-panel" aria-label="Список релизов"><h2 className="vlt-section-title">Версии</h2><div className="release-list">
         {!releases && <p className="vlt-muted" role="status">Загрузка…</p>}

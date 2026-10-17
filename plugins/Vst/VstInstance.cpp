@@ -1,5 +1,7 @@
 #include "Vst/VstInstance.hpp"
 #include "Vst/VstFactory.hpp"
+#include "Host/PluginMidi.hpp"
+#include "Host/PluginAudioBuffers.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -41,116 +43,6 @@ std::string boundedText(const char* data, std::size_t capacity) {
     while (size > 0 && std::isspace(static_cast<unsigned char>(data[size - 1])))
         --size;
     return std::string(data, size);
-}
-
-std::uint8_t midi7(double value) noexcept {
-    return static_cast<std::uint8_t>(
-        std::clamp(std::lround(value * 127.0), 0l, 127l));
-}
-
-bool toMidi(const PluginEvent& input, VstMidiEvent& output,
-            std::uint32_t segmentStart) noexcept {
-    std::memset(&output, 0, sizeof(output));
-    output.type = kVstMidiType;
-    output.byteSize = sizeof(VstMidiEvent);
-    output.deltaFrames = static_cast<VstInt32>(input.frameOffset - segmentStart);
-    const std::uint8_t channel = std::uint8_t(input.channel) & 0x0F;
-
-    switch (input.kind) {
-        case PluginEvent::Kind::NoteOn:
-            output.midiData[0] = 0x90 | channel;
-            output.midiData[1] = std::uint8_t(input.key) & 0x7F;
-            output.midiData[2] = midi7(input.value);
-            return true;
-        case PluginEvent::Kind::NoteOff:
-        case PluginEvent::Kind::NoteChoke:
-            output.midiData[0] = 0x80 | channel;
-            output.midiData[1] = std::uint8_t(input.key) & 0x7F;
-            output.midiData[2] = midi7(input.value);
-            return true;
-        case PluginEvent::Kind::PolyPressure:
-            output.midiData[0] = 0xA0 | channel;
-            output.midiData[1] = std::uint8_t(input.key) & 0x7F;
-            output.midiData[2] = midi7(input.value);
-            return true;
-        case PluginEvent::Kind::MidiController:
-            if (input.paramIndex < 128) {
-                output.midiData[0] = 0xB0 | channel;
-                output.midiData[1] = std::uint8_t(input.paramIndex);
-                output.midiData[2] = midi7(input.value);
-                return true;
-            }
-            if (input.paramIndex == 128) {
-                output.midiData[0] = 0xD0 | channel;
-                output.midiData[1] = midi7(input.value);
-                return true;
-            }
-            if (input.paramIndex == 129) {
-                const std::uint16_t bend = static_cast<std::uint16_t>(
-                    std::clamp(std::lround(input.value * 16383.0), 0l, 16383l));
-                output.midiData[0] = 0xE0 | channel;
-                output.midiData[1] = std::uint8_t(bend & 0x7F);
-                output.midiData[2] = std::uint8_t((bend >> 7) & 0x7F);
-                return true;
-            }
-            if (input.paramIndex == 130) {
-                output.midiData[0] = 0xC0 | channel;
-                output.midiData[1] = midi7(input.value);
-                return true;
-            }
-            return false;
-        default: return false;
-    }
-}
-
-bool fromMidi(const VstMidiEvent& input, PluginEvent& output) noexcept {
-    const std::uint8_t status = input.midiData[0];
-    const std::uint8_t type = status & 0xF0;
-    output.channel = status & 0x0F;
-    output.noteId = -1;
-    switch (type) {
-        case 0x80:
-            output.kind = PluginEvent::Kind::NoteOff;
-            output.key = input.midiData[1] & 0x7F;
-            output.value = double(input.midiData[2] & 0x7F) / 127.0;
-            return true;
-        case 0x90:
-            output.kind = (input.midiData[2] & 0x7F) == 0
-                              ? PluginEvent::Kind::NoteOff
-                              : PluginEvent::Kind::NoteOn;
-            output.key = input.midiData[1] & 0x7F;
-            output.value = double(input.midiData[2] & 0x7F) / 127.0;
-            return true;
-        case 0xA0:
-            output.kind = PluginEvent::Kind::PolyPressure;
-            output.key = input.midiData[1] & 0x7F;
-            output.value = double(input.midiData[2] & 0x7F) / 127.0;
-            return true;
-        case 0xB0:
-            output.kind = PluginEvent::Kind::MidiController;
-            output.paramIndex = input.midiData[1] & 0x7F;
-            output.value = double(input.midiData[2] & 0x7F) / 127.0;
-            return true;
-        case 0xC0:
-            output.kind = PluginEvent::Kind::MidiController;
-            output.paramIndex = 130;
-            output.value = double(input.midiData[1] & 0x7F) / 127.0;
-            return true;
-        case 0xD0:
-            output.kind = PluginEvent::Kind::MidiController;
-            output.paramIndex = 128;
-            output.value = double(input.midiData[1] & 0x7F) / 127.0;
-            return true;
-        case 0xE0: {
-            output.kind = PluginEvent::Kind::MidiController;
-            output.paramIndex = 129;
-            const std::uint16_t bend = std::uint16_t(input.midiData[1] & 0x7F) |
-                (std::uint16_t(input.midiData[2] & 0x7F) << 7);
-            output.value = double(bend) / 16383.0;
-            return true;
-        }
-        default: return false;
-    }
 }
 
 } // namespace
@@ -538,13 +430,16 @@ void VstInstance::prepareAudio(const PluginProcessContext& context,
 void VstInstance::sendMidi(std::span<const PluginEvent> events,
                            std::uint32_t start, std::uint32_t end) noexcept {
     m_events.numEvents = 0;
-    for (const PluginEvent& event : events) {
-        if (event.frameOffset < start || event.frameOffset >= end ||
-            m_events.numEvents >= VstInt32(kMaxBlockEvents)) {
-            continue;
-        }
+    while (m_midiEventCursor < events.size() && events[m_midiEventCursor].frameOffset < end) {
+        const auto& event = events[m_midiEventCursor++];
+        if (event.frameOffset < start || m_events.numEvents >= VstInt32(kMaxBlockEvents)) continue;
         VstMidiEvent& midi = m_midiEvents[std::size_t(m_events.numEvents)];
-        if (!toMidi(event, midi, start)) continue;
+        std::array<std::uint8_t, 3> bytes;
+        if (!encodePluginMidi(event, bytes)) continue;
+        midi = {};
+        midi.type = kVstMidiType; midi.byteSize = sizeof(midi);
+        midi.deltaFrames = VstInt32(event.frameOffset - start);
+        std::memcpy(midi.midiData, bytes.data(), bytes.size());
         m_events.events[std::size_t(m_events.numEvents)] =
             reinterpret_cast<VstEvent*>(&midi);
         ++m_events.numEvents;
@@ -590,15 +485,15 @@ bool VstInstance::processSegment(const PluginProcessContext& context,
 PluginProcessDisposition VstInstance::process(
     const PluginProcessContext& context) noexcept {
     const auto failed = [&] {
-        for (std::uint16_t ch = 0; ch < context.outputChannels; ++ch)
-            if (context.outputs && context.outputs[ch])
-                std::fill_n(context.outputs[ch], context.frames, 0.0f);
+        clearPluginOutputs(context);
         m_outputSink = nullptr;
         m_currentProcess = nullptr;
         return PluginProcessDisposition::Error;
     };
     if (!m_effect || !m_processing || context.frames > m_maxBlockSize)
         return failed();
+    m_midiEventCursor = 0;
+    std::fill(m_zeroInput.begin(), m_zeroInput.end(), 0.0f);
     m_currentProcess = &context;
     m_outputSink = context.outputEvents;
 
@@ -654,7 +549,7 @@ void VstInstance::receiveEvents(const VstEvents* events) noexcept {
         if (!event || event->type != kVstMidiType) continue;
         const auto* midi = reinterpret_cast<const VstMidiEvent*>(event);
         PluginEvent output;
-        if (!fromMidi(*midi, output)) continue;
+        if (!decodePluginMidi(reinterpret_cast<const std::uint8_t*>(midi->midiData), output)) continue;
         const std::int64_t position = std::int64_t(m_segmentStart) +
                                       std::max(midi->deltaFrames, 0);
         output.frameOffset = std::uint32_t(std::min<std::int64_t>(
@@ -673,7 +568,7 @@ VstIntPtr VstInstance::hostDispatch(vst::HostContext& host, AEffect*,
     switch (opcode) {
         case audioMasterAutomate:
             if (PluginListener* listener = self->m_listener.load(std::memory_order_acquire))
-                listener->onParameterChanged(std::uint32_t(index), opt);
+                listener->onParameterEdited(std::uint32_t(index), opt);
             return 0;
         case audioMasterBeginEdit:
         case audioMasterEndEdit:

@@ -13,6 +13,7 @@
 AccountSettingsPage::AccountSettingsPage(QWidget* parent) : QWidget(parent) {
     auto* column = new QVBoxLayout(this);
     auto* title = new QLabel(tr("VLTONE account"), this);
+    title->setProperty("role", "section");
     QFont font = title->font(); font.setBold(true); font.setPointSize(font.pointSize() + 2);
     title->setFont(font);
     column->addWidget(title);

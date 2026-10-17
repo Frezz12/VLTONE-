@@ -322,6 +322,11 @@ const std::vector<ChordParams::Type>& allChordTypes();
 /// the notes stacked on top come back with empty ids.
 Notes buildChords(const Notes& notes, const ChordParams& params);
 
+/// Insert phrase-relative generated notes. Replacement keeps the portions of
+/// existing notes outside [startBeats, endBeats), including both split tails.
+Notes insertGeneratedNotes(const Notes& source, Notes generated,
+                           double startBeats, double endBeats, bool merge);
+
 // ── Single-purpose edits ────────────────────────────────────────────────────
 
 Notes transpose(Notes notes, int semitones);
@@ -356,7 +361,8 @@ Notes nudge(Notes notes, double beats);
 /// than the bar it was written in and would otherwise rotate off the grid.
 Notes rotate(Notes notes, double beats, double spanBeats = 0.0);
 /// Cut every note crossing a grid line into separate notes on each side.
-Notes splitAtGrid(Notes notes, double gridBeats);
+/// `pitchStep` raises/lowers each successive piece in semitones (MIDI-clamped).
+Notes splitAtGrid(Notes notes, double gridBeats, int pitchStep = 0);
 /// Cut every note that spans `beats` there. Notes not crossing it are untouched.
 Notes splitAt(Notes notes, double beats);
 

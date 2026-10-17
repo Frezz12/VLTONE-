@@ -97,7 +97,7 @@ audio::Result projectJson(const ProjectModel& project, json& output) {
         const auto stripRack = [](auto&& self, json& value) -> void {
             if (value.is_object()) {
                 value.erase("rackGroups"); value.erase("masterRackGroups");
-                value.erase("rackParameters");
+                value.erase("rackParameters"); value.erase("modulation"); value.erase("masterModulation");
                 for (auto& entry : value.items()) self(self, entry.value());
             } else if (value.is_array()) for (auto& entry : value) self(self, entry);
         };

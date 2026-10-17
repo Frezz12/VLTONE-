@@ -101,9 +101,9 @@ void benchmark(bool repeatedColor) {
         core = std::make_unique<channel_color::ChannelColorInstance>();
         core->setParameterFromHost(0, -20);
       } else if (std::string_view(type) == "doubler")
-        core = std::make_unique<modulation::DoublerInstance>();
+        core = std::make_unique<daw::plugins::modulation::DoublerInstance>();
       else {
-        core = std::make_unique<modulation::ChorusInstance>();
+        core = std::make_unique<daw::plugins::modulation::ChorusInstance>();
         core->setParameterFromHost(0, .25);
         core->setParameterFromHost(1, .22);
         core->setParameterFromHost(2, .30);

@@ -41,7 +41,8 @@ class Delay {
         if (pos < 0) pos += double(m_data.size());
         const auto first = std::size_t(pos);
         const auto second = first + 1 == m_data.size() ? 0 : first + 1;
-        return std::lerp(m_data[first], m_data[second], pos - double(first));
+        const double t = pos - double(first);
+        return m_data[first] + (m_data[second] - m_data[first]) * t;
     }
     double read(double delay) const noexcept {
         double pos = double(m_cursor) - std::clamp(delay, 3.0, double(m_data.size() - 4));
@@ -56,8 +57,13 @@ class Delay {
                 n -= std::int64_t(m_data.size());
             return m_data[std::size_t(n)];
         };
-        return -t * (t - 1) * (t - 2) / 6 * at(i - 1) + (t + 1) * (t - 1) * (t - 2) / 2 * at(i) -
-               (t + 1) * t * (t - 2) / 2 * at(i + 1) + (t + 1) * t * (t - 1) / 6 * at(i + 2);
+        // The same four-point Lagrange polynomial in Horner form: three
+        // multiplies by the fractional position instead of four cubic weights.
+        const double a = at(i - 1), b = at(i), c = at(i + 1), d = at(i + 2);
+        const double cubic = (d - a + 3 * (b - c)) / 6;
+        const double quadratic = (a + c) * .5 - b;
+        const double linear = c - (2 * a + 3 * b + d) / 6;
+        return ((cubic * t + quadratic) * t + linear) * t + b;
     }
 
   private:

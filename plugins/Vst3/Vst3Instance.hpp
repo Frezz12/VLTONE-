@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Host/PluginInstance.hpp"
+#include "Host/PluginAudioBuffers.hpp"
 #include "Common/LockFreeQueue.hpp"
 #include "Vst3/Vst3Module.hpp"
 #include "Vst3/Vst3Support.hpp"
@@ -65,6 +66,8 @@ public:
     }
     std::int32_t parameterIndexForId(std::string_view id) const noexcept override;
     double parameterValue(std::uint32_t index) const noexcept override;
+    double parameterToNormalized(std::uint32_t index, double value) const noexcept override { return toNormalized(index, value); }
+    double parameterFromNormalized(std::uint32_t index, double value) const noexcept override { return toPlain(index, value); }
     std::string parameterText(std::uint32_t index, double plainValue) const override;
 
     bool saveState(std::vector<std::uint8_t>& out) const override;
@@ -73,6 +76,9 @@ public:
 
     void setParameterFromHost(std::uint32_t index, double plainValue) override;
     void pumpMainThread() override;
+    bool needsMainThreadPump() const noexcept override {
+        return m_restartFlags.load(std::memory_order_acquire) != 0;
+    }
     bool serviceOfflineRestart() override;
 
     bool hasEditor() const noexcept override;
@@ -102,6 +108,7 @@ private:
     PitchCapabilities m_pitchCapabilities;
     void readBuses();
     bool allocateAndActivateBuses(std::uint32_t maxBlockSize, bool sidechainConnected);
+    void reserveParameterChanges(const PluginProcessInfo& info);
     void refreshLatency();
     /// Normalised 0…1 (what VST3 speaks) ↔ the plugin's own units (what this
     /// host's API and its automation lanes speak).
@@ -116,6 +123,7 @@ private:
         double minimum = 0.0;
         double maximum = 1.0;
         bool linear = true;
+        std::int32_t steps = 0;
         bool ascending = true;
         std::vector<float> plainSamples;
     };
@@ -142,6 +150,9 @@ private:
     Steinberg::IPtr<vst3::EventList> m_outputEvents;
 
     std::vector<ParameterInfo> m_parameters;
+    // Process output meters bypass the document notification queue. UI reads
+    // their latest plain values without calling the controller on the audio thread.
+    std::unique_ptr<std::atomic<double>[]> m_readOnlyValues;
     /// VST3 addresses parameters by an opaque `ParamID`, unrelated to the index
     /// they are enumerated in. Kept index-parallel with `m_parameters`.
     std::vector<Steinberg::Vst::ParamID> m_parameterIds;
@@ -154,7 +165,6 @@ private:
     std::atomic<PluginListener*> m_listener{nullptr};
     std::atomic<std::uint32_t> m_latency{0};
     std::atomic<std::uint32_t> m_tail{0};
-    std::atomic<bool> m_restartLatency{false};
     std::atomic<Steinberg::int32> m_restartFlags{0};
 
     PluginEditorHost* m_editorHost = nullptr;
@@ -169,11 +179,7 @@ private:
 
     /// Same rule as CLAP: every bus the plugin declared has to be handed over,
     /// because the plugin indexes `data.inputs[i]` itself.
-    struct AudioBus {
-        std::uint32_t channels = 0;
-        std::vector<float*> pointers;
-        std::vector<float> storage;
-    };
+    using AudioBus = PluginAudioBus;
     std::vector<AudioBus> m_inputBuses;
     std::vector<AudioBus> m_outputBuses;
     std::vector<Steinberg::Vst::AudioBusBuffers> m_inputBufferDescs;

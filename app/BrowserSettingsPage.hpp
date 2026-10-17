@@ -19,13 +19,15 @@ class QSlider;
 class BrowserSettingsPage : public QWidget {
     Q_OBJECT
 public:
-    explicit BrowserSettingsPage(QWidget* parent = nullptr);
+    enum class Section { Files, Web };
+    explicit BrowserSettingsPage(QWidget* parent = nullptr, Section section = Section::Files);
 
 signals:
     /// Anything on this page changed; the shell rebuilds the panel.
     void changed();
 
 private:
+    void buildWebPage();
     void refreshFolders();
     void addFolder();
     void removeSelectedFolder();

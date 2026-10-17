@@ -27,6 +27,13 @@ if [[ -d "$release/forum" || -e "$release/bin/vlt-forum-media" ]]; then
 fi
 (cd "$release" && sha256sum -c SHA256SUMS >/dev/null)
 
+for app in web admin; do
+    mapfile -t manifests < <(find "$release/$app" -type f -path '*/.next/server/app-paths-manifest.json')
+    [[ ${#manifests[@]} -eq 1 ]] || die "$app route manifest is missing or ambiguous"
+    NODE_PATH="$release/$app/node_modules:$release/$app/node_modules/.pnpm/node_modules" \
+        node "$release/ops/check-next-routes.cjs" "${manifests[0]%/.next/server/app-paths-manifest.json}"
+done
+
 [[ -r "$ENV_FILE" ]] || die "missing $ENV_FILE"
 owner="$(stat -c '%U' "$ENV_FILE")"
 mode="$(stat -c '%a' "$ENV_FILE")"

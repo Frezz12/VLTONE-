@@ -27,6 +27,7 @@ class QLabel;
 namespace ui { class CreatorWindow; }
 namespace ui { class NotificationCenter; }
 class QDialog;
+class QImage;
 class QMenu;
 class QProgressBar;
 class QResizeEvent;
@@ -53,6 +54,7 @@ class ContextPanel;
 class NoteContextPanel;
 class FileBrowserPanel;
 class AiChatPanel;
+class MasterPanel;
 class WebBrowserPanel;
 class NotebookWindow;
 class TypingKeyboard;
@@ -453,6 +455,7 @@ public:
     /// cropping the plugin, and that the parameter the plugin itself moves
     /// rises to the top marked active.
     bool checkParameterDockForTest();
+    bool checkMasterPanelForTest();
     /// Prove the settings shell stays screen-bounded and every tab can scroll
     /// independently instead of growing the top-level window.
     bool checkSettingsViewportForTest();
@@ -744,9 +747,9 @@ private:
     void openPianoRoll(const QString& trackId, const QString& clipId);
     void openWarpEditor(const QString& trackId, const QString& clipId);
     void toggleWarpEditor();
-    void setWarpVisible(bool visible);
     /// Show the compact editor for a Pattern container.
     void openPattern(const QString& patternId);
+    void connectPatternRack();
     void openPatternClip(const QString& patternId, const QString& clipId);
     /// Enter in the browser applies the audio file to the most recently
     /// selected Pattern layer or MIDI channel.
@@ -821,6 +824,7 @@ private:
     /// it is opt-in, and it spends the user's money. `persist` is false for the
     /// headless hooks: a screenshot run must not rewrite the user's settings.
     void setAiVisible(bool visible, bool persist = true);
+    void setMasterVisible(bool visible);
     /// Lay the main row out for the current side. The only place that decides
     /// the column order, so the two sides cannot drift apart.
     void relayoutRow();
@@ -877,6 +881,7 @@ private:
     bool cloudRecordingRecoveryExists() const;
 #endif
     void setContextPanelVisible(bool visible);
+    QImage captureProjectPreview();
     bool doSave(const QString& packageDir);
     bool saveProjectAs();
     bool maybeSaveChanges();
@@ -981,9 +986,8 @@ private:
     TimelineWidget* m_timeline = nullptr;
     MixerWidget* m_mixer = nullptr;
     QWidget* m_bottomPanel = nullptr;
-    WarpEditorWidget* m_warpEditor = nullptr;
-    QWidget* m_warpPanel = nullptr;
-    QWidget* m_warpHandle = nullptr;
+    // Last explicitly opened Warp tab, used when W has no clip selection.
+    QPointer<WarpEditorWidget> m_warpEditor;
     InspectorWidget* m_inspector = nullptr;
     ContextPanel* m_contextPanel = nullptr;
     NoteContextPanel* m_noteContextPanel = nullptr;
@@ -998,6 +1002,9 @@ private:
     QDialog* m_notebookDetachedWindow = nullptr;
     bool m_notebookDetached = false;
     bool m_changingNotebookPlacement = false;
+    MasterPanel* m_masterPanel = nullptr;
+    int m_masterWidth = 196;
+    int m_masterDragStartWidth = 196;
     AiChatPanel* m_aiPanel = nullptr;
     QWidget* m_aiHandle = nullptr;
     /// The row holding browser | inspector | arrangement | assistant. Kept
@@ -1028,6 +1035,7 @@ private:
     QAction* m_showBrowserAction = nullptr;
     QAction* m_showWebAction = nullptr;
     QAction* m_showAiAction = nullptr;
+    QAction* m_showMasterAction = nullptr;
     QAction* m_followPlayheadAction = nullptr;
     QAction* m_bounceInPlaceAction = nullptr;
     QAction* m_offlineRenderAction = nullptr;
@@ -1138,8 +1146,6 @@ private:
     double m_playRangeEnd = -1.0;
     int m_mixerHeight = 545;
     int m_mixerDragStartHeight = 545;
-    int m_warpHeight = 360;
-    int m_warpDragStartHeight = 360;
     int m_trackHeaderWidth = ui::kTrackHeaderWidth;
     int m_trackHeaderDragStartWidth = ui::kTrackHeaderWidth;
     bool m_browserOnLeft = true;

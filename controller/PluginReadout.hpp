@@ -2,8 +2,12 @@
 
 #include "Host/PluginTypes.hpp"
 #include "Internal/EqualizerParams.hpp"
+#if DAW_ENABLE_REVERB
+#include "Internal/ReverbInstance.hpp"
+#endif
 #include "Internal/GravityParams.hpp"
 #include "Internal/MorphProgram.hpp"
+#include "Internal/FluxInstance.hpp"
 #include "Internal/SlicerParams.hpp"
 
 #include <bitset>
@@ -16,6 +20,7 @@
 namespace daw {
 
 using MorphSnapshot = plugins::morph::MorphSnapshot;
+using FluxSnapshot = plugins::flux::FluxSnapshot;
 
 namespace plugins::sampler { struct SampleData; }
 
@@ -66,6 +71,9 @@ struct PluginParameterReadout {
     std::int32_t index = -1;
     double value = 0;
     bool available = false;
+    double effectiveValue = 0;
+    double baseNormalized = 0, effectiveNormalized = 0;
+    bool modulated = false;
 };
 
 struct EqualizerSnapshot {
@@ -75,6 +83,13 @@ struct EqualizerSnapshot {
     char comparison = 'A';
     std::pair<std::string, std::string> preset;
 };
+
+#if DAW_ENABLE_REVERB
+struct ReverbSnapshot {
+    plugins::reverb::State state;
+    plugins::reverb::Telemetry telemetry;
+};
+#endif
 
 /// Requested separately: curves are only recalculated when the UI cache changes.
 struct EqualizerResponse {
@@ -117,6 +132,7 @@ struct SamplerSnapshot {
     std::shared_ptr<const plugins::sampler::SampleData> sample;
     /// The decoded source is present even while processed audio is rebuilding.
     bool hasSource = false;
+    double playbackPositionSeconds = -1.0;
 };
 
 } // namespace daw

@@ -16,6 +16,7 @@
 #include <limits>
 #include <numbers>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace daw::engine {
@@ -55,6 +56,9 @@ struct ClipPlacement {
     std::shared_ptr<dsp::WarpPlayback> warpPlayback;
     float fadeInExponent = 1.0f, fadeOutExponent = 1.0f;
     std::shared_ptr<dsp::TimeStretch> stretcher; // prepared off the audio thread
+    // Freeze audio already contains its source's edge transitions and effect
+    // response. A second edge fade would alter its first/last 5 ms.
+    bool edgeTransitionsRendered = false;
 
     // Integrate speed inside each fade, anchoring the head to its END and
     // the tail to its START. The unaffected region stays on the timeline.
@@ -104,12 +108,43 @@ public:
         if (!clips) { m_clips.publish({}); return; }
         auto previous = this->clips();
         auto prepared = std::make_shared<ClipList>(*clips);
+        // Keep the first matching placement, as the former linear lookup did,
+        // including comp slices which share an id but use different sources.
+        struct WarpKey {
+            std::string_view id;
+            const SampleBuffer* audio;
+            bool operator==(const WarpKey&) const = default;
+        };
+        struct WarpHash {
+            std::size_t operator()(const WarpKey& key) const noexcept {
+                return std::hash<std::string_view>{}(key.id) ^
+                    (std::hash<const SampleBuffer*>{}(key.audio) << 1);
+            }
+        };
+        std::unordered_map<WarpKey, const ClipPlacement*, WarpHash> priorWarps;
+        // Keep small tracks and one-off warp edits on the allocation-free lookup.
+        if (previous && previous->size() >= 32 &&
+            std::count_if(prepared->begin(), prepared->end(),
+                [](const auto& clip) { return clip.warp && clip.audio; }) >= 8) {
+            priorWarps.reserve(previous->size());
+            for (const auto& prior : *previous)
+                priorWarps.try_emplace({prior.clipId, prior.audio.get()}, &prior);
+        }
         for (std::size_t index = 0; index < prepared->size(); ++index) {
             auto& clip = (*prepared)[index];
             if (clip.warp && clip.audio) {
                 std::shared_ptr<dsp::WarpPlayback> old;
-                if (previous) for (const auto& prior : *previous)
-                    if (prior.clipId == clip.clipId && prior.audio == clip.audio) { old = prior.warpPlayback; break; }
+                if (!priorWarps.empty()) {
+                    if (const auto prior = priorWarps.find({clip.clipId, clip.audio.get()}); prior != priorWarps.end())
+                        old = prior->second->warpPlayback;
+                } else if (previous) {
+                    for (const auto& prior : *previous) {
+                        if (prior.clipId == clip.clipId && prior.audio == clip.audio) {
+                            old = prior.warpPlayback;
+                            break;
+                        }
+                    }
+                }
                 if (old && old->sampleRate() != m_sampleRate) old.reset();
                 clip.warpPlayback = old && daw::sameWarpAudio(old->map, *clip.warp) && old->tempo == clip.warpTempo ? old :
                     std::make_shared<dsp::WarpPlayback>(*clip.warp, clip.warpTempo, m_sampleRate, old);
@@ -151,7 +186,7 @@ public:
         };
         build(build, 0, schedule->clips->size());
         for (const auto& clip : *schedule->clips) {
-            if (!clip.audio || clip.muted) continue;
+            if (!clip.audio || clip.muted || clip.edgeTransitionsRendered) continue;
             schedule->boundaries.push_back(clip.startSample);
             schedule->boundaries.push_back(clipEnd(clip));
         }

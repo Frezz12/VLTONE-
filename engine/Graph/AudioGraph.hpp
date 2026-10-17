@@ -36,13 +36,14 @@ private:
 /// workers decrementing neighbouring counters do not fight over one line.
 struct alignas(kCacheLine) PendingCounter {
     std::atomic<std::uint32_t> value{0};
+    std::uint32_t initial = 0;
 };
 
 /// The immutable, realtime-safe result of compiling a graph.
 ///
 /// Nothing in here is ever mutated by the audio thread except the per-block
 /// scratch at the bottom — the dependency counters, reset from
-/// `pendingTemplate` at the start of each block, and the resolved input views.
+/// their initial counts at the start of each block, and the resolved input views.
 /// Publication is a single atomic pointer swap, so re-routing never blocks the
 /// audio thread.
 struct CompiledGraph {
@@ -69,6 +70,7 @@ struct CompiledGraph {
         std::uint32_t firstSuccessor = 0;
         std::uint32_t successorCount = 0;
         std::uint32_t dependencies = 0;  // in-degree
+        std::uint32_t dependencyCounter = kInvalidNode;
         std::uint32_t inlineSuccessor = kInvalidNode;
         bool inlineTask = false;
         FrameCount inputLatency = 0;     // arrival time of the aligned inputs
@@ -83,7 +85,6 @@ struct CompiledGraph {
     std::vector<std::uint32_t> successors; // grouped per node
     std::vector<std::uint32_t> order;      // topological, for serial/offline
     std::vector<std::uint32_t> roots;      // nodes with no dependencies
-    std::vector<std::uint32_t> pendingTemplate;
     /// Largest dependency level: a conservative, compile-time lower bound on
     /// how many nodes can be ready together. Used to avoid treating every
     /// graph below a fixed node count as serial work.
@@ -153,6 +154,7 @@ public:
     /// consumer; it receives them in connection order.
     Status connect(NodeId producer, NodeId consumer,
                    InputRole role = InputRole::Main);
+    bool wouldCycle(NodeId producer, NodeId consumer) const;
     Status disconnect(NodeId producer, NodeId consumer);
     /// Drop every connection into and out of a node (used when re-routing it).
     void disconnectAll(NodeId id);

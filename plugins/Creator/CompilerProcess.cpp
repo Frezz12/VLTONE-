@@ -95,6 +95,10 @@ bool runCreatorProcess(const std::filesystem::path &exe,
   const auto start = std::chrono::steady_clock::now();
   bool interrupted = false, timedOut = false, memoryExceeded = false;
   int code = -1;
+  // wamrc writes relative scratch files (wamrc-su-*.su). Keep them in the
+  // private job directory: installed tools and the app's inherited working
+  // directory may not be writable.
+  const auto workDirectory = log.parent_path();
 #ifdef _WIN32
   (void)ownProcessGroup; // Nested Job Objects retain the complete process tree.
   const auto quote = [](std::wstring s) {
@@ -149,7 +153,8 @@ bool runCreatorProcess(const std::filesystem::path &exe,
       limitsSet &&
       CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, TRUE,
                      CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
-                     exe.parent_path().c_str(), &si, &process);
+                     workDirectory.empty() ? nullptr : workDirectory.c_str(),
+                     &si, &process);
   CloseHandle(output);
   CloseHandle(input);
   if (!created) {
@@ -204,14 +209,6 @@ bool runCreatorProcess(const std::filesystem::path &exe,
     const int null = open("/dev/null", O_RDONLY);
     dup2(null, STDIN_FILENO);
     close(null);
-    // The bundled tools name some of their scratch files without a directory
-    // (wamrc's "wamrc-su-XXXXXX" stack-usage file, enabled by our
-    // --stack-bounds-checks, is one), so those files land in the working
-    // directory.  A Finder-launched app inherits "/" as its own working
-    // directory, which is not writable, and every compile then fails with
-    // "make temp file failed".  Anchor the child in the private job
-    // directory that owns this log file instead.
-    const auto workDirectory = log.parent_path();
     if (!workDirectory.empty())
       (void)chdir(workDirectory.c_str());
 #ifndef __APPLE__

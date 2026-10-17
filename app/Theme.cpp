@@ -191,14 +191,14 @@ ThemeManager::ThemeManager() {
         m_defaultFont = app->font();
 
     m_presets = {
-        // Soft lime marks interaction against the original neutral surfaces. Keep
+        // Soft rose marks interaction against the original neutral surfaces. Keep
         // waveforms neutral and selection translucent so white peaks stay clear.
         make("dark", "Dark", true,
              grey(18), grey(28), grey(40),
              grey(237), grey(173),
-             colorFromRgb(0xAED477), colorFromRgb(0xC1E493),
-             grey(192), colorFromRgb(0xAED477),
-             grey(40), grey(64), QColor(174, 212, 119, 48),
+             colorFromRgb(0xD46482), colorFromRgb(0xE87F9B),
+             grey(192), grey(255),
+             grey(40), grey(64), QColor(212, 100, 130, 48),
              grey(22), grey(24)),
         // Preserve the original neutral palette as an explicit choice.
         make("monochrome", "Monochrome", true,
@@ -812,8 +812,7 @@ QLabel[role="secondary"] { color: %TEXT2%; }
 /* Settings navigation keeps text labels and native keyboard navigation;
    the edge marker also identifies the active page without relying on colour. */
 QTreeWidget#SettingsNavigation {
-    background: %WELL%; border: none; border-right: 1px solid %SEP%;
-    padding: 4px; outline: none;
+    background: transparent; border: none; padding: 0; outline: none;
 }
 QTreeWidget#SettingsNavigation::item {
     padding: 0 6px; border: 1px solid transparent;
@@ -823,14 +822,34 @@ QTreeWidget#SettingsNavigation::item:hover { background: %HOVER%; }
 QTreeWidget#SettingsNavigation::item:selected {
     background: %ACCENT_SOFT%; color: %TEXT%; border-left-color: %ACCENT%;
 }
+QTreeWidget#SettingsNavigation::branch { background: transparent; }
 QWidget#SettingsPageHeader {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %PANEL_TOP%,stop:1 %PANEL_BOTTOM%);
+    background: transparent;
     border-bottom: 1px solid %SEP%; }
 QLabel#SettingsPageIcon { background: %ACCENT_SOFT%; border-radius: %RADIUS%px; }
+QWidget#SettingsSidebar { background: %WELL%; border-right: 1px solid %SEP%; }
+QWidget#SettingsFooter { border-top: 1px solid %SEP%; }
+QLineEdit#SettingsSearch { background: %SURFACE%; border-radius: 8px; }
+QTreeWidget#SettingsNavigation::item:focus,
+QTreeWidget#SettingsSearchResults::item:focus { border: 1px solid %ACCENT%; }
+QTreeWidget#SettingsSearchResults { background: transparent; }
+QTreeWidget#SettingsSearchResults::item { padding: 8px; border-bottom: 1px solid %SEP%; }
+QTreeWidget#SettingsSearchResults::item:hover { background: %HOVER%; }
+QTreeWidget#SettingsSearchResults::item:selected { background: %ACCENT_SOFT%; color: %TEXT%; }
 SettingsWindow QGroupBox {
-    border-radius: %RADIUS%px; margin-top: 18px; padding-top: 8px;
+    background: %SURFACE%; border: 1px solid %SEP%;
+    border-radius: 10px; margin-top: 12px; padding-top: 12px;
 }
 SettingsWindow QGroupBox::title { color: %TEXT%; padding: 0 4px; }
+SettingsWindow QGroupBox[searchMatch="true"] { border-color: %ACCENT%; }
+SettingsWindow QComboBox, SettingsWindow QSpinBox, SettingsWindow QDoubleSpinBox,
+SettingsWindow QLineEdit { min-height: 26px; }
+SettingsWindow QPushButton { min-height: 26px; }
+SettingsWindow QCheckBox, SettingsWindow QRadioButton { min-height: 26px; spacing: 8px; }
+QListWidget#ThemePaletteGallery { background: transparent; border: none; }
+QListWidget#ThemePaletteGallery::item { padding: 5px; border: 1px solid %SEP%; border-radius: 8px; }
+QListWidget#ThemePaletteGallery::item:selected { border: 2px solid %ACCENT%; background: %ACCENT_SOFT%; color: %TEXT%; }
+QLabel#AudioLatencySummary { background: %WELL%; padding: 12px; border-radius: 8px; font-size: 16px; font-weight: 600; }
 
 /* Fallback for third-party/plain QSliders. Application-owned sliders use
    ui::GlassSlider and the same proportions: a quiet 4px rail under an 18px

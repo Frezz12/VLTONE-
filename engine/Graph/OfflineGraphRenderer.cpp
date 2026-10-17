@@ -1,4 +1,5 @@
 #include "Graph/OfflineGraphRenderer.hpp"
+#include "Graph/GraphProcessContext.hpp"
 #include "Memory/PcmReadCache.hpp"
 #include "ScopedNoDenormals.hpp"
 
@@ -219,41 +220,18 @@ private:
         const auto midiOffset = (task.sequence % m_window) * m_graph.midiBuffers.size();
         for (const auto node : m_stages[task.stage].nodes) {
             const auto& entry = m_graph.nodes[node];
-            for (std::uint32_t i = 0; i < entry.inputCount; ++i) {
-                const auto input = entry.firstInput + i;
-                const auto& edge = m_graph.inputEdges[input];
-                auto audio = nodeOutput(edge.producer, task.sequence, block.frames);
-                const MidiBuffer* midi = edge.midiBuffer != kInvalidNode
-                    ? &m_midi[midiOffset + edge.midiBuffer] : nullptr;
-                if (edge.delayIndex != kInvalidNode) {
-                    const auto delayed = m_arena.block(m_window * m_graph.nodes.size() + input, block.frames);
-                    m_graph.delays[edge.delayIndex]->process(audio, delayed, block.frames);
-                    audio = delayed;
-                    if (edge.midiDelayIndex != kInvalidNode && midi) {
-                        auto& delayedMidi = m_graph.midiDelayBuffers[edge.midiDelayIndex];
-                        m_graph.midiDelays[edge.midiDelayIndex]->process(*midi, delayedMidi, block.frames);
-                        midi = &delayedMidi;
-                    } else midi = nullptr;
-                }
-                m_inputs[input] = audio;
-                m_midiInputs[input] = midi;
-            }
-            MidiBuffer* midiOutput = entry.midiOutputBuffer != kInvalidNode
-                ? &m_graph.midiBuffers[entry.midiOutputBuffer] : nullptr;
-            if (midiOutput) midiOutput->clear();
             ProcessContext context;
             context.output = nodeOutput(node, task.sequence, block.frames);
-            context.inputs = std::span<const AudioBlock>(m_inputs).subspan(entry.firstInput, entry.inputCount);
-            context.inputRoles = std::span<const InputRole>(m_graph.inputRoles).subspan(entry.firstInput, entry.inputCount);
-            context.midiInputs = std::span<const MidiBuffer* const>(m_midiInputs).subspan(entry.firstInput, entry.inputCount);
-            context.midiOutput = midiOutput;
             context.frames = block.frames;
             context.timelinePosition = block.position;
-            context.sampleRate = m_graph.sampleRate;
             context.playing = block.playing;
             context.offline = true;
             context.transport = block.transport;
-            context.compensateInputLatency(entry.inputLatency, m_sourcesEnd);
+            prepareGraphProcessContext(m_graph, entry, context,
+                {m_inputs, m_midiInputs, std::span(m_midi).subspan(midiOffset, m_graph.midiBuffers.size())},
+                [&](auto producer) { return nodeOutput(producer, task.sequence, block.frames); },
+                [&](auto input) { return m_arena.block(m_window * m_graph.nodes.size() + input, block.frames); },
+                m_sourcesEnd);
             entry.node->process(context);
         }
     }

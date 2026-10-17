@@ -13,7 +13,7 @@ namespace daw::engine {
 /// Meaning of an audio edge at its consumer. Ordinary nodes may ignore this
 /// and continue to sum every input. PluginNode separates Sidechain edges into
 /// the first auxiliary input bus instead of leaking them into the dry signal.
-enum class InputRole : std::uint8_t { Main = 0, Sidechain = 1 };
+enum class InputRole : std::uint8_t { Main = 0, Sidechain = 1, Modulation = 2 };
 
 /// Offline-only opt-in. Ordered nodes own their DSP state and depend solely on
 /// their context and immutable session data. Capture nodes expose their last
@@ -153,6 +153,10 @@ public:
     /// Opt-in for fusing cheap, audio-only one-in/one-out chain nodes into one
     /// scheduler job. This never changes their DSP calls or summation order.
     virtual bool canFuseTask() const noexcept { return false; }
+    /// Opt-in: process accepts output aliasing its sole main audio input.
+    /// The compiler grants this only after every other reader is excluded.
+    /// Custom nodes keep distinct input/output storage unless they opt in.
+    virtual bool supportsInPlace() const noexcept { return false; }
 
     virtual OfflineNodePolicy offlineNodePolicy() const noexcept {
         return OfflineNodePolicy::Barrier;

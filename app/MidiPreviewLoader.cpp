@@ -3,7 +3,7 @@
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QPointer>
-#include <QThreadPool>
+#include "PreviewThreadPool.hpp"
 
 #include <atomic>
 #include <mutex>
@@ -38,7 +38,7 @@ void MidiPreviewLoader::request(const QString& path) {
     }
 
     QPointer<MidiPreviewLoader> self(this);
-    QThreadPool::globalInstance()->start([state, self] {
+    ui::previewThreadPool().start([state, self] {
         for (;;) {
             QString path;
             quint64 generation = 0;

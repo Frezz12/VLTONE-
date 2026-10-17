@@ -220,7 +220,7 @@ protected:
 private:
     void buildTargetRow(class QVBoxLayout* outer);
     void buildToolbar(class QVBoxLayout* outer);
-    void reloadTargetFields();
+    void reloadTargetFields(const daw::AutomationTarget* selection = nullptr);
     void applyTargetFromFields();
     void showLfoDialog();
     void showContourDialog();

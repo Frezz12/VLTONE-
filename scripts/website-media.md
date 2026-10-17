@@ -1,7 +1,7 @@
 # Website media
 
 The marketing images and hero recording use the current **Dark** theme with the
-lime accent (`#AED477`), in Russian and English. Creator media is maintained
+rose accent (`#D46482`), in Russian and English. Creator media is maintained
 separately and must not be overwritten by these scripts.
 
 Use a freshly built `build/bin/VLTONE` alongside its normal helper executables:
@@ -34,3 +34,8 @@ the tab is hidden, motion is paused, or reduced motion is enabled. A current
 screenshot remains the poster when JavaScript or autoplay is unavailable.
 After refreshing media, bump `web/lib/screenshot-version.ts` to avoid stale
 browser caches. The general manual is text only and has no image dependency.
+
+On Windows, pass `--executable build-windows/bin/VLTONE.exe` to each capture
+script. The video script also accepts `--ffmpeg <path-to-ffmpeg.exe>` when the
+encoder is not on PATH. Existing Night Bloom captures can be refreshed directly
+with `capture-website-demo.py`; this covers every home and capabilities image.

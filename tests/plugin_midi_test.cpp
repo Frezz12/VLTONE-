@@ -184,6 +184,35 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const PrepareInfo info = makeInfo();
 
+    // Empty mailbox loads must still observe later bursts, and a full output
+    // block must preserve every unconsumed emergency word across callbacks.
+    {
+        MidiClipPlayerNode player;
+        player.prepare(info);
+        MidiBuffer events; events.reserve(16);
+        ProcessContext context;
+        context.frames = kBlock; context.sampleRate = 48000; context.midiOutput = &events;
+        for (unsigned i = 0; i < 8; ++i) player.process(context);
+        while (player.sendLiveNoteOn(60, 100)) {}
+        bool accepted = true;
+        for (unsigned identity = 0; identity < 2048; ++identity)
+            accepted &= player.sendLiveNoteOff(std::uint8_t(identity % 128), std::uint8_t(identity / 128));
+        std::array<unsigned, 2048> releases{};
+        for (unsigned block = 0; block < 140; ++block) {
+            events.clear(); player.process(context);
+            for (const auto& event : events.events()) if (event.isNoteOff())
+                ++releases[event.channel() * 128 + event.data1];
+        }
+        check(accepted && std::all_of(releases.begin(), releases.end(), [](auto n) { return n == 1; }),
+              "every emergency mailbox word survives tiny output blocks exactly once");
+        while (player.sendLiveNoteOn(60, 100)) {}
+        player.sendLiveNoteOff(127, 15);
+        events.clear(); player.process(context);
+        check(std::any_of(events.events().begin(), events.events().end(), [](const auto& event) {
+            return event.isNoteOff() && event.channel() == 15 && event.data1 == 127 && event.isNoteChoke;
+        }), "an emptied emergency word accepts a later release after idle blocks");
+    }
+
     // ── Audio-only graph storage ──
     {
         AudioGraph graph;

@@ -18,6 +18,7 @@
 #include "Vst3/Vst3Instance.hpp"
 #include "Vst3/Vst3Support.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -472,6 +473,127 @@ int main() {
         std::filesystem::remove_all(directory, error);
     }
 
+    // Output meters are readable state, never a user edit or recovery overlay.
+    {
+        const auto environment = [](const char* name, const char* value) {
+#if defined(_WIN32)
+            ::_putenv_s(name, value);
+#else
+            if (*value) ::setenv(name, value, 1); else ::unsetenv(name);
+#endif
+        };
+        environment("DAW_TEST_VST3_READONLY_METER", "1");
+        {
+            EngineController controller;
+            check(controller.initialize(48000, kBlock, false).isOk(), "meter runtime initializes");
+            const auto track = controller.addTrack(TrackKind::Audio, "Meter fixture");
+            const auto slot = controller.addInsert(track, descriptor);
+            auto* instance = controller.insertInstance(track, slot);
+            check(instance && instance->parameters().size() == 3 &&
+                  instance->parameters()[2].isReadOnly && !instance->parameters()[2].isAutomatable,
+                  "VST3 read-only metadata remains available to generic editors");
+            if (instance) {
+                (void)controller.pumpPluginEvents();
+                engine::GraphProcessor processor(2);
+                processor.setGraph(controller.routingGraph());
+                OutputBuffer output(2, kBlock);
+                for (int block = 0; block < 4; ++block)
+                    processor.process(output.block(), kBlock, block * kBlock, true);
+                std::vector<PluginParameterReadout> values{{"103", -1}};
+                controller.readInsertParameters(track, slot, values);
+                check(values[0].available && values[0].value == .75 && !controller.pumpPluginEvents(),
+                      "process-only read-only output updates display without dirtying the project");
+                const auto snapshot = controller.captureRecoverySnapshot();
+                const auto& stored = snapshot.project.findTrack(track)->inserts.front().parameters;
+                check(snapshot.captureError.empty() && !stored.empty() &&
+                      std::none_of(stored.begin(), stored.end(), [](const auto& value) { return value.id == "103"; }),
+                      "read-only meter is excluded from saved parameter fallbacks");
+                // New inserts intentionally start with a sparse document mirror.
+                // Establish the value before checking that its readback is a no-op.
+                const double unchanged = instance->parameterValue(0);
+                controller.setInsertParameter(track, slot, "100", unchanged);
+                (void)controller.pumpPluginEvents();
+                environment("DAW_TEST_VST3_EDITOR_EDIT", "1");
+                instance->setParameterFromHost(0, unchanged);
+                check(!controller.pumpPluginEvents(), "identical native parameter readback is not a document edit");
+                instance->setParameterFromHost(0, 1.5);
+                instance->setParameterFromHost(0, 1.75);
+                instance->setParameterFromHost(0, .5);
+                check(controller.pumpPluginEvents() &&
+                      controller.project().findTrack(track)->inserts.front().parameters.front().value == .5,
+                      "native parameter bursts retain their final value");
+                check(!controller.pumpPluginEvents(), "drained parameter burst does not repeat a document edit");
+                environment("DAW_TEST_VST3_EDITOR_EDIT", "");
+
+                // Align with an idle full sweep, then simulate unrelated hot
+                // instances requesting service on every intervening UI tick.
+                bool aligned = false;
+                for (int tick = 0; tick < 64 && !aligned; ++tick) {
+                    const auto before = controller.pluginEventScanCountForTest();
+                    (void)controller.pumpPluginEvents();
+                    aligned = controller.pluginEventScanCountForTest() != before;
+                }
+                check(aligned && !instance->needsMainThreadPump(), "quiet VST3 reaches its compatibility sweep");
+                for (int tick = 0; tick < 63; ++tick) {
+                    PluginMainThreadWork::request();
+                    (void)controller.pumpPluginEvents();
+                }
+                const auto beforeSweep = controller.pluginEventScanCountForTest();
+                (void)controller.pumpPluginEvents();
+                check(controller.pluginEventScanCountForTest() == beforeSweep + 1,
+                      "unrelated continuous wakes do not starve the quiet plugin compatibility sweep");
+            }
+        }
+        {
+            const auto all = factory.inspect(pluginPath);
+            const auto instrument = std::find_if(all.begin(), all.end(), [](const auto& value) { return value.isInstrument; });
+            EngineController controller;
+            const bool initialized = controller.initialize(48000, kBlock, false).isOk();
+            const auto track = controller.addTrack(TrackKind::Instrument, "Same-value recording");
+            const bool installed = instrument != all.end() && controller.setTrackInstrumentPlugin(track, *instrument);
+            check(initialized && installed, "native same-value recording fixture initializes");
+            if (initialized && installed) {
+                const auto slot = controller.project().findTrack(track)->instrument.id;
+                const auto clip = controller.addMidiClip(track, 0, 4);
+                const auto lane = controller.addControllerLane(track, clip, "Gain", -1);
+                controller.setLaneTarget(track, clip, lane, {}, "100");
+                controller.setLanePoints(track, clip, lane, {});
+                controller.setInsertParameter(track, slot, "100", 1.0);
+                (void)controller.pumpPluginEvents();
+                auto* instance = controller.insertInstance(track, slot);
+                environment("DAW_TEST_VST3_EDITOR_EDIT", "1");
+                controller.setAutomationWriteEnabled(true);
+                controller.play();
+                bool wroteAutomation = true;
+                for (double seconds : {1.0, 2.0}) {
+                    controller.seekSeconds(seconds);
+                    instance->setParameterFromHost(0, 1.0);
+                    wroteAutomation &= controller.pumpPluginEvents();
+                }
+                const auto& points = controller.project().findTrack(track)->clips.front().lanes.front().points;
+                const double beatsPerSecond = controller.project().tempo / 60.;
+                check(wroteAutomation && points.size() == 2 && std::abs(points[0].beats - beatsPerSecond) < 1e-9 &&
+                      std::abs(points[1].beats - 2 * beatsPerSecond) < 1e-9 &&
+                      points[0].value == .5 && points[1].value == .5,
+                      "identical native values at different times remain automation write points");
+                controller.stop();
+                controller.setAutomationWriteEnabled(false);
+                check(controller.startRecording(track), "native same-value MIDI capture starts");
+                instance->setParameterFromHost(0, 1.0);
+                const bool capturedEdit = controller.pumpPluginEvents();
+                const auto capture = controller.finalizeRecordingCapture();
+                check(capturedEdit && capture.tracks.size() == 1 && capture.tracks[0].performance.lanes.size() == 1 &&
+                      capture.tracks[0].performance.lanes[0].parameterId == "100" &&
+                      !capture.tracks[0].performance.lanes[0].points.empty() &&
+                      capture.tracks[0].performance.lanes[0].points.back().value == .5,
+                      "an identical native instrument value is retained by active MIDI recording");
+                controller.stop();
+                environment("DAW_TEST_VST3_EDITOR_EDIT", "");
+            }
+        }
+        environment("DAW_TEST_VST3_READONLY_METER", "");
+    }
+
     // ── Preset-wide controller changes ──
     // A native preset changes DSP internally and invalidates the host's cache.
     // Arturia also exposes MIDI helper parameters whose zero readbacks must
@@ -531,6 +653,7 @@ int main() {
 #endif
                 check(PluginMainThreadWork::generation() != generation,
                       "a preset notification wakes the main-thread pump");
+                check(live->needsMainThreadPump(), "VST3 exposes direct restart work for targeted servicing");
                 check(live->pendingParameterEvents().empty(),
                       "preset refresh has no queued processor edits before it is serviced");
                 const bool metadata = (flags & Steinberg::Vst::kParamTitlesChanged) != 0;
@@ -543,6 +666,7 @@ int main() {
                     check(live->activate(setup), "combined preset/metadata refresh activates");
                     live->startProcessing();
                 }
+                check(!live->needsMainThreadPump(), "serviced VST3 skips unrelated instance wakes");
                 PluginEvent notification;
                 bool offsetRefreshed = false;
                 while (node->popNotification(notification))
@@ -586,7 +710,7 @@ int main() {
         engine.graph().setSink(engine.graph().adoptNode(node));
         check(bool(engine.prepare(48000, 128, 2, true)), "prepare dynamic VST3 latency");
         environment("DAW_TEST_VST3_RESTART_FLAGS", std::to_string(int(Steinberg::Vst::kLatencyChanged)));
-        for (unsigned latency : {64u, 128u, 37u}) {
+        for (unsigned latency : {128u, 37u, 64u}) {
             environment("DAW_TEST_VST3_LATENCY", std::to_string(latency));
             node->instance()->setParameterFromHost(1, 0.25);
             check(bool(node->serviceOffline()), "service VST3 structural notification");
@@ -709,6 +833,35 @@ int main() {
                 note.noteId=1234;PluginEvent tuning;tuning.kind=PluginEvent::Kind::NotePitch;tuning.noteId=1234;tuning.value=12;tuning.frameOffset=12;
                 std::array<PluginEvent,2> expression{note,tuning};context.inputEvents=expression;instance->process(context);
                 check(std::fabs(left[0]-.75f)<1e-6f,"VST3 tuning reaches the matching note ID in the declared normalized range");
+
+                // Piano Roll drawing releases previews with NoteChoke. Test
+                // the real adapter and audio, not just the queued MIDI event.
+                PluginEvent release = note;
+                release.kind = PluginEvent::Kind::NoteChoke;
+                release.value = 0.0;
+                context.inputEvents = std::span<const PluginEvent>(&release, 1);
+                instance->process(context);
+                for (int block = 0; block < 3; ++block) {
+                    check(std::all_of(left.begin(), left.end(), [](float sample) { return sample == 0.0f; }) &&
+                              std::all_of(right.begin(), right.end(), [](float sample) { return sample == 0.0f; }),
+                          "releasing a VST3 preview stops its audio and keeps idle blocks silent");
+                    context.inputEvents = {};
+                    instance->process(context);
+                }
+                context.inputEvents = std::span<const PluginEvent>(&note, 1);
+                instance->process(context);
+                check(left[0] > 0.0f, "a VST3 note can be auditioned again after release");
+                release.kind = PluginEvent::Kind::NoteOff;
+                context.inputEvents = std::span<const PluginEvent>(&release, 1);
+                instance->process(context);
+                check(left[0] == 0.0f && right[0] == 0.0f,
+                      "ordinary VST3 note-off still releases the note");
+                release.kind = PluginEvent::Kind::NoteChoke;
+                std::array<PluginEvent, 2> click{note, release};
+                context.inputEvents = click;
+                instance->process(context);
+                check(left[0] == 0.0f && right[0] == 0.0f,
+                      "a quick VST3 preview click ends within the same audio block");
                 instance->stopProcessing();
                 instance->deactivate();
             }

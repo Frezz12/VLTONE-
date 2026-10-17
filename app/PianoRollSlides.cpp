@@ -44,56 +44,86 @@ std::string PianoRollView::slideAt(QPointF p) const {
             return i->id;
     return {};
 }
-void PianoRollView::paintSlides(QPainter &p) {
+void PianoRollView::paintSlides(QPainter &p, const QRegion& region) {
     const auto *c = clip();
     if (!c)
         return;
     const auto &notes = daw::midiNotes(*c);
     const auto &list = daw::slides::editable(*c);
+    const bool previewActive = m_tool == Tool::Slide && !m_slideGesture && m_pointerInside &&
+        m_pointer.x() >= keyboardWidth() && m_pointer.y() >= ui::kRulerHeight &&
+        m_pointer.y() < laneTop();
+    if (list.empty() && !previewActive) return;
+    const QRectF field(keyboardWidth(), ui::kRulerHeight, width() - keyboardWidth(),
+                       laneTop() - ui::kRulerHeight);
+    if (!region.intersects(field.toAlignedRect())) return;
     p.save();
     p.setClipRect(QRectF(keyboardWidth(), ui::kRulerHeight, width() - keyboardWidth(),
                          laneTop() - ui::kRulerHeight),
                   Qt::IntersectClip);
     p.setRenderHint(QPainter::Antialiasing);
     const auto revision = m_controller->midiNotesRevision(m_trackId.toStdString());
-    if (m_slidePaintRevision != revision || m_slidePaintClip != c->id) {
+    const bool curvesChanged = m_slidePaintRevision != revision || m_slidePaintClip != c->id;
+    if (curvesChanged) {
         m_slidePaintCurves = daw::slides::compile(notes, list);
         m_slidePaintRevision = revision;
         m_slidePaintClip = c->id;
+        m_slidePaintNoteIndices.clear();
+        for (std::size_t i = 0; i < notes.size(); ++i) {
+            const auto curve = m_slidePaintCurves.find(notes[i].id);
+            if (curve != m_slidePaintCurves.end() && !curve->second.empty())
+                m_slidePaintNoteIndices.push_back(i);
+        }
     }
     const auto &curves = m_slidePaintCurves;
-    for (const auto &n : notes) {
-        auto curve = curves.find(n.id);
-        if (curve == curves.end() || curve->second.empty())
-            continue;
-        QPainterPath path;
-        bool first = true;
-        double end = std::min(n.startBeats + n.lengthBeats, xToBeats(width()));
-        double begin =
-            std::max({n.startBeats, curve->second.front().beats, xToBeats(keyboardWidth())});
-        for (double b = begin; b <= end + 1e-7; b += std::max(.002, 1.5 / pxPerBeat())) {
-            double pitch =
-                n.pitch + daw::engine::curve::valueAt(curve->second, std::min(b, end), 0);
-            QPointF q(beatsToX(std::min(b, end)),
-                      pitchToY(0) - pitch * m_rowHeight + m_rowHeight * .5);
-            if (first) {
-                path.moveTo(q);
-                first = false;
-            } else
-                path.lineTo(q);
+    // Playback invalidates narrow regions at frame rate. Compile the projected
+    // paths only after a note edit or viewport change, preserving sample phase
+    // and draw order between full paints and disjoint playhead strips.
+    const std::array<double, 5> view{pxPerBeat(), m_rowHeight, m_scrollX, m_scrollY, keyboardWidth()};
+    if (curvesChanged || m_slidePaintSize != size() || m_slidePaintView != view) {
+        m_slidePaintPaths.clear();
+        m_slidePaintSize = size();
+        m_slidePaintView = view;
+        for (const std::size_t index : m_slidePaintNoteIndices) {
+            const auto& n = notes[index];
+            const auto curve = curves.find(n.id);
+            QPainterPath path;
+            bool first = true;
+            const double end = std::min(n.startBeats + n.lengthBeats, xToBeats(width()));
+            const double begin =
+                std::max({n.startBeats, curve->second.front().beats, xToBeats(keyboardWidth())});
+            for (double b = begin; b <= end + 1e-7; b += std::max(.002, 1.5 / pxPerBeat())) {
+                const double pitch =
+                    n.pitch + daw::engine::curve::valueAt(curve->second, std::min(b, end), 0);
+                QPointF q(beatsToX(std::min(b, end)),
+                          pitchToY(0) - pitch * m_rowHeight + m_rowHeight * .5);
+                if (first) {
+                    path.moveTo(q);
+                    first = false;
+                } else
+                    path.lineTo(q);
+            }
+            m_slidePaintPaths.push_back(std::move(path));
         }
-        QColor ink = Theme::automationAccent();
-        ink.setAlpha(170);
-        p.setPen(QPen(ink, 1.3));
-        p.drawPath(path);
     }
+    QColor curveInk = Theme::automationAccent();
+    curveInk.setAlpha(170);
+    p.setPen(QPen(curveInk, 1.3));
+    for (const auto& path : m_slidePaintPaths)
+        if (region.intersects(path.boundingRect().adjusted(-2, -2, 2, 2).toAlignedRect()))
+            p.drawPath(path);
+    ensureDocumentNoteIdIndex(*c);
+    const auto findNote = [&](const std::string& id) -> const daw::NoteModel* {
+        const auto found = m_noteById.find(id);
+        return found == m_noteById.end() ? nullptr : &notes[found->second];
+    };
     auto draw = [&](const daw::SlideNoteModel &s, bool preview) {
         auto r = slideRect(s);
-        const daw::NoteModel *anchor = nullptr;
-        for (const auto &n : notes)
-            if (n.id == s.referenceNoteId && !n.muted && n.startBeats <= s.startBeats &&
-                n.startBeats + n.lengthBeats > s.startBeats)
-                anchor = &n;
+        if (!preview && s.id != m_selectedSlide &&
+            !region.intersects(r.adjusted(-2, -2, 2, 2).toAlignedRect())) return;
+        const daw::NoteModel *anchor = findNote(s.referenceNoteId);
+        if (anchor && (anchor->muted || anchor->startBeats > s.startBeats ||
+                       anchor->startBeats + anchor->lengthBeats <= s.startBeats)) anchor = nullptr;
         QColor ink = anchor && !s.muted ? Theme::automationAccent() : th().textSecondary;
         QColor fill = ink;
         fill.setAlpha(preview ? 20 : 45);
@@ -103,10 +133,9 @@ void PianoRollView::paintSlides(QPainter &p) {
         p.drawRoundedRect(r, 3, 3);
         double activeEnd = s.startBeats;
         if (anchor)
-            for (const auto &n : notes)
-                if (!n.muted && std::find(s.targetNoteIds.begin(), s.targetNoteIds.end(), n.id) !=
-                                    s.targetNoteIds.end())
-                    activeEnd = std::max(activeEnd, n.startBeats + n.lengthBeats);
+            for (const auto &id : s.targetNoteIds)
+                if (const auto* n = findNote(id); n && !n->muted)
+                    activeEnd = std::max(activeEnd, n->startBeats + n->lengthBeats);
         if (activeEnd < s.startBeats + s.lengthBeats) {
             double left = std::max(r.left(), beatsToX(activeEnd));
             p.fillRect(QRectF(left, r.top(), r.right() - left, r.height()),
@@ -116,11 +145,10 @@ void PianoRollView::paintSlides(QPainter &p) {
             p.setPen(QPen(ink, 1, Qt::DashLine));
             p.drawLine(QPointF(r.left(), r.center().y()),
                        QPointF(r.left(), noteRect(*anchor).center().y()));
-            for (const auto &n : notes)
-                if (std::find(s.targetNoteIds.begin(), s.targetNoteIds.end(), n.id) !=
-                    s.targetNoteIds.end()) {
+            for (const auto &id : s.targetNoteIds)
+                if (const auto* n = findNote(id)) {
                     p.setBrush(Qt::NoBrush);
-                    p.drawRoundedRect(noteRect(n), 2, 2);
+                    p.drawRoundedRect(noteRect(*n), 2, 2);
                 }
         }
         if (!s.points.empty() && r.width() > 24) {
@@ -163,9 +191,7 @@ void PianoRollView::paintSlides(QPainter &p) {
     };
     for (const auto &s : list)
         draw(s, false);
-    if (m_tool == Tool::Slide && !m_slideGesture && m_pointerInside &&
-        m_pointer.x() >= keyboardWidth() && m_pointer.y() >= ui::kRulerHeight &&
-        m_pointer.y() < laneTop() && slideAt(m_pointer).empty()) {
+    if (previewActive && slideAt(m_pointer).empty()) {
         std::vector<std::string> selected;
         for (const auto &id : m_selected)
             selected.push_back(id.toStdString());

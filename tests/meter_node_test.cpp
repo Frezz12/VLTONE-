@@ -125,6 +125,16 @@ int main() {
           "mono processing resets the no-longer-present right peak");
     check(meter.peakHold() == 0.5f, "the next block starts a new peak history");
 
+    for (const auto inputs : {std::span<const AudioBlock>(oneInput),
+                             std::span<const AudioBlock>(threeInputs), noInputs}) {
+        dsp::sumInto(expected.block(), inputs);
+        context = contextFor(output.block(), inputs);
+        context.offline = true;
+        meter.process(context);
+        check(output.storage == expected.storage && meter.peakHold() == 0.5f,
+              "offline meter preserves audio without changing live peak history");
+    }
+
     // Diagnostic microbenchmark against the removed two-pass implementation.
     // Atomic stores are included on both sides so only aggregation differs.
     constexpr FrameCount kBenchFrames = 512;
@@ -169,6 +179,14 @@ int main() {
     check(oldLeft.load(std::memory_order_relaxed) == meter.peakLeft() &&
               oldRight.load(std::memory_order_relaxed) == meter.peakRight(),
           "benchmark paths publish identical peaks");
+
+    fusedContext.offline = true;
+    const auto offlineStart = std::chrono::steady_clock::now();
+    for (int i = 0; i < kIterations; ++i) meter.process(fusedContext);
+    const double offlineMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - offlineStart).count();
+    check(fusedOutput.storage == oldOutput.storage, "offline meter benchmark preserves every sample");
+    std::printf("      offline meter %.2f ms versus live %.2f ms\n", offlineMs, fusedMs);
 
     if (failures == 0) {
         std::puts("\nALL PASSED");

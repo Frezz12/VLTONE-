@@ -1,4 +1,5 @@
 #include "TimelineView.h"
+#include "ScrollMotion.hpp"
 
 #include <QPainter>
 #include <QMouseEvent>
@@ -282,9 +283,10 @@ void TimelineView::mousePressEvent(QMouseEvent* event)
     }
 
     if (event->button() == Qt::MiddleButton) {
+        ui::ScrollMotion::cancel(this);
         dragStartX_ = event->pos().x();
-        dragStartScroll_ = scrollOffset_;
-        setCursor(Qt::ClosedHandCursor);
+        dragLastX_ = event->position().x();
+        setCursor(Qt::SizeHorCursor);
         event->accept();
         return;
     }
@@ -295,8 +297,15 @@ void TimelineView::mousePressEvent(QMouseEvent* event)
 void TimelineView::mouseMoveEvent(QMouseEvent* event)
 {
     if (dragStartX_ >= 0) {
-        const int dx = event->pos().x() - dragStartX_;
-        setScrollOffset(dragStartScroll_ - dx * samplesPerPixel_);
+        if (event->type() == QEvent::MouseMove && !(event->buttons() & Qt::MiddleButton)) {
+            ui::ScrollMotion::cancel(this); dragStartX_ = -1; unsetCursor(); return;
+        }
+        const double dx = event->position().x() - dragLastX_;
+        dragLastX_ = event->position().x();
+        ui::ScrollMotion::pan(this, {-dx, 0},
+            [this] { return QPointF(scrollOffset_ / samplesPerPixel_, 0); },
+            [this](QPointF at) { setScrollOffset(at.x() * samplesPerPixel_); },
+            [](QPointF at) { return QPointF(std::max(0., at.x()), 0); });
         event->accept();
         return;
     }
@@ -306,6 +315,8 @@ void TimelineView::mouseMoveEvent(QMouseEvent* event)
 void TimelineView::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::MiddleButton && dragStartX_ >= 0) {
+        mouseMoveEvent(event);
+        ui::ScrollMotion::finishPan(this);
         dragStartX_ = -1;
         setCursor(Qt::ArrowCursor);
         event->accept();
@@ -316,6 +327,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent* event)
 
 void TimelineView::wheelEvent(QWheelEvent* event)
 {
+    ui::ScrollMotion::cancel(this);
     if (event->modifiers() & Qt::ControlModifier) {
         const double factor = (event->angleDelta().y() > 0) ? 1.0 / 1.15 : 1.15;
         double newZoom = samplesPerPixel_ * factor;

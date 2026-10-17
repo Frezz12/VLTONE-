@@ -640,6 +640,72 @@ int main() {
               "copy redo restores the extended Pattern boundary");
     }
 
+    // A neighbouring Pattern bounds automatic growth, while the MIDI remains
+    // editable outside the audible window in either direction.
+    {
+        daw::EngineController p{};
+        p.initialize(48000, 512, false);
+        p.setTempo(120);
+        const auto pattern = p.addPattern("Bounded Pattern");
+        const auto owner = p.project().findTrack(pattern)->clips.front().id;
+        p.setClipStartSeconds(pattern, owner, 2.0);
+        const auto child = p.addTrack(daw::TrackKind::Midi, "Bounded Child");
+        p.moveTrackToFolder(child, pattern);
+        const auto member = p.addMidiClip(child, 2.25, 1.0);
+        p.addNote(child, member, 60, 0.0, 2.0);
+        p.addPatternClip(pattern, 8.0, 2.0);
+        const auto next = p.addPatternClip(pattern, 5.0, 2.0);
+        const auto originalNotes = findClip(p, child, member)->notes;
+        const auto depth = p.undoDepth();
+        p.beginClipPositionEdit();
+        p.setClipStartSeconds(child, member, 4.75);
+        check(findClip(p, pattern, owner)->durationSeconds == 3.0 &&
+                  findClip(p, child, member)->startSeconds == 4.75 &&
+                  findClip(p, child, member)->durationSeconds == 1.0,
+              "MIDI moves past its Pattern while growth stops at the nearest unsorted neighbour");
+        p.setClipStartSeconds(child, member, 3.0);
+        check(findClip(p, pattern, owner)->durationSeconds == 2.0,
+              "reversing the drag immediately restores the smaller Pattern boundary");
+        p.setClipStartSeconds(child, member, 4.75);
+        p.endClipPositionEdit("Move Bounded MIDI");
+        const auto rightNotes = engineNotesFor(p, child);
+        check(p.undoDepth() == depth + 1 && rightNotes && rightNotes->size() == 1 &&
+                  rightNotes->front().startBeats == 9.5 && rightNotes->front().lengthBeats == .5 &&
+                  findClip(p, child, member)->notes == originalNotes &&
+                  findClip(p, child, member)->patternClipId == owner &&
+                  findClip(p, pattern, next)->startSeconds == 5.0,
+              "the Pattern clips playback at its right boundary without changing source notes or ownership");
+        p.undo();
+        check(findClip(p, pattern, owner)->durationSeconds == 2.0 &&
+                  findClip(p, child, member)->startSeconds == 2.25,
+              "one undo restores MIDI placement and bounded Pattern growth");
+        p.redo();
+        check(findClip(p, pattern, owner)->durationSeconds == 3.0 &&
+                  findClip(p, child, member)->startSeconds == 4.75,
+              "redo restores the bounded MIDI drag");
+        p.beginClipPositionEdit();
+        p.setClipStartSeconds(child, member, 1.5);
+        p.endClipPositionEdit("Move MIDI Left");
+        const auto leftNotes = engineNotesFor(p, child);
+        check(leftNotes && leftNotes->size() == 1 && leftNotes->front().startBeats == 4.0 &&
+                  leftNotes->front().lengthBeats == 1.0 &&
+                  findClip(p, child, member)->notes == originalNotes,
+              "moving MIDI before its Pattern clips the left edge without deleting notes");
+        p.undo();
+        const auto copy = p.duplicateClipAt(child, member, 6.0);
+        check(!copy.empty() && findClip(p, child, copy)->patternClipId == owner &&
+                  findClip(p, pattern, owner)->durationSeconds == 3.0 &&
+                  engineNotesFor(p, child)->size() == 1,
+              "a drag-copy beyond the neighbour stays in its source Pattern and is silent outside it");
+        p.undo();
+        p.redo();
+        check(findClip(p, child, copy) && findClip(p, pattern, owner)->durationSeconds == 3.0,
+              "redoing a MIDI copy cannot extend over the next Pattern");
+        const auto added = p.addMidiClip(child, 4.5, 3.0, owner);
+        check(!added.empty() && findClip(p, pattern, owner)->durationSeconds == 3.0,
+              "adding long MIDI to an existing Pattern obeys the same neighbour boundary");
+    }
+
     // Removing a Pattern removes its private source subtree as one object.
     {
         daw::EngineController p{};
@@ -734,10 +800,16 @@ int main() {
         }
         check(leftMember && rightMember && leftMember->notes.size() == 1 &&
                   rightMember->notes.size() == 1 &&
-                  std::fabs(leftMember->notes.front().lengthBeats - 1.0) < 1e-9 &&
-                  std::fabs(rightMember->notes.front().startBeats) < 1e-9 &&
-                  std::fabs(rightMember->notes.front().lengthBeats - 3.0) < 1e-9,
-              "splitting a Pattern cuts a crossing child note into both halves");
+                  leftMember->contentStorage() == rightMember->contentStorage() &&
+                  std::fabs(leftMember->notes.front().lengthBeats - 4.0) < 1e-9,
+              "splitting a Pattern preserves shared source notes without destructive trimming");
+        const auto splitNotes = engineNotesFor(p, source);
+        check(splitNotes && splitNotes->size() == 2 &&
+                  std::fabs((*splitNotes)[0].startBeats - 1.0) < 1e-9 &&
+                  std::fabs((*splitNotes)[0].lengthBeats - 1.0) < 1e-9 &&
+                  std::fabs((*splitNotes)[1].startBeats - 2.0) < 1e-9 &&
+                  std::fabs((*splitNotes)[1].lengthBeats - 2.0) < 1e-9,
+              "split Pattern playback gates crossing notes to the two audible windows");
         check(p.undoLabel() == "Split Pattern Clip",
               "the whole nested split is one undo action");
 
@@ -750,9 +822,14 @@ int main() {
                 if (clip.patternClipId == copy) copiedMember = &clip;
             }
         }
-        check(copiedMember && std::fabs(copiedMember->startSeconds - 2.0) < 1e-9 &&
-                  copiedMember->notes.size() == 1,
-              "duplicating a Pattern copies and relinks all child MIDI data");
+        const auto copiedNotes = engineNotesFor(p, source);
+        check(copiedMember && std::fabs(copiedMember->startSeconds - 1.0) < 1e-9 &&
+                  copiedMember->notes.size() == 1 && copiedNotes &&
+                  std::any_of(copiedNotes->begin(), copiedNotes->end(), [](const auto& note) {
+                      return std::fabs(note.startBeats - 4.0) < 1e-9 &&
+                             std::fabs(note.lengthBeats - 2.0) < 1e-9;
+                  }),
+              "duplicating a trimmed Pattern preserves content offset and audible placement");
 
         p.setClipStartSeconds(pattern, copy, 3.0);
         copiedMember = nullptr;
@@ -762,8 +839,12 @@ int main() {
                 if (clip.patternClipId == copy) copiedMember = &clip;
             }
         }
-        check(copiedMember && std::fabs(copiedMember->startSeconds - 3.0) < 1e-9,
-              "moving a Pattern clip moves its child MIDI clips immediately");
+        const auto movedNotes = engineNotesFor(p, source);
+        check(copiedMember && std::fabs(copiedMember->startSeconds - 2.0) < 1e-9 &&
+                  movedNotes && std::any_of(movedNotes->begin(), movedNotes->end(), [](const auto& note) {
+                      return std::fabs(note.startBeats - 6.0) < 1e-9;
+                  }),
+              "moving a trimmed Pattern updates its audible notes immediately");
 
         p.removeClip(pattern, copy);
         bool orphan = false;
@@ -888,15 +969,20 @@ int main() {
         const auto memberAfterSplit = clipIds(child);
         const std::vector<std::string> rightMembers = memberIds(right);
         std::string splitRightMember;
+        std::string rightFuture;
         for (const std::string& id : rightMembers) {
-            if (id != future) splitRightMember = id;
+            const auto* view = findClip(p, child, id);
+            if (view->patternPartId == findClip(p, child, crossing)->patternPartId) splitRightMember = id;
+            if (view->patternPartId == findClip(p, child, future)->patternPartId) rightFuture = id;
         }
+        if (!check(!splitRightMember.empty() && !rightFuture.empty(),
+                   "split Pattern materializes both composition views")) return 1;
         const std::string splitRightNote =
             findClip(p, child, splitRightMember)->notes.front().id;
         check(!right.empty() && rightMembers.size() == 2 &&
                   findClip(p, child, future)->notes.data() == futureStorage &&
                   engineNotesFor(p, denseTrack) == denseSchedule,
-              "Pattern split captures only crossing clips and scalar right-member ownership");
+              "Pattern split shares composition data and preserves unrelated note schedules");
 
         p.setNotePan(denseTrack, denseClip, denseNoteId, 0.1f);
         denseSchedule = engineNotesFor(p, denseTrack);
@@ -913,7 +999,8 @@ int main() {
         p.redo();
         check(clipIds(pattern) == ownerAfterSplit &&
                   clipIds(child) == memberAfterSplit &&
-                  findClip(p, child, future)->patternClipId == right &&
+                  findClip(p, child, future)->patternClipId == owner &&
+                  findClip(p, child, rightFuture)->patternClipId == right &&
                   findClip(p, child, splitRightMember) &&
                   findClip(p, child, splitRightMember)->notes.front().id ==
                       splitRightNote,
@@ -925,12 +1012,12 @@ int main() {
 
         // One right member was already muted. Pattern undo must restore that
         // individual scalar rather than blindly unmuting every member.
-        p.setClipMuted(child, future, true);
+        p.setClipMuted(child, rightFuture, true);
         const daw::NoteModel* rightMemberStorage =
             findClip(p, child, splitRightMember)->notes.data();
         p.setClipMuted(pattern, right, true);
         check(findClip(p, pattern, right)->muted &&
-                  findClip(p, child, future)->muted &&
+                  findClip(p, child, rightFuture)->muted &&
                   findClip(p, child, splitRightMember)->muted &&
                   findClip(p, child, splitRightMember)->notes.data() ==
                       rightMemberStorage,
@@ -939,7 +1026,7 @@ int main() {
         denseSchedule = engineNotesFor(p, denseTrack);
         p.undo();
         check(!findClip(p, pattern, right)->muted &&
-                  findClip(p, child, future)->muted &&
+                  findClip(p, child, rightFuture)->muted &&
                   !findClip(p, child, splitRightMember)->muted &&
                   findClip(p, denseTrack, denseClip)->notes.data() ==
                       denseStorage &&
@@ -948,7 +1035,7 @@ int main() {
               "Pattern mute undo restores individual states and preserves unrelated live edits");
         p.redo();
         check(findClip(p, pattern, right)->muted &&
-                  findClip(p, child, future)->muted &&
+                  findClip(p, child, rightFuture)->muted &&
                   findClip(p, child, splitRightMember)->muted &&
                   engineNotesFor(p, denseTrack) == denseSchedule,
               "Pattern mute redo republishes only its member tracks");
@@ -2653,6 +2740,62 @@ int main() {
               "filing it into a summing folder leaves that routing alone");
     }
 
+    // Both folder kinds delete their complete nested contents as one undo step.
+    for (const bool summing : {false, true}) {
+        daw::EngineController f{};
+        f.initialize(48000, 512, false);
+        const auto folder = f.addFolder(summing, "Delete Folder");
+        const auto nested = f.addFolder(!summing, "Nested Folder");
+        const auto child = f.addTrack(daw::TrackKind::Midi, "Nested Child");
+        const auto pattern = f.addPattern("Nested Pattern");
+        const auto source = f.addTrack(daw::TrackKind::Midi, "Pattern Source");
+        const auto outside = f.addTrack(daw::TrackKind::Audio, "Outside");
+        f.moveTrackToFolder(nested, folder);
+        f.moveTrackToFolder(child, nested);
+        f.moveTrackToFolder(pattern, folder);
+        f.moveTrackToFolder(source, pattern);
+        const auto clip = f.addMidiClip(child, 0.0, 2.0);
+        f.addNote(child, clip, 60, 0.0, 1.0, 100);
+        const auto patternClip = f.addMidiClip(source, 0.0, 2.0);
+        f.addNote(source, patternClip, 64, 0.0, 1.0, 100);
+        const auto bus = summing ? folder : nested;
+        f.setTrackOutputBus(outside, bus);
+        const auto send = f.addSend(outside, pattern);
+        const auto before = f.project().tracks;
+        const auto depth = f.undoDepth();
+
+        f.removeTrack(folder);
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            check(f.project().tracks.size() == 1 &&
+                      f.project().findTrack(outside) &&
+                      f.project().findTrack(outside)->outputBusId.empty() &&
+                      f.project().findTrack(outside)->sends.empty() &&
+                      !f.trackNodes(child) && !f.trackNodes(source) &&
+                      f.undoDepth() == depth + 1,
+                  "folder deletion removes every descendant and incoming edge in one step");
+            f.undo();
+            check(f.undoDepth() == depth &&
+                      f.project().tracks.size() == before.size() &&
+                      std::equal(before.begin(), before.end(), f.project().tracks.begin(),
+                          [](const auto& a, const auto& b) {
+                              return a.id == b.id && a.parentId == b.parentId &&
+                                     a.outputBusId == b.outputBusId;
+                          }),
+                  "one undo restores folder order, nesting and output routing");
+            const auto* restoredOutside = f.project().findTrack(outside);
+            const auto childNotes = engineNotesFor(f, child);
+            const auto sourceNotes = engineNotesFor(f, source);
+            check(restoredOutside && restoredOutside->sends.size() == 1 &&
+                      restoredOutside->sends.front().id == send &&
+                      restoredOutside->sends.front().destinationTrackId == pattern &&
+                      findClip(f, child, clip) && findClip(f, source, patternClip) &&
+                      childNotes && childNotes->size() == 1 &&
+                      sourceNotes && sourceNotes->size() == 1,
+                  "folder undo restores sends, MIDI clips and nested Pattern playback");
+            f.redo();
+        }
+    }
+
     // ── Summing can be turned on and off after the fact ──
     {
         daw::EngineController f{};
@@ -3107,6 +3250,14 @@ int main() {
                 return false;
             };
             check(waitForBake(), "background clip bake publishes audio and waveform together");
+            std::vector<std::string> changedWaveforms, secondView;
+            check(async.clipWaveformChangesSince(initialRevision, changedWaveforms) &&
+                      changedWaveforms == std::vector<std::string>{ac} &&
+                      async.clipWaveformChangesSince(initialRevision, secondView) && secondView == changedWaveforms,
+                  "a completed bake invalidates only its clip and is available to independent views");
+            check(async.clipWaveformChangesSince(async.clipWaveformRevision(), secondView) && secondView.empty() &&
+                      !async.clipWaveformChangesSince(async.clipWaveformRevision() + 1, secondView),
+                  "waveform journal handles up-to-date and incompatible revisions");
             const auto previous = async.cachedClipSampleData(at, ac);
             const auto envelope = async.clipWaveform(*async.audioClip(at, ac));
             async.setClipSampleParameter(at, ac, "pre.boost", 0.7);
@@ -3323,9 +3474,16 @@ int main() {
         daw::EngineController r{};
         r.initialize(48000, 512, /*openDevice=*/false);
         const std::string t = r.addTrack(daw::TrackKind::Audio, "Tall");
+        const auto geometry = r.clipGeometryRevision();
+        const auto heightRevision = r.trackHeightRevision();
         r.setTrackHeight(t, 200.0);
         check(std::fabs(r.project().findTrack(t)->height - 200.0) < 1e-6,
               "setTrackHeight applies");
+        check(r.clipGeometryRevision() == geometry && r.trackHeightRevision() > heightRevision,
+              "height changes invalidate lane layout without invalidating clip time ranges");
+        const auto resized = r.trackHeightRevision();
+        r.setTrackHeight(t, 200.0);
+        check(r.trackHeightRevision() == resized, "unchanged height leaves layout revision intact");
         r.setTrackHeight(t, 5.0);   // below the clamp floor
         check(r.project().findTrack(t)->height == 24.0,
               "track height clamps to a sane minimum");

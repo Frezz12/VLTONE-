@@ -20,6 +20,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QListView>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -34,6 +35,7 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStaticText>
+#include <QStyledItemDelegate>
 #include <QStyleOptionSpinBox>
 #include <QThreadPool>
 #include <QTimer>
@@ -46,10 +48,15 @@
 
 namespace {
 using namespace daw::plugins::morph;
-const std::array<QColor, 4> accents{QColor("#159bfa"), QColor("#984bfa"),
-                                    QColor("#f47739"), QColor("#c69a13")};
-const QColor ink("#2e4058");
-const QColor muted("#617187");
+const std::array<QColor, 4> accents{QColor("#318b98"), QColor("#8970b5"),
+                                  QColor("#c47553"), QColor("#a48532")};
+const QColor ink("#292d2e");
+const QColor muted("#626a69");
+const QColor paper("#f2f2ed");
+const QColor panelWhite("#fdfdfa");
+const QColor lineColor("#dcded7");
+const QColor fieldColor("#eeefe9");
+const QColor focusColor("#247d89");
 const QPointF padCenter(158, 106);
 constexpr double padRadius = 78;
 constexpr auto sourceMime = "application/x-vlt-morph-source";
@@ -71,11 +78,12 @@ public:
   explicit MorphMenu(QWidget *parent = nullptr) : QMenu(parent) {
     setFont(morphFont());
     setStyleSheet(
-        "QMenu {background:#f9fbfc;color:#2e4058;border:1px solid #cbd4df;"
-        "border-radius:6px;padding:5px;} QMenu::item {padding:6px 24px;}"
-        "QMenu::item:selected {background:#e1effa;border-radius:3px;}"
-        "QMenu::item:disabled {color:#8b98a8;}"
-        "QMenu::separator {height:1px;background:#dce2e9;margin:4px 9px;}");
+        "QMenu {background:#fdfdfa;color:#292d2e;border:1px solid #dcded7;"
+        "border-radius:10px;padding:7px;}"
+        "QMenu::item {padding:8px 28px 8px 16px;margin:2px;border-radius:6px;}"
+        "QMenu::item:selected {background:#e4eeeb;color:#205e67;}"
+        "QMenu::item:disabled {color:#8a908a;}"
+        "QMenu::separator {height:1px;background:#dcded7;margin:6px 10px;}");
   }
 };
 QString valueText(unsigned id, double value) {
@@ -85,7 +93,7 @@ QString valueText(unsigned id, double value) {
 void text(QPainter &p, QRectF r, const QString &s, int size, QColor color = ink,
           double tracking = 0, Qt::Alignment alignment = Qt::AlignCenter) {
   QFont f = morphFont(size);
-  f.setWeight(QFont::Medium);
+  f.setWeight(size >= 20 ? QFont::DemiBold : QFont::Medium);
   f.setLetterSpacing(QFont::AbsoluteSpacing, tracking);
   const QString label = englishText(s);
   while (QFontMetricsF(f).horizontalAdvance(label) > r.width() &&
@@ -99,72 +107,33 @@ QPointF polar(QPointF c, double radius, double degrees) {
   const double a = degrees * std::numbers::pi / 180;
   return c + QPointF(std::cos(a) * radius, std::sin(a) * radius);
 }
-void screw(QPainter &p, QPointF c, double radius = 5) {
-  QLinearGradient metal(c - QPointF(radius, radius),
-                        c + QPointF(radius, radius));
-  metal.setColorAt(0, QColor("#ffffff"));
-  metal.setColorAt(1, QColor("#d2d7dc"));
-  p.setBrush(metal);
-  p.setPen(QPen(QColor("#c1c8cf"), .8));
-  p.drawEllipse(c, radius, radius);
-  p.setPen(Qt::NoPen);
-  p.setBrush(QColor("#7b8791"));
-  p.drawEllipse(c, radius * .27, radius * .27);
-}
 void well(QPainter &p, QRectF r, QColor accent = {}, double = -1) {
   p.save();
-  QLinearGradient material(r.topLeft(), r.bottomRight());
-  material.setColorAt(0, QColor("#edf0f2"));
-  material.setColorAt(.32, QColor("#f9fafb"));
-  material.setColorAt(1, QColor("#f0f2f3"));
-  p.setBrush(material);
-  p.setPen(QPen(QColor("#d3d9e0"), 1));
-  p.drawRoundedRect(r, 13, 13);
-  p.setBrush(Qt::NoBrush);
-  p.setPen(QPen(Qt::white, 1));
-  p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 12, 12);
+  p.setBrush(panelWhite);
+  p.setPen(QPen(lineColor, .8));
+  p.drawRoundedRect(r, 18, 18);
   if (accent.isValid()) {
-    QPainterPath clip;
-    clip.addRoundedRect(r.adjusted(.5, .5, -.5, -.5), 13, 13);
-    p.setClipPath(clip);
-    QColor wash = accent;
-    wash.setAlpha(8);
-    QLinearGradient tint(r.topLeft(), r.bottomRight());
-    tint.setColorAt(0, wash);
-    tint.setColorAt(1, Qt::transparent);
-    p.fillRect(r, tint);
-    p.setPen(QPen(accent, 1.2));
-    p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(r.adjusted(.7, .7, -.7, -.7), 12, 12);
-    p.setClipping(false);
-    // Only the top edge carries the strong color; the sides remain quiet.
-    p.setClipRect(QRectF(r.left(), r.top() + 16, r.width(), r.height()));
-    wash.setAlpha(32);
-    p.setPen(QPen(QColor("#f6f8f9"), 2));
-    p.drawRoundedRect(r.adjusted(.7, .7, -.7, -.7), 12, 12);
-    p.setPen(QPen(wash, .8));
-    p.drawRoundedRect(r.adjusted(.7, .7, -.7, -.7), 12, 12);
+    QColor tint = accent;
+    tint.setAlpha(7);
+    p.setBrush(tint);
+    p.setPen(Qt::NoPen);
+    p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 17, 17);
   }
   p.restore();
 }
 void controlSurface(QPainter &p, QRectF r, QColor accent, bool pressed,
                     bool selected, bool hovered) {
-  QLinearGradient face(r.topLeft(), r.bottomLeft());
-  face.setColorAt(0, QColor(pressed ? "#e5e9ee" : "#fcfdfd"));
-  face.setColorAt(1, QColor(pressed ? "#f3f5f7" : "#eceff2"));
-  p.setBrush(face);
-  p.setPen(QPen(selected  ? accent
-                : hovered ? QColor("#a4b3c4")
-                          : QColor("#ced5de"),
-                1));
-  p.drawRoundedRect(r, 5, 5);
+  QColor fill = pressed ? QColor("#dfe3dc")
+                       : hovered ? QColor("#e6e9e1") : fieldColor;
   if (selected) {
-    QColor tint = accent;
-    tint.setAlpha(12);
-    p.setBrush(tint);
-    p.setPen(Qt::NoPen);
-    p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4);
+    fill = accent;
+    fill.setAlpha(pressed ? 40 : 23);
   }
+  p.setBrush(fill);
+  p.setPen(QPen(selected ? accent : hovered ? QColor("#aeb6ac") : lineColor,
+                selected ? 1.1 : .8));
+  const double radius = std::min(10., r.height() * .28);
+  p.drawRoundedRect(r, radius, radius);
 }
 enum class Glyph {
   None,
@@ -443,6 +412,9 @@ public:
   QColor accent = ink;
   Glyph glyph;
   bool flat = false, highlighted = false;
+  bool showCaption = false, dropdown = false, primary = false;
+  bool segmented = false;
+  QString displayCaption;
 
 protected:
   void paintEvent(QPaintEvent *) override {
@@ -450,29 +422,66 @@ protected:
     p.setRenderHint(QPainter::Antialiasing);
     const bool active = isChecked() || highlighted;
     const bool hovered = underMouse() || highlighted;
-    const bool power = glyph == Glyph::Power;
-    QColor foreground = active ? accent.darker(120) : ink;
+    const bool power = glyph == Glyph::Power || glyph == Glyph::Gain ||
+                       glyph == Glyph::Clip;
+    const bool compare = glyph == Glyph::Compare;
+    QColor foreground = active ? accent.darker(125) : ink;
     if (!isEnabled())
       p.setOpacity(.38);
     const auto r = QRectF(rect()).adjusted(1, 1, -1, -1);
     if (power) {
-      const auto c = r.center();
-      const double radius = std::min(r.width(), r.height()) * .48;
-      QColor tint = accent;
-      tint.setAlpha(active ? (isDown() ? 42 : 23) : 8);
-      p.setBrush(tint);
-      tint.setAlpha(active ? 65 : 22);
-      p.setPen(QPen(tint, 1));
-      p.drawEllipse(c, radius, radius);
-      foreground = active ? accent.darker(115) : muted;
+      const double u = std::min(r.width() / 44., r.height() / 26.);
+      const QRectF track(r.center().x() - 22 * u,
+                         r.center().y() - 12 * u, 44 * u, 24 * u);
+      p.setPen(Qt::NoPen);
+      p.setBrush(active ? accent : QColor("#c7cdc3"));
+      p.drawRoundedRect(track, 12 * u, 12 * u);
+      const QPointF thumb(track.left() + (active ? 32 : 12) * u,
+                          track.center().y());
+      p.setBrush(panelWhite);
+      p.drawEllipse(thumb, (isDown() ? 8 : 9) * u,
+                    (isDown() ? 8 : 9) * u);
+      // A mark and the thumb position both communicate the on/off state.
+      p.setPen(QPen(active ? accent.darker(125) : muted, 1.4 * u,
+                    Qt::SolidLine, Qt::RoundCap));
+      p.drawLine(thumb + QPointF(0, -3) * u, thumb + QPointF(0, 3) * u);
+    } else if (compare) {
+      controlSurface(p, r, accent, isDown(), false, hovered);
+      const double u = height() / 44.;
+      const double half = r.width() * .5;
+      const bool sideB = text().contains("[B]");
+      auto f = font();
+      f.setWeight(QFont::DemiBold);
+      p.setFont(f);
+      for (unsigned side = 0; side < 2; ++side) {
+        const QRectF segment(r.left() + half * side + 4 * u,
+                             r.top() + 4 * u, half - 8 * u,
+                             r.height() - 8 * u);
+        if (side == unsigned(sideB)) {
+          p.setPen(Qt::NoPen);
+          p.setBrush(ink);
+          p.drawRoundedRect(segment, 7 * u, 7 * u);
+        }
+        p.setPen(side == unsigned(sideB) ? panelWhite : muted);
+        p.drawText(segment, Qt::AlignCenter, side ? "B" : "A");
+      }
+    } else if (primary || (segmented && active)) {
+      p.setPen(Qt::NoPen);
+      p.setBrush(isDown() ? QColor("#131918")
+                         : hovered ? QColor("#404947") : ink);
+      p.drawRoundedRect(r, r.height() * .28, r.height() * .28);
+      foreground = panelWhite;
     } else if (!flat || hovered || isDown() || isChecked()) {
       controlSurface(p, r, accent, isDown(), active, hovered);
     }
-    if (glyph != Glyph::None) {
+    const QString caption = displayCaption.isEmpty() ? text() : displayCaption;
+    const bool labeled = showCaption || glyph == Glyph::None;
+    const double iconSize = std::min(width(), height()) * .52;
+    if (glyph != Glyph::None && !power && !compare) {
       p.save();
-      const double size = std::min(width(), height()) * (power ? .62 : .64);
-      p.translate(width() / 2., height() / 2. + (isDown() ? .6 : 0));
-      p.scale(size / 32., size / 32.);
+      p.translate(labeled ? height() * .55 : width() / 2.,
+                  height() / 2. + (isDown() ? .7 : 0));
+      p.scale(iconSize / 32., iconSize / 32.);
       p.translate(-16, -16);
       p.setPen(
           QPen(foreground, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -481,7 +490,7 @@ protected:
                 active || text() == QString::fromUtf8("♥") ||
                     text().contains("[B]"));
       p.restore();
-      if (glyph == Glyph::Sine) {
+      if (glyph == Glyph::Sine && !labeled) {
         auto f = font();
         f.setPixelSize(std::max(8, height() / 3));
         p.setFont(f);
@@ -489,53 +498,156 @@ protected:
         p.drawText(rect().adjusted(0, 1, -3, 0), Qt::AlignRight | Qt::AlignTop,
                    text().endsWith('2') ? "2" : "1");
       }
-    } else {
-      const auto label = rect().adjusted(9, 1 + int(isDown()), -9, -1);
-      p.setFont(fittedFont(font(), text(), label.width()));
+    }
+    if (labeled && !power) {
+      const auto label = rect().adjusted(
+          glyph == Glyph::None ? 12 : qRound(height() * .98),
+          1 + int(isDown()), dropdown ? -qRound(height() * .85) : -12, -1);
+      p.setFont(fittedFont(font(), caption, label.width()));
       p.setPen(foreground);
       p.drawText(
-          label, Qt::AlignCenter,
-          p.fontMetrics().elidedText(text(), Qt::ElideRight, label.width()));
+          label, (dropdown || showCaption ? Qt::AlignLeft : Qt::AlignHCenter) |
+                     Qt::AlignVCenter,
+          p.fontMetrics().elidedText(caption, Qt::ElideRight, label.width()));
+    }
+    if (dropdown) {
+      const QPointF c(width() - height() * .43, height() * .5);
+      const double d = height() * .09;
+      QPainterPath chevron;
+      const double direction = isCheckable() && active ? -1. : 1.;
+      chevron.moveTo(c + QPointF(-d, -d * .45 * direction));
+      chevron.lineTo(c + QPointF(0, d * .55 * direction));
+      chevron.lineTo(c + QPointF(d, -d * .45 * direction));
+      p.setPen(QPen(foreground, std::max(1., height() * .035),
+                    Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+      p.setBrush(Qt::NoBrush);
+      p.drawPath(chevron);
     }
     if (hasFocus()) {
-      p.setPen(QPen(QColor("#348ed0"), 1.3, Qt::DashLine));
+      p.setPen(QPen(focusColor, 1.5));
       p.setBrush(Qt::NoBrush);
-      if (power)
-        p.drawEllipse(r.adjusted(1, 1, -1, -1));
-      else
-        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4);
+      p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8);
     }
   }
 };
 
+class MorphChoiceDelegate final : public QStyledItemDelegate {
+public:
+  explicit MorphChoiceDelegate(QComboBox *owner)
+      : QStyledItemDelegate(owner), combo(owner) {}
+  QSize sizeHint(const QStyleOptionViewItem &option,
+                 const QModelIndex &index) const override {
+    const QFontMetrics metrics(option.font);
+    return {metrics.horizontalAdvance(index.data().toString()) + 56,
+            std::max(32, metrics.height() + 16)};
+  }
+  void paint(QPainter *p, const QStyleOptionViewItem &option,
+             const QModelIndex &index) const override {
+    p->save();
+    p->setRenderHint(QPainter::Antialiasing);
+    const auto r = QRectF(option.rect).adjusted(4, 2, -4, -2);
+    const bool selected = option.state & QStyle::State_Selected;
+    const bool current = index.row() == combo->currentIndex();
+    const double u = std::max(1., option.font.pixelSize() / 13.);
+    p->setPen(Qt::NoPen);
+    p->setBrush(selected ? QColor("#e4eeeb") : panelWhite);
+    p->drawRoundedRect(r, 6 * u, 6 * u);
+    p->setFont(option.font);
+    p->setPen(index.flags() & Qt::ItemIsEnabled ? ink : muted);
+    const auto label = r.adjusted(12 * u, 0, -32 * u, 0);
+    p->drawText(label, Qt::AlignLeft | Qt::AlignVCenter,
+                QFontMetrics(option.font).elidedText(
+                    index.data().toString(), Qt::ElideRight, int(label.width())));
+    if (current) {
+      const QPointF c(r.right() - 16 * u, r.center().y());
+      QPainterPath check;
+      check.moveTo(c + QPointF(-4, 0) * u);
+      check.lineTo(c + QPointF(-1, 3) * u);
+      check.lineTo(c + QPointF(5, -3) * u);
+      p->setPen(QPen(focusColor, 1.7 * u, Qt::SolidLine,
+                    Qt::RoundCap, Qt::RoundJoin));
+      p->drawPath(check);
+    }
+    p->restore();
+  }
+
+private:
+  QComboBox *combo;
+};
+
 class MorphCombo final : public QComboBox {
 public:
-  using QComboBox::QComboBox;
+  explicit MorphCombo(QWidget *parent = nullptr) : QComboBox(parent) {
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setAttribute(Qt::WA_Hover);
+    auto *list = new QListView(this);
+    list->setObjectName("morphChoiceList");
+    list->setUniformItemSizes(true);
+    list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setStyleSheet(
+        "QListView {background:#fdfdfa;color:#292d2e;border:1px solid #dcded7;"
+        "border-radius:9px;padding:5px;outline:0;}"
+        "QScrollBar:vertical {background:#fdfdfa;width:8px;margin:4px 0;}"
+        "QScrollBar::handle:vertical {background:#b9c1b6;min-height:24px;"
+        "border-radius:4px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;}"
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical "
+        "{background:transparent;}");
+    setView(list);
+    setItemDelegate(new MorphChoiceDelegate(this));
+    setMaxVisibleItems(10);
+  }
+  void showPopup() override {
+    view()->setFont(font());
+    const double u = std::max(1., font().pixelSize() / 13.);
+    int contentWidth = width();
+    for (int row = 0; row < count(); ++row)
+      contentWidth = std::max(contentWidth,
+          fontMetrics().horizontalAdvance(itemText(row)) + qRound(56 * u));
+    view()->setMinimumWidth(std::min(contentWidth, qRound(420 * u)));
+    QComboBox::showPopup();
+    update();
+  }
+  void hidePopup() override {
+    QComboBox::hidePopup();
+    update();
+  }
 
 protected:
+  bool event(QEvent *event) override {
+    if (event->type() == QEvent::Enter || event->type() == QEvent::Leave)
+      update();
+    return QComboBox::event(event);
+  }
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    controlSurface(p, QRectF(rect()).adjusted(1, 1, -1, -2), ink, false, false,
-                   underMouse());
+    if (!isEnabled())
+      p.setOpacity(.45);
+    const bool open = view()->isVisible();
+    controlSurface(p, QRectF(rect()).adjusted(1, 1, -1, -1), focusColor,
+                   open, open, underMouse());
     const double u = height() / 30.;
-    const QRectF label(8 * u, 0, width() - 32 * u, height() - 1);
-    p.setPen(isEnabled() ? ink : QColor("#84909c"));
+    const QRectF label(10 * u, 0, width() - 36 * u, height() - 1);
+    p.setPen(ink);
     p.setFont(fittedFont(font(), currentText(), label.width()));
     p.drawText(label, Qt::AlignLeft | Qt::AlignVCenter,
                p.fontMetrics().elidedText(currentText(), Qt::ElideRight,
                                           int(label.width())));
     QPainterPath arrow;
     const QPointF c(width() - 12 * u, height() / 2.);
-    arrow.moveTo(c + QPointF(-3.5, -1.5) * u);
-    arrow.lineTo(c + QPointF(0, 2) * u);
-    arrow.lineTo(c + QPointF(3.5, -1.5) * u);
+    const double direction = open ? -1. : 1.;
+    arrow.moveTo(c + QPointF(-3.5, -1.5 * direction) * u);
+    arrow.lineTo(c + QPointF(0, 2 * direction) * u);
+    arrow.lineTo(c + QPointF(3.5, -1.5 * direction) * u);
     p.setPen(QPen(ink, 1.3 * u, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     p.drawPath(arrow);
     if (hasFocus()) {
       p.setBrush(Qt::NoBrush);
-      p.setPen(QPen(ink, 1, Qt::DashLine));
-      p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -3), 3, 3);
+      p.setPen(QPen(focusColor, 1.5));
+      p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), 7, 7);
     }
   }
 };
@@ -596,6 +708,11 @@ public:
   MorphKnob(unsigned id, QString caption, QColor color, QWidget *parent)
       : ui::Knob(englishText(caption), parent), index(id),
         label(englishText(caption)), accent(color) {
+    if (label != "HPF" && label != "LPF") {
+      label = label.toLower();
+      if (!label.isEmpty())
+        label[0] = label[0].toUpper();
+    }
     const auto &info = parameterTable()[id];
     setRange(info.minValue, info.maxValue);
     setDefaultValue(info.defaultValue);
@@ -628,7 +745,7 @@ protected:
     p.translate((width() - 100 * scale) / 2.,
                 (height() - heightUnits * scale) / 2.);
     p.scale(scale, scale);
-    const QPointF c(50, hero ? 103 : 43);
+    const QPointF c(50, hero ? 103 : 44);
     const double resolution = scale * devicePixelRatioF();
     if (face.isNull() || !qFuzzyCompare(face.devicePixelRatio(), resolution)) {
       face = QPixmap(int(std::ceil(100 * resolution)),
@@ -638,36 +755,22 @@ protected:
       QPainter q(&face);
       q.setRenderHint(QPainter::Antialiasing);
       q.setPen(Qt::NoPen);
-      QRadialGradient shadow(c + QPointF(2, 5), 43);
-      shadow.setColorAt(0, QColor(57, 72, 88, 70));
-      shadow.setColorAt(.68, QColor(57, 72, 88, 38));
-      shadow.setColorAt(.86, QColor(57, 72, 88, 11));
-      shadow.setColorAt(1, Qt::transparent);
-      q.setBrush(shadow);
-      q.drawEllipse(c + QPointF(2, 5), 43, 43);
+      q.setBrush(QColor(34, 44, 37, 12));
+      q.drawEllipse(c + QPointF(0, 3), 35, 35);
       q.setBrush(Qt::NoBrush);
-      q.setPen(QPen(QColor("#dce2e8"), 2.5, Qt::SolidLine, Qt::RoundCap));
+      q.setPen(QPen(QColor("#dfe3da"), 3.5, Qt::SolidLine, Qt::RoundCap));
       q.drawArc(QRectF(c.x() - 42, c.y() - 42, 84, 84), 225 * 16, -270 * 16);
-      QLinearGradient rim(c - QPointF(20, 39), c + QPointF(22, 40));
-      rim.setColorAt(0, QColor("#ffffff"));
-      rim.setColorAt(.35, QColor("#dfe4e8"));
-      rim.setColorAt(.7, QColor("#a7b2bd"));
-      rim.setColorAt(1, QColor("#cbd2d8"));
-      q.setBrush(rim);
-      q.setPen(QPen(QColor("#b3bec8"), .8));
-      q.drawEllipse(c, 37.5, 37.5);
-      QLinearGradient cap(c - QPointF(17, 33), c + QPointF(23, 38));
-      cap.setColorAt(0, QColor("#ffffff"));
-      cap.setColorAt(.4, QColor("#f3f5f6"));
-      cap.setColorAt(1, QColor("#d9dee2"));
+      QLinearGradient cap(c - QPointF(0, 34), c + QPointF(0, 34));
+      cap.setColorAt(0, QColor("#454e4b"));
+      cap.setColorAt(1, QColor("#282f2c"));
       q.setBrush(cap);
-      q.setPen(QPen(QColor("#7d8b98"), .85));
-      q.drawEllipse(c, 35, 35);
+      q.setPen(QPen(QColor("#202824"), .8));
+      q.drawEllipse(c, 34, 34);
       q.setBrush(Qt::NoBrush);
-      q.setPen(QPen(Qt::white, 1.3));
-      q.drawArc(QRectF(c.x() - 33.5, c.y() - 33.5, 67, 67), 15 * 16, 170 * 16);
-      ::text(q, hero ? QRectF(0, 0, 100, 20) : QRectF(0, 111, 100, 15), label,
-             hero ? 11 : 13, muted, hero ? 1.7 : .4);
+      q.setPen(QPen(QColor(255, 255, 255, 22), 1));
+      q.drawEllipse(c, 31.5, 31.5);
+      ::text(q, hero ? QRectF(0, 0, 100, 20) : QRectF(0, 109, 100, 17), label,
+             hero ? 12 : 13, muted);
     }
     p.drawPixmap(0, 0, face);
     const bool log = parameterTable()[index].unit == "Hz" || index == EchoTime;
@@ -677,33 +780,30 @@ protected:
             : (value() - minimumValue()) / (maximumValue() - minimumValue()),
         0., 1.);
     p.setBrush(Qt::NoBrush);
-    QColor track = accent;
-    track.setAlpha(22);
-    p.setPen(QPen(track, 2.7, Qt::SolidLine, Qt::RoundCap));
-    p.drawArc(QRectF(c.x() - 42, c.y() - 42, 84, 84), 225 * 16, -270 * 16);
-    p.setPen(QPen(accent, 1.6, Qt::SolidLine, Qt::RoundCap));
+    p.setPen(QPen(accent, 3.5, Qt::SolidLine, Qt::RoundCap));
     p.drawArc(QRectF(c.x() - 42, c.y() - 42, 84, 84), 225 * 16,
               int(-270 * t * 16));
     if (modulation != 0 || highlighted) {
-      p.setPen(QPen(highlighted ? ink : accent, 1.1, Qt::DashLine));
+      p.setPen(QPen(highlighted ? ink : accent, 1.7, Qt::DashLine));
       p.drawArc(
           QRectF(c.x() - 46, c.y() - 46, 92, 92),
           int((225 - 270 * std::clamp(t - std::abs(modulation), 0., 1.)) * 16),
           int(-270 * std::min(1., std::abs(modulation) * 2) * 16));
     }
-    const auto inner = polar(c, 18, 135 + t * 270),
-               outer = polar(c, 33, 135 + t * 270);
-    p.setPen(QPen(Qt::white, 3.6, Qt::SolidLine, Qt::RoundCap));
-    p.drawLine(inner + QPointF(.5, .5), outer + QPointF(.5, .5));
-    p.setPen(QPen(ink, 2.5, Qt::SolidLine, Qt::RoundCap));
+    const auto inner = polar(c, 20, 135 + t * 270),
+               outer = polar(c, 28, 135 + t * 270);
+    p.setPen(QPen(panelWhite, 3.2, Qt::SolidLine, Qt::RoundCap));
     p.drawLine(inner, outer);
+    p.setPen(QPen(panelWhite, 1.2));
+    p.setBrush(accent);
+    p.drawEllipse(polar(c, 42, 135 + t * 270), 3.4, 3.4);
     if (cachedValue != value() || cachedIndex != index) {
       cachedValue = value();
       cachedIndex = index;
       number.setText(valueText(index, value()));
       number.setTextFormat(Qt::PlainText);
       numberFont = morphFont(hero ? 22 : 15);
-      numberFont.setWeight(QFont::Medium);
+      numberFont.setWeight(QFont::DemiBold);
       number.prepare(QTransform(), numberFont);
     }
     p.setFont(numberFont);
@@ -712,8 +812,8 @@ protected:
         QPointF((100 - number.size().width()) * .5, hero ? 23 : 91), number);
     if (hasFocus()) {
       p.setBrush(Qt::NoBrush);
-      p.setPen(QPen(QColor("#348ed0"), 1, Qt::DashLine));
-      p.drawRoundedRect(QRectF(1, 1, 98, heightUnits - 2), 6, 6);
+      p.setPen(QPen(focusColor, 1.3));
+      p.drawRoundedRect(QRectF(1, 1, 98, heightUnits - 2), 10, 10);
     }
   }
 
@@ -945,6 +1045,7 @@ struct MorphPanel::Impl {
                : 0;
   }
   void toggleDetails();
+  void resizeToContent();
   void build();
   void layout();
   void cache();
@@ -1010,13 +1111,13 @@ MorphPanel::Impl::Impl(MorphPanel *owner, daw::EngineController *c, QString ch,
   surface->setObjectName("morphSurface");
   scroll->setWidget(surface);
   QPalette light = surface->palette();
-  light.setColor(QPalette::Window, QColor("#f5f7f8"));
+  light.setColor(QPalette::Window, paper);
   light.setColor(QPalette::WindowText, ink);
-  light.setColor(QPalette::Base, QColor("#ffffff"));
+  light.setColor(QPalette::Base, panelWhite);
   light.setColor(QPalette::Text, ink);
-  light.setColor(QPalette::Button, QColor("#f2f4f6"));
+  light.setColor(QPalette::Button, fieldColor);
   light.setColor(QPalette::ButtonText, ink);
-  light.setColor(QPalette::Highlight, QColor("#dbeefe"));
+  light.setColor(QPalette::Highlight, QColor("#e4eeeb"));
   light.setColor(QPalette::HighlightedText, ink);
   surface->setPalette(light);
   q->setPalette(light);
@@ -1024,19 +1125,14 @@ MorphPanel::Impl::Impl(MorphPanel *owner, daw::EngineController *c, QString ch,
   scroll->viewport()->setAutoFillBackground(true);
   scroll->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
   surface->setStyleSheet(QStringLiteral(
-      "QDoubleSpinBox {color:#2e4058;background:#f8fafb;border:1px solid "
-      "#ced5de;"
-      "border-radius:5px;padding:2px 5px;}"
-      "QDoubleSpinBox:focus {border-color:#348ed0;}"
+      "QDoubleSpinBox {color:#292d2e;background:#eeefe9;border:1px solid "
+      "#dcded7;border-radius:7px;padding:2px 7px;}"
+      "QDoubleSpinBox:focus {border-color:#247d89;}"
       "QDoubleSpinBox::up-button,QDoubleSpinBox::down-button "
       "{border:0;width:16px;}"
       "QDoubleSpinBox::up-arrow,QDoubleSpinBox::down-arrow {image:none;}"
-      "QComboBox::drop-down {border:0;width:17px;}"
-      "QComboBox QAbstractItemView {color:#2e4058;background:#f9fbfc;"
-      "selection-background-color:#dbeefe;selection-color:#2e4058;border:1px "
-      "solid #ccd4df;}"
-      "QToolTip {color:#2e4058;background:#ffffff;border:1px solid "
-      "#c9d2dd;padding:5px;}"));
+      "QToolTip {color:#292d2e;background:#fdfdfa;border:1px solid "
+      "#dcded7;padding:6px;}"));
   surface->paint = [this](QPainter &p) {
     if (background.isNull())
       cache();
@@ -1121,7 +1217,7 @@ MorphKnob *MorphPanel::Impl::knob(unsigned id, QString label, QColor color,
   return k;
 }
 void MorphPanel::Impl::build() {
-  button(QString::fromUtf8("‹"), {506, 28, 47, 43}, [this] {
+  button(QString::fromUtf8("‹"), {434, 28, 40, 44}, [this] {
     auto presets = factoryPresets();
     unsigned n = 0;
     for (unsigned i = 0; i < presets.size(); ++i)
@@ -1129,7 +1225,7 @@ void MorphPanel::Impl::build() {
         n = i;
     q->applyFactoryPreset((n + 29) % 30);
   });
-  button(QString::fromUtf8("›"), {554, 28, 47, 43}, [this] {
+  button(QString::fromUtf8("›"), {480, 28, 40, 44}, [this] {
     auto presets = factoryPresets();
     unsigned n = 29;
     for (unsigned i = 0; i < presets.size(); ++i)
@@ -1138,10 +1234,11 @@ void MorphPanel::Impl::build() {
     q->applyFactoryPreset((n + 1) % 30);
   });
   topPreset =
-      button("Init", {602, 28, 332, 43}, [this] { presetMenu(topPreset); });
+      button("Init", {530, 28, 344, 44}, [this] { presetMenu(topPreset); });
+  static_cast<MorphButton *>(topPreset)->dropdown = true;
   topPreset->setObjectName("morphPresetMenu");
   topPreset->setAccessibleName(QString::fromUtf8("Presets"));
-  star = button(QString::fromUtf8("♡"), {935, 28, 43, 43}, [this] {
+  star = button(QString::fromUtf8("♡"), {882, 28, 44, 44}, [this] {
     const auto key =
         QString::fromStdString(state.presetKind + ":" + state.presetName);
     if (!favorites.removeOne(key))
@@ -1150,7 +1247,7 @@ void MorphPanel::Impl::build() {
     sync();
   });
   star->setAccessibleName(QString::fromUtf8("Favorite"));
-  abButton = button("A / B", {1045, 28, 46, 43}, [this] {
+  abButton = button("A / B", {1002, 28, 80, 44}, [this] {
     if (sideB)
       b = state;
     else
@@ -1160,16 +1257,18 @@ void MorphPanel::Impl::build() {
   });
   abButton->setObjectName("morphAB");
   abButton->setAccessibleName(QString::fromUtf8("Compare Morph A/B"));
-  button(QString::fromUtf8("⚙"), {1438, 26, 54, 48}, [this] {
+  button(QString::fromUtf8("⚙"), {1442, 28, 44, 44}, [this] {
     settingsMenu();
   })->setAccessibleName(QString::fromUtf8("Settings"));
-  button("≡", {987, 28, 46, 43}, [this] { presetMenu(topPreset); });
-  auto *random = button("Random", {1103, 28, 46, 43}, [this] {
+  button("≡", {934, 28, 44, 44}, [this] { presetMenu(topPreset); });
+  auto *random = button("Random", {1094, 28, 116, 44}, [this] {
     finish();
     apply(randomState(state, QRandomGenerator::global()->generate()),
           QStringLiteral("Randomize Morph parameters"));
   });
   random->setObjectName("morphRandom");
+  random->showCaption = true;
+  random->primary = true;
   random->setToolTip("New random sound, Mix 100%. Does not save a preset.");
   pad = new PaintWidget(surface);
   pad->setFocusPolicy(Qt::StrongFocus);
@@ -1224,11 +1323,11 @@ void MorphPanel::Impl::build() {
           });
     m.exec(e->globalPos());
   };
-  tabFlow = button("FLOW", {1060, 110, 36, 32}, [this] {
+  tabFlow = button("FLOW", {50, 114, 96, 34}, [this] {
     canvasTab = false;
     sync();
   });
-  tabCanvas = button("CANVAS", {1100, 110, 36, 32}, [this] {
+  tabCanvas = button("CANVAS", {152, 114, 112, 34}, [this] {
     canvasTab = true;
     sync();
   });
@@ -1236,17 +1335,27 @@ void MorphPanel::Impl::build() {
   tabCanvas->setCheckable(true);
   tabFlow->setObjectName("morphFlowTab");
   tabCanvas->setObjectName("morphCanvasTab");
-  choice(Routing, {895, 110, 152, 32});
+  for (auto *tab : {tabFlow, tabCanvas}) {
+    auto *button = static_cast<MorphButton *>(tab);
+    button->showCaption = true;
+    button->segmented = true;
+    button->displayCaption = tab == tabFlow ? "Flow" : "Canvas";
+  }
+  choice(Routing, {805, 114, 144, 34});
   auto *interaction =
-      knob(Interaction, "INTERACTION", muted, {714, 117, 106, 156});
+      knob(Interaction, "INTERACTION", ink, {56, 162, 124, 158});
   interaction->setProperty("morphFlowOnly", true);
   balanceButton =
-      button("MODE MIX", {1140, 110, 36, 32}, [this] { toggleDetails(); });
+      button("MODE MIX", {961, 114, 114, 34}, [this] { toggleDetails(); });
+  balanceButton->showCaption = true;
+  balanceButton->displayCaption = "Balance";
   balanceButton->setCheckable(true);
   balanceButton->setObjectName("morphBalanceDetails");
   balanceButton->setAccessibleName(QString::fromUtf8("Morph balance"));
   detailsButton =
-      button("MOD MATRIX", {1180, 110, 36, 32}, [this] { toggleDetails(); });
+      button("MOD MATRIX", {1083, 114, 135, 34}, [this] { toggleDetails(); });
+  detailsButton->showCaption = true;
+  detailsButton->displayCaption = "Modulation";
   detailsButton->setCheckable(true);
   detailsButton->setObjectName("morphModulationDetails");
   detailsButton->setAccessibleName(QString::fromUtf8("Modulation and macros"));
@@ -1256,7 +1365,7 @@ void MorphPanel::Impl::build() {
       "Flow and Canvas. Drop an image, paint, or edit a route."));
   flow->setObjectName("morphCanvas");
   flow->setAcceptDrops(true);
-  add(flow, {29, 145, 1212, 179});
+  add(flow, {224, 166, 994, 159});
   flow->lower();
   flow->paint = [this](QPainter &p) { paintFlow(p); };
   flow->pointer = [this](QMouseEvent *e, int phase) {
@@ -1291,7 +1400,7 @@ void MorphPanel::Impl::build() {
   };
 
   canvasTools.push_back(
-      button(QString::fromUtf8("Import"), {47, 294, 36, 32}, [this] {
+      button(QString::fromUtf8("Import"), {49, 294, 102, 32}, [this] {
         const auto path = QFileDialog::getOpenFileName(
             q, QString::fromUtf8("Import Canvas image"), {},
             QString::fromUtf8("Images (*.png *.jpg *.jpeg *.webp)"));
@@ -1302,17 +1411,17 @@ void MorphPanel::Impl::build() {
       "Create a sound locally from the image's colors, contrast and texture. "
       "Mix stays at 100%."));
   canvasTools.push_back(
-      button(QString::fromUtf8("Brush"), {89, 294, 36, 32}, [this] {
+      button(QString::fromUtf8("Brush"), {159, 294, 94, 32}, [this] {
         brush = true;
         brushSettings();
       }));
   canvasTools.push_back(
-      button(QString::fromUtf8("Route"), {131, 294, 36, 32}, [this] {
+      button(QString::fromUtf8("Route"), {261, 294, 96, 32}, [this] {
         brush = false;
         pathMenu();
       }));
   canvasTools.push_back(
-      button(QString::fromUtf8("Variation"), {173, 294, 36, 32}, [this] {
+      button(QString::fromUtf8("Variation"), {365, 294, 119, 32}, [this] {
         if (!state.canvas.painted)
           return;
         auto n = state;
@@ -1327,14 +1436,14 @@ void MorphPanel::Impl::build() {
       "Create another sound from this image. Keeps the image and route; does "
       "not save a preset."));
   canvasTools.push_back(
-      toggle(QString::fromUtf8("Scan"), CanvasOn, {227, 294, 36, 32}));
+      toggle(QString::fromUtf8("Scan"), CanvasOn, {504, 294, 88, 32}));
   auto *influence = new MorphValueBox(surface);
   influence->setRange(0, 100);
   influence->setSuffix("%");
   influence->setDecimals(0);
   influence->setObjectName("canvas.influence");
   influence->setAccessibleName(QString::fromUtf8("Canvas influence"));
-  add(influence, {271, 294, 86, 32});
+  add(influence, {600, 294, 86, 32});
   canvasTools.push_back(influence);
   QObject::connect(influence, &QDoubleSpinBox::valueChanged, q,
                    [this](double v) {
@@ -1344,16 +1453,17 @@ void MorphPanel::Impl::build() {
   QObject::connect(influence, &QDoubleSpinBox::editingFinished, q,
                    [this] { end(CanvasInfluence); });
   recordButton =
-      button(QString::fromUtf8("● Record"), {389, 294, 36, 32}, [this] {
+      button(QString::fromUtf8("● Record"), {710, 294, 102, 32}, [this] {
         record = !record;
         sync();
       });
   recordButton->setCheckable(true);
   recordButton->setObjectName("morphRecord");
   canvasTools.push_back(recordButton);
-  canvasTools.push_back(choice(MotionBars, {433, 294, 106, 32}));
+  static_cast<MorphButton *>(recordButton)->displayCaption = "Record";
+  canvasTools.push_back(choice(MotionBars, {820, 294, 106, 32}));
   canvasTools.push_back(
-      toggle(QString::fromUtf8("Motion"), MotionOn, {547, 294, 36, 32}));
+      toggle(QString::fromUtf8("Motion"), MotionOn, {934, 294, 96, 32}));
   knob(Mix, "MIX", muted, {1280, 151, 150, 177});
   meters = new PaintWidget(surface);
   add(meters, {1436, 157, 55, 160});
@@ -1382,9 +1492,9 @@ void MorphPanel::Impl::build() {
     text(p, {0, 138, 55, 20},
          QString::number(peak, 'f', 1) + " " + englishText("dB"), 11, muted);
   };
-  auto *clip = toggle("SOFT CLIP", SoftClip, {1438, 741, 34, 32});
+  auto *clip = toggle("SOFT CLIP", SoftClip, {1431, 741, 54, 32});
   clip->setToolTip("Soft Clip: gently limit output peaks above -0.9 dBFS.");
-  auto *autoGain = toggle("AUTO GAIN", AutoGain, {1438, 682, 34, 32});
+  auto *autoGain = toggle("AUTO GAIN", AutoGain, {1431, 682, 54, 32});
   autoGain->setToolTip(
       "Auto Gain: match wet loudness to the input. Gain adds a manual trim.");
   gainReadout = new PaintWidget(surface);
@@ -1411,16 +1521,16 @@ void MorphPanel::Impl::build() {
                                                       {0, 4, 3, 1, 2, 5}}};
   for (unsigned m = 0; m < 4; ++m) {
     const double x = 26 + 374. * m;
-    auto *on = toggle("⏻", moduleOffsets[m], {x + 19, 371, 45, 45});
+    auto *on = toggle("⏻", moduleOffsets[m], {x + 287, 375, 54, 32});
     on->accent = accents[m];
-    auto *more = button("…", {x + 312, 376, 36, 32}, [this, m] {
+    auto *more = button("…", {x + 258, 412, 83, 28}, [this, m] {
       finish();
       moduleExpanded[m] = !moduleExpanded[m];
-      background = {};
-      layout();
-      sync();
+      resizeToContent();
     });
-    more->flat = true;
+    more->glyph = Glyph::None;
+    more->displayCaption = "More";
+    more->dropdown = true;
     more->accent = accents[m];
     more->setCheckable(true);
     more->setObjectName(QString("morphModuleDetails%1").arg(m));
@@ -1450,7 +1560,10 @@ void MorphPanel::Impl::build() {
     source->setCheckable(true);
     source->setAccessibleName(
         QString::fromUtf8("LFO %1 — select or drag to assign").arg(i + 1));
-    add(source, {408. + i * 40, 633, 32, 28});
+    source->segmented = true;
+    source->glyph = Glyph::None;
+    source->showCaption = false;
+    add(source, {372. + i * 72, 633, 66, 28});
     QObject::connect(source, &QPushButton::clicked, q, [this, i] {
       finish();
       lfo = i;
@@ -1597,14 +1710,14 @@ void MorphPanel::Impl::build() {
   knob(LowPass, "LPF", muted, {681, 667, 89, 115});
   knob(Mix, "DRY/WET", accents[0], {795, 667, 89, 115});
   knob(Width, "WIDTH", muted, {909, 667, 89, 115});
-  auto *fx = button("FX +", {994, 633, 32, 28}, [this] {
+  auto *fx = button("FX +", {932, 633, 94, 28}, [this] {
     finish();
     advanced = !advanced;
-    background = {};
-    layout();
-    sync();
+    resizeToContent();
   });
   fx->setCheckable(true);
+  fx->showCaption = true;
+  fx->displayCaption = "Effects";
   fx->setObjectName("morphAdvanced");
   fx->setAccessibleName(QString::fromUtf8("Drive / Echo / Bloom"));
   knob(Drive, "DRIVE", accents[2], {38, 866, 87, 107}, 1);
@@ -1651,7 +1764,7 @@ void MorphPanel::Impl::build() {
       },
       true);
   canvasTools.push_back(button(
-      QString::fromUtf8("Smooth route"), {607, 294, 36, 32},
+      QString::fromUtf8("Smooth route"), {1050, 294, 36, 32},
       [this] {
         auto n = state;
         smoothPath(n.canvas);
@@ -1659,7 +1772,7 @@ void MorphPanel::Impl::build() {
       },
       false));
   canvasTools.push_back(button(
-      QString::fromUtf8("Clear Canvas"), {649, 294, 36, 32},
+      QString::fromUtf8("Clear Canvas"), {1094, 294, 36, 32},
       [this] {
         auto n = state;
         auto path = n.canvas.path;
@@ -1670,6 +1783,10 @@ void MorphPanel::Impl::build() {
         apply(std::move(n), QString::fromUtf8("Clear Morph Canvas"));
       },
       false));
+  for (auto *tool : canvasTools)
+    if (auto *button = dynamic_cast<MorphButton *>(tool))
+      button->showCaption = button->glyph != Glyph::Smooth &&
+                            button->glyph != Glyph::Clear;
   for (auto &item : items) {
     if (item.widget->toolTip().isEmpty())
       item.widget->setToolTip(item.widget->accessibleName());
@@ -1682,11 +1799,23 @@ void MorphPanel::Impl::build() {
 void MorphPanel::Impl::toggleDetails() {
   finish();
   detailsExpanded = !detailsExpanded;
+  resizeToContent();
+  if (detailsExpanded)
+    scroll->ensureWidgetVisible(pad, 0, 12);
+}
+
+void MorphPanel::Impl::resizeToContent() {
   background = {};
   layout();
   sync();
-  if (detailsExpanded)
-    scroll->ensureWidgetVisible(pad, 0, 12);
+  const double preferred = QSettings().value("Morph/zoom", 0.).toDouble();
+  const double scale = preferred > 0 ? preferred
+                                     : std::clamp(q->width() / 1536., .75, 2.);
+  // Request the full height before scrollbars are needed. The host bounds it
+  // to the workspace; a constrained editor can still scroll the entire panel.
+  emit q->preferredHeightChanged(qRound(
+      (864 + moduleHeight() + (detailsExpanded ? 234 : 0) +
+       (advanced ? 204 : 0)) * scale));
 }
 
 void MorphPanel::Impl::layout() {
@@ -1697,7 +1826,7 @@ void MorphPanel::Impl::layout() {
   const bool vertical = (864 + extraHeight) * q->width() / 1536. > q->height();
   zoom = preferred > 0
              ? preferred
-             : std::clamp((q->width() - (vertical ? 18 : 0)) / 1536., .65, 2.);
+             : std::clamp((q->width() - (vertical ? 18 : 0)) / 1536., .75, 2.);
   const QSize size(qRound(1536 * zoom), qRound((864 + extraHeight) * zoom));
   if (surface->size() != size) {
     surface->resize(size);
@@ -1728,42 +1857,50 @@ void MorphPanel::Impl::layout() {
 void MorphPanel::Impl::cache() {
   background = QPixmap(surface->size() * surface->devicePixelRatioF());
   background.setDevicePixelRatio(surface->devicePixelRatioF());
-  background.fill(QColor("#f5f7f8"));
+  background.fill(paper);
   QPainter p(&background);
   p.setRenderHint(QPainter::Antialiasing);
   p.scale(zoom, zoom);
   const double height = surface->height() / zoom;
-  QLinearGradient body(0, 0, 1536, height);
-  body.setColorAt(0, QColor("#fafbfc"));
-  body.setColorAt(.55, QColor("#f0f2f4"));
-  body.setColorAt(1, QColor("#fafbfb"));
-  p.setBrush(body);
-  p.setPen(QPen(QColor("#cfd5dc"), 1.5));
-  p.drawRoundedRect(QRectF(1, 1, 1534, height - 2), 20, 20);
+  p.setPen(Qt::NoPen);
+  p.setBrush(ink);
+  p.drawRoundedRect(QRectF(28, 28, 44, 44), 14, 14);
+  p.save();
+  p.translate(34, 34);
+  p.setPen(QPen(panelWhite, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   p.setBrush(Qt::NoBrush);
-  p.setPen(QPen(Qt::white, 1.5));
-  p.drawRoundedRect(QRectF(3, 3, 1530, height - 6), 18, 18);
-  text(p, {74, 23, 270, 49}, "MORPH", 30, ink, 12,
+  drawGlyph(p, Glyph::Flow, false);
+  p.restore();
+  text(p, {89, 19, 200, 47}, "morph", 38, ink, -1.3,
        Qt::AlignLeft | Qt::AlignVCenter);
+  text(p, {225, 34, 180, 30}, "Modulation effect", 13, muted, 0,
+       Qt::AlignLeft | Qt::AlignVCenter);
+  text(p, {1250, 34, 163, 30}, "VLT / AUDIO", 12, muted, 1.8);
   well(p, {26, 95, 1218, 243});
   well(p, {1262, 95, 248, 243});
-  text(p, {51, 117, 326, 28}, "MODULATION FLOW", 16, ink, 3.4,
-       Qt::AlignLeft | Qt::AlignVCenter);
-  text(p, {1282, 116, 127, 28}, "OUTPUT", 15, ink, 3,
+  text(p, {730, 114, 66, 34}, "Routing", 12, muted, 0);
+  text(p, {1285, 114, 127, 28}, "Output", 17, ink, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
   for (unsigned i = 0; i < 4; ++i) {
     const double x = 26 + 374. * i;
     well(p, {x, 356, 364, 254. + (moduleExpanded[i] ? 172 : 0)}, accents[i]);
-    text(p, {x + 85, 377, 222, 33},
-         std::array<const char *, 4>{"CHORUS", "FLANGER", "PHASER",
-                                     "DOUBLER"}[i],
-         18, accents[i].darker(125), 4.2);
-    text(p, {x + 78, 409, 235, 23},
-         std::array<const char *, 4>{"WIDE & LUSH", "SWEEP & TEXTURE",
-                                     "MOVEMENT & COLOR", "SPACE & WIDTH"}[i],
-         10, muted, 2.2);
+    QColor tint = accents[i];
+    tint.setAlpha(22);
+    p.setPen(Qt::NoPen);
+    p.setBrush(tint);
+    p.drawRoundedRect(QRectF(x + 23, 379, 29, 25), 7, 7);
+    text(p, {x + 23, 379, 29, 25}, QString("0%1").arg(i + 1), 11,
+         accents[i].darker(140));
+    text(p, {x + 64, 373, 202, 36},
+         std::array<const char *, 4>{"Chorus", "Flanger", "Phaser",
+                                     "Doubler"}[i],
+         23, ink, -.3, Qt::AlignLeft | Qt::AlignVCenter);
+    text(p, {x + 24, 412, 227, 26},
+         std::array<const char *, 4>{"Wide & lush", "Sweep & texture",
+                                     "Movement & color", "Space & width"}[i],
+         13, muted, 0, Qt::AlignLeft | Qt::AlignVCenter);
     if (moduleExpanded[i]) {
-      p.setPen(QColor("#d9dfe5"));
+      p.setPen(lineColor);
       p.drawLine(QPointF(x + 22, 603), QPointF(x + 342, 603));
     }
   }
@@ -1772,15 +1909,15 @@ void MorphPanel::Impl::cache() {
   well(p, {26, 622, 508, 190});
   well(p, {546, 622, 500, 190});
   well(p, {1058, 622, 452, 190});
-  text(p, {49, 634, 298, 26}, "GLOBAL MODULATION", 14, ink, 3,
+  text(p, {49, 634, 298, 26}, "Global modulation", 17, ink, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
-  text(p, {568, 634, 294, 26}, "TONE & WIDTH", 14, ink, 3,
+  text(p, {568, 634, 294, 26}, "Tone & width", 17, ink, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
-  text(p, {1079, 634, 280, 26}, "GAIN & LEVEL", 14, ink, 3,
+  text(p, {1079, 634, 280, 26}, "Gain & level", 17, ink, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
-  text(p, {1223, 683, 200, 23}, "AUTO GAIN", 12, ink, 1,
+  text(p, {1223, 683, 200, 23}, "Auto gain", 15, ink, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
-  text(p, {1223, 742, 200, 23}, "SOFT CLIP", 12, ink, 1,
+  text(p, {1223, 742, 200, 23}, "Soft clip", 15, ink, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
   text(p, {1223, 768, 198, 19}, "Round off loud peaks", 11, muted, 0,
        Qt::AlignLeft | Qt::AlignVCenter);
@@ -1789,10 +1926,10 @@ void MorphPanel::Impl::cache() {
     well(p, {348, 832, 330, 214});
     well(p, {690, 832, 430, 214});
     well(p, {1132, 832, 378, 214});
-    text(p, {45, 837, 265, 24}, "MODE MIX", 13, ink, 2);
-    text(p, {366, 838, 210, 23}, "MACROS", 13, ink, 2);
-    text(p, {705, 838, 211, 23}, "MOD MATRIX", 13, ink, 2);
-    text(p, {1148, 838, 238, 23}, "ENV FOLLOWER", 13, ink, 1.7);
+    text(p, {45, 837, 265, 24}, "Mode mix", 15);
+    text(p, {366, 838, 210, 23}, "Macros", 15);
+    text(p, {705, 838, 211, 23}, "Modulation matrix", 15);
+    text(p, {1148, 838, 238, 23}, "Envelope follower", 15);
   }
   if (advanced) {
     p.translate(0, detailsExpanded ? 234 : 0);
@@ -1800,15 +1937,19 @@ void MorphPanel::Impl::cache() {
     well(p, {373, 832, 392, 182}, accents[2]);
     well(p, {777, 832, 392, 182}, accents[3]);
     well(p, {1181, 832, 329, 182});
-    text(p, {45, 839, 287, 23}, "DRIVE", 13, ink, 2);
-    text(p, {389, 839, 357, 23}, "ECHO", 13, accents[2].darker(130), 2);
-    text(p, {793, 839, 357, 23}, "BLOOM", 13, accents[3].darker(130), 2);
-    text(p, {1193, 839, 305, 23}, "MOTION & BREATHING", 12, ink, 1.6);
+    text(p, {45, 839, 287, 23}, "Drive", 15);
+    text(p, {389, 839, 357, 23}, "Echo", 15);
+    text(p, {793, 839, 357, 23}, "Bloom", 15);
+    text(p, {1193, 839, 305, 23}, "Motion & breathing", 15);
   }
   p.restore();
-  for (auto c : {QPointF(26, 27), QPointF(1509, 27), QPointF(26, height - 27),
-                 QPointF(1509, height - 27)})
-    screw(p, c, 5.8);
+  text(p, {31, height - 35, 260, 22}, "MORPH / VLTONE", 10, muted, 1.3,
+       Qt::AlignLeft | Qt::AlignVCenter);
+  for (unsigned i = 0; i < accents.size(); ++i) {
+    p.setPen(Qt::NoPen);
+    p.setBrush(accents[i]);
+    p.drawEllipse(QPointF(1450 + i * 16, height - 24), 3, 3);
+  }
 }
 void MorphPanel::Impl::write(unsigned id, double v) {
   if (importing) {
@@ -2003,8 +2144,11 @@ void MorphPanel::Impl::sync() {
       source->setChecked(source->source == lfo + 1);
   for (auto *w : canvasTools)
     w->setVisible(canvasTab);
-  flow->setGeometry(flow->x(), flow->y(), flow->width(),
-                    qRound((canvasTab ? 139 : 179) * zoom));
+  const QRectF flowRect = canvasTab ? QRectF(49, 159, 1169, 124)
+                                    : QRectF(224, 166, 994, 159);
+  flow->setGeometry(qRound(flowRect.x() * zoom), qRound(flowRect.y() * zoom),
+                    qRound(flowRect.width() * zoom),
+                    qRound(flowRect.height() * zoom));
   recordButton->setChecked(record);
   abButton->setText(sideB ? "A / [B]" : "[A] / B");
   refreshing = false;
@@ -2145,7 +2289,7 @@ void MorphPanel::Impl::paintFlow(QPainter &p) {
       for (unsigned m = 0; m < 4; ++m)
         for (unsigned strand = 0; strand < 12; ++strand)
           for (unsigned i = 0; i <= 64; ++i) {
-            const double x = i / 64., center = .29 + .185 * m;
+            const double x = i / 64., center = .14 + .24 * m;
             const double fan = strand / 11.;
             const double shape = std::exp(-std::pow((x - center) / .27, 2)) *
                                  std::array<double, 4>{.40, .48, .47, .28}[m] *
@@ -2195,8 +2339,8 @@ void MorphPanel::Impl::paintFlow(QPainter &p) {
               curve.moveTo(0, y);
           }
           QColor color = accents[m];
-          color.setAlpha(enabled ? (strand == 0 ? 210 : 30) : 10);
-          waves.setPen(QPen(color, (strand == 0 ? 1.1 : .6) * zoom));
+          color.setAlpha(enabled ? (strand == 0 ? 220 : 35) : 18);
+          waves.setPen(QPen(color, (strand == 0 ? 1.8 : .7) * zoom));
           waves.setBrush(Qt::NoBrush);
           waves.drawPath(curve);
           if (!strand)
@@ -2207,7 +2351,7 @@ void MorphPanel::Impl::paintFlow(QPainter &p) {
         outside.connectPath(inside.toReversed());
         outside.closeSubpath();
         QColor tint = accents[m];
-        tint.setAlpha(enabled ? 8 : 2);
+        tint.setAlpha(enabled ? 16 : 3);
         waves.fillPath(outside, tint);
       }
     }
@@ -2215,18 +2359,15 @@ void MorphPanel::Impl::paintFlow(QPainter &p) {
     p.drawImage(QRectF(0, 0, w, h), flowWaves);
     for (unsigned m = 0; m < 4; ++m) {
       const bool enabled = state.values[moduleOffsets[m]] > .5;
-      const QPointF at((.29 + .2 * m) * w, h * .80);
+      const QPointF at((.14 + .24 * m) * w, h * .80);
       p.setPen(Qt::NoPen);
-      p.setBrush(QColor("#ffffff"));
-      p.drawEllipse(at, 15 * zoom, 15 * zoom);
-      QColor c = enabled ? accents[m] : QColor("#bac4ce");
-      p.setPen(QPen(c, 2.7 * zoom));
-      p.setBrush(Qt::NoBrush);
-      p.drawEllipse(at, 8 * zoom, 8 * zoom);
+      QColor c = enabled ? accents[m] : QColor("#b9c1b6");
+      p.setBrush(c);
+      p.drawEllipse(at, 4 * zoom, 4 * zoom);
       text(p, {at.x() - 80 * zoom, h * .87, 160 * zoom, 22 * zoom},
-           std::array<const char *, 4>{"CHORUS", "FLANGER", "PHASER",
-                                       "DOUBLER"}[m],
-           std::max(9, qRound(12 * zoom)), muted, 2 * zoom);
+           std::array<const char *, 4>{"Chorus", "Flanger", "Phaser",
+                                       "Doubler"}[m],
+           std::max(9, qRound(13 * zoom)), muted);
     }
   }
   if (flow->hasFocus()) {
@@ -2789,9 +2930,7 @@ void MorphPanel::Impl::settingsMenu() {
                           : QString::fromUtf8("Fit width"),
                     q, [this, scale] {
                       QSettings().setValue("Morph/zoom", scale);
-                      background = {};
-                      layout();
-                      sync();
+                      resizeToContent();
                     });
   m.addAction(QString::fromUtf8("Copy A → B"), q, [this] {
     if (!sideB)
@@ -2806,9 +2945,7 @@ void MorphPanel::Impl::settingsMenu() {
   m.addAction(QString::fromUtf8("Drive / Echo / Bloom"), q, [this] {
     finish();
     advanced = !advanced;
-    background = {};
-    layout();
-    sync();
+    resizeToContent();
   });
   m.addAction(QString::fromUtf8("Modulation and macros"), q,
               [this] { toggleDetails(); });

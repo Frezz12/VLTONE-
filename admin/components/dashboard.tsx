@@ -9,6 +9,7 @@ import { AdminShell } from "./admin-shell";
 import { adminPollingAllowed } from "./admin-activity";
 import { useAdmin } from "./use-admin";
 import { DashboardUsage, type DashboardUsageData } from "./dashboard-usage";
+import { SupportStats } from "./support-stats";
 
 type ActivityPoint = { bucket: string; sessions: number; crashes: number };
 type AIPoint = { bucket: string; tokens: number };
@@ -69,5 +70,6 @@ export function Dashboard() {
       </section>
       {data.usage && <DashboardUsage data={data.usage} generatedAt={data.generated_at} busy={loading} search={usageSearch} onSearch={(value) => { setUsageSearch(value); setUsagePage(0); }} onPage={setUsagePage} />}
     </>}
+    <SupportStats />
   </AdminShell>;
 }

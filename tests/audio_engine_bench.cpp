@@ -7,6 +7,7 @@
 #include "RealtimeMetrics.hpp"
 #include "Job/AudioWorkerRegistration.hpp"
 #include "Host/PluginNode.hpp"
+#include "AudioBenchPacer.hpp"
 #ifdef DAW_ENABLE_VST3
 #include "Vst3/Vst3Factory.hpp"
 #endif
@@ -129,11 +130,13 @@ int main(int argc, char** argv) {
     }
     std::vector<float> left(frames), right(frames); float* pointers[]{left.data(), right.data()}; AudioBlock output(pointers, 2, frames);
     std::printf("tracks=%u nodes=%zu fused_tasks=%u workers=%u rate=%.0f frames=%u EQ=%d\n", tracks, (*compiled)->nodes.size(), (*compiled)->taskCount, processor.workerCount(), rate, frames, heavy);
+    std::printf("audio_buffers=%zu dependency_counters=%zu\n", (*compiled)->arena.bufferCount(), (*compiled)->pending.size());
     std::printf("clips=%d paced=%d serial=%d realtime_workers=%u caller_realtime=%u (no device workgroup) budget_ms=%.4f\n",
                 clips, paced, serial, processor.realtimeWorkerCount(), callerStatus & 1u, frames * 1000. / rate);
     std::printf("round,fusion,mean_ms,p95_ms,p99_ms,p99_9_ms,max_ms,over_budget,cpu_ms_per_block,pcm_misses\n");
     const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<double>(double(frames) / rate));
+    AudioBenchPacer pacer;
     const auto render = [&](unsigned block) {
         const auto position = clips ? (std::uint64_t(block) * frames) % (262144 / frames * frames)
                                     : std::uint64_t(block) * frames;
@@ -155,7 +158,7 @@ int main(int argc, char** argv) {
             samples.drain(*metrics);
             // Pace outside the measured render. This exposes parked-worker wake
             // latency hidden by throughput loops; it is not a hardware xrun test.
-            if (paced) std::this_thread::sleep_until(deadline);
+            if (paced) pacer.wait(deadline);
         }
         const auto cpuEnd = processCpuMs();
         const double cpuMs = cpuStart >= 0 && cpuEnd >= 0 ? (cpuEnd - cpuStart) / blocks : -1;

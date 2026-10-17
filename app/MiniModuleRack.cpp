@@ -1,4 +1,5 @@
 #include "MiniModuleRack.hpp"
+#include "RackParameterBinding.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
 #include "model/MiniModules.hpp"
@@ -187,6 +188,7 @@ protected:
       p.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap));
       p.drawLine(QPointF(18, 18) + 4 * dir, QPointF(18, 18) + 9 * dir);
     }
+    paintModulation(p, style == "fader" ? QRectF(0, 5, 29, 26) : QRectF(6, 6, 24, 24), style == "fader");
   }
 
 private:
@@ -410,6 +412,10 @@ public:
                             ";");
         auto *knob = new ModuleKnob(c, m_look, group);
         knob->setObjectName(QString::fromStdString(c.id));
+        knob->setProperty("modulationChannel", m_channel);
+        knob->setProperty("modulationSlot", QString::fromStdString(model.id));
+        knob->setProperty("modulationParameter", QString::fromStdString(c.id));
+        knob->setProperty("modulationEligible", c.minimum < c.maximum);
         knob->setAccessibleName(QString::fromStdString(model.name) + " " +
                                 caption(c.name));
         auto *value = new QLabel(group);
@@ -586,6 +592,8 @@ public:
       m_mode->setToolTip(tr("Sound mode") + ": " + m_mode->currentText());
     }
     for (auto &d : m_dials)
+      RackParameterBinding::refreshModulation(d.knob, m_controller, m_channel.toStdString(), model.id, d.control.id);
+    for (auto &d : m_dials)
       if (!d.knob->isEditing()) {
         double value = d.control.initial;
         for (const auto &p : model.parameters)
@@ -606,10 +614,14 @@ public:
       }
     update();
   }
-  void fit(int width) {
+  void fit(int width, bool stretch = false) {
     m_controls->setDirection(width < 100 ? QBoxLayout::TopToBottom
                                          : QBoxLayout::LeftToRight);
-    setFixedHeight(m_compact ? 76 : cardHeight(m_model, width));
+    const int height = m_compact ? 76 : cardHeight(m_model, width);
+    setMinimumHeight(height);
+    setMaximumHeight(stretch ? QWIDGETSIZE_MAX : height);
+    setSizePolicy(QSizePolicy::Preferred,
+                  stretch ? QSizePolicy::Expanding : QSizePolicy::Fixed);
   }
   std::function<void(bool)> edited;
   std::function<void(const QString &)> automate;
@@ -743,7 +755,7 @@ int MiniModuleRack::naturalHeight(const daw::ProjectModel &,
   return height;
 }
 int MiniModuleRack::naturalHeight() const {
-  if (m_compact) return 232;
+  if (m_compact) return int(m_models.size()) * 77 + (m_models.size() < 3 ? 30 : 1);
   return naturalHeight(m_controller->project(), m_models, m_stripWidth);
 }
 void MiniModuleRack::setRackHeight(int height) {
@@ -753,8 +765,13 @@ void MiniModuleRack::setRackHeight(int height) {
 void MiniModuleRack::setStripWidth(int width) {
   m_stripWidth = width;
   for (auto *card : m_cards)
-    card->fit(width);
-  setFixedHeight(std::max(m_assignedHeight, naturalHeight()));
+    card->fit(width, m_models.size() == 3);
+  if (m_compact) {
+    setMinimumHeight(naturalHeight());
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+  } else {
+    setFixedHeight(std::max(m_assignedHeight, naturalHeight()));
+  }
   updateGeometry();
 }
 void MiniModuleRack::sync(bool automation) {
@@ -792,6 +809,10 @@ void MiniModuleRack::rebuild() {
     delete item->widget();
     delete item;
   }
+  if (m_compact) {
+    m_well->setStyleSheet("#SlotWell{background:" + th().well().name()
+        + ";border:1px solid " + th().separator().name() + ";border-radius:4px;}");
+  }
   for (const auto &model : m_models) {
     auto *card =
         new MiniModuleCard(m_controller, m_channel, m_project, model, m_well, m_compact);
@@ -802,23 +823,21 @@ void MiniModuleRack::rebuild() {
     };
     card->openMenu = [this, id](const QPoint &p) { cardMenu(id, p); };
     m_cards.push_back(card);
-    m_column->addWidget(card);
+    m_column->addWidget(card, m_models.size() == 3 ? 1 : 0);
   }
-  for (int empty = 0; empty < (m_compact ? std::max(0, 3 - int(m_models.size())) : 1); ++empty) {
   auto *add = new QPushButton(QStringLiteral("+"), m_well);
   add->setObjectName("AddMiniModule");
   add->setMinimumHeight(28);
-  if (m_compact) add->setFixedHeight(76);
   add->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   add->setStyleSheet(
       "QPushButton{border:0;background:transparent;font-size:14px;} "
       "QPushButton:hover{background:rgba(128,128,128,18);}");
   if (m_compact) {
-    add->setText(tr("+ Mini module"));
-    add->setStyleSheet("QPushButton{border:1px dashed " + th().separator().name()
-        + ";border-radius:6px;background:" + th().well().name()
-        + ";color:" + th().textSecondary.name() + ";font-size:10px;}"
-          "QPushButton:hover{border-color:" + th().accent.name() + ";}");
+    add->setStyleSheet("QPushButton{border:0;border-radius:3px;background:transparent;color:"
+        + th().textSecondary.name() + ";font-size:18px;}"
+          "QPushButton:hover{background:" + th().surface.name() + ";color:"
+        + th().accent.name() + ";} QPushButton:focus{border:1px solid "
+        + th().accent.name() + ";}");
   }
   add->setAccessibleName(tr("Add mini module"));
   add->setToolTip(tr("Add mini module (maximum three)"));
@@ -826,7 +845,11 @@ void MiniModuleRack::rebuild() {
   add->setVisible(m_models.size() < 3);
   connect(add, &QPushButton::clicked, this,
           [this, add] { addMenu(add->mapToGlobal(QPoint(0, add->height()))); });
-  m_column->addWidget(add, 1);
+  // Fill from the top; once full, the three cards share the available height.
+  if (m_models.size() < 3) {
+    m_column->addWidget(add, 1);
+  } else {
+    delete add;
   }
   m_assignedHeight = 0;
   setStripWidth(m_stripWidth);
@@ -1129,7 +1152,7 @@ void MiniModuleRack::dropEvent(QDropEvent *e) {
   finishEdits();
   int at = 0;
   for (auto *card : m_cards)
-    if (e->position().y() > card->geometry().center().y())
+    if (e->position().y() > card->mapTo(this, card->rect().center()).y())
       ++at;
   auto old = std::find_if(m_models.begin(), m_models.end(), [&](const auto &m) {
     return m.id == parts[1].toStdString();

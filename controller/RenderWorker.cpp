@@ -79,6 +79,10 @@ void writeSession(const auto& data, const fs::path& root,
     Json manifest{{"version", kVersion}, {"spec", data.spec}, {"rate", data.sampleRate},
         {"block", data.blockSize}, {"revision", data.revision}, {"generation", data.generation},
         {"normalize", normalize}, {"analyze", analyze}};
+    // Session-only routing is deliberately absent from the project format.
+    auto& controlOnly = manifest["controlOnly"] = Json::array();
+    for (const auto& track : data.snapshot.project.tracks)
+        if (track.renderControlOnly) controlOnly.push_back(track.id);
     std::string document;
     require(ProjectSerializer::serializeDocument(data.snapshot.project, document, MediaPaths::Absolute));
     writeFile(root / "document.json", document.data(), document.size());
@@ -137,6 +141,11 @@ std::pair<bool, bool> readSession(auto& data, const fs::path& root, const Proces
             data.blockSize > 0 && data.blockSize <= engine::kMaxBlockSize, "invalid render session format");
     require(ProjectSerializer::deserializeDocument(data.snapshot.project,
         readFile(privateFile(root, "document.json"))));
+    for (const auto& id : manifest.value("controlOnly", Json::array())) {
+        auto* track = data.snapshot.project.findTrack(id.get<std::string>());
+        require(track && carriesAudio(*track), "invalid render control source");
+        track->renderControlOnly = true;
+    }
     require(data.catalog.cache.load(platform::pathToUtf8(privateFile(root, "catalog.json"))),
             "cannot read render plugin catalogue");
     for (const auto& state : manifest.at("states")) {

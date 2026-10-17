@@ -155,6 +155,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/v1/releases/latest", s.latestRelease)
 	r.Get("/v1/releases/{version}", s.publicRelease)
 	r.Get("/v1/releases/{version}/download/{kind}", s.downloadReleaseArtifact)
+	r.Post("/v1/releases/{version}/download/{kind}/click", s.recordReleaseDownloadClick)
+	r.Post("/v1/support/boosty/click/{source}", s.recordSupportClick)
 	r.Get("/v1/releases/{version}/screenshots/{screenshotID}", s.releaseScreenshot)
 
 	r.Route("/v1/web/auth", func(r chi.Router) {
@@ -361,6 +363,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/admin/crashes/{crashID}/artifact", s.adminCrashArtifact)
 		r.Get("/v1/admin/audit", s.adminAudit)
 		r.Get("/v1/admin/releases", s.adminReleases)
+		r.Get("/v1/admin/releases/download-stats", s.adminReleaseDownloadStats)
+		r.Get("/v1/admin/dashboard/support-stats", s.adminSupportStats)
 		r.Get("/v1/admin/releases/{releaseID}", s.adminRelease)
 		r.With(s.adminCSRF).Post("/v1/admin/releases", s.adminCreateRelease)
 		r.With(s.adminCSRF).Put("/v1/admin/releases/{releaseID}", s.adminUpdateRelease)

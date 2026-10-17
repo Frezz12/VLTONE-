@@ -2,6 +2,8 @@
 
 #include "Host/PluginTypes.hpp"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <string>
 #include <vector>
 
@@ -28,6 +30,8 @@ bool decodeHandshake(const std::string& text);
 /// Serialise one descriptor. Returns a JSON object as text.
 std::string descriptorToJson(const PluginDescriptor& descriptor);
 bool descriptorFromJson(const std::string& text, PluginDescriptor& out);
+/// The same decoder for a descriptor in an already parsed cache document.
+bool descriptorFromJsonValue(const nlohmann::json& value, PluginDescriptor& out);
 
 /// The scanner's stdout: `{"schema":N,"plugins":[…]}` on success.
 std::string encodeResult(const std::vector<PluginDescriptor>& plugins);

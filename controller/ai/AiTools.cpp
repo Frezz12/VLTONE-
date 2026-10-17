@@ -1690,6 +1690,8 @@ ToolResult callTool(EngineController& c, const std::string& name,
         request.creativity = creativity;
         request.rhythmicDensity = density;
         request.beatsPerBar = beatsPerBar(c);
+        request.meterNumerator = c.timeSigNumerator();
+        request.meterDenominator = c.timeSigDenominator();
         if (lowest >= 0.0)
             request.pitchRange = CompositionPitchRange{
                 int(std::llround(lowest)), int(std::llround(highest))};

@@ -14,6 +14,7 @@ enum class PublishIssueKind {
     InvalidAssetIdentity,
     LocalWarp,
     ClipContentFormat,
+    LocalModulation,
 };
 
 struct PublishIssue {

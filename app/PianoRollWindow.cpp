@@ -20,6 +20,7 @@
 #include "EngineController.hpp"
 #include "Nodes/MidiClipPlayerNode.hpp"
 #include "PianoRollTools.hpp"
+#include "MidiGeneratorDialog.hpp"
 #include "Theme.hpp"
 #include "UndoTranslations.hpp"
 #include "UiConstants.hpp"
@@ -30,6 +31,7 @@
 #include <QCursor>
 #include <QColorDialog>
 #include <QButtonGroup>
+#include <QCache>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QFrame>
@@ -104,6 +106,129 @@ constexpr double kMaxPxPerBeat = 800.0;
 /// Only the automatic fit is floored — zooming out by hand still goes to
 /// `kMinPxPerBeat`.
 constexpr double kMinFitPxPerBeat = 160.0;
+
+constexpr int kNavigatorMinHeight = 10;
+constexpr int kNavigatorMaxHeight = 30;
+
+// Keep Qt's scrollbar geometry and input handling, with a clip overview under
+// its translucent viewport. Only the lower edge has a separate resize gesture.
+class PianoRollNavigator final : public QScrollBar {
+public:
+    explicit PianoRollNavigator(QWidget* parent) : QScrollBar(Qt::Horizontal, parent) {
+        setFixedHeight(kNavigatorMinHeight);
+        setMouseTracking(true);
+        setAttribute(Qt::WA_OpaquePaintEvent);
+    }
+    std::function<void(QPainter&)> paintNotes;
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), th().headerBackground);
+        if (paintNotes) paintNotes(p);
+        QStyleOptionSlider option;
+        initStyleOption(&option);
+        const QRectF handle = style()->subControlRect(
+            QStyle::CC_ScrollBar, &option, QStyle::SC_ScrollBarSlider, this);
+        const qreal pixel = 1.0 / p.device()->devicePixelRatioF();
+        QColor fill = th().textPrimary;
+        fill.setAlpha(isSliderDown() ? 52 : underMouse() ? 38 : 26);
+        p.fillRect(handle, fill);
+        QColor edge = th().textPrimary;
+        edge.setAlpha(isSliderDown() || hasFocus() ? 170 : underMouse() ? 130 : 95);
+        p.fillRect(QRectF(handle.left(), 0, pixel, height()), edge);
+        p.fillRect(QRectF(handle.right() - pixel, 0, pixel, height()), edge);
+        p.fillRect(QRectF(handle.left(), 0, handle.width(), pixel), edge);
+        p.fillRect(QRectF(0, height() - pixel, width(), pixel), th().separator());
+        if (m_resizing || (underMouse() && cursor().shape() == Qt::SizeVerCursor))
+            p.fillRect(QRectF(0, height() - pixel, width(), pixel), edge);
+    }
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton && onResizeEdge(event->position())) {
+            m_resizing = true;
+            m_startY = event->globalPosition().y();
+            m_startHeight = height();
+            setCursor(Qt::SizeVerCursor);
+            event->accept();
+            return;
+        }
+        QScrollBar::mousePressEvent(event);
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (m_resizing) {
+            setFixedHeight(std::clamp(m_startHeight + qRound(event->globalPosition().y() - m_startY),
+                                     kNavigatorMinHeight, kNavigatorMaxHeight));
+            event->accept();
+            return;
+        }
+        if (event->buttons() == Qt::NoButton) updateCursor(event->position());
+        QScrollBar::mouseMoveEvent(event);
+    }
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (m_resizing && event->button() == Qt::LeftButton) {
+            m_resizing = false;
+            updateCursor(event->position());
+            event->accept();
+            return;
+        }
+        QScrollBar::mouseReleaseEvent(event);
+    }
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton && onResizeEdge(event->position())) {
+            m_resizing = false;
+            setFixedHeight(kNavigatorMinHeight);
+            event->accept();
+            return;
+        }
+        QScrollBar::mouseDoubleClickEvent(event);
+    }
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        QMenu menu(this);
+        menu.addSection(QCoreApplication::translate("PianoRollWindow", "Navigator height"));
+        for (int extent : {10, 20, 30}) {
+            auto* action = menu.addAction(
+                QCoreApplication::translate("PianoRollWindow", "%1 px").arg(extent));
+            action->setCheckable(true);
+            action->setChecked(height() == extent);
+            connect(action, &QAction::triggered, this, [this, extent] { setFixedHeight(extent); });
+        }
+        menu.exec(event->globalPos());
+    }
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::WindowDeactivate ||
+            event->type() == QEvent::Hide) {
+            m_resizing = false;
+            unsetCursor();
+        }
+        return QScrollBar::event(event);
+    }
+private:
+    bool onResizeEdge(const QPointF& point) const { return point.y() >= height() - 2; }
+    void updateCursor(const QPointF& point) {
+        setCursor(onResizeEdge(point) ? Qt::SizeVerCursor : Qt::ArrowCursor);
+        update();
+    }
+    bool m_resizing = false;
+    qreal m_startY = 0;
+    int m_startHeight = kNavigatorMinHeight;
+};
+
+class PianoRollControlStrip final : public QWidget {
+public:
+    explicit PianoRollControlStrip(QWidget* parent) : QWidget(parent) {
+        setFixedSize(ui::kViewControlWidth, 3 * ui::kViewControlHeight);
+        setAttribute(Qt::WA_NoMousePropagation);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), th().headerBackground);
+        const qreal pixel = 1.0 / p.device()->devicePixelRatioF();
+        p.fillRect(QRectF(0, 0, pixel, height()), th().separator());
+        for (int i = 1; i <= 3; ++i)
+            p.fillRect(QRectF(0, i * ui::kViewControlHeight - pixel, width(), pixel), th().separator());
+    }
+};
 
 /// The velocity lane: a bar per note with a small cap at its value.
 constexpr double kLaneHeight = 84.0;
@@ -236,11 +361,9 @@ const QCursor& toolCursor(icons::Glyph glyph) {
     icons::paint(p, glyph, QRectF(0.6, 0.6, size - 1.2, size - 1.2),
                  QColor(0xFA, 0xFA, 0xFA));
     p.end();
-    // Hot spot at the working end of each tool, not at the icon's centre: the
-    // brush paints from its bristles, the blade cuts at its edge, and the
-    // arrow points from its own tip.
+    // Brushes and pointers act at their tips; scissors cut where their blades
+    // cross, and the disable mark acts at the centre of its X.
     const QPoint hot = glyph == icons::Glyph::Brush   ? QPoint(6, 18)
-                     : glyph == icons::Glyph::Knife   ? QPoint(12, 18)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
     return *cache.insert(int(glyph), QCursor(pm, hot.x(), hot.y()));
@@ -351,6 +474,7 @@ PianoRollView::PianoRollView(daw::EngineController* controller, QWidget* parent)
 }
 
 PianoRollView::~PianoRollView() {
+    m_controller->clearClipNotePreview(this);
     finishWheelNoteEdit();
     cancelControllerLaneWrite();
     commitPendingErase();
@@ -439,6 +563,10 @@ void PianoRollView::dropEvent(QDropEvent* event) {
 }
 
 void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
+    m_controller->clearClipNotePreview(this);
+    m_splitPreview.reset();
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     m_sampleDropName.clear();
     if (m_trackId != trackId || m_clipId != clipId) { cancelSlideGesture(); if (m_slideEditor) m_slideEditor->close(); m_selectedSlide.clear(); }
     // Whatever the keyboard is sounding belongs to the track being left.
@@ -473,7 +601,7 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     invalidateDocumentPaintCaches();
     m_selected.clear();
     m_primary.clear();
-    m_moving = m_resizing = m_resizingLeft = false;
+    m_panning = m_moving = m_resizing = m_resizingLeft = false;
     m_resizeOrig.clear();
     m_moveWorking.clear();
     m_duplicateDragPending = false;
@@ -510,6 +638,7 @@ void PianoRollView::setClip(const QString& trackId, const QString& clipId) {
     m_previewWholeClip = true;
     m_pxPerBeat = 0.0;   // let the new clip pick its own width
     m_scrollX = 0.0;
+    updateCursor(m_pointer);
     emit selectionChanged();
     emit viewportChanged();
     emitStatus();
@@ -630,6 +759,7 @@ int PianoRollView::snapPitch(int pitch) const {
 // ── Tools ───────────────────────────────────────────────────────────────────
 
 void PianoRollView::setTool(Tool tool) {
+    if (m_splitPreview) clearPreview();
     m_tool = tool;
     m_heldTool.reset();
     updateCursor(m_pointer);
@@ -672,6 +802,7 @@ void PianoRollView::setScaleHighlight(bool show) {
 void PianoRollView::setColorMode(ColorMode mode) {
     m_colorMode = mode;
     update();
+    emit viewportChanged();
 }
 
 void PianoRollView::setGridContrast(double contrast) {
@@ -757,7 +888,7 @@ double PianoRollView::maxScrollY() const {
 
 double PianoRollView::maxScrollX() const {
     const double usable = double(width()) - keyboardWidth();
-    return std::max(0.0, clipBeats() * pxPerBeat() - usable);
+    return std::max(0.0, editorBeats() * pxPerBeat() - usable);
 }
 
 void PianoRollView::clampScroll() {
@@ -1007,6 +1138,99 @@ bool PianoRollView::checkAuditionForTest() {
     return ok;
 }
 
+bool PianoRollView::checkPaintCachesForTest() {
+    daw::EngineController controller{};
+    if (!controller.initialize(48000, 512, false).isOk()) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Midi, "Slide cache");
+    const auto ghost = controller.addTrack(daw::TrackKind::Midi, "Ghost cache");
+    const auto clipId = controller.addMidiClip(track, 0, 8);
+    const auto ghostClip = controller.addMidiClip(ghost, 0, 8);
+    daw::NoteModel base;
+    base.id = "cache-base"; base.pitch = 60; base.startBeats = 0; base.lengthBeats = 6;
+    controller.setClipNotes(track, clipId, {base}, "Cache fixture");
+    controller.setClipNotes(ghost, ghostClip, {base}, "Ghost fixture");
+    PianoRollView view(&controller);
+    view.resize(800, 420);
+    view.setClip(QString::fromStdString(track), QString::fromStdString(clipId));
+    view.m_showVelocityLane = false;
+    view.m_pxPerBeat = 110;
+    view.m_rowHeight = 16;
+    view.m_scrollY = (kMaxPitch - 78) * view.m_rowHeight;
+    const QRegion full(view.rect());
+    const auto render = [&](const QRegion& region, bool ghosts = false) {
+        QImage image(view.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setClipRegion(region);
+        if (ghosts) view.paintGridAndNotes(painter, region);
+        else view.paintSlides(painter, region);
+        return image;
+    };
+    bool ok = true;
+    const auto check = [&](bool pass, const char* label) {
+        std::fprintf(stderr, "%s piano paint cache: %s\n", pass ? "PASS" : "FAIL", label);
+        ok &= pass;
+    };
+    const QImage empty = render(full);
+    check(view.m_slidePaintRevision == ~std::uint64_t(0),
+          "a clip without slides bypasses curve compilation and note traversal");
+    auto slide = daw::slides::create({base}, 1, 2, 72);
+    controller.setClipSlideNotes(track, clipId, {slide}, "Cache slide");
+    view.m_selectedSlide = slide.id;
+    const QImage first = render(full);
+    check(first != empty && first == render(full), "cached slides match their first raster paint");
+    const QRegion strips = QRegion(QRect(170, 0, 13, view.height())) |
+                           QRegion(QRect(460, 0, 17, view.height()));
+    const QImage partial = render(strips);
+    bool sameStrips = true;
+    for (const QRect& strip : strips) sameStrips &= partial.copy(strip) == first.copy(strip);
+    check(sameStrips, "disjoint playhead repaints match full slide rendering exactly");
+    for (const double scale : {137.0, 83.0}) {
+        view.m_pxPerBeat = scale;
+        view.m_scrollX = 73.5;
+        view.m_scrollY += 3.25;
+        const QImage changed = render(full);
+        view.m_slidePaintRevision = ~std::uint64_t(0);
+        check(changed == render(full), "zoom and pan invalidate only viewport-dependent slide geometry");
+    }
+    view.m_pxPerBeat = 110; view.m_scrollX = 400;
+    const QImage selected = render(full);
+    view.m_selectedSlide.clear();
+    check(selected != render(full), "an offscreen selected slide retains visible target outlines");
+    view.m_selectedSlide = slide.id;
+    base.pitch = 62;
+    controller.setClipNotes(track, clipId, {base}, "Change slide base");
+    const QImage changedNotes = render(full);
+    view.m_slidePaintRevision = ~std::uint64_t(0);
+    check(changedNotes == render(full), "note edits invalidate compiled slides and cached geometry");
+    controller.setClipSlideNotes(track, clipId, {}, "Remove slides");
+    check(render(full) == empty, "removing the final slide leaves no cached curve pixels");
+    view.m_scrollX = 0;
+    view.m_tool = Tool::Slide;
+    view.m_pointerInside = true;
+    view.m_pointer = QPointF(view.beatsToX(1), view.pitchToY(72) + 8);
+    check(render(full) != empty, "empty slide lists still draw the live creation preview");
+    view.m_tool = Tool::Draw;
+    view.setGhostTracks({QString::fromStdString(ghost)});
+    render(full, true);
+    check(view.m_ghostPaintIndexes.size() == 1, "the live ghost clip receives an index");
+    for (int i = 0; i < 8; ++i) {
+        const auto transient = controller.addMidiClip(ghost, 1, 2);
+        controller.setClipNotes(ghost, transient, {base}, "Transient ghost");
+        render(full, true);
+        check(view.m_ghostPaintIndexes.size() == 2, "a newly inserted ghost clip is indexed");
+        controller.removeClip(ghost, transient);
+        render(full, true);
+        check(view.m_ghostPaintIndexes.size() == 1 &&
+              !view.m_ghostPaintIndexes.contains(ghost + '\n' + transient),
+              "deleting ghost clips releases their indexes without changing the ghost set");
+    }
+    controller.undo();
+    render(full, true);
+    check(view.m_ghostPaintIndexes.size() == 2, "Undo restores a deleted ghost and its index");
+    return ok;
+}
+
 bool PianoRollView::checkInteractionGesturesForTest() {
     const auto* current = clip();
     if (!current || width() < 200 || height() < 160) return false;
@@ -1080,7 +1304,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
         m_noteBorders = false;
         QPainter painter(&image);
         paintNoteShape(painter, QRectF(2.0, 2.0, 28.0, 12.0),
-                       QColor(90, 160, 225), false, false);
+                       QColor(90, 160, 225), false);
         painter.end();
         return image;
     };
@@ -2021,7 +2245,7 @@ bool PianoRollView::checkInteractionGesturesForTest() {
                          int(repeatDispatched));
         }
     }
-    return ok;
+    return checkPaintCachesForTest() && ok;
 }
 
 double PianoRollView::clipBeats() const {
@@ -2032,13 +2256,21 @@ double PianoRollView::clipBeats() const {
     return beats > 0.0 ? beats : 4.0;
 }
 
+double PianoRollView::editorBeats() const {
+    if (!m_controller) return clipBeats() + 16.0;
+    const auto& project = m_controller->project();
+    const double barBeats = std::max(1, project.timeSigNumerator) *
+                            4.0 / std::max(1, project.timeSigDenominator);
+    return clipBeats() + 4.0 * barBeats;
+}
+
 double PianoRollView::pxPerBeat() const {
     if (m_pxPerBeat > 0.0) return m_pxPerBeat;
     const double usable = double(width()) - keyboardWidth();
     if (usable <= 0.0) return kMinFitPxPerBeat;
-    // Fit the clip, but never tighter than `kMinFitPxPerBeat` — past that the
-    // notes are too thin to grab and the roll scrolls instead.
-    return std::max(usable / clipBeats(), kMinFitPxPerBeat);
+    // Fit the clip plus four empty bars, but never tighter than
+    // `kMinFitPxPerBeat` — past that notes are too thin to grab, so scroll instead.
+    return std::max(usable / editorBeats(), kMinFitPxPerBeat);
 }
 
 double PianoRollView::xToBeats(double x) const {
@@ -2278,7 +2510,7 @@ void PianoRollView::seekToLocalBeat(double beats, bool snapping) {
 QRectF PianoRollView::noteRect(const daw::NoteModel& n) const {
     const double x = beatsToX(n.startBeats);
     const double w = std::max(3.0, n.lengthBeats * pxPerBeat());
-    return QRectF(x, pitchToY(n.pitch) + 1.0, w, m_rowHeight - 2.0);
+    return QRectF(x, pitchToY(n.pitch) + 1.0, w, m_rowHeight - 1.0);
 }
 
 // The lane draws and edits one number per note, and which number that is comes
@@ -2464,6 +2696,8 @@ void PianoRollView::cancelControllerLaneWrite() {
 // ── Zoom ────────────────────────────────────────────────────────────────────
 
 void PianoRollView::zoomHorizontal(double factor) {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     // Zoom about the pointer when it is over the grid, so the note under the
     // cursor stays put — the only zoom that doesn't lose your place.
     const double anchorX =
@@ -2477,6 +2711,8 @@ void PianoRollView::zoomHorizontal(double factor) {
 }
 
 void PianoRollView::setHorizontalZoomFromStart(double pixels) {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     m_pxPerBeat = std::clamp(pixels, kMinPxPerBeat, kMaxPxPerBeat);
     // The right overview bracket represents the visible range's end; its left
     // edge is implicitly bar one. Every drag therefore returns the viewport to
@@ -2490,6 +2726,8 @@ void PianoRollView::setHorizontalZoomFromStart(double pixels) {
 double PianoRollView::effectivePixelsPerBeat() const { return pxPerBeat(); }
 
 void PianoRollView::zoomVertical(double factor) {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     const bool pointerInField =
         m_pointerInside && m_pointer.y() >= ui::kRulerHeight &&
         m_pointer.y() < laneTop();
@@ -2506,6 +2744,8 @@ void PianoRollView::zoomVertical(double factor) {
 }
 
 void PianoRollView::setPixelsPerBeat(double px) {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     // Zero is meaningful: it hands the width back to "fit the clip".
     m_pxPerBeat = px <= 0.0 ? 0.0 : std::clamp(px, kMinPxPerBeat, kMaxPxPerBeat);
     clampScroll();
@@ -2514,6 +2754,8 @@ void PianoRollView::setPixelsPerBeat(double px) {
 }
 
 void PianoRollView::setRowHeight(double px) {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     m_rowHeight = std::clamp(px, kMinRowHeight, kMaxRowHeight);
     clampScroll();
     emit viewportChanged();
@@ -2521,13 +2763,15 @@ void PianoRollView::setRowHeight(double px) {
 }
 
 void PianoRollView::zoomToFit() {
-    // Asked for by name, so it really fits: the whole clip however long it is.
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
+    // Fit the whole clip and its four-bar editing space, however long it is.
     // The floor in `pxPerBeat()` is for the width the roll picks on its own,
     // and applying it here would mean "fit" showed only part of the clip.
     const double usable = double(width()) - keyboardWidth();
     m_pxPerBeat =
         usable > 0.0
-            ? std::clamp(usable / clipBeats(), kMinPxPerBeat, kMaxPxPerBeat)
+            ? std::clamp(usable / editorBeats(), kMinPxPerBeat, kMaxPxPerBeat)
             : 0.0;
     m_scrollX = 0.0;
     scrollToContent();
@@ -2535,6 +2779,8 @@ void PianoRollView::zoomToFit() {
 }
 
 void PianoRollView::zoomToSelection() {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     mt::Notes selection = targetNotes();
     if (selection.empty()) return;
     double start = 0.0, end = 0.0;
@@ -2558,6 +2804,8 @@ void PianoRollView::zoomToSelection() {
 }
 
 void PianoRollView::scrollToContent() {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     const auto* c = clip();
     int lowest = 60;   // middle C when there is nothing to look at yet
     int highest = 60;
@@ -2587,6 +2835,7 @@ void PianoRollView::hideEvent(QHideEvent* ev) {
     // A close normally hides this modeless editor rather than destroying it.
     // Do not leave a wheel burst's controller transaction open while hidden.
     finishWheelNoteEdit();
+    clearPreview();
     QWidget::hideEvent(ev);
 }
 
@@ -2827,14 +3076,23 @@ void PianoRollView::previewTransform(
     untouched.insert(untouched.end(), result.begin(), result.end());
     m_preview = std::move(untouched);
     invalidateNotePaintIndex();
+    invalidateSoundingPitchIndex();
     m_previewSelection = std::move(resultIds);
     m_previewWholeClip = wholeClip;
+    m_controller->previewClipNotes(this, m_trackId.toStdString(),
+                                   m_clipId.toStdString(), *m_preview);
     emitStatus();
     update();
 }
 
 bool PianoRollView::commitPreview(const QString& label) {
-    if (!m_preview || !clip()) return false;
+    if (m_splitPreview && !validateSplitPreview()) return false;
+    if (!m_preview || !clip() || !m_controller->clipNotePreviewActive(this)) {
+        clearPreview();
+        return false;
+    }
+    m_splitPreview.reset();
+    updateCursor(m_pointer);
 
     // Move the exact painted notes into the document before the event loop can
     // paint again. There is no second transform (and therefore no second RNG
@@ -2849,6 +3107,7 @@ bool PianoRollView::commitPreview(const QString& label) {
 
     m_controller->setClipNotes(m_trackId.toStdString(), m_clipId.toStdString(),
                                std::move(committed), label.toStdString());
+    m_controller->clearClipNotePreview(this);
     invalidateSoundingPitchIndex();
     if (!wholeClip) {
         m_selected = committedSelection;
@@ -2862,9 +3121,13 @@ bool PianoRollView::commitPreview(const QString& label) {
 }
 
 void PianoRollView::clearPreview() {
+    m_controller->clearClipNotePreview(this);
+    m_splitPreview.reset();
+    updateCursor(m_pointer);
     if (!m_preview) return;
     m_preview.reset();
     invalidateNotePaintIndex();
+    invalidateSoundingPitchIndex();
     m_previewSelection.clear();
     m_previewWholeClip = true;
     emitStatus();
@@ -2873,7 +3136,83 @@ void PianoRollView::clearPreview() {
 
 // ── Edits the context panel drives ─────────────────────────────────────────
 
+void PianoRollView::beginSplitPreview() {
+    if (m_splitPreview || !clip() || m_selected.isEmpty() || targetNotes().empty()) return;
+    finishInterruptedPointerGesture();
+    finishWheelNoteEdit();
+    stopAudition();
+    clearPreview();
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
+    setFocus(Qt::ShortcutFocusReason);
+    m_heldTool.reset();
+    m_splitPreview = SplitPreview{};
+    m_splitPreview->beats = std::clamp(effectiveGridBeats(), kMinNoteBeats, 16.0);
+    m_splitPreview->revision = m_controller->midiNotesRevision(m_trackId.toStdString());
+    m_splitPreview->source = clipNotes();
+    m_splitPreview->selection = m_selected;
+    updateSplitPreview();
+    updateCursor(m_pointer);
+}
+
+bool PianoRollView::validateSplitPreview() {
+    if (!m_splitPreview) return false;
+    const auto* current = clip();
+    if (!current || m_splitPreview->revision !=
+            m_controller->midiNotesRevision(m_trackId.toStdString()) ||
+        m_splitPreview->selection != m_selected ||
+        daw::midiNotes(*current) != m_splitPreview->source) {
+        clearPreview();
+        return false;
+    }
+    return true;
+}
+
+void PianoRollView::updateSplitPreview() {
+    if (!validateSplitPreview()) return;
+    const double beats = m_splitPreview->beats;
+    const int step = m_splitPreview->pitchStep;
+    previewTransform([beats, step](const mt::Notes& notes) {
+        return mt::splitAtGrid(notes, beats, step);
+    });
+}
+
+void PianoRollView::dragSplitPreview(double y) {
+    if (!validateSplitPreview() || !m_splitPreview->dragging) return;
+    auto& split = *m_splitPreview;
+    split.dragRemainder += (split.lastY - y) / m_rowHeight;
+    split.lastY = y;
+    const int steps = int(split.dragRemainder);
+    if (!steps) return;
+    split.dragRemainder -= steps;
+    const int pitchStep = std::clamp(split.pitchStep + steps, -127, 127);
+    if (pitchStep == -127 || pitchStep == 127) split.dragRemainder = 0.0;
+    if (pitchStep == split.pitchStep) return;
+    split.pitchStep = pitchStep;
+    updateSplitPreview();
+}
+
+QString PianoRollView::splitPreviewLabel() const {
+    if (!m_splitPreview) return {};
+    const double beats = m_splitPreview->beats;
+    QString division;
+    for (const auto flavour : {mt::GridFlavour::Straight, mt::GridFlavour::Triplet,
+                               mt::GridFlavour::Dotted}) {
+        for (int denominator : {1, 2, 4, 8, 16, 32, 64, 128}) {
+            if (std::abs(mt::gridBeatsFor(denominator, flavour) - beats) > 1e-6) continue;
+            division = flavour == mt::GridFlavour::Triplet ? tr("1/%1 triplet").arg(denominator)
+                : flavour == mt::GridFlavour::Dotted ? tr("1/%1 dotted").arg(denominator)
+                : QStringLiteral("1/%1").arg(denominator);
+            break;
+        }
+        if (!division.isEmpty()) break;
+    }
+    if (division.isEmpty()) division = tr("%1 beats").arg(beats, 0, 'g', 4);
+    return tr("Split %1 · Notes: %2").arg(division).arg(m_previewSelection.size());
+}
+
 void PianoRollView::beginSelectionEdit() {
+    if (m_splitPreview) clearPreview();
     if (m_selectionEditUndoActive) return;
     finishWheelNoteEdit();
     m_controller->beginNoteEdit(m_trackId.toStdString(), m_clipId.toStdString());
@@ -3273,7 +3612,10 @@ void PianoRollView::paintEvent(QPaintEvent* event) {
 }
 
 void PianoRollView::paintScene(QPainter& p, const QRegion& region) {
-    if (!ui::graphics::isSceneRecording(p) || !clip()) {
+    // Zoom changes every tile's geometry each frame. Record the visible field
+    // once until it settles; rebuilding a full tile cache cannot be reused and
+    // repeats grid/ruler/note work for every horizontal and vertical cell.
+    if (!ui::graphics::isSceneRecording(p) || !clip() || ui::ScrollMotion::isZooming(this)) {
         paintGridAndNotes(p, region);
         paintOverlays(p, region);
         return;
@@ -3282,6 +3624,7 @@ void PianoRollView::paintScene(QPainter& p, const QRegion& region) {
     QDataStream stream(&signature, QIODevice::WriteOnly);
     stream << size() << font() << palette().cacheKey() << p.device()->devicePixelRatioF()
            << pxPerBeat() << m_rowHeight << keyboardWidth() << laneTop() << laneHeight() << int(m_laneParam)
+           << ui::gridLineWidth()
            << quint64(m_controller->projectGeneration())
            << quint64(m_controller->midiNotesRevision(m_trackId.toStdString()))
            << m_trackId << m_clipId << clip()->color << clip()->startSeconds << clip()->offsetSeconds
@@ -3300,21 +3643,27 @@ void PianoRollView::paintScene(QPainter& p, const QRegion& region) {
     p.fillRect(rect(), th().background);
     const double key = keyboardWidth(), top = ui::kRulerHeight;
     const QRectF field(key, top, std::max(0., width() - key), std::max(0., laneTop() - top));
-    const int tileWidth = std::max(1, std::min(512, int(field.width())));
-    const int tileHeight = std::max(1, std::min(256, int(field.height())));
-    const double scrollX = m_scrollX, scrollY = m_scrollY;
+    const qreal dpr = p.device()->devicePixelRatioF();
+    const qreal tileWidth = std::max(1.0, std::floor(std::min(512.0, field.width()) * dpr)) / dpr;
+    const qreal tileHeight = std::max(1.0, std::floor(std::min(256.0, field.height()) * dpr)) / dpr;
+    // Round the shared scroll once. Rounding each tile's offset separately
+    // puts negative and positive half-pixels on opposite sides of their seam.
+    const double scrollX = std::round(m_scrollX * dpr) / dpr;
+    const double scrollY = std::round(m_scrollY * dpr) / dpr;
     for (qint64 y = qint64(std::floor(scrollY / tileHeight)); y * tileHeight < scrollY + field.height(); ++y) {
         for (qint64 x = qint64(std::floor(scrollX / tileWidth)); x * tileWidth < scrollX + field.width(); ++x) {
+            // Each recording is already clipped to its tile; the assembled
+            // tiles need only the viewport clip, with no second tile scissor.
             const QPointF origin(x * tileWidth - scrollX, y * tileHeight - scrollY);
             p.save();
-            p.setClipRect(field.intersected(QRectF(key + origin.x(), top + origin.y(), tileWidth, tileHeight)), Qt::IntersectClip);
+            p.setClipRect(field, Qt::IntersectClip);
             m_gpuNoteTiles.paint(p, (quint64(x) << 16) | quint64(y), size(), origin,
                 [&](QPainter& local) {
                     QScopedValueRollback<double> sx(m_scrollX, double(x * tileWidth));
                     QScopedValueRollback<double> sy(m_scrollY, double(y * tileHeight));
-                    const QRect dirty(int(key), int(top), tileWidth, tileHeight);
+                    const QRectF dirty(key, top, tileWidth, tileHeight);
                     local.setClipRect(dirty);
-                    paintGridAndNotes(local, QRegion(dirty));
+                    paintGridAndNotes(local, QRegion(dirty.toAlignedRect()));
                 });
             p.restore();
         }
@@ -3354,14 +3703,34 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     const double fieldBottom = laneTop();
     const QRectF field(keyWidth, gridTop, double(width()) - keyWidth,
                        std::max(0.0, fieldBottom - gridTop));
-    const QColor gridBase = m_gridColor.isValid() ? m_gridColor : t.gridLine;
-    const QColor gridStrong =
-        m_gridColor.isValid() ? m_gridColor.lighter(140) : t.gridLineStrong;
+    // Keep the note field lighter than its grid: quiet charcoal rows with
+    // dark divisions, instead of bright lines over a nearly black well.
+    const QColor fieldColor = t.dark ? mixColors(t.surface, t.surfaceElevated, 0.5)
+                                     : mixColors(t.background, t.surface, 0.5);
+    const QColor gridInk = m_gridColor.isValid() ? m_gridColor : QColor(Qt::black);
+    const auto gridLine = [&](double darkStrength, double lightStrength) {
+        return mixColors(fieldColor, gridInk, t.dark ? darkStrength : lightStrength);
+    };
+    const QColor rowLine = gridLine(0.22 + 0.14 * m_gridContrast, 0.06 + 0.08 * m_gridContrast);
+    const QColor subdivisionLine = gridLine(0.25 + 0.18 * m_gridContrast, 0.08 + 0.08 * m_gridContrast);
+    const QColor beatLine = gridLine(0.46 + 0.20 * m_gridContrast, 0.16 + 0.12 * m_gridContrast);
+    const QColor halfBarLine = gridLine(0.50 + 0.20 * m_gridContrast, 0.20 + 0.14 * m_gridContrast);
+    const QColor barLine = gridLine(0.64 + 0.22 * m_gridContrast, 0.24 + 0.18 * m_gridContrast);
     const QColor clipColor = ui::colorFromRgb(c->color);
+    const qreal gridDpr = std::max<qreal>(1.0, p.device()->devicePixelRatioF());
+    const qreal gridWidth = ui::gridLineWidth();
+    const auto gridPixel = [gridDpr](qreal position) {
+        return std::round(position * gridDpr) / gridDpr;
+    };
+    const auto gridLineCenter = [gridDpr](qreal position) {
+        return (std::floor(position * gridDpr) + 0.5) / gridDpr;
+    };
+    const double clipEndX = gridPixel(beatsToX(clipBeats()));
+    const double tailLeft = std::clamp(clipEndX, keyWidth, double(width()));
 
     p.save();
     p.setClipRect(QRectF(0, 0, double(width()), fieldBottom), Qt::IntersectClip);
-    p.fillRect(field, t.well());
+    p.fillRect(field, fieldColor);
 
     // The ruler is clip-local: bar 1 is always the clip's own beginning, even
     // when that beginning is bar 37 on the arrangement. Seeking converts the
@@ -3372,16 +3741,13 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     rulerFill.setColorAt(
         1.0, mixColors(t.surface, t.toolbarBackground, 0.45));
     p.fillRect(QRectF(0.0, 0.0, double(width()), gridTop), rulerFill);
-    drawTimeRangeStrip(p);
     p.setPen(QPen(t.sectionDivider(), 1.0));
     p.drawLine(QPointF(0.0, gridTop - 1.0),
                QPointF(double(width()), gridTop - 1.0));
 
-    // Row banding, so a pitch can be read off the grid at a glance. The *white*
-    // key rows are lightened rather than the black ones darkened: on a dark
-    // theme the field is already near-black and there is no darker left to go.
-    const QColor whiteRow = mixColors(t.well(), t.textPrimary, 0.09);
-    const QColor scaleRow = mixColors(t.well(), t.accent, 0.16);
+    // Subtle key banding keeps pitches readable without overpowering notes.
+    const QColor whiteRow = mixColors(fieldColor, Qt::white, t.dark ? 0.015 : 0.16);
+    const QColor scaleRow = mixColors(fieldColor, t.accent, 0.16);
     for (int pitch = kMinPitch; pitch <= kMaxPitch; ++pitch) {
         const double y = pitchToY(pitch);
         if (y + m_rowHeight < gridTop || y > fieldBottom) continue;
@@ -3396,25 +3762,35 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
             p.fillRect(QRectF(keyWidth, y, field.width(), m_rowHeight), whiteRow);
         }
     }
-    // A stronger line under every B → C boundary, so octaves are countable.
-    p.setPen(QPen(gridBase, 1.0));
-    for (int pitch = kMinPitch; pitch <= kMaxPitch; pitch += 12) {
+    // Tint every pitch after the opaque row fills, before notes and grid lines.
+    drawTimeRangeStrip(p);
+    // Share the timeline's thickness and physical-pixel centres. Contrast keeps
+    // bars, beats and subdivisions distinct even at fractional hairline widths.
+    p.save();
+    p.setClipRect(field, Qt::IntersectClip);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    // Delimit every pitch, with a stronger line at each octave boundary.
+    for (int pitch = kMinPitch; pitch <= kMaxPitch; ++pitch) {
         const double y = pitchToY(pitch) + m_rowHeight;
         if (y < gridTop || y > fieldBottom) continue;
-        p.drawLine(QPointF(keyWidth, y), QPointF(field.right(), y));
+        p.setPen(QPen(pitch % 12 == 0 ? beatLine : rowLine, gridWidth));
+        p.drawLine(QPointF(keyWidth, gridLineCenter(y)),
+                   QPointF(field.right(), gridLineCenter(y)));
     }
 
     // Subdivisions recede behind beats, half-bars and bar boundaries. Keep the
     // hierarchy at every contrast setting and use the meter's actual beat unit.
     const int beatsPerBar = std::max(1, m_controller->project().timeSigNumerator);
     const double beatLength = 4.0 / std::max(1, m_controller->project().timeSigDenominator);
-    const double totalBeats = clipBeats();
+    const double totalBeats = editorBeats();
     const double px = pxPerBeat();
     const double grid = effectiveGridBeats();
-    const double faint = 0.25 + 0.5 * m_gridContrast;
-    const QColor beatLine = mixColors(gridBase, t.textPrimary, 0.06 + 0.16 * m_gridContrast);
-    const QColor halfBarLine = mixColors(gridStrong, t.textPrimary, 0.05 + 0.16 * m_gridContrast);
-    const QColor barLine = mixColors(gridStrong, t.textPrimary, 0.14 + 0.22 * m_gridContrast);
+    const auto beatVisible = [&](int beat) {
+        if (beat % beatsPerBar == 0) return true;
+        const bool halfBar = beatsPerBar % 2 == 0 &&
+                             beat % beatsPerBar == beatsPerBar / 2;
+        return beatLength * px * (halfBar ? beatsPerBar / 2.0 : 1.0) >= 8.0;
+    };
 
     // Work from the actual disjoint update region rather than its bounding box.
     // A normal playback tick produces two tiny strips (old and new playhead); a
@@ -3423,20 +3799,20 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     // though Qt was going to accept only a handful of painted pixels.
     std::vector<std::pair<double, double>> dirtyBeatRanges;
     dirtyBeatRanges.reserve(std::size_t(region.rectCount()));
-    constexpr double kGridPaintMarginPx = 2.0;
+    const double gridPaintMargin = std::ceil(gridWidth / 2.0) + 1.0;
     for (const QRect& updateRect : region) {
         if (updateRect.top() > fieldBottom) continue;
         const double leftPx = std::max(
-            keyWidth, double(updateRect.left()) - kGridPaintMarginPx);
+            keyWidth, double(updateRect.left()) - gridPaintMargin);
         const double rightPx = std::min(
-            double(width()), double(updateRect.right()) + kGridPaintMarginPx);
+            double(width()), double(updateRect.right()) + gridPaintMargin);
         if (rightPx < leftPx) continue;
         const double rawFirst = xToBeats(leftPx);
         const double rawLast = xToBeats(rightPx);
         if (rawLast < 0.0) continue;
         // Keep the whole visible time interval here, including the blank area
         // beyond this clip. Notes and ghosts may have a tail there; the grid
-        // loops below clamp their own indices to the clip duration.
+        // loops below clamp their own indices to the editor's padded duration.
         dirtyBeatRanges.emplace_back(std::max(0.0, rawFirst), rawLast);
     }
     std::sort(dirtyBeatRanges.begin(), dirtyBeatRanges.end());
@@ -3453,7 +3829,7 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     dirtyBeatRanges.resize(mergedRangeCount);
 
     if (grid > 0.0 && grid * px >= 4.0) {
-        p.setPen(QPen(mixColors(gridBase, t.background, 1.0 - faint), 1.0));
+        p.setPen(QPen(subdivisionLine, gridWidth));
         const std::int64_t finalSlot = std::int64_t(
             std::floor((totalBeats + 1e-9) / grid));
         for (const auto& range : dirtyBeatRanges) {
@@ -3469,9 +3845,15 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
                     at += (m_swing - 0.5) * grid;
                 if (at < range.first - 1e-9 || at > range.second + 1e-9)
                     continue;
+                // Paint coincident divisions only once, including their
+                // antialiased edges, just as on the timeline.
+                const int beat = int(std::round(at / beatLength));
+                if (std::abs(at / beatLength - beat) < 1e-7 && beatVisible(beat))
+                    continue;
                 const double x = beatsToX(at);
                 if (x < keyWidth || x > width()) continue;
-                p.drawLine(QPointF(x, gridTop), QPointF(x, fieldBottom));
+                p.drawLine(QPointF(gridLineCenter(x), gridTop),
+                           QPointF(gridLineCenter(x), fieldBottom));
             }
         }
     }
@@ -3483,14 +3865,40 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
             const bool bar = beat % beatsPerBar == 0;
             const bool halfBar = beatsPerBar % 2 == 0 &&
                                  beat % beatsPerBar == beatsPerBar / 2;
-            if (!bar && beatLength * px * (halfBar ? beatsPerBar / 2.0 : 1.0) < 8.0)
-                continue;
+            if (!beatVisible(beat)) continue;
             const double x = beatsToX(beat * beatLength);
             if (x < keyWidth || x > width()) continue;
-            p.setPen(QPen(bar ? barLine : halfBar ? halfBarLine : beatLine,
-                          bar ? 1.0 + m_gridContrast : 1.0));
-            p.drawLine(QPointF(x, gridTop), QPointF(x, fieldBottom));
+            p.setPen(QPen(bar ? barLine : halfBar ? halfBarLine : beatLine, gridWidth));
+            p.drawLine(QPointF(gridLineCenter(x), gridTop),
+                       QPointF(gridLineCenter(x), fieldBottom));
         }
+    }
+    p.restore();
+
+    // Dim the extra editor bars together with their grid, before drawing notes.
+    // This preserves the divisions while marking the currently inaudible tail.
+    if (tailLeft < width()) {
+        const QColor tailShade(0, 0, 0, t.dark ? 60 : 14);
+        p.fillRect(QRectF(tailLeft, gridTop, width() - tailLeft,
+                         fieldBottom - gridTop), tailShade);
+        p.fillRect(QRectF(tailLeft, ui::kLoopStripHeight, width() - tailLeft,
+                         gridTop - ui::kLoopStripHeight), tailShade);
+    }
+    if (clipEndX >= keyWidth && clipEndX < width()) {
+        p.fillRect(QRectF(clipEndX, ui::kLoopStripHeight, 1.0 / gridDpr,
+                         gridPixel(fieldBottom) - ui::kLoopStripHeight),
+                   mixColors(fieldColor, t.textSecondary, 0.45));
+    }
+    if (!m_timeRange.valid() && width() - tailLeft > 80.0) {
+        QFont labelFont = p.font();
+        labelFont.setPixelSize(9);
+        p.setFont(labelFont);
+        p.setPen(t.textSecondary);
+        const QRectF label(tailLeft + 8.0, 0.0, width() - tailLeft - 16.0,
+                           ui::kLoopStripHeight);
+        p.drawText(label, Qt::AlignLeft | Qt::AlignVCenter,
+                   p.fontMetrics().elidedText(tr("Outside clip"), Qt::ElideRight,
+                                             int(label.width())));
     }
 
     // Local bar numbers and beat ticks. Labels thin out only when the current
@@ -3520,7 +3928,7 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
             const double x = beatsToX(beat * beatLength);
             if (x < keyWidth || x > width()) continue;
             const bool bar = beat % beatsPerBar == 0;
-            p.setPen(QPen(bar ? barLine : beatLine, 1.0));
+            p.setPen(QPen(bar ? t.gridLineStrong : t.gridLine, 1.0));
             p.drawLine(QPointF(x, gridTop - (bar ? 8.0 : 4.0)),
                        QPointF(x, gridTop));
             if (bar && (beat / beatsPerBar) % labelStride == 0) {
@@ -3537,6 +3945,11 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
     // can be written against the bass or the chords, not to be edited here.
     if (!m_ghostTracks.isEmpty() && !dirtyBeatRanges.empty() &&
         dirtyRect.intersects(field)) {
+        const std::array<std::uint64_t, 4> stamp{
+            m_controller->projectGeneration(), m_controller->projectRevision(),
+            m_controller->clipGeometryRevision(), m_controller->project().structureRevision()};
+        const bool sweep = stamp != m_ghostPaintModelStamp;
+        if (sweep) { m_ghostPaintModelStamp = stamp; ++m_ghostPaintSweep; }
         const double tempo = m_controller->project().tempo;
         // Usually only one or two tracks are ghosted. Resolve those directly
         // instead of walking every track in the project on each playhead frame.
@@ -3567,6 +3980,7 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
                     auto [found, inserted] =
                         m_ghostPaintIndexes.try_emplace(key);
                     GhostPaintIndexEntry& entry = found->second;
+                    entry.lastSeen = m_ghostPaintSweep;
                     if (inserted || entry.revision != revision ||
                         entry.noteCount != daw::midiNotes(other).size()) {
                         entry.index.rebuild(daw::midiNotes(other));
@@ -3621,6 +4035,11 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
                 p.setRenderHint(QPainter::Antialiasing, false);
             }
         }
+        // The selected ghost tracks can stay open while their clips are
+        // replaced or deleted. Retain only live clip indexes after an edit.
+        if (sweep) std::erase_if(m_ghostPaintIndexes, [this](const auto& item) {
+            return item.second.lastSeen != m_ghostPaintSweep;
+        });
     }
 
     // ── Notes ──
@@ -3649,17 +4068,18 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
         if (r.right() < keyWidth || r.left() > width()) return;
         if (!r.intersects(dirtyRect)) return;
         if (!region.intersects(r.toAlignedRect())) return;
-        const bool selected = m_selected.contains(QString::fromStdString(n.id));
+        const bool selected = (m_splitPreview ? m_previewSelection : m_selected)
+                                  .contains(QString::fromStdString(n.id));
 
         QColor fill = colorFor(n, clipColor);
         if (n.muted) {
             // A muted note stays exactly where it is and reads as switched off.
             fill = mixColors(fill, t.background, 0.7);
         }
-        if (selected) fill = mixColors(fill, Qt::white, 0.35);
+        if (selected) fill = mixColors(fill, Qt::white, 0.18);
         if (m_preview) fill = mixColors(fill, t.accent, 0.35);
 
-        paintNoteShape(p, r, fill, selected, n.muted);
+        paintNoteShape(p, r, fill, n.muted);
 
         if (m_showNoteNames && m_rowHeight >= 11.0 && r.width() > 26.0) {
             p.setFont(noteFont);
@@ -3710,7 +4130,7 @@ void PianoRollView::paintGridAndNotes(QPainter& p, const QRegion& region) {
 }
 
 void PianoRollView::paintOverlays(QPainter& p, const QRegion& region) {
-    paintSlides(p);
+    paintSlides(p, region);
     const auto* c = clip();
     if (!c) return;
     m_paintClip = c;
@@ -3798,9 +4218,12 @@ void PianoRollView::paintOverlays(QPainter& p, const QRegion& region) {
 
     if (m_marquee) {
         const QRectF box = QRectF(m_marqueeOrigin, m_marqueeCurrent).normalized();
-        p.setPen(QPen(t.accent, 1.0, Qt::DashLine));
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(QPen(t.accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.setBrush(QColor(t.accent.red(), t.accent.green(), t.accent.blue(), 40));
-        p.drawRect(box);
+        p.drawRoundedRect(box, 4.0, 4.0);
+        p.restore();
     }
 
     // The blade's line, so a slice is aimed rather than guessed at.
@@ -3867,6 +4290,28 @@ void PianoRollView::paintOverlays(QPainter& p, const QRegion& region) {
         p.setPen(t.textPrimary);
         p.drawText(badge, Qt::AlignCenter, elided);
     }
+    if (m_splitPreview) {
+        // Stay in the overlay layer so cached CPU/GPU note tiles cannot hide
+        // the live division. This readout never takes focus or mouse input.
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QFont readoutFont = font();
+        readoutFont.setWeight(QFont::DemiBold);
+        p.setFont(readoutFont);
+        const auto metrics = p.fontMetrics();
+        const qreal available = std::max(0.0, width() - keyWidth - 24.0);
+        const QString label = metrics.elidedText(splitPreviewLabel(), Qt::ElideRight,
+                                                 int(std::max(0.0, available - 24.0)));
+        const QSizeF size(std::min(available, qreal(metrics.horizontalAdvance(label) + 24)),
+                          metrics.height() + 16);
+        const QRectF badge(QPointF(width() - size.width() - 12, gridTop + 12), size);
+        p.setPen(QPen(t.separator(), 1));
+        p.setBrush(t.surfaceElevated);
+        p.drawRoundedRect(badge, 6, 6);
+        p.setPen(t.textPrimary);
+        p.drawText(badge.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, label);
+        p.restore();
+    }
     p.restore();
 
     // ── The parameter lane ──
@@ -3877,74 +4322,106 @@ void PianoRollView::paintOverlays(QPainter& p, const QRegion& region) {
 /// One note's body, in whichever style the roll is set to. Both styles paint
 /// inside the pixel-aligned bounds so neither end is clipped by its own stroke.
 void PianoRollView::paintNoteShape(QPainter& p, const QRectF& r,
-                                   const QColor& fill, bool selected,
-                                   bool muted) const {
-    const Theme& t = th();
+                                   const QColor& fill, bool muted) const {
     const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
     const qreal pixel = 1.0 / std::max<qreal>(1.0, dpr);
     const QRectF shape = ui::pixelAlignedRect(r, dpr);
-    const qreal borderWidth = selected ? 2.0 * pixel
-                              : m_noteBorders ? pixel
-                                              : 0.0;
-    const QColor border = selected
-                              ? t.textPrimary
-                              : mixColors(fill, Qt::black, muted ? 0.35 : 0.48);
+    const qreal borderWidth = m_noteBorders ? pixel : 0.0;
+    const QColor border = mixColors(fill, Qt::black, muted ? 0.35 : 0.30);
+    // Shade inside the face: its bottom meets the pitch boundary, with no
+    // detached shadow or empty strip making the note appear to float.
+    QLinearGradient face(shape.topLeft(), shape.bottomLeft());
+    face.setColorAt(0.0, mixColors(fill, Qt::white, muted ? 0.04 : 0.16));
+    face.setColorAt(0.25, mixColors(fill, Qt::white, muted ? 0.01 : 0.04));
+    face.setColorAt(0.70, fill);
+    face.setColorAt(1.0, mixColors(fill, Qt::black, muted ? 0.08 : 0.22));
+    const QColor highlight = mixColors(fill, Qt::white, muted ? 0.08 : 0.32);
 
     p.save();
     if (m_noteStyle == NoteStyle::Flat) {
-        // The flat style is deliberately raster-sharp: border and fill are
-        // nested rectangles rather than a centred pen that loses half a pixel
-        // at the note's beginning and end.
+        // Square corners share the raised face; nested, pixel-aligned rectangles
+        // keep their edges crisp without a centred stroke or rounded corners.
         p.setRenderHint(QPainter::Antialiasing, false);
         p.setPen(Qt::NoPen);
+        QRectF body = shape;
         if (borderWidth > 0.0) {
-            p.fillRect(shape, border);
-            const QRectF inner = shape.adjusted(borderWidth, borderWidth,
-                                                -borderWidth, -borderWidth);
-            if (inner.width() > 0.0 && inner.height() > 0.0)
-                p.fillRect(inner, fill);
-        } else {
-            p.fillRect(shape, fill);
+            p.fillRect(body, border);
+            body.adjust(borderWidth, borderWidth, -borderWidth, -borderWidth);
+        }
+        if (body.width() > 0.0 && body.height() > 0.0) {
+            p.fillRect(body, face);
+            if (body.width() >= 8.0 && body.height() >= 6.0)
+                p.fillRect(QRectF(body.left(), body.top(), body.width(), pixel), highlight);
         }
         p.restore();
         return;
     }
 
-    p.setRenderHint(QPainter::Antialiasing, true);
-    // Keep the contact shadow inside the note's paint/hit envelope: the time
-    // edges stay exact, and tiled or partial repaints cannot clip a shadow tail.
-    const qreal lift = shape.height() >= 6.0 ? pixel : 0.0;
-    const qreal shadowRadius = std::min({4.0, shape.height() * 0.32,
-                                        shape.width() * 0.25});
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, muted ? 35 : t.dark ? 125 : 70));
-    p.drawRoundedRect(shape, shadowRadius, shadowRadius);
-    const QRectF body = shape.adjusted(borderWidth * 0.5,
-                                       borderWidth * 0.5,
-                                      -borderWidth * 0.5,
-                                      -borderWidth * 0.5 - lift);
-    if (body.width() <= 0.0 || body.height() <= 0.0) {
-        p.restore();
-        return;
-    }
-    const qreal radius = std::min({4.0, body.height() * 0.32,
-                                  body.width() * 0.25});
-    const QColor top = mixColors(fill, Qt::white, muted ? 0.05 : 0.22);
-    const QColor bottom = mixColors(fill, Qt::black, muted ? 0.06 : 0.20);
-    QLinearGradient face(body.topLeft(), body.bottomLeft());
-    face.setColorAt(0.0, top);
-    face.setColorAt(0.25, mixColors(fill, Qt::white, muted ? 0.02 : 0.06));
-    face.setColorAt(0.65, fill);
-    face.setColorAt(1.0, bottom);
-    p.setBrush(face);
-    if (borderWidth > 0.0) p.setPen(QPen(border, borderWidth));
-    else p.setPen(Qt::NoPen);
-    p.drawRoundedRect(body, radius, radius);
-    if (body.width() >= 8.0 && body.height() >= 6.0) {
-        p.setPen(QPen(QColor(255, 255, 255, muted ? 20 : 65), pixel));
-        const qreal y = body.top() + borderWidth * 0.5 + pixel;
-        p.drawLine(QPointF(body.left() + radius, y),
-                   QPointF(body.right() - radius, y));
+    const QRectF body = shape.adjusted(borderWidth, borderWidth, -borderWidth, -borderWidth);
+    const qreal radius = std::min({4.0, shape.height() * 0.32,
+                                  shape.width() * 0.25});
+    const bool raised = body.width() >= 8.0 && body.height() >= 6.0;
+    const auto paintRounded = [&](QPainter& target, const QRectF& bounds) {
+        const QRectF inset = bounds.adjusted(borderWidth, borderWidth, -borderWidth, -borderWidth);
+        const qreal innerRadius = std::max(0.0, radius - borderWidth);
+        QLinearGradient localFace(face);
+        localFace.setStart(bounds.topLeft());
+        localFace.setFinalStop(bounds.bottomLeft());
+        target.setRenderHint(QPainter::Antialiasing, true);
+        target.setPen(Qt::NoPen);
+        // An inset face leaves a one-pixel border without a centred stroke
+        // leaking coverage outside tiny rounded corners.
+        if (borderWidth > 0.0) {
+            target.setBrush(border);
+            target.drawRoundedRect(bounds, radius, radius);
+        }
+        if (inset.isEmpty()) return;
+        target.setBrush(localFace);
+        target.drawRoundedRect(inset, innerRadius, innerRadius);
+        if (raised) {
+            target.setPen(QPen(highlight, pixel));
+            const qreal y = inset.top() + pixel * 0.5;
+            target.drawLine(QPointF(inset.left() + innerRadius, y),
+                            QPointF(inset.right() - innerRadius, y));
+        }
+    };
+    if (ui::graphics::isSceneRecording(p)) {
+        // Tiny GPU triangles only receive coarse MSAA coverage. Cache the face
+        // at native DPR, keeping both antialiased caps at their original size.
+        // Zoom/resize stretches just one flat column, never the rounded edges.
+        static thread_local QCache<QByteArray, QImage> faces(4 * 1024);
+        const int width = qRound(shape.width() * dpr);
+        const int height = qRound(shape.height() * dpr);
+        const int cap = std::min(width / 2, int(std::ceil((radius + borderWidth + pixel) * dpr)));
+        const int assetWidth = std::min(width, cap * 2 + 1);
+        QByteArray key;
+        QDataStream stream(&key, QIODevice::WriteOnly);
+        stream << assetWidth << height << dpr << radius << fill << muted << m_noteBorders << raised;
+        auto* asset = faces.object(key);
+        if (!asset) {
+            auto image = std::make_unique<QImage>(assetWidth, height, QImage::Format_ARGB32_Premultiplied);
+            image->setDevicePixelRatio(dpr);
+            image->fill(Qt::transparent);
+            QPainter local(image.get());
+            paintRounded(local, QRectF(0, 0, assetWidth / dpr, height / dpr));
+            local.end();
+            const int cost = int(image->sizeInBytes() / 1024 + 1);
+            faces.insert(key, image.release(), cost);
+            asset = faces.object(key);
+        }
+        if (width == assetWidth) {
+            p.drawImage(shape.topLeft(), *asset);
+        } else {
+            const qreal edge = cap / dpr;
+            p.drawImage(QRectF(shape.left(), shape.top(), edge, shape.height()),
+                        *asset, QRectF(0, 0, cap, height));
+            p.drawImage(QRectF(shape.left() + edge, shape.top(), shape.width() - 2 * edge, shape.height()),
+                        *asset, QRectF(cap, 0, 1, height));
+            p.drawImage(QRectF(shape.right() - edge, shape.top(), edge, shape.height()),
+                        *asset, QRectF(cap + 1, 0, cap, height));
+        }
+    } else {
+        paintRounded(p, shape);
     }
     p.restore();
 }
@@ -4135,6 +4612,11 @@ void PianoRollView::invalidateDocumentPaintCaches() {
     // even if the old clip was switched away mid-gesture.
     m_soundingPitchInvalidationDeferred = false;
     m_soundingPitchIndexDirty = true;
+    m_slidePaintRevision = ~std::uint64_t(0);
+    m_slidePaintClip.clear();
+    m_slidePaintCurves.clear();
+    m_slidePaintNoteIndices.clear();
+    m_slidePaintPaths.clear();
 }
 
 void PianoRollView::ensureSoundingPitchIndex(const mt::Notes& notes) const {
@@ -4158,7 +4640,7 @@ PianoRollView::PitchMask
 PianoRollView::soundingPitchesAtBeat(double beat) const {
     const auto* c = clip();
     if (!c) return {};
-    ensureSoundingPitchIndex(daw::midiNotes(*c));
+    ensureSoundingPitchIndex(visibleNotes());
     return m_soundingPitchIndex.pitchesAt(beat);
 }
 
@@ -4168,7 +4650,7 @@ PianoRollView::PitchMask PianoRollView::soundingPitches() const {
     const double at = daw::secondsToBeats(
         m_controller->presentationPositionSeconds() - c->startSeconds + c->offsetSeconds,
         m_controller->project().tempo);
-    ensureSoundingPitchIndex(daw::midiNotes(*c));
+    ensureSoundingPitchIndex(visibleNotes());
     return m_soundingPitchIndex.pitchesAt(at);
 }
 
@@ -4249,7 +4731,8 @@ void PianoRollView::paintLane(QPainter& p) {
     p.drawText(QRectF(7.0, fieldBottom + 23.0, keyWidth - 12.0, 13.0),
                Qt::AlignLeft | Qt::AlignVCenter, range);
 
-    if (ui::graphics::isSceneRecording(p) && !m_laneDragging && !m_laneResizing &&
+    if (ui::graphics::isSceneRecording(p) && !ui::ScrollMotion::isZooming(this) &&
+        !m_laneDragging && !m_laneResizing &&
         !(m_pointerInside && m_pointer.y() >= fieldBottom - kLaneGripPx)) {
         const int tileWidth = std::max(1, std::min(512, int(parameterField.width())));
         const double scroll = m_scrollX;
@@ -4500,6 +4983,21 @@ void PianoRollView::paintLaneValues(QPainter& p) {
 // ── Input ───────────────────────────────────────────────────────────────────
 
 void PianoRollView::mousePressEvent(QMouseEvent* ev) {
+    if (m_splitPreview) {
+        m_pointer = ev->position();
+        if (validateSplitPreview()) {
+            if (ev->button() == Qt::LeftButton) {
+                commitPreview(tr("Split Notes"));
+            } else if (ev->button() == Qt::MiddleButton) {
+                m_splitPreview->dragging = true;
+                m_splitPreview->lastY = ev->position().y();
+                m_splitPreview->dragRemainder = 0.0;
+                updateCursor(m_pointer);
+            }
+        }
+        ev->accept();
+        return;
+    }
     if (hasActivePointerGesture()) finishInterruptedPointerGesture();
     m_pointerButton = ev->button();
     m_lastPointerPosition = ev->position();
@@ -4510,6 +5008,17 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     const QPointF pos = ev->position();
     m_pointer = pos;
     m_pointerInside = true;
+
+    // Navigation must bypass note edits, auditions and the undo transaction.
+    if (ev->button() == Qt::MiddleButton) {
+        ui::ScrollMotion::cancel(this);
+        ui::ScrollMotion::cancelZoom(this);
+        m_panning = true;
+        m_panLastPosition = pos;
+        setCursor(Qt::SizeAllCursor);
+        ev->accept();
+        return;
+    }
 
     if (slidePress(ev)) return;
 
@@ -4550,7 +5059,7 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
             case RangeGrab::None:
                 break;
         }
-        setCursor(m_rangeGrab == RangeGrab::Move ? Qt::ClosedHandCursor
+        setCursor(m_rangeGrab == RangeGrab::Move ? Qt::SizeAllCursor
                                                : Qt::SizeHorCursor);
         update();
         ev->accept();
@@ -4788,6 +5297,7 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
                 m_resizingLeft ? n->startBeats
                                : n->startBeats + n->lengthBeats;
         }
+        updateCursor(pos);
         update();
         return;
     }
@@ -4826,6 +5336,7 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
     m_resizing = false;
     m_resizingLeft = false;
     m_moving = true;
+    updateCursor(pos);
     if (const auto* drawn = note(QString::fromStdString(noteId))) {
         m_moveWorking = {*drawn};
         m_grabBeats = xToBeats(pos.x()) - drawn->startBeats;
@@ -4836,6 +5347,15 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
 }
 
 void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
+    if (m_splitPreview) {
+        m_pointer = ev->position();
+        m_pointerInside = true;
+        if (ev->buttons() & Qt::MiddleButton) dragSplitPreview(ev->position().y());
+        else m_splitPreview->dragging = false;
+        updateCursor(m_pointer);
+        ev->accept();
+        return;
+    }
     if (slideMove(ev)) return;
     if (hasActivePointerGesture() && m_pointerButton != Qt::NoButton &&
         !(ev->buttons() & m_pointerButton)) {
@@ -4848,6 +5368,22 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
     const QPointF pos = ev->position();
     m_pointer = pos;
     m_pointerInside = true;
+    if (m_panning) {
+        // Incremental, fractional deltas also reverse immediately at a bound.
+        const QPointF delta = pos - m_panLastPosition;
+        m_panLastPosition = pos;
+        ui::ScrollMotion::pan(this, -delta,
+            [this] { return QPointF(m_scrollX, m_scrollY); },
+            [this](QPointF at) {
+                const QPointF before(m_scrollX, m_scrollY);
+                setScrollX(at.x()); setScrollY(at.y());
+                if (before != QPointF(m_scrollX, m_scrollY)) emit viewportChanged();
+            },
+            [this](QPointF at) { return QPointF(std::clamp(at.x(), 0., maxScrollX()),
+                                               std::clamp(at.y(), 0., maxScrollY())); });
+        ev->accept();
+        return;
+    }
     if (m_rangeGrab != RangeGrab::None) {
         const bool snapping = m_snapEnabled != bool(ev->modifiers() & Qt::AltModifier);
         updateTimeRangeDrag(pos.x(), snapping);
@@ -5051,6 +5587,34 @@ void PianoRollView::mouseMoveEvent(QMouseEvent* ev) {
 }
 
 void PianoRollView::mouseReleaseEvent(QMouseEvent* ev) {
+    if (m_splitPreview) {
+        if (ev->button() == Qt::MiddleButton) {
+            // Include an endpoint coalesced into release by the window system.
+            dragSplitPreview(ev->position().y());
+            if (m_splitPreview) m_splitPreview->dragging = false;
+        }
+        updateCursor(ev->position());
+        ev->accept();
+        return;
+    }
+    if (m_panning) {
+        if (ev->button() == Qt::MiddleButton) {
+            // Qt may coalesce the last movement into the release event.
+            if (ev->position() != m_panLastPosition) {
+                QMouseEvent finalMove(QEvent::MouseMove, ev->position(), ev->scenePosition(),
+                                     ev->globalPosition(), Qt::NoButton, Qt::MiddleButton,
+                                     ev->modifiers(), ev->source(), ev->pointingDevice());
+                finalMove.setTimestamp(ev->timestamp());
+                mouseMoveEvent(&finalMove);
+            }
+            ui::ScrollMotion::finishPan(this);
+            m_panning = false;
+            m_pointerButton = Qt::NoButton;
+            updateCursor(ev->position());
+        }
+        ev->accept();
+        return;
+    }
     stopAudition();
     if (slideRelease()) { m_pointerButton = Qt::NoButton; ev->accept(); return; }
     m_pointerButton = Qt::NoButton;
@@ -5303,20 +5867,60 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
     const double dx = fine ? pixels.x() : notches.x();
     const double dy = fine ? pixels.y() : notches.y();
 
-    // Ctrl/Cmd zooms horizontally, Alt vertically — the two axes are
-    // independent, because a dense chord voicing and a long phrase need
-    // different things from the same clip.
-    if (modifiers & Qt::ControlModifier) {
-        ui::ScrollMotion::cancel(this);
-        // Pixel deltas are far smaller than a notch, so the exponent keeps a
-        // pinch-less trackpad zoom moving at the same rate as a wheel.
-        zoomHorizontal(std::pow(1.0015, fine ? dy : dy * 0.9));
+    if (m_splitPreview) {
+        if (validateSplitPreview()) {
+            auto& split = *m_splitPreview;
+            // Prefer detents when both units are supplied. Ignore trackpad
+            // inertia and cap accelerated packets at one musical division.
+            const double delta = notches.y() ? notches.y() : pixels.y() * 4.0;
+            if (ev->phase() == Qt::ScrollMomentum) {
+                ev->accept();
+                return;
+            }
+            if (delta * split.wheelRemainder < 0.0) split.wheelRemainder = 0.0;
+            split.wheelRemainder += delta;
+            const int steps = int(split.wheelRemainder / 120.0);
+            if (steps) split.wheelRemainder = 0.0;
+            const double beats = std::clamp(split.beats * (steps > 0 ? 0.5 : steps < 0 ? 2.0 : 1.0),
+                                            kMinNoteBeats, 16.0);
+            if (beats != split.beats) {
+                split.beats = beats;
+                updateSplitPreview();
+            }
+        }
         ev->accept();
         return;
     }
-    if (modifiers & Qt::AltModifier) {
-        ui::ScrollMotion::cancel(this);
-        zoomVertical(std::pow(1.0015, fine ? dy : dy * 0.9));
+
+    // Ctrl/Cmd zooms horizontally, Alt vertically — the two axes are
+    // independent, because a dense chord voicing and a long phrase need
+    // different things from the same clip.
+    if (modifiers & (Qt::ControlModifier | Qt::AltModifier)) {
+        const bool horizontal = modifiers & Qt::ControlModifier;
+        const double factor = std::pow(1.0015, fine ? dy : dy * 0.9);
+        const double anchorX = std::clamp(ev->position().x(), keyboardWidth(),
+                                          std::max(keyboardWidth(), double(width())));
+        const double fieldY = std::clamp(ev->position().y() - ui::kRulerHeight, 0.0, fieldHeight());
+        const double anchorBeats = xToBeats(anchorX);
+        const double anchorRow = (fieldY + m_scrollY) / m_rowHeight;
+        ui::ScrollMotion::zoom(this, horizontal ? QPointF(factor, 1) : QPointF(1, factor),
+            fine || ev->phase() == Qt::ScrollMomentum,
+            [this] { return QPointF(pxPerBeat(), m_rowHeight); },
+            [this, anchorX, fieldY, anchorBeats, anchorRow](QPointF scale) {
+                // Leave the untouched axis alone, including its automatic
+                // fit sentinel. exp(log(scale)) can differ by a rounding bit.
+                if (!qFuzzyCompare(scale.x(), pxPerBeat())) {
+                    m_pxPerBeat = std::clamp(scale.x(), kMinPxPerBeat, kMaxPxPerBeat);
+                    m_scrollX = anchorBeats * pxPerBeat() - (anchorX - keyboardWidth());
+                }
+                if (!qFuzzyCompare(scale.y(), m_rowHeight)) {
+                    m_rowHeight = std::clamp(scale.y(), kMinRowHeight, kMaxRowHeight);
+                    m_scrollY = anchorRow * m_rowHeight - fieldY;
+                }
+                clampScroll();
+                emit viewportChanged();
+                update();
+            });
         ev->accept();
         return;
     }
@@ -5325,6 +5929,7 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
     if (m_showVelocityLane && ev->position().y() >= laneTop() &&
         !m_selected.isEmpty() && m_laneParam != LaneParam::Controller) {
         ui::ScrollMotion::cancel(this);
+        ui::ScrollMotion::cancelZoom(this);
         m_wheelAccum += int(std::lround(fine ? dy * 4.0 : dy));
         const int steps = m_wheelAccum / kWheelPerStep;
         if (steps != 0) {
@@ -5349,7 +5954,7 @@ void PianoRollView::wheelEvent(QWheelEvent* ev) {
 }
 
 bool PianoRollView::hasActivePointerGesture() const {
-    return m_slideGesture || m_rangeGrab != RangeGrab::None || m_scrubbingPlayhead || m_marquee ||
+    return m_panning || m_slideGesture || m_rangeGrab != RangeGrab::None || m_scrubbingPlayhead || m_marquee ||
            m_moving || m_resizing || m_laneDragging || m_erasing || m_muting ||
            m_stretching || m_drawing || m_laneResizing || m_lanePointDrag >= 0 ||
            m_pressedKey >= 0 || m_gestureUndoActive;
@@ -5357,6 +5962,7 @@ bool PianoRollView::hasActivePointerGesture() const {
 
 void PianoRollView::finishInterruptedPointerGesture() {
     if (!hasActivePointerGesture()) return;
+    if (m_panning) ui::ScrollMotion::cancel(this);
     const Qt::MouseButton button = m_pointerButton == Qt::NoButton
         ? Qt::LeftButton : m_pointerButton;
     QMouseEvent release(QEvent::MouseButtonRelease, m_lastPointerPosition,
@@ -5366,10 +5972,23 @@ void PianoRollView::finishInterruptedPointerGesture() {
 }
 
 bool PianoRollView::event(QEvent* ev) {
+    if (m_splitPreview) {
+        if (ev->type() == QEvent::MouseButtonDblClick) {
+            mousePressEvent(static_cast<QMouseEvent*>(ev));
+            return true;
+        }
+        if (ev->type() == QEvent::Hide || ev->type() == QEvent::WindowDeactivate ||
+            ev->type() == QEvent::FocusOut) clearPreview();
+        else if (ev->type() == QEvent::UngrabMouse) m_splitPreview->dragging = false;
+    }
     if (ev->type() == QEvent::MouseButtonDblClick) { auto* e = static_cast<QMouseEvent*>(ev); const auto id = slideAt(e->position()); if (!id.empty() && e->button() == Qt::LeftButton) { slideRelease(); openSlideEditor(id); return true; } }
     if (ev->type() == QEvent::ToolTip) {
         const auto* help = static_cast<QHelpEvent*>(ev);
-        if (clip() && help->pos().y() < ui::kLoopStripHeight &&
+        if (clip() && help->pos().x() >= keyboardWidth() &&
+            help->pos().y() < laneTop() && xToBeats(help->pos().x()) >= clipBeats()) {
+            QToolTip::showText(help->globalPos(),
+                tr("Notes here will play after you extend the MIDI clip."), this);
+        } else if (clip() && help->pos().y() < ui::kLoopStripHeight &&
             help->pos().x() >= keyboardWidth()) {
             QToolTip::showText(help->globalPos(),
                 tr("Local range for copying and repeating notes. Double-click to clear; the timeline loop is unchanged."), this);
@@ -5430,6 +6049,13 @@ bool PianoRollView::event(QEvent* ev) {
 }
 
 void PianoRollView::keyPressEvent(QKeyEvent* ev) {
+    if (m_splitPreview) {
+        if (ev->key() == Qt::Key_Escape) clearPreview();
+        else if (ev->key() == Qt::Key_Return || ev->key() == Qt::Key_Enter)
+            commitPreview(tr("Split Notes"));
+        ev->accept();
+        return;
+    }
     if (slideKey(ev)) return;
     finishWheelNoteEdit();
     if (isPianoRollEditShortcut(ev)) {
@@ -5492,7 +6118,7 @@ void PianoRollView::contextMenuEvent(QContextMenuEvent* ev) {
 
 void PianoRollView::leaveEvent(QEvent*) {
     m_pointerInside = false;
-    unsetCursor();
+    if (!hasActivePointerGesture()) unsetCursor();
     update();
 }
 
@@ -5562,8 +6188,20 @@ QString PianoRollView::handleAt(const QPointF& pos) const {
 }
 
 void PianoRollView::updateCursor(const QPointF& pos) {
+    if (m_splitPreview) {
+        setCursor(m_splitPreview->dragging ? Qt::SizeVerCursor : Qt::CrossCursor);
+        return;
+    }
     if (!clip()) {
         unsetCursor();
+        return;
+    }
+    if (m_panning || m_moving) {
+        setCursor(Qt::SizeAllCursor);
+        return;
+    }
+    if (m_resizing) {
+        setCursor(Qt::SizeHorCursor);
         return;
     }
     if (m_laneRamping) {
@@ -5575,7 +6213,7 @@ void PianoRollView::updateCursor(const QPointF& pos) {
         return;
     }
     if (pos.y() < ui::kLoopStripHeight && pos.x() >= keyboardWidth()) {
-        setCursor(rangeGrabAt(pos.x()) == RangeGrab::Move ? Qt::OpenHandCursor
+        setCursor(rangeGrabAt(pos.x()) == RangeGrab::Move ? Qt::SizeAllCursor
                                                         : Qt::SizeHorCursor);
         return;
     }
@@ -5606,7 +6244,7 @@ void PianoRollView::updateCursor(const QPointF& pos) {
             setCursor(toolCursor(icons::Glyph::Knife));
             return;
         case Tool::Mute:
-            setCursor(toolCursor(icons::Glyph::NoteMute));
+            setCursor(toolCursor(icons::Glyph::Close));
             return;
         case Tool::Erase:
             setCursor(toolCursor(icons::Glyph::Eraser));
@@ -5638,7 +6276,7 @@ void PianoRollView::updateCursor(const QPointF& pos) {
         setCursor(Qt::SizeHorCursor);
         return;
     }
-    setCursor(currentTool == Tool::Draw ? Qt::OpenHandCursor
+    setCursor(currentTool == Tool::Draw ? Qt::SizeAllCursor
                                         : toolCursor(icons::Glyph::Pointer));
 }
 
@@ -5820,6 +6458,9 @@ void PianoRollView::emitStatus() {
     }
     QString text = tr("%1 · %2 notes selected").arg(toolName).arg(m_selected.size());
     if (m_preview) text = tr("%1 · previewing — press Apply to keep it").arg(toolName);
+    if (m_splitPreview)
+        text = tr("Split · %1 beats · step %2 st · Wheel: division · Middle-drag: stairs · Click: apply · Esc: cancel")
+            .arg(m_splitPreview->beats, 0, 'g', 4).arg(m_splitPreview->pitchStep);
     emit statusChanged(text);
 }
 
@@ -5859,22 +6500,28 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
     connect(m_view, &PianoRollView::playheadMoved, this,
             &PianoRollWindow::playheadMoved);
 
-    m_hScroll = new QScrollBar(Qt::Horizontal, this);
+    auto* navigator = new PianoRollNavigator(this);
+    navigator->paintNotes = [this](QPainter& painter) { paintNavigatorNotes(painter); };
+    m_hScroll = navigator;
     m_hScroll->setObjectName(QStringLiteral("PianoRollNavigator"));
-    m_hScroll->setFixedHeight(12);
     m_hScroll->setAccessibleName(tr("Piano roll horizontal scroll"));
-    m_hScroll->setToolTip(tr("Move left or right through the clip"));
+    m_hScroll->setToolTip(tr("Drag to scroll through the clip. Drag the lower edge to resize (10–30 px); double-click it to reset. Right-click for height presets."));
+    m_hScroll->setAccessibleDescription(m_hScroll->toolTip());
     m_vScroll = new QScrollBar(Qt::Vertical, this);
     m_vScroll->setObjectName(QStringLiteral("PianoRollVerticalScroll"));
     m_vScroll->setFixedWidth(ui::kTimelineScrollExtent);
     m_vScroll->setAccessibleName(tr("Piano roll vertical scroll"));
     m_vScroll->setToolTip(tr("Move up or down through the notes"));
-    m_hScroll->setFocusPolicy(Qt::NoFocus);
+    m_hScroll->setFocusPolicy(Qt::TabFocus);
     m_vScroll->setFocusPolicy(Qt::NoFocus);
     connect(m_hScroll, &QScrollBar::valueChanged, this, [this](int value) {
+        ui::ScrollMotion::cancel(m_view);
+        ui::ScrollMotion::cancelZoom(m_view);
         m_view->setScrollX(double(value));
     });
     connect(m_vScroll, &QScrollBar::valueChanged, this, [this](int value) {
+        ui::ScrollMotion::cancel(m_view);
+        ui::ScrollMotion::cancelZoom(m_view);
         m_view->setScrollY(double(value));
     });
 
@@ -5917,6 +6564,8 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
     navigation->setContentsMargins(0, 0, 0, 0);
     navigation->setSpacing(0);
     m_navigationKeyboardSpace = new QWidget(this);
+    m_navigationKeyboardSpace->setObjectName(QStringLiteral("PianoRollNavigatorCorner"));
+    m_navigationKeyboardSpace->setAttribute(Qt::WA_StyledBackground);
     m_navigationKeyboardSpace->setFixedWidth(int(kKeyboardWidth));
     navigation->addWidget(m_navigationKeyboardSpace);
     navigation->addWidget(m_hScroll, 1);
@@ -5929,14 +6578,17 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
     grid->addWidget(m_view, 1);
     auto* rail = new QWidget(this);
     rail->setObjectName(QStringLiteral("PianoRollNavigationRail"));
+    rail->setAttribute(Qt::WA_StyledBackground);
     rail->setFixedWidth(ui::kTimelineScrollExtent);
     auto* railColumn = new QVBoxLayout(rail);
     railColumn->setContentsMargins(0, 0, 0, 0);
     railColumn->setSpacing(0);
     m_navigationRulerSpace = new QWidget(rail);
+    m_navigationRulerSpace->setObjectName(QStringLiteral("PianoRollRulerCorner"));
+    m_navigationRulerSpace->setAttribute(Qt::WA_StyledBackground);
     m_navigationRulerSpace->setFixedHeight(ui::kRulerHeight);
     railColumn->addWidget(m_navigationRulerSpace);
-    auto* controls = new ui::ViewControlStrip(rail);
+    auto* controls = new PianoRollControlStrip(rail);
     controls->setObjectName(QStringLiteral("PianoRollViewControls"));
     auto* controlsColumn = new QVBoxLayout(controls);
     controlsColumn->setContentsMargins(0, 0, 0, 0);
@@ -5986,6 +6638,8 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
     railColumn->addWidget(controls);
     railColumn->addWidget(m_vScroll, 1);
     m_navigationLaneSpace = new QWidget(rail);
+    m_navigationLaneSpace->setObjectName(QStringLiteral("PianoRollLaneCorner"));
+    m_navigationLaneSpace->setAttribute(Qt::WA_StyledBackground);
     railColumn->addWidget(m_navigationLaneSpace);
     grid->addWidget(rail);
     column->addLayout(grid, 1);
@@ -6060,6 +6714,7 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
 }
 
 PianoRollWindow::~PianoRollWindow() {
+    if (m_generatorDialog) m_generatorDialog->reject();
     cancelToolPreview();
     if (qApp) qApp->removeEventFilter(this);
 }
@@ -6170,7 +6825,7 @@ void PianoRollWindow::buildToolbar() {
          tr("Slice (2) — hold S to borrow it for one cut")},
         {PianoRollView::Tool::Erase, icons::Glyph::Eraser, tr("Erase (3)")},
         {PianoRollView::Tool::Select, icons::Glyph::Pointer, tr("Select (4 / E / Ctrl)")},
-        {PianoRollView::Tool::Mute, icons::Glyph::Power,
+        {PianoRollView::Tool::Mute, icons::Glyph::Close,
          tr("Disable notes (5) — hold T to borrow it for one note")},
         {PianoRollView::Tool::Slide, icons::Glyph::Automation, tr("Slide (6)")},
     };
@@ -6222,6 +6877,13 @@ void PianoRollWindow::buildToolbar() {
     chords->setFixedWidth(chords->fontMetrics().horizontalAdvance(chords->text()) + 30);
     connect(chords, &QToolButton::clicked, m_chordAction, &QAction::trigger);
     row->addWidget(chords);
+    auto* generator = toolbarButton(m_toolbar, icons::Glyph::SingleNote, tr("MIDI Generator"));
+    generator->setObjectName(QStringLiteral("PianoRollMidiGeneratorButton"));
+    generator->setText(tr("Generate…"));
+    generator->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    generator->setFixedWidth(generator->fontMetrics().horizontalAdvance(generator->text()) + 30);
+    connect(generator, &QToolButton::clicked, m_generatorAction, &QAction::trigger);
+    row->addWidget(generator);
     row->addWidget(divider());
 
     // Editing aids follow the tools; clip selection and monitoring stay together.
@@ -6939,9 +7601,9 @@ void PianoRollWindow::buildViewMenu(QMenu* menu) {
          {tr("Flat"), PianoRollView::NoteStyle::Flat}},
         [this](PianoRollView::NoteStyle style) { m_view->setNoteStyle(style); });
     m_noteStyleMenu->addSeparator();
-    addToggle(m_noteStyleMenu, tr("Note Names on Notes"), "view.noteNames", false,
+    addToggle(m_noteStyleMenu, tr("Note Names on Notes"), "view.noteNames", true,
               [this](bool on) { m_view->setShowNoteNames(on); });
-    addToggle(m_noteStyleMenu, tr("Name Every Key"), "view.keyNames", false,
+    addToggle(m_noteStyleMenu, tr("Name Every Key"), "view.keyNames", true,
               [this](bool on) { m_view->setShowAllKeyNames(on); });
     addToggle(m_noteStyleMenu, tr("Note Borders"), "view.noteBorders", true,
               [this](bool on) { m_view->setNoteBorders(on); });
@@ -7045,6 +7707,19 @@ void PianoRollWindow::buildToolsMenu(QMenu* menu) {
         });
     });
     m_chordAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_B));
+    m_generatorAction = menu->addAction(tr("MIDI Generator…"), this, [this] {
+        if (!m_view->clip()) return;
+        cancelToolPreview(); m_view->clearPreview();
+        if (m_generatorDialog) m_generatorDialog->reject();
+        const double start = m_view->m_timeRange.valid() ? m_view->m_timeRange.from
+            : daw::secondsToBeats(m_view->clip()->offsetSeconds, m_controller->tempo());
+        auto* dialog = new MidiGeneratorDialog(*m_controller, m_trackId.toStdString(), m_clipId.toStdString(), start, this);
+        m_generatorDialog = dialog;
+        connect(dialog, &MidiGeneratorDialog::applied, this, [this] { refresh(); emit edited(); });
+        connect(dialog, &QDialog::finished, dialog, &QObject::deleteLater);
+        emit internalWindowRequested(dialog, QStringLiteral("internalEditors/pianoRollTools/MidiGeneratorDialog"));
+        dialog->show();
+    });
     m_glueAction = menu->addAction(tr("Glue…"), this, [this] {
         hostToolDialog<GlueDialog>(m_glueDialog, tr("Glue"), [this](GlueDialog* d) {
             const auto params = d->params();
@@ -7061,7 +7736,16 @@ void PianoRollWindow::buildToolsMenu(QMenu* menu) {
             m_view->previewTransform(run);
         });
     });
-    m_strumAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_S));
+    m_strumAction->setShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_S));
+    m_splitAction = menu->addAction(tr("Split Notes"), this, [this] {
+        if (m_view->m_splitPreview || !m_view->hasSelection()) return;
+        cancelToolPreview();
+        m_previewOwner = nullptr;
+        m_view->beginSplitPreview();
+    });
+    m_splitAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_S));
+    m_splitAction->setObjectName(QStringLiteral("pianoRoll.tools.split"));
+    m_splitAction->setAutoRepeat(false);
     m_articulateAction = menu->addAction(tr("Articulate…"), this, [this] {
         hostToolDialog<ArticulateDialog>(
             m_articulateDialog, tr("Articulate"), [this](ArticulateDialog* d) {
@@ -7271,6 +7955,7 @@ void PianoRollWindow::hostToolDialog(Dialog*& dialog,
                                      const QString& undoLabel,
                                      const std::function<void(Dialog*)>& preview,
                                      const std::function<void(Dialog*)>& prepare) {
+    if (m_view->m_splitPreview) m_view->clearPreview();
     if (!dialog) {
         dialog = new Dialog(this);
         const QPointer<Dialog> guarded(dialog);
@@ -7278,6 +7963,7 @@ void PianoRollWindow::hostToolDialog(Dialog*& dialog,
                 [this, guarded, preview] {
             if (!guarded) return;
             Dialog* current = guarded.data();
+            if (m_view->m_splitPreview) m_view->clearPreview();
             if (current->previewEnabled()) {
                 if (m_previewOwner && m_previewOwner != current) {
                     m_view->clearPreview();
@@ -7298,6 +7984,7 @@ void PianoRollWindow::hostToolDialog(Dialog*& dialog,
         connect(dialog, &ToolDialog::applyRequested, this,
                 [this, guarded, preview, undoLabel] {
                     if (!guarded) return;
+                    if (m_view->m_splitPreview) m_view->clearPreview();
                     Dialog* current = guarded.data();
                     // With Preview off there is no painted result yet. Build it
                     // and commit it in the same event-loop turn; with Preview on
@@ -7348,6 +8035,8 @@ void PianoRollWindow::hostToolDialog(Dialog*& dialog,
 void PianoRollWindow::loadViewPreferences() {
     // The continuous state: what no menu item owns, and what the user sets by
     // dragging rather than by picking.
+    m_hScroll->setFixedHeight(std::clamp(pianoRollPref("navigation.height", kNavigatorMinHeight).toInt(),
+                                       kNavigatorMinHeight, kNavigatorMaxHeight));
     m_view->setLaneHeight(pianoRollPref("lane.height", 84.0).toDouble());
     const int laneParam = pianoRollPref("lane.param", 0).toInt();
     m_view->setLaneParam(laneParam == 1 ? PianoRollView::LaneParam::Pan
@@ -7364,6 +8053,7 @@ void PianoRollWindow::loadViewPreferences() {
 }
 
 void PianoRollWindow::saveViewPreferences() {
+    setPianoRollPref("navigation.height", m_hScroll->height());
     setPianoRollPref("lane.height", m_view->laneHeightPx());
     // A controller lane belongs to one clip, so only the two note parameters
     // are worth remembering; anything else reopens on velocity.
@@ -7374,12 +8064,18 @@ void PianoRollWindow::saveViewPreferences() {
 }
 
 void PianoRollWindow::closeEvent(QCloseEvent* event) {
+    if (m_generatorDialog) m_generatorDialog->reject();
     cancelToolPreview();
+    m_view->clearPreview();
+    m_previewOwner = nullptr;
     saveViewPreferences();
     QWidget::closeEvent(event);
 }
 
 void PianoRollWindow::hideEvent(QHideEvent* event) {
+    cancelToolPreview();
+    m_view->clearPreview();
+    m_previewOwner = nullptr;
     if (m_auditionButton && m_auditionButton->isChecked()) {
         m_controller->setExclusiveAuditionTrack({});
         const QSignalBlocker block(m_auditionButton);
@@ -7794,6 +8490,13 @@ bool PianoRollWindow::eventFilter(QObject* watched, QEvent* event) {
     if (!inside || isTextEntry(focus) || qobject_cast<QSlider*>(focus) || QApplication::activePopupWidget())
         return QWidget::eventFilter(watched, event);
 
+    if (m_view->m_splitPreview && (key->key() == Qt::Key_Escape ||
+        key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
+        if (!shortcutOverride) m_view->keyPressEvent(key);
+        key->accept();
+        return true;
+    }
+
     // The main window owns 1–8 for arrangement tools. While the roll has
     // focus, none of those keys may change a tool behind this editor.
     if (!(key->modifiers() & ~Qt::KeypadModifier)) {
@@ -7844,6 +8547,11 @@ bool PianoRollWindow::eventFilter(QObject* watched, QEvent* event) {
 
     m_view->finishWheelNoteEdit();
     if (localAction) {
+        if (localAction == m_splitAction && key->isAutoRepeat()) {
+            key->accept();
+            return true;
+        }
+        if (localAction != m_splitAction && m_view->m_splitPreview) m_view->clearPreview();
         localAction->trigger();
         key->accept();
         return true;
@@ -8075,6 +8783,7 @@ void PianoRollWindow::refreshGhostMenu() {
 }
 
 void PianoRollWindow::setClip(const QString& trackId, const QString& clipId) {
+    if (m_generatorDialog) m_generatorDialog->reject();
     cancelToolPreview();
     const bool auditionWasOn = m_auditionButton && m_auditionButton->isChecked();
     m_refreshPending = false;
@@ -8112,6 +8821,12 @@ std::optional<QPointF> PianoRollWindow::collaborationPositionFor(
 }
 
 void PianoRollWindow::refresh() {
+    if (m_view->hasPreview() && !m_controller->clipNotePreviewActive(m_view)) {
+        cancelToolPreview();
+        m_view->clearPreview();
+        m_previewOwner = nullptr;
+    }
+    if (m_view && m_view->m_splitPreview) m_view->validateSplitPreview();
     if (!isVisible()) {
         m_refreshPending = true;
         return;
@@ -8354,7 +9069,8 @@ bool PianoRollWindow::checkInteractionGesturesForTest() {
         hasShortcut(m_arpAction, QKeySequence(Qt::ALT | Qt::Key_A)) &&
         hasShortcut(m_chordAction, QKeySequence(Qt::ALT | Qt::Key_B)) &&
         hasShortcut(m_glueAction, QKeySequence(Qt::ALT | Qt::Key_G)) &&
-        hasShortcut(m_strumAction, QKeySequence(Qt::ALT | Qt::Key_S)) &&
+        hasShortcut(m_splitAction, QKeySequence(Qt::ALT | Qt::Key_S)) &&
+        hasShortcut(m_strumAction, QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_S)) &&
         hasShortcut(m_articulateAction, QKeySequence(Qt::ALT | Qt::Key_T)) &&
         hasShortcut(m_randomAction, QKeySequence(Qt::ALT | Qt::Key_R));
     const bool pinnedControls =
@@ -8485,15 +9201,68 @@ bool PianoRollWindow::checkInteractionGesturesForTest() {
            PianoRollView::checkVelocityRampForTest() && checkMidiFileActionsForTest();
 }
 
+void PianoRollWindow::paintNavigatorNotes(QPainter& painter) {
+    const auto* clip = m_view->clip();
+    if (!clip) return;
+    const auto& t = th();
+    const qreal dpr = painter.device()->devicePixelRatioF();
+    const double total = m_view->editorBeats();
+    QByteArray signature;
+    QDataStream stream(&signature, QIODevice::WriteOnly);
+    stream << m_hScroll->size() << dpr << m_trackId << m_clipId
+           << quint64(m_controller->projectGeneration())
+           << quint64(m_controller->midiNotesRevision(m_trackId.toStdString()))
+           << clip->color << total << m_view->clipBeats() << int(m_view->m_colorMode)
+           << t.headerBackground << t.surface << t.textPrimary;
+    if (signature != m_navigatorSignature) {
+        m_navigatorSignature = signature;
+        m_navigatorPreview = QImage(QSize(qRound(m_hScroll->width() * dpr),
+                                         qRound(m_hScroll->height() * dpr)),
+                                    QImage::Format_ARGB32_Premultiplied);
+        m_navigatorPreview.setDevicePixelRatio(dpr);
+        const QColor background = mixColors(t.headerBackground, t.surface, 0.3);
+        m_navigatorPreview.fill(background);
+        QPainter preview(&m_navigatorPreview);
+        const qreal pixel = 1.0 / dpr;
+        const auto align = [dpr](qreal value) { return std::round(value * dpr) / dpr; };
+        const double width = m_hScroll->width(), height = m_hScroll->height();
+        const double end = align(width * m_view->clipBeats() / total);
+        preview.fillRect(QRectF(end, 0, width - end, height), mixColors(background, Qt::black, t.dark ? 0.20 : 0.06));
+        preview.fillRect(QRectF(end, 0, pixel, height), t.separator());
+        const auto& notes = daw::midiNotes(*clip);
+        int low = 127, high = 0;
+        for (const auto& note : notes) {
+            if (note.startBeats >= total || note.startBeats + note.lengthBeats <= 0) continue;
+            low = std::min(low, note.pitch); high = std::max(high, note.pitch);
+        }
+        const double middle = (low + high) * 0.5;
+        const double pitches = std::max(12, high - low + 3);
+        const double pitchHeight = (height - 2 * pixel) / pitches;
+        const QColor clipColor = ui::colorFromRgb(clip->color);
+        for (const auto& note : notes) {
+            if (note.startBeats >= total || note.startBeats + note.lengthBeats <= 0) continue;
+            const double x = align(width * std::max(0.0, note.startBeats) / total);
+            const double right = align(width * std::min(total, note.startBeats + note.lengthBeats) / total);
+            const double y = align(pixel + (middle + pitches * 0.5 - note.pitch - 0.5) * pitchHeight);
+            QColor color = m_view->colorFor(note, clipColor);
+            if (note.muted) color = mixColors(color, background, 0.65);
+            preview.fillRect(QRectF(x, y, std::max(pixel, right - x),
+                                   std::max(pixel, align(pitchHeight))), color);
+        }
+    }
+    painter.drawImage(QPointF(0, 0), m_navigatorPreview);
+}
+
 void PianoRollWindow::applyNavigationTheme() {
     const auto& t = th();
-    m_hScroll->setStyleSheet(ui::navigationScrollBarStyle());
-    m_vScroll->setStyleSheet(ui::navigationScrollBarStyle());
     setStyleSheet(QStringLiteral(R"(
 #PianoRollToolbar, #PianoRollFooter { background: %1; border: none; border-radius: 0; }
 #PianoRollFooter { border-top: 1px solid %2; }
 #PianoRollTopNavigation { background: %1; }
+#PianoRollNavigatorCorner { border-right: 1px solid %2; border-bottom: 1px solid %2; }
 #PianoRollNavigationRail { background: %1; }
+#PianoRollRulerCorner { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %7,stop:1 %8); border-bottom: 1px solid %2; }
+#PianoRollLaneCorner { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %9,stop:1 %10); border-left: 1px solid %2; border-top: 1px solid %2; }
 #PianoRollToolDivider { color: %2; }
 #PianoRollToolbar QToolButton { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; }
 #PianoRollToolbar QToolButton:hover { background: %3; border-color: %2; }
@@ -8502,16 +9271,28 @@ void PianoRollWindow::applyNavigationTheme() {
 #PianoRollToolbar QToolButton::menu-indicator { width: 5px; height: 5px; subcontrol-position: bottom right; right: 1px; bottom: 1px; }
 #PianoRollToolbar QComboBox, #PianoRollFooter QComboBox { min-height: 20px; border-radius: 4px; }
 )").arg(t.headerBackground.name(), t.separator().name(), t.surfaceElevated.name(),
-          t.well().name(), mixColors(t.headerBackground, t.accent, 0.22).name(), t.accent.name()));
+          t.well().name(), mixColors(t.headerBackground, t.accent, 0.22).name(), t.accent.name(),
+          mixColors(t.surfaceElevated, t.toolbarBackground, 0.30).name(),
+          mixColors(t.surface, t.toolbarBackground, 0.45).name(),
+          mixColors(t.surface, t.background, 0.22).name()).arg(mixColors(t.background, t.surface, 0.18).name()));
     m_hScroll->setStyleSheet(QStringLiteral(R"(
-QScrollBar:horizontal { background: %1; height: 12px; border: none; margin: 0; }
-QScrollBar::handle:horizontal { background: %2; border: none; border-radius: 3px; min-width: 32px; margin: 3px 0; }
-QScrollBar::handle:horizontal:hover { background: %3; }
-QScrollBar::handle:horizontal:pressed { background: %4; }
+QScrollBar:horizontal { background: transparent; border: none; border-radius: 0; margin: 0; padding: 0; }
+QScrollBar::handle:horizontal { background: transparent; border: none; border-radius: 0; min-width: 32px; margin: 0; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; height: 0; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
-)").arg(t.headerBackground.name(), mixColors(t.headerBackground, t.textPrimary, 0.30).name(),
-          mixColors(t.headerBackground, t.textPrimary, 0.46).name(), t.accent.name()));
+)"));
+    m_vScroll->setStyleSheet(QStringLiteral(R"(
+QScrollBar:vertical { background: %1; border: none; border-left: 1px solid %2; border-radius: 0; margin: 0; padding: 0; }
+QScrollBar::handle:vertical { background: %3; border: none; border-radius: 0; min-height: 32px; margin: 0 3px; }
+QScrollBar::handle:vertical:hover { background: %4; }
+QScrollBar::handle:vertical:pressed { background: %5; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { width: 0; height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+)").arg(t.headerBackground.name(), t.separator().name(),
+          mixColors(t.headerBackground, t.textPrimary, 0.24).name(),
+          mixColors(t.headerBackground, t.textPrimary, 0.34).name(),
+          mixColors(t.headerBackground, t.textPrimary, 0.44).name()));
+    if (auto* controls = findChild<QWidget*>(QStringLiteral("PianoRollViewControls"))) controls->update();
     for (auto* button : findChildren<QToolButton*>())
         if (button->property("pianoGlyph").isValid())
             button->setIcon(icons::icon(icons::Glyph(button->property("pianoGlyph").toInt()), t.textPrimary, 16));
@@ -8529,6 +9310,7 @@ void PianoRollWindow::updateScrollBars() {
     m_hScroll->setPageStep(std::max(1, int(m_view->width() - m_view->keyboardWidth())));
     m_hScroll->setSingleStep(std::max(1, int(m_view->effectivePixelsPerBeat() / 4)));
     m_hScroll->setValue(int(std::lround(m_view->scrollX())));
+    m_hScroll->update();
     m_vScroll->setRange(0, int(std::ceil(m_view->maxScrollY())));
     m_vScroll->setPageStep(std::max(1, int(m_view->fieldHeight())));
     m_vScroll->setSingleStep(std::max(1, int(m_view->rowHeight())));
@@ -8547,6 +9329,7 @@ void PianoRollWindow::updateScrollBars() {
 
 void PianoRollWindow::updateActionState() {
     const bool midiClip = m_view && m_view->clip();
+    if (m_splitAction) m_splitAction->setEnabled(midiClip && m_view->hasSelection());
     if (m_importMidiAction) m_importMidiAction->setEnabled(midiClip);
     if (m_exportMidiAction) m_exportMidiAction->setEnabled(midiClip);
     if (m_undoAction && !m_sharedUndoAction) {

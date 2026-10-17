@@ -3,6 +3,7 @@
 #include "DSP/Simd.hpp"
 #include "ScopedNoDenormals.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <numbers>
@@ -11,6 +12,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
 #endif
 
 namespace daw::engine {
@@ -29,6 +32,10 @@ void pumpOfflineMessages() {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
+#elif defined(__APPLE__)
+    for (unsigned i = 0; i < 256; ++i)
+        if (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true) != kCFRunLoopRunHandledSource)
+            break;
 #endif
 }
 } // namespace
@@ -270,35 +277,28 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
                                  const float* const* input,
                                  ChannelCount inputChannels, FrameCount frames) {
     const rt::ScopedNoDenormals noDenormals;
+    const auto renderGated = [&] {
+        m_lastBlockResult.store(BlockResult::Gated, std::memory_order_relaxed);
+        m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
+        for (ChannelCount ch = 0; ch < output.numChannels(); ++ch)
+            dsp::clear(output.channel(ch).first(frames));
+        if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
+        m_outputTransition.process(output, frames);
+        if (m_outputSafetyMute->load(std::memory_order_acquire))
+            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) dsp::clear(output.channel(ch).first(frames));
+        m_outputGated = true;
+    };
     // Gate check, then claim the render. The claim must be published before the
     // re-check, or a gate opening in between would see `rendering` clear and
     // let the control thread reconfigure nodes underneath this block.
     if (m_gateRequested.load()) {
-        m_lastBlockResult.store(BlockResult::Gated, std::memory_order_relaxed);
-        m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
-        for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
-            dsp::clear(output.channel(ch).first(frames));
-        }
-        if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
-        m_outputTransition.process(output, frames);
-        if (m_outputSafetyMute->load(std::memory_order_acquire))
-            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) dsp::clear(output.channel(ch).first(frames));
-        m_outputGated = true;
+        renderGated();
         return;
     }
     m_rendering.store(true);
     if (m_gateRequested.load()) {
-        m_lastBlockResult.store(BlockResult::Gated, std::memory_order_relaxed);
-        m_gatedBlocks.fetch_add(1, std::memory_order_relaxed);
         m_rendering.store(false);
-        for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) {
-            dsp::clear(output.channel(ch).first(frames));
-        }
-        if (!m_outputGated) m_outputTransition.begin(m_transport.sampleRate());
-        m_outputTransition.process(output, frames);
-        if (m_outputSafetyMute->load(std::memory_order_acquire))
-            for (ChannelCount ch = 0; ch < output.numChannels(); ++ch) dsp::clear(output.channel(ch).first(frames));
-        m_outputGated = true;
+        renderGated();
         return;
     }
 
@@ -509,9 +509,24 @@ Status RealtimeEngine::renderOffline(
         // Also clears a previous pass's failure before retrying this engine.
         for (const auto& entry : original->nodes) entry.node->reset();
         result = prepareOfflineGraph();
+        const auto snapshot = m_processor.graph();
+        if (result && m_prepareInfo.offline && snapshot != original &&
+            (snapshot->totalLatency != original->totalLatency ||
+             !std::equal(original->nodes.begin(), original->nodes.end(),
+                         snapshot->nodes.begin(), snapshot->nodes.end(),
+                         [](const auto& before, const auto& after) {
+                             return before.id == after.id && before.node == after.node &&
+                                    before.latency == after.latency;
+                         }))) {
+            // The caller already calculated file trimming and stem delays from
+            // this prepared offline graph. Recalculate if any branch moved,
+            // but keep a rebuild with identical timing in the current pass.
+            m_offlineError = "processor timing changed while resetting for export";
+            result = fail(EngineError::RenderRestartRequired);
+        }
         if (result) {
-            const auto snapshot = m_processor.graph();
-            for (const auto& entry : snapshot->nodes) entry.node->reset();
+            if (snapshot != original)
+                for (const auto& entry : snapshot->nodes) entry.node->reset();
             clearDelays(*snapshot);
             const auto serviceNode = [&](std::uint32_t node, SamplePos position) -> Status {
                 const auto& entry = snapshot->nodes[node];

@@ -59,9 +59,48 @@ public:
         std::vector<ControlPoint> points;
     };
     using ControlCurves = std::vector<ControlCurve>;
-    void setControllers(std::shared_ptr<const ControlCurves> curves) { m_controllers.publish(std::move(curves)); }
+    void setControllers(std::shared_ptr<const ControlCurves> curves) {
+        const auto current = m_controllers.controlCopy();
+        if ((current ? current->curves : nullptr) == curves) return;
+        // More than one publication can pass between audio blocks; allocator
+        // reuse must not make a replacement look like the old snapshot.
+        m_controllers.publish(makeControllerSchedule(std::move(curves), ++m_nextControllerRevision));
+    }
 
 private:
+    static constexpr std::size_t kMaxControllers = 8192;
+    struct ControllerSchedule {
+        std::uint64_t revision = 0;
+        std::shared_ptr<const ControlCurves> curves;
+        std::vector<std::size_t> order;
+        std::vector<double> subtreeMaxEnd;
+    };
+    static std::shared_ptr<const ControllerSchedule> makeControllerSchedule(
+        std::shared_ptr<const ControlCurves> curves, std::uint64_t revision) {
+        if (!curves) return {};
+        auto schedule = std::make_shared<ControllerSchedule>();
+        schedule->revision = revision;
+        schedule->curves = std::move(curves);
+        for (std::size_t i = 0; i < std::min(schedule->curves->size(), kMaxControllers); ++i) {
+            const auto& curve = (*schedule->curves)[i];
+            if (curve.channel >= 0 && curve.channel <= 15 && !curve.points.empty())
+                schedule->order.push_back(i);
+        }
+        std::stable_sort(schedule->order.begin(), schedule->order.end(), [&](auto a, auto b) {
+            return (*schedule->curves)[a].startBeats < (*schedule->curves)[b].startBeats;
+        });
+        schedule->subtreeMaxEnd.resize(schedule->order.size());
+        const auto build = [&](auto&& self, std::size_t first, std::size_t last) -> double {
+            if (first == last) return -std::numeric_limits<double>::infinity();
+            const auto mid = first + (last - first) / 2;
+            return schedule->subtreeMaxEnd[mid] = std::max({
+                (*schedule->curves)[schedule->order[mid]].endBeats,
+                self(self, first, mid), self(self, mid + 1, last)});
+        };
+        build(build, 0, schedule->order.size());
+        return schedule;
+    }
+
     /// Control-thread-prepared interval index. `subtreeMaxEnd[mid]` is the
     /// latest note end in the balanced subtree whose root is `mid`. It lets a
     /// seek chase prune whole runs of expired notes without allocating or
@@ -132,10 +171,12 @@ public:
         bool timelineSuppressed;
     };
     ControlState controlState() const {
-        return {m_schedule.controlCopy(), m_controllers.controlCopy(), m_timelineSuppressed.load(std::memory_order_relaxed)};
+        const auto controllers = m_controllers.controlCopy();
+        return {m_schedule.controlCopy(), controllers ? controllers->curves : nullptr,
+            m_timelineSuppressed.load(std::memory_order_relaxed)};
     }
     void restoreControlState(const ControlState& state) {
-        m_schedule.publish(state.notes); m_controllers.publish(state.controllers);
+        m_schedule.publish(state.notes); setControllers(state.controllers);
         setTimelineSuppressed(state.timelineSuppressed);
     }
     /// Deterministic performance-test hook: indexed subtrees inspected by the
@@ -468,6 +509,11 @@ private:
         // for the next block. If the block itself contains only releases and is
         // full, put the unconsumed bits back instead of forgetting them.
         for (std::size_t wordIndex = 0; wordIndex < kLiveReleaseWords; ++wordIndex) {
+            // The normal block has no emergency releases. Avoid a locked RMW
+            // on every empty word; a release published after this load remains
+            // in the mailbox for the next block, just as with exchange(0).
+            if (m_emergencyLiveReleases[wordIndex].load(std::memory_order_relaxed) == 0)
+                continue;
             std::uint64_t releases =
                 m_emergencyLiveReleases[wordIndex].exchange(
                     0, std::memory_order_acq_rel);
@@ -514,9 +560,10 @@ private:
     }
 
     std::string m_name;
-    RealtimeSnapshot<ControlCurves> m_controllers;
-    const ControlCurves* m_controllerSnapshot = nullptr;
-    std::array<int, 8192> m_controllerValues{};
+    RealtimeSnapshot<ControllerSchedule> m_controllers;
+    std::uint64_t m_nextControllerRevision = 0, m_controllerRevision = 0;
+    std::array<int, kMaxControllers> m_controllerValues{};
+    std::array<std::uint64_t, kMaxControllers / 64> m_pendingControllers{};
     std::array<bool, 16> m_sustainChannels{};
     std::array<bool, 16> m_bendChannels{};
 
@@ -527,17 +574,47 @@ private:
             if (m_bendChannels[ch] && out.push({0, std::uint8_t(0xe0 | ch), 0, 64}))
                 m_bendChannels[ch] = false;
         }
-        m_controllerSnapshot = nullptr;
+        m_controllerRevision = 0;
     }
 
     void playControllers(const ProcessContext& context, double begin, double end, double samplesPerBeat) {
-        auto curves = m_controllers.read();
+        auto schedule = m_controllers.read();
+        const auto* curves = schedule ? schedule->curves.get() : nullptr;
+        const auto revision = schedule ? schedule->revision : 0;
         const bool discontinuity = !m_hasPosition || std::abs(begin - m_expectedBeats) > 1e-6 ||
-                                   m_controllerSnapshot != curves.get();
-        if (discontinuity) { releaseControllers(*context.midiOutput); m_controllerValues.fill(-1); }
-        m_controllerSnapshot = curves.get();
-        if (!curves) return;
-        for (std::size_t i = 0; i < std::min(curves->size(), m_controllerValues.size()); ++i) {
+                                   m_controllerRevision != revision;
+        if (discontinuity) {
+            releaseControllers(*context.midiOutput);
+            m_controllerValues.fill(-1); m_pendingControllers.fill(0);
+        }
+        m_controllerRevision = revision;
+        if (!curves || curves->empty()) return;
+        // Select intersecting intervals without walking every sequence placement.
+        // Retain previously sent curves until their end/reset is processed. Bits
+        // are consumed in original list order, preserving overlapping CC order.
+        const auto count = std::min(curves->size(), kMaxControllers);
+        const auto words = (count + 63) / 64;
+        std::array<std::uint64_t, kMaxControllers / 64> selected;
+        std::copy_n(m_pendingControllers.begin(), words, selected.begin());
+        if (count % 64) selected[words - 1] &= (std::uint64_t{1} << (count % 64)) - 1;
+        const auto visit = [&](auto&& self, std::size_t first, std::size_t last) -> void {
+            if (first == last) return;
+            const auto mid = first + (last - first) / 2;
+            if (schedule->subtreeMaxEnd[mid] <= begin) return;
+            self(self, first, mid);
+            const auto i = schedule->order[mid];
+            const auto& curve = (*curves)[i];
+            if (curve.startBeats >= end) return;
+            if (curve.endBeats > begin) selected[i / 64] |= std::uint64_t{1} << (i % 64);
+            self(self, mid + 1, last);
+        };
+        // A handful of lanes is cheaper to scan than to traverse an index.
+        if (curves->size() <= 32) selected[0] = (std::uint64_t{1} << curves->size()) - 1;
+        else visit(visit, 0, schedule->order.size());
+        for (std::size_t word = 0; word < words; ++word) while (selected[word]) {
+            const auto bit = std::countr_zero(selected[word]);
+            selected[word] &= selected[word] - 1;
+            const auto i = word * 64 + bit;
             const auto& c = (*curves)[i];
             if (c.channel < 0 || c.channel > 15 || c.points.empty()) continue;
             const auto send = [&](double beat, double value, std::uint64_t order, bool force) {
@@ -554,6 +631,7 @@ private:
                 else return;
                 if (context.midiOutput->push(event)) {
                     m_controllerValues[i] = v;
+                    m_pendingControllers[word] |= std::uint64_t{1} << bit;
                     if (c.cc == 64) m_sustainChannels[c.channel] = v >= 64;
                     if (c.cc == -2) m_bendChannels[c.channel] = v != 8192;
                 }
@@ -562,6 +640,7 @@ private:
                 if (c.cc == 64) send(begin, 0, 0, true);
                 if (c.cc == -2) send(begin, 8192.0 / 16383.0, 0, true);
                 m_controllerValues[i] = -1;
+                m_pendingControllers[word] &= ~(std::uint64_t{1} << bit);
             }
             if (end <= c.startBeats || begin >= c.endBeats) continue;
             const double at = std::max(begin, c.startBeats);
@@ -584,6 +663,7 @@ private:
                 if (c.cc == 64) send(c.endBeats, 0, 0, true);
                 if (c.cc == -2) send(c.endBeats, 8192.0 / 16383.0, 0, true);
                 m_controllerValues[i] = -1;
+                m_pendingControllers[word] &= ~(std::uint64_t{1} << bit);
             }
         }
     }

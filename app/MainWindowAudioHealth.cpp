@@ -83,6 +83,10 @@ void MainWindow::showAudioFailure(const daw::AudioFailureNotice& notice, bool re
     card.detail = QString::fromStdString(notice.detail);
     card.resolved = notice.state == State::Recovered;
     if (notice.source == Source::Plugin) {
+        bool analysis = false;
+        if (const auto* chain = m_controller.channelInserts(notice.address.channelId))
+            for (const auto& slot : *chain)
+                if (slot.id == notice.address.slotId) analysis = slot.analysisOnly;
         for (auto* strip : findChildren<ChannelStrip*>())
             if (notice.master ? strip->isMaster() : strip->trackId().toStdString() == notice.address.channelId)
                 strip->refreshPluginHealth();
@@ -93,6 +97,7 @@ void MainWindow::showAudioFailure(const daw::AudioFailureNotice& notice, bool re
         else if (!notice.canRetry) card.message = tr("Plugin disabled. No saved state is available. Replace or remove it from the slot.");
         else if (notice.state == State::Failed) card.message = tr("Could not restore the plugin. It remains disabled.");
         else if (notice.recording) card.message = tr("Plugin disabled. Recovery will wait until recording has finished.");
+        else if (analysis) card.message = tr("Analyzer disabled. The master output is unchanged. Recovery will wait until playback stops.");
         else if (notice.master) card.message = tr("Master output muted after a plugin error. Recovery will wait until playback stops.");
         else if (notice.instrument) card.message = tr("Instrument disabled after an error. Recovery will wait until playback stops.");
         else card.message = tr("Effect disabled. The track continues without it. Recovery will wait until playback and monitoring stop.");

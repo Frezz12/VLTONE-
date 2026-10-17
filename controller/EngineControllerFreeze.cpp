@@ -42,6 +42,9 @@ std::string EngineController::freezeUnavailableReason(const std::string& id) {
     if (external(track->instrument) || std::any_of(track->inserts.begin(), track->inserts.end(), external) ||
         std::any_of(track->samplerFx.inserts.begin(), track->samplerFx.inserts.end(), external))
         return "Tracks with an external sidechain cannot be frozen independently";
+    for (const auto& source : track->modulation.sources)
+        if (source.kind == modulation::Kind::Follower && !source.audioChannelId.empty())
+            return "Tracks with an external modulation source cannot be frozen independently";
     bool material = false;
     for (const auto& clip : track->clips) {
         if (clip.playbackInjection.active() || !clip.patternClipId.empty() ||
@@ -62,7 +65,9 @@ std::string EngineController::freezeUnavailableReason(const std::string& id) {
             // automation to be made independent before baking this source.
             if (clip.kind == ClipKind::Automation && clip.automation.active &&
                 clip.automation.target.channelId == id &&
-                clip.automation.target.kind == AutomationTargetKind::PluginParameter)
+                (clip.automation.target.kind == AutomationTargetKind::PluginParameter ||
+                 clip.automation.target.kind == AutomationTargetKind::ModulatorRate ||
+                 clip.automation.target.kind == AutomationTargetKind::ModulationDepth))
                 return "Disable external plugin automation before freezing";
         }
     }
@@ -78,6 +83,7 @@ std::string EngineController::freezeFingerprint(const TrackModel& track) const {
     copy.instrument = track.instrument; copy.inserts = track.inserts;
     copy.channelColor = track.channelColor;
     copy.miniModules = track.miniModules;
+    copy.modulation = track.modulation;
     for(auto& module:copy.miniModules) normalizeFreezeSlot(module);
     copy.samplerFx = track.samplerFx; copy.clips = track.clips;
     normalizeFreezeSlot(copy.instrument);

@@ -1,9 +1,12 @@
 #include "LoudnessDisplay.hpp"
 #include "ChannelStrip.hpp"
 #include "MixerWidget.hpp"
+#include "MasterPanel.hpp"
 #include "EngineController.hpp"
 #include "Core/AudioBuffer.hpp"
 #include <QApplication>
+#include <QLabel>
+#include <QToolButton>
 #include <QTemporaryDir>
 #include <QThread>
 #include <cmath>
@@ -45,14 +48,17 @@ bool LoudnessDisplay::checkForTest(const QString& screenshotPrefix) {
     mixer.resize(620, 650); mixer.show();
     for (int i = 0; i < 24; ++i) QApplication::processEvents();
     mixer.refreshMeters();
-    auto* display = mixer.findChild<LoudnessDisplay*>();
+    MasterPanel master(&controller);
+    master.resize(196,850); master.show(); QApplication::processEvents(); master.refreshMeters();
+    auto* display = master.findChild<QLabel*>("MasterShortTerm");
     if (!display) return false;
     const auto value = QString::number(measured.shortTerm, 'f', 1);
-    check(display->toolTip().contains(value) && display->accessibleName().contains(value), "visible and accessible readings use engine data");
-    if (!screenshotPrefix.isEmpty()) check(mixer.grab().save(screenshotPrefix + "-live.png"), "saves the live master and aligned channel rows");
+    check(display->text()==value && display->accessibleName().contains(value), "visible and accessible readings use engine data in the master sidebar");
+    check(!mixer.findChild<LoudnessDisplay*>(), "master measurement is outside the mixer");
+    if (!screenshotPrefix.isEmpty()) check(master.grab().save(screenshotPrefix + "-live.png"), "saves the live master sidebar");
     const auto before = controller.undoDepth();
-    display->click();
-    check(std::isnan(controller.masterLoudness().integrated) && !display->toolTip().contains(value), "click resets engine and display together");
+    master.findChild<QToolButton*>("MasterResetMeters")->click();
+    check(std::isnan(controller.masterLoudness().integrated) && display->text()!=value, "click resets engine and display together");
     check(controller.undoDepth() == before, "meter reset does not edit the project");
     for (int width : {75, 100, 180}) {
         ChannelStrip inspector(&controller, QString::fromStdString(track), false);

@@ -4,6 +4,7 @@
 #include <QSet>
 #include <QHash>
 #include <QWidget>
+#include <QElapsedTimer>
 #include "MixerPreferences.hpp"
 
 #include <functional>
@@ -47,10 +48,18 @@ public:
                  bool insertsOnly = false, int insertSlots = 0);
     ~ChannelStrip() override;
 
+    /// The master sidebar uses the same slot face and hover actions as channels.
+    static QToolButton* createSlotButton(const QString& text, bool active, QWidget* parent);
+    static QWidget* createSlotRow(QToolButton* slot,
+                                 const std::vector<QAbstractButton*>& actions, QWidget* parent);
+
     const QString& trackId() const { return m_trackId; }
     bool isMaster() const { return m_master; }
     /// Mixer-wide slot count; zero in the constructor keeps the standalone fit.
     int insertSlotCount() const { return m_insertSlotCount; }
+    /// Reuse the shell of an unfocused, idle channel of the same track kind.
+    /// Slot widgets are rebuilt so their captured plugin/send ids cannot leak.
+    bool rebindChannel(const QString& trackId, int insertSlots);
 
     void setSelected(bool selected);
     /// In the mixer the strip stretches when the pane is taller than it needs.
@@ -75,6 +84,7 @@ public:
     double faderGainForTest() const;
     static bool checkDragLifecycleForTest();
     static bool checkFaderInputForTest();
+    static bool checkRebindForTest();
     static bool checkGroupInputsForTest();
     static bool checkContextMenusForTest();
     static bool checkColorForTest();
@@ -123,6 +133,7 @@ protected:
 
 private:
     float m_displayedPeak = -1.0f;
+    QElapsedTimer m_readoutClock;
     double m_displayedGain = -1.0;
     double m_displayedPan = -2.0;
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(
@@ -144,6 +155,8 @@ QWidget* buildColor();
     /// same arithmetic.
     void refreshColorRackRow();
     QWidget* buildInserts();
+    void buildRack();
+    void measureRack();
     /// Right-click menu for a loaded insert: bypass, replace, reorder, remove.
     QMenu* buildInsertMenu(QWidget* parent, const QString& insertId,
                            std::size_t index);
@@ -221,7 +234,7 @@ QWidget* buildColor();
     void populateAddSendMenu(QMenu* menu);
     void applyTheme();
     void updateReadouts();
-    void refreshLevelAutomationValues();
+    void refreshLevelAutomationValues(bool readouts = true);
     void updateResponsiveLayout();
     void resetPeakHold();
     void updateHeader(const QString& name, std::uint32_t color);

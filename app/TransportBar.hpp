@@ -1,6 +1,7 @@
 #pragma once
 #include "graphics/ScenePaintSource.hpp"
 #include "TimelineRuler.hpp"
+#include "UndoStack.hpp"
 
 #include <QList>
 #include <QPoint>
@@ -88,12 +89,12 @@ public:
     /// shortcuts, or restored workspace state. These setters never echo the
     /// state back through the corresponding signals.
     void setMixerVisible(bool visible);
-    void setWarpVisible(bool visible);
     void setInspectorVisible(bool visible);
     void setBrowserVisible(bool visible);
     void setWebVisible(bool visible);
     void setNotebookVisible(bool visible);
     void setAiVisible(bool visible);
+    void setMasterVisible(bool visible);
     void setMixerDetached(bool detached);
 
     /// Smallest header width that still keeps the position/BPM readout and the
@@ -139,6 +140,7 @@ signals:
     void webToggled(bool on);
     void notebookToggled(bool on);
     void aiToggled(bool on);
+    void masterToggled(bool on);
     void detachMixerRequested();
     void addTrackRequested();
     void settingsRequested();
@@ -215,6 +217,7 @@ private:
     ui::IconButton* m_webPanelButton = nullptr;
     ui::IconButton* m_notebookPanelButton = nullptr;
     ui::IconButton* m_aiPanelButton = nullptr;
+    ui::IconButton* m_masterPanelButton = nullptr;
 
     QLineEdit* m_positionValue = nullptr;
     QLineEdit* m_tempoEdit = nullptr;
@@ -242,5 +245,5 @@ private:
     bool m_plainPanelStyle = true;
     int m_typingOctave = 5;         // shown in the typing keyboard's tooltip
     bool m_tempoEditing = false;
-    std::size_t m_tempoUndoDepth = 0;
+    daw::UndoStack::Group m_tempoUndoGroup;
 };

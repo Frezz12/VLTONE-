@@ -70,7 +70,12 @@ std::string descriptorToJson(const PluginDescriptor& descriptor) {
 
 bool descriptorFromJson(const std::string& text, PluginDescriptor& out) {
     try {
-        const auto value = json::parse(text);
+        return descriptorFromJsonValue(json::parse(text), out);
+    } catch (const std::exception&) { return false; }
+}
+
+bool descriptorFromJsonValue(const json& value, PluginDescriptor& out) {
+    try {
         if (!value.is_object()) return false;
         auto descriptor = fromJson(value);
         if (descriptor.format == Format::Unknown || descriptor.uid.empty()) return false;
@@ -136,10 +141,10 @@ bool decodeResult(const std::string& text, std::vector<PluginDescriptor>& out, b
                     if (!entry.contains(key)) { out.clear(); return false; }
                 }
             }
-            PluginDescriptor descriptor = fromJson(entry);
+            PluginDescriptor descriptor;
             // A descriptor with no identity is unusable, and silently keeping one
             // would put an un-loadable row in the browser.
-            if (descriptor.format == Format::Unknown || descriptor.uid.empty()) {
+            if (!descriptorFromJsonValue(entry, descriptor)) {
                 out.clear(); return false;
             }
             out.push_back(std::move(descriptor));

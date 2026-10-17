@@ -1,4 +1,6 @@
 #include "Au/AuInstance.hpp"
+#include "Host/PluginMidi.hpp"
+#include "Host/PluginAudioBuffers.hpp"
 
 #include "Au/AuTiming.hpp"
 
@@ -155,6 +157,8 @@ void AuInstance::readParameters() {
         info.defaultValue = raw.defaultValue;
         // AU is already in plain units — no normalisation anywhere in this file.
         info.isAutomatable = (raw.flags & kAudioUnitParameterFlag_NonRealTime) == 0;
+        info.isReadOnly = (raw.flags & kAudioUnitParameterFlag_IsWritable) == 0;
+        if (info.isReadOnly) info.isAutomatable = false;
         info.isStepped = raw.unit == kAudioUnitParameterUnit_Indexed ||
                          raw.unit == kAudioUnitParameterUnit_Boolean;
         info.isBypass = false;
@@ -318,6 +322,19 @@ bool AuInstance::activate(const PluginProcessInfo& info) {
     UInt32 maxFrames = info.maxBlockSize;
     AudioUnitSetProperty(m_unit, kAudioUnitProperty_MaximumFramesPerSlice,
                          kAudioUnitScope_Global, 0, &maxFrames, sizeof(maxFrames));
+
+    // Ordinary effects/instruments select offline processing through this
+    // property, before initialization and the final latency query. The auol
+    // preflight/render flags are a different protocol and do not select it.
+    UInt32 propertySize = 0;
+    Boolean writable = false;
+    if (AudioUnitGetPropertyInfo(m_unit, kAudioUnitProperty_OfflineRender,
+            kAudioUnitScope_Global, 0, &propertySize, &writable) == noErr && writable) {
+        const UInt32 offline = info.offline ? 1 : 0;
+        if (AudioUnitSetProperty(m_unit, kAudioUnitProperty_OfflineRender,
+                kAudioUnitScope_Global, 0, &offline, sizeof(offline)) != noErr)
+            return false;
+    }
 
     // The unit pulls its input rather than being handed it — this is where the
     // host says who to pull from.
@@ -591,6 +608,9 @@ OSStatus AuInstance::renderInput(void* context, AudioUnitRenderActionFlags* flag
                                  AudioBufferList* data) {
     auto* self = static_cast<AuInstance*>(context);
     if (!self || !data) return noErr;
+    if (frames > self->m_blockFrames) return kAudioUnitErr_TooManyFramesToProcess;
+    if (bus >= self->m_inputBusChannels.size() || data->mNumberBuffers > self->m_inputBusChannels[bus])
+        return kAudioUnitErr_InvalidElement;
 
     const std::uint64_t silenceMask =
         bus == 0 ? self->m_blockInputSilenceMask
@@ -606,7 +626,7 @@ OSStatus AuInstance::renderInput(void* context, AudioUnitRenderActionFlags* flag
         const std::uint16_t inputChannels =
             bus == 0 ? self->m_blockInputChannels
                      : (bus == 1 ? self->m_blockSidechainInputChannels : 0);
-        if (inputs && channel < inputChannels) {
+        if (inputs && channel < inputChannels && inputs[channel]) {
             source = inputs[channel];
             if (channel >= 64 ||
                 (silenceMask & (std::uint64_t{1} << channel)) == 0) {
@@ -615,9 +635,11 @@ OSStatus AuInstance::renderInput(void* context, AudioUnitRenderActionFlags* flag
         } else {
             // A channel the caller did not supply reads as silence, never as
             // whatever was in the buffer last block.
-            source = self->m_silence.data() + std::size_t(channel) * self->m_maxBlockSize;
+            float* silent = self->m_silence.data() + std::size_t(channel) * self->m_maxBlockSize;
+            std::fill_n(silent, frames, 0.0f);
+            source = silent;
         }
-        const UInt32 count = std::min<UInt32>(frames, self->m_blockFrames);
+        const UInt32 count = frames;
         if (buffer.mData) {
             // The unit gave us a buffer to fill; anything else is its memory.
             std::memcpy(buffer.mData, source, std::size_t(count) * sizeof(float));
@@ -706,11 +728,7 @@ void AuInstance::installHostCallbacks() {
 
 PluginProcessDisposition AuInstance::process(
     const PluginProcessContext& context) noexcept {
-    auto silence = [&] {
-        for (std::uint16_t channel = 0; channel < context.outputChannels; ++channel) {
-            std::fill_n(context.outputs[channel], context.frames, 0.0f);
-        }
-    };
+    const auto silence = [&] { clearPluginOutputs(context); };
     if (!m_processing || !m_unit) {
         // Not writing is not the same as writing nothing: the caller's buffer
         // is recycled and still holds the previous block.
@@ -719,7 +737,7 @@ PluginProcessDisposition AuInstance::process(
     }
     if (context.frames > m_maxBlockSize || m_outputChannels == 0) {
         silence();
-        return PluginProcessDisposition::Continue;
+        return PluginProcessDisposition::Error;
     }
 
     // Parameters and notes both go in before the render, each with its frame
@@ -734,20 +752,12 @@ PluginProcessDisposition AuInstance::process(
                                       AudioUnitParameterValue(event.value),
                                       UInt32(event.frameOffset));
                 break;
-            case PluginEvent::Kind::NoteOn:
-            case PluginEvent::Kind::NoteOff: {
-                if (!m_acceptsMidi) break;
-                const bool on = event.kind == PluginEvent::Kind::NoteOn;
-                const UInt32 status =
-                    UInt32((on ? 0x90u : 0x80u) | (unsigned(event.channel) & 0x0Fu));
-                const UInt32 velocity =
-                    on ? UInt32(std::clamp(event.value, 0.0, 1.0) * 127.0 + 0.5) : 0u;
-                MusicDeviceMIDIEvent(m_unit, status, UInt32(event.key), velocity,
-                                     UInt32(event.frameOffset));
+            default: {
+                std::array<std::uint8_t, 3> bytes;
+                if (m_acceptsMidi && encodePluginMidi(event, bytes))
+                    MusicDeviceMIDIEvent(m_unit, bytes[0], bytes[1], bytes[2], UInt32(event.frameOffset));
                 break;
             }
-            default:
-                break;
         }
     }
 
@@ -785,8 +795,7 @@ PluginProcessDisposition AuInstance::process(
     timeStamp.mSampleTime = Float64(m_renderTime);
     timeStamp.mFlags = kAudioTimeStampSampleTimeValid;
 
-    AudioUnitRenderActionFlags flags =
-        context.offline ? kAudioOfflineUnitRenderAction_Render : 0;
+    AudioUnitRenderActionFlags flags = 0;
     const bool failed = AudioUnitRender(m_unit, &flags, &timeStamp, 0, context.frames, list) != noErr;
     if (failed) {
         silence();

@@ -20,6 +20,10 @@
 /// per-voice inner loop.
 namespace daw::plugins::sampler {
 
+/// Safety ramp for instantaneous amplitude changes, in output time. It does
+/// not move the DAHDSR stages or change the modulation envelopes.
+inline constexpr double kAmpRampSeconds = 0.002;
+
 /// FL's "tension": bends a 0…1 ramp without changing its endpoints. Positive
 /// values make it start fast and ease out, negative the other way; zero is a
 /// straight line.
@@ -43,7 +47,8 @@ struct EnvSettings {
 class Envelope {
 public:
     void noteOn() noexcept;
-    void noteOff() noexcept;
+    void noteOff() noexcept { noteOff(m_value); }
+    void noteOff(double from) noexcept;
     void kill() noexcept;
 
     /// True until the release has finished — the amplitude envelope's answer to
@@ -190,6 +195,7 @@ public:
     void kill() noexcept;
 
     bool active() const noexcept { return m_active; }
+    double position() const noexcept { return m_position; } // Audio-thread readout.
     bool releasing() const noexcept { return m_amp.released(); }
     int key() const noexcept { return m_key; }
     int channel() const noexcept { return m_channel; }
@@ -225,17 +231,17 @@ private:
     static float readSample(const engine::SampleBuffer& audio,
                             engine::ChannelCount channel, double position) noexcept;
 
-    /// Fill `left`/`right` with `count` frames of raw source, fades included,
+    /// Fill `left`/`right` with `count` frames of raw source, user fades included,
     /// and return how many frames were actually produced — fewer when the
     /// sample ran out. Both playback engines share the gain, filter and pan
-    /// pass that follows, which is why they only produce source here.
+    /// pass that follows; `endFade` tapers the final output after those stages.
     engine::FrameCount fillResampled(const SampleData& sample,
                                      const SamplerSettings& settings,
-                                     const Region& region, float* left, float* right,
+                                     const Region& region, float* left, float* right, float* endFade,
                                      engine::FrameCount count, double rate) noexcept;
     engine::FrameCount fillStretched(const SampleData& sample,
                                      const SamplerSettings& settings,
-                                     const Region& region, float* left, float* right,
+                                     const Region& region, float* left, float* right, float* endFade,
                                      engine::FrameCount count, double pitch,
                                      double timeRate, engine::dsp::TimeStretch& stretcher) noexcept;
 
@@ -272,9 +278,11 @@ private:
     /// but a loop would then never stop.
     int m_cutRemaining = -1;
     int m_cutLength = 1;
-    /// Only retriggers with Cut Itself fade in, paired with the outgoing cut.
+    /// Cut Itself and stolen voices fade in alongside the outgoing sound.
     int m_fadeInRemaining = 0;
 
+    double m_ampGain = 0.0;
+    int m_ampRampLength = 1;
     Envelope m_amp;
     Envelope m_modEnv[kModTargetCount];
     Lfo m_lfo[kModTargetCount];

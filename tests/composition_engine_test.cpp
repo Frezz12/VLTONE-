@@ -1,9 +1,12 @@
 #include "ai/CompositionEngine.hpp"
+#include "MidiTools.hpp"
 
 #include <cmath>
+#include <chrono>
 #include <algorithm>
 #include <cstdio>
 #include <set>
+#include <map>
 #include <sstream>
 #include <string>
 
@@ -194,6 +197,68 @@ int main() {
         complete = complete && first == std::vector<int>({0, 2, 4, 7, 11}) && second == std::vector<int>({0, 4, 5, 9});
     }
     check(complete, "extended chords keep every tone and change at off-grid harmony boundaries");
+
+    bool matrixValid = true, scaleValid = true;
+    for (auto scale : daw::miditools::allScales()) {
+        for (auto role : {ai::CompositionRole::Melody, ai::CompositionRole::Chords}) {
+            for (int bars : {1, 8, 64}) for (const auto meter : {std::pair{4, 4}, std::pair{3, 4}, std::pair{6, 8}, std::pair{7, 8}}) {
+                ai::CompositionRequest r;
+                r.role = role; r.scale = daw::miditools::scaleId(scale); r.keyRoot = 9;
+                r.pitchRange = ai::CompositionPitchRange{48, 84}; r.bars = bars;
+                r.seed = 320 + bars; r.swing = .75; r.expression = 1;
+                r.rhythmicDensity = 1; r.character = ai::CompositionCharacter::Rhythmic;
+                r.meterNumerator = meter.first; r.meterDenominator = meter.second;
+                r.beatsPerBar = meter.first * 4.0 / meter.second;
+                const auto results = ai::generateCompositionCandidates(r);
+                matrixValid &= results.size() == 3;
+                for (const auto& candidate : results) {
+                    matrixValid &= ai::validateCompositionCandidate(r, candidate).valid();
+                    for (const auto& note : candidate.notes) {
+                        scaleValid &= daw::miditools::inScale(note.pitch, 9, scale);
+                        matrixValid &= note.lengthBeats >= 1.0 / 960.0 && note.startBeats + note.lengthBeats <= bars * r.beatsPerBar + 1e-8;
+                    }
+                }
+            }
+        }
+    }
+    check(matrixValid, "1/8/64 bars and simple/compound/odd meters stay valid at maximum swing and expression");
+    check(scaleValid, "melodies and progressions obey every supported scale");
+    ai::CompositionRequest eight;
+    eight.bars = 8; eight.seed = 817; eight.pitchRange = ai::CompositionPitchRange{60, 84};
+    const auto start = std::chrono::steady_clock::now();
+    auto normal = ai::generateCompositionCandidates(eight);
+    const auto milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::printf("INFO  three eight-bar variants: %.2f ms\n", milliseconds);
+    eight.character = ai::CompositionCharacter::Spacious;
+    const auto spacious = ai::generateCompositionCandidates(eight);
+    eight.character = ai::CompositionCharacter::Rhythmic;
+    const auto rhythmic = ai::generateCompositionCandidates(eight);
+    std::size_t sparseCount = 0, busyCount = 0;
+    for (const auto& candidate : spacious) sparseCount += candidate.notes.size();
+    for (const auto& candidate : rhythmic) busyCount += candidate.notes.size();
+    check(sparseCount < busyCount, "character meaningfully changes phrase density");
+    eight.role = ai::CompositionRole::Chords; eight.seventhChords = true; eight.chordBars = 2;
+    const auto sevenths = ai::generateCompositionCandidates(eight);
+    bool fourVoices = sevenths.size() == 3;
+    for (const auto& candidate : sevenths) {
+        std::map<double, std::set<int>> voices;
+        for (const auto& note : candidate.notes) voices[note.startBeats].insert(note.pitch % 12);
+        for (const auto& [time, chord] : voices) fourVoices &= chord.size() == 4;
+    }
+    check(fourVoices, "seventh-chord mode keeps four distinct voices");
+    ai::CompositionRequest partialHarmony;
+    partialHarmony.role = ai::CompositionRole::Chords; partialHarmony.bars = 2;
+    partialHarmony.harmony = {{2, 2, 1, {1, 5, 8}}};
+    const auto partialChords = ai::generateCompositionCandidates(partialHarmony);
+    bool resolved = partialChords.size() == 3;
+    for (const auto& candidate : partialChords)
+        for (const auto& note : candidate.notes) if (note.startBeats >= 4)
+            resolved &= note.pitch % 12 == 0 || note.pitch % 12 == 4 || note.pitch % 12 == 7;
+    check(resolved, "a resolved chord ending returns to the key after an earlier harmony clip ends");
+    eight.pitchRange = ai::CompositionPitchRange{61, 61}; eight.scale = "major";
+    check(!ai::validateCompositionRequest(eight).valid(), "an impossible scale/register combination is rejected");
+    eight.pitchRange = ai::CompositionPitchRange{48, 84}; eight.meterNumerator = 6; eight.meterDenominator = 8;
+    check(!ai::validateCompositionRequest(eight).valid(), "contradictory bar length and meter are rejected");
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return failures;

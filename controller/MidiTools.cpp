@@ -6,6 +6,7 @@
 #include <map>
 #include <numeric>
 #include <random>
+#include <tuple>
 
 namespace daw::miditools {
 
@@ -783,6 +784,41 @@ Notes randomize(Notes notes, const RandomParams& params) {
     return notes;
 }
 
+Notes insertGeneratedNotes(const Notes& source, Notes generated,
+                           double startBeats, double endBeats, bool merge) {
+    if (!std::isfinite(startBeats) || !std::isfinite(endBeats) ||
+        startBeats < 0 || endBeats <= startBeats) return source;
+    Notes result;
+    for (const auto& note : source) {
+        const double end = note.startBeats + note.lengthBeats;
+        if (merge || end <= startBeats || note.startBeats >= endBeats) {
+            result.push_back(note);
+            continue;
+        }
+        if (note.startBeats < startBeats) {
+            auto left = note;
+            left.lengthBeats = startBeats - note.startBeats;
+            if (left.lengthBeats >= 1.0 / 960.0) result.push_back(std::move(left));
+        }
+        if (end > endBeats) {
+            auto right = note;
+            right.startBeats = endBeats;
+            right.lengthBeats = end - endBeats;
+            if (note.startBeats < startBeats) right.id.clear();
+            if (right.lengthBeats >= 1.0 / 960.0) result.push_back(std::move(right));
+        }
+    }
+    for (auto& note : generated) {
+        note.id.clear();
+        note.startBeats += startBeats;
+        result.push_back(std::move(note));
+    }
+    std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.startBeats, a.pitch) < std::tie(b.startBeats, b.pitch);
+    });
+    return result;
+}
+
 Notes humanize(Notes notes, double timingBeats, int velocityAmount,
                uint32_t seed) {
     RandomParams params;
@@ -1031,26 +1067,35 @@ Notes splitAt(Notes notes, double beats) {
     return out;
 }
 
-Notes splitAtGrid(Notes notes, double gridBeats) {
-    if (gridBeats <= 0.0) return notes;
+Notes splitAtGrid(Notes notes, double gridBeats, int pitchStep) {
+    if (!std::isfinite(gridBeats) || gridBeats <= 0.0) return notes;
+    gridBeats = std::max(kMinLength, gridBeats);
+    pitchStep = std::clamp(pitchStep, -127, 127);
     Notes out;
     for (const auto& note : notes) {
         const double end = noteEnd(note);
         double cut = std::floor(note.startBeats / gridBeats + 1.0) * gridBeats;
         double pieceStart = note.startBeats;
+        int pitch = note.pitch;
         bool cutAny = false;
         for (; cut < end - kEps; cut += gridBeats) {
-            if (cut <= pieceStart + kEps) continue;
+            // Keep the source endpoints exact without sub-minimum fragments
+            // that the controller would lengthen on Apply.
+            if (cut - pieceStart < kMinLength - kEps) continue;
+            if (end - cut < kMinLength - kEps) break;
             NoteModel piece = note;
             if (cutAny) piece.id.clear();
+            piece.pitch = pitch;
             piece.startBeats = pieceStart;
             piece.lengthBeats = cut - pieceStart;
             out.push_back(piece);
             pieceStart = cut;
+            pitch = std::clamp(pitch + pitchStep, 0, 127);
             cutAny = true;
         }
         NoteModel tail = note;
         if (cutAny) tail.id.clear();
+        tail.pitch = pitch;
         tail.startBeats = pieceStart;
         tail.lengthBeats = std::max(kMinLength, end - pieceStart);
         out.push_back(tail);

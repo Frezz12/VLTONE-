@@ -652,7 +652,7 @@ public:
     /// Undoable.
     std::string addInsert(const std::string& channelId,
                           const plugins::PluginDescriptor& descriptor,
-                          size_t index = size_t(-1));
+                          size_t index = size_t(-1), bool analysisOnly = false);
     void removeInsert(const std::string& channelId, const std::string& insertId);
     void moveInsert(const std::string& channelId, const std::string& insertId,
                     size_t targetIndex);
@@ -735,6 +735,8 @@ public:
         std::vector<ChainSlotSnapshot> instrumentFx;
         float instrumentFxVolume = 1.f, instrumentFxPan = 0.f;
         std::vector<RackGroupModel> rackGroups;
+        modulation::Rack modulation;
+        std::vector<TrackModel> modulationAutomation;
         std::vector<ChainSlotSnapshot> miniModules;
         std::optional<ChainSlotSnapshot> channelColor;
         std::string sourceName;       ///< what it came from, for the paste menu
@@ -860,6 +862,15 @@ public:
 
     // Local device rack. All positions are insertion boundaries in the original
     // channel vector; a transfer adjusts them after lifting the selection.
+    const modulation::Rack& rackModulation(const std::string& channelId) const;
+    bool setRackModulation(const std::string& channelId, const modulation::Rack& rack,
+        const std::string& label = "Change Rack Modulation");
+    std::string addRackModulator(const std::string& channelId, modulation::Kind kind);
+    std::string duplicateRackModulator(const std::string& channelId, const std::string& sourceId);
+    std::string assignRackModulation(const std::string& channelId, const std::string& sourceId,
+        const std::string& slotId, const std::string& parameterId);
+    float rackModulationValue(const std::string& channelId, const std::string& sourceId) const;
+    std::string rackModulationStatus(const std::string& channelId, const std::string& routeId) const;
     const std::vector<RackGroupModel>& rackGroups(const std::string& channelId) const;
     bool createRackGroup(const std::string& channelId, const std::vector<std::string>& ids,
                          const std::string& name, std::string* groupId = nullptr);
@@ -1005,8 +1016,20 @@ public:
     bool auditionEqualizerBand(const std::string& channelId, const std::string& insertId, int band);
     bool switchEqualizerComparison(const std::string& channelId, const std::string& insertId, char slot);
     bool copyEqualizerComparison(const std::string& channelId, const std::string& insertId);
+#if DAW_ENABLE_REVERB
+    std::optional<ReverbSnapshot> reverbSnapshot(const std::string& channelId, const std::string& insertId) const;
+    bool applyReverbState(const std::string& channelId, const std::string& insertId,
+                          const plugins::reverb::State&, const std::string& label = "Change Reverb");
+    bool switchReverbComparison(const std::string& channelId, const std::string& insertId, char side);
+    bool copyReverbComparison(const std::string& channelId, const std::string& insertId);
+#endif
     bool setGravityFrozen(const std::string& channelId, const std::string& insertId, bool frozen);
     std::optional<MorphSnapshot> morphSnapshot(const std::string& channelId, const std::string& insertId) const;
+    std::optional<FluxSnapshot> fluxSnapshot(const std::string& channelId, const std::string& insertId) const;
+    std::optional<plugins::flux::FluxTelemetry> fluxTelemetry(const std::string& channelId, const std::string& insertId) const;
+    bool applyFluxState(const std::string& channelId, const std::string& insertId,
+        const plugins::flux::State& state, const std::string& label = "Change Flux", bool history = true,
+        const plugins::flux::State* previous = nullptr);
     bool applyMorphState(const std::string& channelId, const std::string& insertId,
         const plugins::morph::State& state, const std::string& label = "Change Morph", bool history = true,
         const plugins::morph::State* previous = nullptr);
@@ -1193,6 +1216,7 @@ public:
     bool commitWarpPreview();
     void cancelWarpPreview();
     bool warpPreviewActive();
+    bool warpPreviewActiveFor(const std::string& trackId, const std::string& clipId);
     const ClipWarpModel* warpPreviewMap() const;
     /// Replace or clear the media referenced by one clip while keeping that
     /// clip's processing, stretch and private FX state. Empty clears it.
@@ -1227,6 +1251,9 @@ public:
     /// Paint-only view of already prepared audio; never decodes or processes.
     ClipWaveformView clipWaveform(const ClipModel& clip) const;
     std::uint64_t clipWaveformRevision() const { return m_clipWaveformRevision; }
+    // False means the caller must invalidate everything (history expired or a
+    // structural edit). Multiple views can independently consume this journal.
+    bool clipWaveformChangesSince(std::uint64_t revision, std::vector<std::string>& clipIds) const;
     double clipSampleParameter(const std::string& trackId,
                                const std::string& clipId,
                                const std::string& parameterId);
@@ -1848,6 +1875,17 @@ public:
     void touchInsertParameter(const std::string& channelId,
                               const std::string& insertId,
                               const std::string& parameterId);
+    /// New native-editor value edits only; beginEdit still selects ordinary automation.
+    std::uint64_t parameterTouchRevision(const std::string& channel = {}) const {
+        if (channel.empty()) return m_parameterTouchRevision;
+        const auto found = m_parameterTouchByChannel.find(channel);
+        return found == m_parameterTouchByChannel.end() ? 0 : found->second.first;
+    }
+    std::optional<AutomationTarget> lastEditedPluginParameter(const std::string& channel) const {
+        const auto found = m_parameterTouchByChannel.find(channel);
+        if (found == m_parameterTouchByChannel.end()) return std::nullopt;
+        return found->second.second;
+    }
     std::optional<AutomationTarget> lastTouchedAutomation(
         const std::string& channelId) const;
     enum class AutomationFollowChange { None, Values, Structure };
@@ -1875,6 +1913,18 @@ public:
     void setClipNotes(const std::string& trackId, const std::string& clipId,
                       std::vector<NoteModel> notes, const std::string& label,
                       bool stretchSlides = false);
+
+    /// Temporary playback only: never changes the document, history or shared
+    /// project. The owner prevents a closing editor from cancelling another one.
+    void previewClipNotes(const void* owner, const std::string& trackId,
+                          const std::string& clipId, std::vector<NoteModel> notes);
+    void clearClipNotePreview(const void* owner);
+    bool clipNotePreviewActive(const void* owner) const;
+
+    /// Commit an already-previewed note vector and grow its clip/Pattern owner
+    /// in one history operation (one BatchCommand in a shared project).
+    bool applyGeneratedMidi(const std::string& trackId, const std::string& clipId,
+                            std::vector<NoteModel> notes, double endBeats);
 
     // ── Master / metering ──
     struct InstrumentSlideStatus { plugins::SlideDelivery mode = plugins::SlideDelivery::Off; bool overloaded = false, clipped = false; };
@@ -2232,6 +2282,8 @@ public:
     std::uint64_t projectGeneration() const { return m_projectGeneration; }
     /// Includes live placements before their gesture enters undo history.
     std::uint64_t clipGeometryRevision() const { return m_clipGeometryRevision; }
+    /// Lane heights do not change clip time ranges, pattern membership or DSP.
+    std::uint64_t trackHeightRevision() const { return m_trackHeightRevision; }
     /// How deep the stack can get. Beyond it `undoDepth` stops rising, so a
     /// caller comparing depths across an edit has to expect the ceiling.
     std::size_t undoLimit() const { return m_undo.limit(); }
@@ -2372,6 +2424,7 @@ private:
         std::vector<RackChannelState> channels;
         std::vector<RackAutomationAddress> automation;
     };
+    modulation::Rack* mutableRackModulation(const std::string& channelId);
     std::vector<RackGroupModel>* mutableRackGroups(const std::string& channelId);
     bool applyRackEdit(const RackEditState& state);
     bool commitRackEdit(const RackEditState& before, const RackEditState& after, const std::string& label);
@@ -2441,8 +2494,8 @@ private:
         const std::string& patternTrackId, const ClipModel& source,
         const PatternClipMembers& members, double startSeconds,
         const std::string& undoLabel);
-    /// Record one plugin-editor gesture as a breakpoint at the playhead.
-    void writeAutomationPoint(const std::string& channelId, const std::string& slotId,
+    /// Record one plugin-editor gesture; true when a lane or capture accepted it.
+    bool writeAutomationPoint(const std::string& channelId, const std::string& slotId,
                               const std::string& parameterId, double value);
     /// The placements one clip renders as, appended to `list`. A plain clip is
     /// one placement; a layered clip is one per comp segment, with equal-power
@@ -2582,6 +2635,7 @@ private:
     std::unordered_map<std::string, PendingSharedAssetMutation>
         m_pendingSharedAssetMutations;
     std::uint64_t m_clipGeometryRevision = 1;
+    std::uint64_t m_trackHeightRevision = 1;
     mutable std::uint64_t m_linkCountRevision = ~std::uint64_t(0);
     mutable std::uint64_t m_linkCountGeometry = 0, m_linkCountGeneration = 0;
     mutable std::unordered_map<std::string, std::size_t> m_linkCounts;
@@ -2603,6 +2657,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<const TrackModel>> m_recoveryTrackParts;
     std::size_t m_recoveryPluginCaptureCursor = 0;
     bool m_automationWrite = false;
+    std::uint64_t m_parameterTouchRevision = 0;
+    std::unordered_map<std::string, std::pair<std::uint64_t, AutomationTarget>> m_parameterTouchByChannel;
     std::unordered_map<std::string, AutomationTarget> m_lastTouchedAutomation;
     std::unordered_map<std::string, AutomationTarget> m_pendingAutomationTouches;
     mutable bool m_automationReadoutCacheDirty = true;
@@ -2737,6 +2793,8 @@ private:
     };
     std::vector<SharedClipSampleCacheEntry> m_sharedClipSampleCache;
     std::uint64_t m_clipWaveformRevision = 0;
+    std::deque<std::pair<std::uint64_t, std::string>> m_clipWaveformChanges;
+    void noteClipWaveformChange(const std::string& clipId = {});
     static ClipSampleCacheEntry buildClipSample(
         const std::string& path, const plugins::sampler::PrecomputeSettings& settings,
         std::shared_ptr<const engine::SampleBuffer> raw, bool waveform,
@@ -2909,7 +2967,7 @@ private:
                          std::uint64_t source, MidiInputStamp stamp, LiveMidiOrigin origin);
     bool sendLiveMidiEvent(const std::string& trackId, int status, int data1, int data2,
                            bool audition = false);
-    void captureMidiParameter(const std::string& trackId, const std::string& slotId,
+    bool captureMidiParameter(const std::string& trackId, const std::string& slotId,
                               const std::string& parameterId, double plain,
                               MidiInputStamp stamp, bool retrospective);
     void resetMidiInput();
@@ -3032,6 +3090,15 @@ private:
     };
     NoteEdit m_noteEdit;
     std::uint64_t m_noteEditIndexBuildCount = 0;
+
+    struct ClipNotePreview {
+        const void* owner = nullptr;
+        std::string trackId, clipId;
+        std::shared_ptr<const ClipContent> source;
+        std::vector<NoteModel> before, notes;
+    };
+    std::optional<ClipNotePreview> m_clipNotePreview;
+    void publishClipNotePreview(const std::shared_ptr<const ClipContent>& source);
 
     struct ClipPositionOrigin {
         std::string beforeTrackId;

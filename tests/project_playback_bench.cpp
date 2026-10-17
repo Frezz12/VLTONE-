@@ -6,6 +6,7 @@
 #include "Core/AudioBuffer.hpp"
 #include "Job/AudioWorkerRegistration.hpp"
 #include "Memory/PcmReadCache.hpp"
+#include "AudioBenchPacer.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -71,6 +72,7 @@ int main(int argc, char** argv) try {
     audio::AudioBuffer input(2, frames), output(2, frames); input.clear();
     const auto count = unsigned(std::ceil(seconds * rate / frames));
     const auto period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(frames / rate));
+    AudioBenchPacer pacer;
     const auto serviceEvery = std::max(1u, unsigned(rate * .015 / frames));
     const auto block = [&](unsigned i, daw::rt::TimingAccumulator* timings = nullptr) {
         const auto until = Clock::now() + period;
@@ -79,7 +81,7 @@ int main(int argc, char** argv) try {
         const auto duration = daw::rt::nowNanos() - begin;
         if (timings) timings->add({duration, std::uint64_t(double(frames) * 1e9 / rate), frames, 0});
         if (i % serviceEvery == 0) pump(c);
-        if (paced) std::this_thread::sleep_until(until);
+        if (paced) pacer.wait(until);
     };
     const auto warm = [&] {
         c.stop(); c.seekSeconds(23); pump(c); c.play();
@@ -87,6 +89,7 @@ int main(int argc, char** argv) try {
         (void)c.callbackMetrics(true); (void)c.graphMetrics(true);
     };
     std::cout << "PROJECT tracks=" << c.project().tracks.size() << " nodes=" << c.routingGraph()->nodes.size()
+        << " audio_buffers=" << c.routingGraph()->arena.bufferCount() << " dependency_counters=" << c.routingGraph()->pending.size()
         << " workers=" << c.audioWorkerCount() << " rt_workers=" << c.realtimeAudioWorkerCount()
         << " caller_rt=" << (callerStatus & 1) << " rate=" << rate << " block=" << frames
         << " paced=" << paced << " budget_ms=" << frames * 1000. / rate << '\n';

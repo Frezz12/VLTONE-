@@ -412,8 +412,9 @@ void SlicerWaveform::paintScene(QPainter& painter, const QRegion&) {
 }
 void SlicerWaveform::mousePressEvent(QMouseEvent* e) {
     if (!m_sample) return;
-    setFocus(); m_pressPosition = e->position(); m_pressFrame = frameForX(e->position().x()); m_panStart = m_viewStart;
-    if (e->button() == Qt::MiddleButton) { m_panning = true; setCursor(Qt::ClosedHandCursor); return; }
+    ui::ScrollMotion::cancel(this);
+    setFocus(); m_pressPosition = e->position(); m_pressFrame = frameForX(e->position().x());
+    if (e->button() == Qt::MiddleButton) { m_panLastPosition = e->position(); m_panning = true; setCursor(Qt::SizeHorCursor); return; }
     if (e->button() != Qt::LeftButton) return;
     if (e->position().y() < 24) { m_overview = true; mouseMoveEvent(e); return; }
     if (e->position().y() < 48 || e->modifiers().testFlag(Qt::AltModifier)) { m_selectingRange = true; return; }
@@ -423,14 +424,28 @@ void SlicerWaveform::mousePressEvent(QMouseEvent* e) {
 }
 void SlicerWaveform::mouseMoveEvent(QMouseEvent* e) {
     if (m_overview) { setView((e->position().x() - 12) / plotRect().width() * m_sample->frames() - m_viewSpan / 2, m_viewSpan); return; }
-    if (m_panning) { setView(m_panStart - (e->position().x() - m_pressPosition.x()) / plotRect().width() * m_viewSpan, m_viewSpan); return; }
+    if (m_panning) {
+        if (e->type() == QEvent::MouseMove && !(e->buttons() & Qt::MiddleButton)) {
+            cancelDrag(); return;
+        }
+        const double delta = m_panLastPosition.x() - e->position().x();
+        m_panLastPosition = e->position();
+        const double scale = plotRect().width() / m_viewSpan;
+        ui::ScrollMotion::pan(this, {delta, 0},
+            [this, scale] { return QPointF(m_viewStart * scale, 0); },
+            [this, scale](QPointF at) { setView(at.x() / scale, m_viewSpan); },
+            [this, scale](QPointF at) { return QPointF(std::clamp(at.x(), 0.,
+                std::max(0., double(m_sample->frames()) - m_viewSpan) * scale), 0); });
+        return;
+    }
     if (m_dragBoundary > 0) { emit boundaryMoved(m_dragBoundary, quint32(frameForX(e->position().x()))); return; }
     if (m_selectingRange) {
         const auto f = quint32(frameForX(e->position().x())); m_rangeStart = std::min(f, quint32(m_pressFrame)); m_rangeEnd = std::max(f, quint32(m_pressFrame)); update(); return;
     }
     setCursor(boundaryAt(e->position().x()) > 0 ? Qt::SplitHCursor : Qt::PointingHandCursor);
 }
-void SlicerWaveform::mouseReleaseEvent(QMouseEvent*) {
+void SlicerWaveform::mouseReleaseEvent(QMouseEvent* e) {
+    if (m_panning) { mouseMoveEvent(e); ui::ScrollMotion::finishPan(this); }
     if (m_dragBoundary > 0) emit boundaryCommit();
     if (m_selectingRange && m_rangeEnd > m_rangeStart) emit rangeRequested(m_rangeStart, m_rangeEnd);
     m_dragBoundary = -1; m_panning = m_overview = m_selectingRange = false; setCursor(Qt::PointingHandCursor); emit auditionReleased();
@@ -439,6 +454,7 @@ void SlicerWaveform::mouseDoubleClickEvent(QMouseEvent* e) {
     cancelDrag(); if (e->button() == Qt::LeftButton && plotRect().contains(e->position())) emit splitRequested(quint32(frameForX(e->position().x())));
 }
 bool SlicerWaveform::cancelDrag() {
+    ui::ScrollMotion::cancel(this);
     const bool active = m_dragBoundary > 0 || m_selectingRange || m_panning || m_overview;
     if (m_dragBoundary > 0) emit boundaryCancel();
     m_dragBoundary = -1; m_selectingRange = m_panning = m_overview = false; setCursor(Qt::PointingHandCursor); return active;

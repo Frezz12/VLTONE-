@@ -20,7 +20,11 @@
 #include <QVBoxLayout>
 #include <QUrl>
 
-BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
+BrowserSettingsPage::BrowserSettingsPage(QWidget* parent, Section section) : QWidget(parent) {
+    if (section == Section::Web) {
+        buildWebPage();
+        return;
+    }
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(16, 16, 16, 16);
     column->setSpacing(8);
@@ -34,6 +38,8 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     column->addWidget(hint);
 
     m_folders = new QListWidget(this);
+    m_folders->setMinimumHeight(100);
+    m_folders->setMaximumHeight(140);
     m_folders->setSelectionMode(QAbstractItemView::SingleSelection);
     connect(m_folders, &QListWidget::currentRowChanged, this,
             [this](int row) { m_remove->setEnabled(row >= 0); });
@@ -106,13 +112,22 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     form->addRow(QString(), m_loop);
 
     m_gain = new ui::GlassSlider(Qt::Horizontal, this);
+    m_gain->setAccessibleName(tr("Preview level"));
     m_gain->setRange(0, 200);   // percent of the recorded level
     m_gain->setValue(int(ui::browserprefs::previewGain() * 100.0f));
-    connect(m_gain, &QSlider::valueChanged, this, [this](int value) {
+    auto* gainRow = new QWidget(this);
+    auto* gainLayout = new QHBoxLayout(gainRow);
+    gainLayout->setContentsMargins(0, 0, 0, 0);
+    auto* gainValue = new QLabel(QStringLiteral("%1%").arg(m_gain->value()), gainRow);
+    gainValue->setMinimumWidth(46);
+    gainLayout->addWidget(m_gain, 1);
+    gainLayout->addWidget(gainValue);
+    connect(m_gain, &QSlider::valueChanged, this, [this, gainValue](int value) {
+        gainValue->setText(QStringLiteral("%1%").arg(value));
         ui::browserprefs::setPreviewGain(float(value) / 100.0f);
         emit changed();
     });
-    form->addRow(tr("Preview level"), m_gain);
+    form->addRow(tr("Preview level"), gainRow);
 
     m_midiTempo = new QComboBox(this);
     m_midiTempo->addItems({tr("Ask each time"), tr("Keep the project's tempo"),
@@ -132,7 +147,12 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
 
     column->addLayout(form);
 
-    column->addWidget(ui::separatorLine(Qt::Horizontal, 0, this));
+    column->addStretch(1);
+    refreshFolders();
+}
+
+void BrowserSettingsPage::buildWebPage() {
+    auto* column = new QVBoxLayout(this);
     column->addWidget(ui::sectionLabel(tr("WEB BROWSER"), this));
     auto* webHint = new QLabel(
         tr("The integrated browser keeps its own cookies and opens this page "
@@ -145,6 +165,7 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     auto* webForm = new QFormLayout();
     webForm->setSpacing(8);
     m_webHome = new QLineEdit(this);
+    m_webHome->setObjectName(QStringLiteral("WebBrowserHome"));
     m_webHome->setClearButtonEnabled(true);
     const QString storedHome = ui::webprefs::homeUrl();
     if (storedHome != QLatin1String(ui::webprefs::kStartUrl))
@@ -262,7 +283,6 @@ BrowserSettingsPage::BrowserSettingsPage(QWidget* parent) : QWidget(parent) {
     column->addLayout(webForm);
     column->addStretch(1);
 
-    refreshFolders();
 }
 
 void BrowserSettingsPage::refreshFolders() {

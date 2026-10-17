@@ -12,9 +12,13 @@
 class ContextPanelPage : public QWidget {
     Q_OBJECT
 public:
-    explicit ContextPanelPage(QWidget* parent = nullptr);
+    enum class Section { Panel, Plugins };
+    explicit ContextPanelPage(QWidget* parent = nullptr, Section section = Section::Panel);
 
 signals:
     /// A profile or the transparency setting changed; the panel should rebuild.
     void changed();
+
+private:
+    void buildPluginPage();
 };

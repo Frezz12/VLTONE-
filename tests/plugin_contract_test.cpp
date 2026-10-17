@@ -1,5 +1,7 @@
 // Cross-format regressions for host/plugin contracts found in the 2026-09 review.
 #include "Host/PluginNode.hpp"
+#include "Host/PluginAudioBuffers.hpp"
+#include "Host/PluginMidi.hpp"
 #include "Graph/AudioGraph.hpp"
 #include "Graph/GraphProcessor.hpp"
 #include "Nodes/BasicNodes.hpp"
@@ -55,10 +57,104 @@ struct Block {
         context.outputs = outputs; context.outputChannels = 2; context.frames = 128;
     }
 };
+struct EventCapture final : EventSink {
+    std::array<PluginEvent, 256> events{};
+    std::size_t count = 0;
+    void push(const PluginEvent& event) noexcept override {
+        if (count < events.size()) events[count++] = event;
+    }
+};
+void verifyEventOnly(Format format, const char* path, const char* setting) {
+    Environment enabled(setting);
+    auto instance = create(descriptor(format, path));
+    require(instance->busLayout().outputs.empty(), "event-only plugin declares no audio outputs");
+    require(instance->activate({48000, 128, false}), "activate event-only plugin");
+    instance->startProcessing();
+    PluginEvent event; event.kind = PluginEvent::Kind::ParamValue; event.value = .75; event.frameOffset = 17;
+    EventCapture sink;
+    PluginProcessContext context; context.frames = 128; context.inputEvents = std::span(&event, 1);
+    context.outputEvents = &sink;
+    require(instance->process(context) != PluginProcessDisposition::Error && sink.count == 1 &&
+            sink.events[0].frameOffset == 17 && std::abs(sink.events[0].value - .75) < 1e-6,
+            "event-only processor must run and return events without audio buses");
+    context.frames = 129;
+    require(instance->process(context) == PluginProcessDisposition::Error,
+            "oversized blocks cannot masquerade as successfully rendered silence");
+}
+void verifySteadyClock(Format format, const char* path, const char* setting) {
+    Environment validate(setting);
+    PluginNode node("clock", create(descriptor(format, path)));
+    node.prepare({48000, 128, 2});
+    Block block;
+    float* inputChannels[]{block.left.data(), block.right.data()};
+    std::array<engine::AudioBlock, 1> inputs{engine::AudioBlock(inputChannels, 2, 128)};
+    engine::ProcessContext context;
+    context.output = engine::AudioBlock(block.outputs, 2, 128);
+    context.inputs = inputs; context.frames = 128; context.sampleRate = 48000;
+    for (std::int64_t position : {0, 128, 128, 16, -512, 0}) {
+        context.timelinePosition = position;
+        context.playing = position != 128;
+        node.process(context);
+        require(bool(node.offlineStatus()), "steady time survives stop, seek and negative PDC time");
+    }
+    node.setBypassed(true);
+    for (int i = 0; i < 4; ++i) node.process(context);
+    node.setBypassed(false);
+    node.process(context); node.process(context);
+    require(bool(node.offlineStatus()), "steady time advances through sleeping bypass");
+    node.reset(); node.process(context);
+    require(bool(node.offlineStatus()), "reset cannot move steady time backwards");
+}
 }
 int main() try {
+    {
+        Block block;
+        PluginAudioBus bus;
+        bus.allocate(3, 128);
+        require(bus.bindInput(block.context, 0, 128) == 4 && bus.pointers[0] == block.left.data(),
+                "main channels bind directly and missing channels are silent");
+        bus.pointers[2][0] = 99;
+        require(bus.bindInput(block.context, 1, 128) == 7 && bus.pointers[2][0] == 0,
+                "silent scratch is reset each block");
+        const float* sparse[] = {nullptr, block.right.data()};
+        block.context.inputs = sparse;
+        require(bus.bindInput(block.context, 0, 128) == 5, "null channels use silent scratch");
+        bus.bindOutput(block.context, 0, 128);
+        require(bus.pointers[0] == block.outLeft.data() && bus.pointers[2] != block.outRight.data(),
+                "only supplied main outputs use host storage");
+        bus.bindOutput(block.context, 1, 128);
+        require(bus.pointers[0] != block.outLeft.data(), "aux outputs have independent scratch");
+        std::cout << "PASS shared audio bus mapping and silence\n";
+    }
+    {
+        for (auto kind : {PluginEvent::Kind::NoteOn, PluginEvent::Kind::NoteOff,
+                          PluginEvent::Kind::NoteChoke, PluginEvent::Kind::PolyPressure,
+                          PluginEvent::Kind::MidiController}) {
+            for (unsigned controller : {0u, 64u, 127u, 128u, 129u, 130u}) {
+                PluginEvent input; input.kind = kind; input.channel = 15; input.key = 127;
+                input.paramIndex = controller; input.value = 0.75;
+                std::array<std::uint8_t, 3> bytes;
+                PluginEvent output;
+                require(encodePluginMidi(input, bytes) && decodePluginMidi(bytes.data(), output), "MIDI 1 round trip");
+                require(output.channel == 15 && output.kind ==
+                    (kind == PluginEvent::Kind::NoteChoke ? PluginEvent::Kind::NoteOff : kind), "MIDI kind and channel");
+                require(kind == PluginEvent::Kind::MidiController ? output.paramIndex == controller : output.key == 127,
+                        "MIDI controller/note identity");
+                require(std::abs(output.value - (kind == PluginEvent::Kind::NoteChoke ? 0 : input.value)) < 1.0 / 127,
+                        "MIDI quantization and choke velocity");
+            }
+        }
+        PluginEvent invalid; invalid.kind = PluginEvent::Kind::NoteOn;
+        std::array<std::uint8_t, 3> bytes;
+        invalid.value = std::numeric_limits<double>::quiet_NaN();
+        require(!encodePluginMidi(invalid, bytes), "nonfinite MIDI rejected before rounding");
+        invalid.value = 1; invalid.channel = -1;
+        require(!encodePluginMidi(invalid, bytes), "wildcard is not a MIDI channel");
+        std::cout << "PASS shared MIDI conversion for VST, CLAP and AU\n";
+    }
 #if DAW_ENABLE_CLAP
     const auto clap = descriptor(Format::Clap, DAW_TEST_CLAP_PATH);
+    verifyEventOnly(Format::Clap, DAW_TEST_CLAP_PATH, "DAW_TEST_CLAP_EVENT_ONLY");
     {
         Environment request("DAW_TEST_CLAP_INIT_CALLBACK");
         auto instance = create(clap);
@@ -77,35 +173,63 @@ int main() try {
         require(!instance->saveState(state) && state.empty(), "CLAP invalid state write rejected");
         std::cout << "PASS CLAP state stream validation\n";
     }
-    {
-        Environment validate("DAW_TEST_CLAP_VALIDATE_STEADY_TIME");
-        PluginNode node("CLAP clock", create(clap));
-        node.prepare({48000, 128, 2});
-        Block block;
-        float* inputChannels[]{block.left.data(), block.right.data()};
-        std::array<engine::AudioBlock, 1> inputs{engine::AudioBlock(inputChannels, 2, 128)};
-        engine::ProcessContext context;
-        context.output = engine::AudioBlock(block.outputs, 2, 128);
-        context.inputs = inputs; context.frames = 128; context.sampleRate = 48000;
-        for (std::int64_t position : {0, 128, 128, 16, -512, 0}) {
-            context.timelinePosition = position;
-            context.playing = position != 128;
-            node.process(context);
-            require(bool(node.offlineStatus()), "CLAP steady time survives stop, seek and negative PDC time");
-        }
-        node.setBypassed(true);
-        for (int i = 0; i < 4; ++i) node.process(context);
-        node.setBypassed(false);
-        node.process(context); node.process(context);
-        require(bool(node.offlineStatus()), "CLAP steady time advances through sleeping bypass");
-        node.reset(); node.process(context);
-        require(bool(node.offlineStatus()), "CLAP reset cannot move steady time backwards");
-        std::cout << "PASS CLAP monotonic sample clock independent of transport\n";
-    }
+    verifySteadyClock(Format::Clap, DAW_TEST_CLAP_PATH, "DAW_TEST_CLAP_VALIDATE_STEADY_TIME");
 #endif
 #if DAW_ENABLE_VST3
     // The fixture checks ExitDll at DLL detach, after main has returned.
     Environment moduleShutdown("DAW_TEST_VST3_MODULE_EXIT");
+    verifyEventOnly(Format::Vst3, DAW_TEST_VST3_PATH, "DAW_TEST_VST3_EVENT_ONLY");
+    verifySteadyClock(Format::Vst3, DAW_TEST_VST3_PATH, "DAW_TEST_VST3_VALIDATE_STEADY_TIME");
+    {
+        const auto d = descriptor(Format::Vst3, DAW_TEST_VST3_PATH);
+        Environment notices("DAW_TEST_VST3_ACTIVATION_RESTART_FLAGS");
+        const auto latencyFlag = std::to_string(int(Steinberg::Vst::kLatencyChanged));
+        environment(notices.name, latencyFlag.c_str());
+        PluginNode node("activation latency", create(d));
+        for (int cycle = 0; cycle < 4; ++cycle) {
+            node.prepare({48000, 128, 2});
+            require(node.isReady() && node.latencySamples() == 64, "activation reads reported latency");
+            require(!node.takeLatencyChanged() && !node.takeRestartRequested(),
+                    "activation latency must not trigger another activation (Gullfoss)");
+        }
+        {
+            Environment values("DAW_TEST_VST3_RESTART_FLAGS");
+            const auto flag = std::to_string(int(Steinberg::Vst::kParamValuesChanged));
+            environment(values.name, flag.c_str());
+            node.instance()->setParameterFromHost(1, .25);
+            node.instance()->pumpMainThread();
+            PluginEvent event; bool refreshed = false;
+            while (node.popNotification(event))
+                refreshed |= event.paramIndex == 1 && std::abs(event.value - .25) < 1e-6;
+            require(refreshed, "acknowledged activation latency cannot block later value notifications");
+        }
+        const auto combined = std::to_string(int(Steinberg::Vst::kLatencyChanged |
+                                                Steinberg::Vst::kParamTitlesChanged));
+        {
+            Environment asynchronous("DAW_TEST_VST3_RESTART_FLAGS");
+            environment(asynchronous.name, latencyFlag.c_str());
+            // A delayed notification after activation is common too. The
+            // graph must remain live when the reported value did not move.
+            for (int repeat = 0; repeat < 8; ++repeat) {
+                node.instance()->setParameterFromHost(1, .25);
+                node.instance()->pumpMainThread();
+                require(!node.takeLatencyChanged() && !node.takeRestartRequested(),
+                        "unchanged asynchronous latency must not reconfigure the graph (Rev LX-24)");
+            }
+            Environment latency("DAW_TEST_VST3_LATENCY");
+            environment(latency.name, "128");
+            node.instance()->setParameterFromHost(1, .25);
+            node.instance()->pumpMainThread();
+            require(node.takeLatencyChanged() && node.instance()->latencySamples() == 128,
+                    "a real latency change still reaches graph compensation");
+            node.prepare({48000, 128, 2});
+            require(node.latencySamples() == 128, "real latency is applied during graph preparation");
+        }
+        environment(notices.name, combined.c_str());
+        node.prepare({48000, 128, 2});
+        require(node.takeRestartRequested(), "activation cannot swallow unrelated metadata changes");
+        std::cout << "PASS VST3 activation latency does not loop\n";
+    }
     {
         const auto d = descriptor(Format::Vst3, DAW_TEST_VST3_PATH);
         {
@@ -216,7 +340,33 @@ int main() try {
     }
 #endif
 #if DAW_ENABLE_VST
-
+    {
+        auto instance = create(descriptor(Format::Vst, DAW_TEST_VST_SHELL_PATH));
+        require(instance->activate({48000, 128, false}), "activate dense VST2 automation");
+        instance->startProcessing();
+        Block block;
+        std::vector<PluginEvent> events;
+        for (unsigned frame = 0; frame < 128; ++frame) {
+            PluginEvent parameter; parameter.frameOffset = frame; parameter.value = double(frame) / 127;
+            events.push_back(parameter);
+            if (frame == 0 || frame == 63 || frame == 127) {
+                PluginEvent midi; midi.kind = PluginEvent::Kind::MidiController;
+                midi.paramIndex = 64; midi.frameOffset = frame; midi.value = 1;
+                events.push_back(midi);
+            }
+        }
+        EventCapture sink;
+        block.context.inputEvents = events; block.context.outputEvents = &sink;
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            sink.count = 0;
+            require(instance->process(block.context) != PluginProcessDisposition::Error, "process dense VST2 block");
+            for (unsigned frame = 0; frame < 128; ++frame)
+                require(std::abs(block.outLeft[frame] - float(frame) / 127) < 1e-6, "VST2 automation is sample accurate");
+            require(sink.count == 3 && sink.events[0].frameOffset == 0 && sink.events[1].frameOffset == 63 &&
+                    sink.events[2].frameOffset == 127, "MIDI is delivered once at each automation segment boundary");
+        }
+        std::cout << "PASS VST2 dense automation with interleaved MIDI\n";
+    }
     {
         const auto all=factoryFor(Format::Vst)->inspect(DAW_TEST_VST_SHELL_PATH);
         const auto synth=std::find_if(all.begin(),all.end(),[](const auto& d){return d.isInstrument;});

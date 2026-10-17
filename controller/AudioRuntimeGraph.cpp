@@ -20,12 +20,17 @@ void AudioRuntime::clearGraphIds(ClipFxChannel& channel) {
 engine::NodeId AudioRuntime::connectSlots(engine::AudioGraph& graph,
                                          std::span<InsertSlot> live,
                                          std::vector<engine::NodeId>& ids,
-                                         engine::NodeId head) {
+                                         engine::NodeId head, engine::NodeId analysisSource) {
     ids.clear();
     engine::NodeId previous = head;
-    for (InsertSlot& slot : live) {
+    // Analysis nodes are terminal readers: the graph schedules every node,
+    // protects the sink buffer from reuse, and derives PDC from the sink only.
+    // Each analyzer hears the same completed signal, never another analyzer.
+    for (const bool analysis : {false, true}) for (InsertSlot& slot : live) {
+        if (slot.configuration.analysisOnly != analysis) continue;
         clearGraphIds(std::span(&slot, 1));
         if (!slot.node) continue;
+        const auto input = analysis && analysisSource != engine::kInvalidNode ? analysisSource : previous;
         if (slot.channelMode == PluginChannelMode::DualMono && slot.rightNode &&
             slot.leftSelector && slot.rightSelector && slot.stereoMerge) {
             slot.leftSelectorId = graph.adoptNode(slot.leftSelector);
@@ -33,22 +38,22 @@ engine::NodeId AudioRuntime::connectSlots(engine::AudioGraph& graph,
             slot.nodeId = graph.adoptNode(slot.node);
             slot.rightNodeId = graph.adoptNode(slot.rightNode);
             const engine::NodeId mergeId = graph.adoptNode(slot.stereoMerge);
-            ids.push_back(slot.leftSelectorId);
-            graph.connect(previous, slot.leftSelectorId);
-            graph.connect(previous, slot.rightSelectorId);
+            if (!analysis) ids.push_back(slot.leftSelectorId);
+            graph.connect(input, slot.leftSelectorId);
+            graph.connect(input, slot.rightSelectorId);
             graph.connect(slot.leftSelectorId, slot.nodeId);
             graph.connect(slot.rightSelectorId, slot.rightNodeId);
             graph.connect(slot.nodeId, mergeId);
             graph.connect(slot.rightNodeId, mergeId);
-            graph.connect(previous, mergeId);
-            previous = mergeId;
+            graph.connect(input, mergeId);
+            if (!analysis) previous = mergeId;
             continue;
         }
         const engine::NodeId id = graph.adoptNode(slot.node);
         slot.nodeId = id;
-        ids.push_back(id);
-        graph.connect(previous, id);
-        previous = id;
+        if (!analysis) ids.push_back(id);
+        graph.connect(input, id);
+        if (!analysis) previous = id;
     }
     return previous;
 }
@@ -96,7 +101,7 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
     masterChannel.ids.fader = masterFaderId;
     masterChannel.ids.meter = masterFaderId;
     const auto masterMiniEnd = connectMiniModules(graph, masterChannel, spec.masterMiniModules, false, masterSumId);
-    auto masterChainEnd = connectSlots(graph, masterChannel.inserts, masterChannel.ids.inserts, masterMiniEnd);
+    auto masterChainEnd = connectSlots(graph, masterChannel.inserts, masterChannel.ids.inserts, masterMiniEnd, masterFaderId);
     masterChainEnd = connectMiniModules(graph, masterChannel, spec.masterMiniModules, true, masterChainEnd);
     masterChannel.ids.preFaderTap = masterChainEnd;
     graph.connect(masterChainEnd, masterFaderId);
@@ -384,6 +389,7 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
         auto clips = std::make_shared<engine::ClipPlayerNode::ClipList>();
         engine::ClipPlacement clip; clip.audio = track.frozenAudio;
         clip.lengthSamples = track.frozenFrames;
+        clip.edgeTransitionsRendered = true;
         clips->push_back(std::move(clip));
         channel.frozenPlayer->setClips(std::move(clips));
         const auto fader = channel.ids.fader, meter = channel.ids.meter;
@@ -469,7 +475,10 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
             auto bus = channels.find(track.outputBusId);
             if (bus != channels.end()) destination = channelEntry(bus->second);
         }
-        graph.connect(channel.ids.meter, destination);
+        const auto destinationSpec = std::find_if(spec.channels.begin(), spec.channels.end(),
+            [&](const auto& s) { return s.id == track.outputBusId; });
+        if (!track.renderControlOnly || (destinationSpec != spec.channels.end() && destinationSpec->renderControlOnly))
+            graph.connect(channel.ids.meter, destination);
 
         channel.sends.resize(track.sends.size());
         channel.sendIds.clear();
@@ -547,6 +556,9 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
     };
     connectSidechains(masterChannel, spec.masterSidechains);
     for (const auto& track : spec.channels) connectSidechains(channels.at(track.id), track.sidechains);
+
+    connectModulation(masterChannel, AudioGraphSpec::masterChannelId, spec.masterModulation);
+    for (const auto& track : spec.channels) connectModulation(channels.at(track.id), track.id, track.modulation);
 
     if (!spec.auditionCapture.empty()) {
         const auto channel = channels.find(spec.auditionCapture);

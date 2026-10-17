@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace daw::plugins {
 
@@ -63,7 +64,6 @@ SpeakerArrangement arrangementFor(std::uint32_t channels) {
 constexpr char kStateMagic[4] = {'D', 'V', 'S', '3'};
 
 /// Notes one block can carry. Past this the block is not music.
-constexpr std::size_t kMaxEventsPerBlock = 512;
 
 void appendUint32(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(std::uint8_t(value & 0xFF));
@@ -132,16 +132,18 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
         auto* listener = m_listener.load(std::memory_order_acquire);
         if (!listener) return;
         for (std::size_t i = 0; i < m_parameterIds.size(); ++i) {
-            if (m_parameterIds[i] == id) listener->onParameterGesture(std::uint32_t(i), begin);
+            if (m_parameterIds[i] == id && !m_parameters[i].isReadOnly)
+                listener->onParameterGesture(std::uint32_t(i), begin);
         }
     };
     m_handler.onEdit = [this](ParamID id, ParamValue normalized) {
         auto* listener = m_listener.load(std::memory_order_acquire);
         for (std::size_t i = 0; i < m_parameterIds.size(); ++i) {
             if (m_parameterIds[i] != id) continue;
+            if (m_parameters[i].isReadOnly) break;
             (void)m_editorEdits.push(QueuedEdit{std::uint32_t(i), normalized});
             if (listener) {
-                listener->onParameterChanged(std::uint32_t(i),
+                listener->onParameterEdited(std::uint32_t(i),
                                              toPlain(std::uint32_t(i), normalized));
             }
             break;
@@ -149,15 +151,15 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
     };
     m_handler.onRestart = [this](int32 flags) {
         const int32 previous = m_restartFlags.fetch_or(flags, std::memory_order_release);
-        if ((flags & kParamValuesChanged) && !(previous & kParamValuesChanged))
+        constexpr int32 readbacks = kParamValuesChanged | kLatencyChanged;
+        if (flags & readbacks & ~previous)
             PluginMainThreadWork::request();
         auto* listener = m_listener.load(std::memory_order_acquire);
-        if (flags & kLatencyChanged) {
-            m_restartLatency.store(true, std::memory_order_release);
-            if (listener) listener->onLatencyChanged();
-        }
         if ((flags & kReloadComponent) && listener) listener->onReloadRequested();
-        if ((flags & ~(kReloadComponent | kParamValuesChanged)) != 0 && listener)
+        // Read latency on the main thread before invalidating the graph. Some
+        // processors repeat this notification after activation (Rev LX-24 even
+        // delivers it later); an unchanged value must not restart their DSP.
+        if ((flags & ~(kReloadComponent | readbacks)) != 0 && listener)
             listener->onRestartRequested();
     };
 
@@ -312,6 +314,8 @@ void Vst3Instance::readParameters() {
         info.defaultValue =
             m_controller->normalizedParamToPlain(raw.id, raw.defaultNormalizedValue);
         info.isAutomatable = (raw.flags & Vst::ParameterInfo::kCanAutomate) != 0;
+        info.isReadOnly = (raw.flags & Vst::ParameterInfo::kIsReadOnly) != 0;
+        if (info.isReadOnly) info.isAutomatable = false;
         info.isStepped = raw.stepCount > 0;
         // Recorded, but the host does not drive it: `PluginNode` bypasses every
         // format the same way, with a crossfade, so a plugin's own bypass
@@ -322,6 +326,7 @@ void Vst3Instance::readParameters() {
         m_parameterIds.push_back(raw.id);
 
         ParameterConversion conversion;
+        conversion.steps = std::max(0, raw.stepCount);
         conversion.minimum = m_controller->normalizedParamToPlain(raw.id, 0.0);
         conversion.maximum = m_controller->normalizedParamToPlain(raw.id, 1.0);
         conversion.ascending = conversion.maximum >= conversion.minimum;
@@ -352,6 +357,12 @@ void Vst3Instance::readParameters() {
         m_parameterConversions.push_back(std::move(conversion));
         m_parameterIndexById.emplace(raw.id, std::uint32_t(m_parameterIds.size() - 1));
     }
+    m_readOnlyValues.reset();
+    if (std::any_of(m_parameters.begin(), m_parameters.end(), [](const auto& parameter) { return parameter.isReadOnly; })) {
+        m_readOnlyValues = std::make_unique<std::atomic<double>[]>(m_parameters.size());
+        for (std::size_t i = 0; i < m_parameters.size(); ++i)
+            m_readOnlyValues[i].store(std::numeric_limits<double>::quiet_NaN(), std::memory_order_relaxed);
+    }
 }
 
 void Vst3Instance::notifyControllerValues() {
@@ -361,6 +372,7 @@ void Vst3Instance::notifyControllerValues() {
     // the plugin already loaded its preset. Echoing every value into process()
     // also fires MIDI helpers (Arturia's CC7 mirror reads zero), muting notes.
     for (std::uint32_t i = 0; i < m_parameterIds.size(); ++i) {
+        if (m_parameters[i].isReadOnly) continue;
         listener->onParameterChanged(i, parameterValue(i));
     }
 }
@@ -369,6 +381,7 @@ double Vst3Instance::toPlain(std::uint32_t index, double normalized) const {
     if (index >= m_parameterConversions.size()) return normalized;
     normalized = std::clamp(normalized, 0.0, 1.0);
     const ParameterConversion& conversion = m_parameterConversions[index];
+    if (conversion.steps > 0) normalized = std::round(normalized * conversion.steps) / conversion.steps;
     if (conversion.linear || conversion.plainSamples.empty()) {
         return conversion.minimum +
                (conversion.maximum - conversion.minimum) * normalized;
@@ -416,6 +429,10 @@ std::int32_t Vst3Instance::parameterIndexForId(std::string_view id) const noexce
 
 double Vst3Instance::parameterValue(std::uint32_t index) const noexcept {
     if (!m_controller || index >= m_parameterIds.size()) return 0.0;
+    if (m_parameters[index].isReadOnly && m_readOnlyValues) {
+        const double value = m_readOnlyValues[index].load(std::memory_order_relaxed);
+        if (std::isfinite(value)) return value;
+    }
     return toPlain(index, m_controller->getParamNormalized(m_parameterIds[index]));
 }
 
@@ -533,13 +550,7 @@ bool Vst3Instance::allocateAndActivateBuses(std::uint32_t maxBlockSize, bool sid
                 info.channelCount = 2;
             }
             AudioBus& bus = buses[std::size_t(i)];
-            bus.channels = std::uint32_t(std::max<int32>(info.channelCount, 0));
-            bus.storage.assign(std::size_t(bus.channels) * maxBlockSize, 0.0f);
-            bus.pointers.resize(bus.channels);
-            for (std::uint32_t channel = 0; channel < bus.channels; ++channel) {
-                bus.pointers[channel] =
-                    bus.storage.data() + std::size_t(channel) * maxBlockSize;
-            }
+            bus.allocate(std::uint32_t(std::max<int32>(info.channelCount, 0)), maxBlockSize);
             // An active silent key bus makes compressors such as Waves RComp
             // detect silence rather than their main input. Activate an aux
             // input only when the graph actually connects a sidechain source.
@@ -578,6 +589,13 @@ bool Vst3Instance::allocateAndActivateBuses(std::uint32_t maxBlockSize, bool sid
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
+void Vst3Instance::reserveParameterChanges(const PluginProcessInfo& info) {
+    const auto capacity = std::max<std::size_t>(m_parameters.size(), 32);
+    m_inputChanges->reserve(capacity,
+        pluginBlockEventCapacity(m_descriptor, info, m_parameters.size()) + capacity);
+    m_outputChanges->reserve(capacity);
+}
+
 bool Vst3Instance::activate(const PluginProcessInfo& info) {
     if (m_active) deactivate();
     if (!m_component || !m_processor) return false;
@@ -609,19 +627,16 @@ bool Vst3Instance::activate(const PluginProcessInfo& info) {
 
     // One queue per parameter is the worst case a block of automation can
     // produce; sized here so `process` never allocates.
-    const std::size_t capacity = std::max<std::size_t>(m_parameters.size(), 32);
-    m_inputChanges->reserve(capacity,
-        pluginBlockEventCapacity(m_descriptor, info, m_parameters.size()) + capacity);
-    m_outputChanges->reserve(capacity);
-    for(const auto& channel:m_midiParameterMappings) if(channel[129]>=0)
-        m_inputChanges->reserveParameterPoints(m_parameterIds[channel[129]],std::size_t(m_maxBlockSize) + 128);
+    reserveParameterChanges(info);
     m_events->reserve(m_descriptor.wantsMidi || m_descriptor.isInstrument
         ? engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate) : 0);
     m_outputEvents->reserve(m_descriptor.producesMidi
         ? engine::pitchEventCapacity(info.maxBlockSize, info.sampleRate) : 0);
 
+    // The snapshot below acknowledges latency announced by this activation.
+    // Do not leave that flag blocking a later value-only editor notification.
+    m_restartFlags.fetch_and(~kLatencyChanged, std::memory_order_acq_rel);
     refreshLatency();
-    m_restartLatency.store(false, std::memory_order_release);
     if (restartFlags & kParamValuesChanged) notifyControllerValues();
     return true;
 }
@@ -668,7 +683,7 @@ void Vst3Instance::refreshLatency() {
 }
 
 void Vst3Instance::setParameterFromHost(std::uint32_t index, double plainValue) {
-    if (!m_controller || index >= m_parameterIds.size()) return;
+    if (!m_controller || index >= m_parameterIds.size() || m_parameters[index].isReadOnly) return;
     m_controller->setParamNormalized(m_parameterIds[index], toNormalized(index, plainValue));
 }
 
@@ -677,9 +692,17 @@ void Vst3Instance::pumpMainThread() {
     // stop voices. Combined metadata/structural changes are handled under the
     // RenderGate by activate() or serviceOfflineRestart().
     const int32 flags = m_restartFlags.load(std::memory_order_acquire);
-    if (flags != kParamValuesChanged) return;
-    m_restartFlags.fetch_and(~kParamValuesChanged, std::memory_order_acq_rel);
-    notifyControllerValues();
+    constexpr int32 readbacks = kParamValuesChanged | kLatencyChanged;
+    if (!flags || (flags & ~readbacks)) return;
+    m_restartFlags.fetch_and(~flags, std::memory_order_acq_rel);
+    if (flags & kLatencyChanged) {
+        const auto previous = latencySamples();
+        refreshLatency();
+        if (previous != latencySamples())
+            if (auto* listener = m_listener.load(std::memory_order_acquire))
+                listener->onLatencyChanged();
+    }
+    if (flags & kParamValuesChanged) notifyControllerValues();
 }
 
 bool Vst3Instance::serviceOfflineRestart() {
@@ -700,12 +723,7 @@ bool Vst3Instance::serviceOfflineRestart() {
     }
     if (flags & kParamTitlesChanged) {
         readParameters();
-        const auto capacity = std::max<std::size_t>(m_parameters.size(), 32);
-        m_inputChanges->reserve(capacity, pluginBlockEventCapacity(m_descriptor,
-            PluginProcessInfo{m_sampleRate, m_maxBlockSize, true}, m_parameters.size()) + capacity);
-        m_outputChanges->reserve(capacity);
-    for(const auto& channel:m_midiParameterMappings) if(channel[129]>=0)
-        m_inputChanges->reserveParameterPoints(m_parameterIds[channel[129]],std::size_t(m_maxBlockSize) + 128);
+        reserveParameterChanges({m_sampleRate, m_maxBlockSize, true});
     }
     if (flags & (kMidiCCAssignmentChanged | kParamTitlesChanged)) readMidiMappings();
     if (flags & kParamValuesChanged) notifyControllerValues();
@@ -941,22 +959,14 @@ bool Vst3Instance::setEditorSize(std::uint32_t& width, std::uint32_t& height) {
 
 PluginProcessDisposition Vst3Instance::process(
     const PluginProcessContext& context) noexcept {
-    auto silence = [&] {
-        for (std::uint16_t channel = 0; channel < context.outputChannels; ++channel) {
-            std::fill_n(context.outputs[channel], context.frames, 0.0f);
-        }
-    };
+    const auto silence = [&] { clearPluginOutputs(context); };
     if (!m_processing || !m_processor) {
         silence();
         return PluginProcessDisposition::Continue;
     }
     if (context.frames > m_maxBlockSize) {
         silence();
-        return PluginProcessDisposition::Continue;
-    }
-    if (m_outputBuses.empty()) {
-        silence();
-        return PluginProcessDisposition::Continue;
+        return PluginProcessDisposition::Error;
     }
 
     // ── Parameter changes and notes for this block ──
@@ -971,7 +981,8 @@ PluginProcessDisposition Vst3Instance::process(
         else if (event.kind == PluginEvent::Kind::MidiController &&
                  event.paramIndex < kCountCtrlNumber && event.channel >= 0 && event.channel < 16)
             parameter = m_midiParameterMappings[std::size_t(event.channel)][event.paramIndex];
-        if (parameter < 0 || std::size_t(parameter) >= m_parameterIds.size()) continue;
+        if (parameter < 0 || std::size_t(parameter) >= m_parameterIds.size() ||
+            m_parameters[std::size_t(parameter)].isReadOnly) continue;
         auto* queue = m_inputChanges->begin(m_parameterIds[std::size_t(parameter)]);
         if (!queue) { silence(); return PluginProcessDisposition::Error; }
         queue->expectPoint();
@@ -979,7 +990,7 @@ PluginProcessDisposition Vst3Instance::process(
     if (!m_inputChanges->preparePoints()) { silence(); return PluginProcessDisposition::Error; }
     QueuedEdit edit;
     while (m_editorEdits.pop(edit)) {
-        if (edit.parameterIndex >= m_parameterIds.size()) continue;
+        if (edit.parameterIndex >= m_parameterIds.size() || m_parameters[edit.parameterIndex].isReadOnly) continue;
         if (vst3::ParamValueQueue* queue =
                 m_inputChanges->begin(m_parameterIds[edit.parameterIndex])) {
             queue->add(0, std::clamp(edit.normalized, 0.0, 1.0));
@@ -988,7 +999,7 @@ PluginProcessDisposition Vst3Instance::process(
     for (const PluginEvent& event : context.inputEvents) {
         switch (event.kind) {
             case PluginEvent::Kind::ParamValue: {
-                if (event.paramIndex >= m_parameterIds.size()) break;
+                if (event.paramIndex >= m_parameterIds.size() || m_parameters[event.paramIndex].isReadOnly) break;
                 vst3::ParamValueQueue* queue =
                     m_inputChanges->begin(m_parameterIds[event.paramIndex]);
                 if (!queue) break;
@@ -997,7 +1008,9 @@ PluginProcessDisposition Vst3Instance::process(
                 break;
             }
             case PluginEvent::Kind::NoteOn:
-            case PluginEvent::Kind::NoteOff: {
+            case PluginEvent::Kind::NoteOff:
+            // VST3 has no note choke; release audition voices with note-off.
+            case PluginEvent::Kind::NoteChoke: {
                 if (m_events->full()) break;
                 Event note{};
                 note.busIndex = 0;
@@ -1030,7 +1043,8 @@ PluginProcessDisposition Vst3Instance::process(
                 const std::int32_t parameter =
                     m_midiParameterMappings[std::size_t(event.channel)]
                                            [std::size_t(event.paramIndex)];
-                if (parameter < 0 || std::size_t(parameter) >= m_parameterIds.size()) break;
+                if (parameter < 0 || std::size_t(parameter) >= m_parameterIds.size() ||
+                    m_parameters[std::size_t(parameter)].isReadOnly) break;
                 if (vst3::ParamValueQueue* queue =
                         m_inputChanges->begin(m_parameterIds[std::size_t(parameter)])) {
                     queue->add(int32(event.frameOffset),
@@ -1068,45 +1082,13 @@ PluginProcessDisposition Vst3Instance::process(
     // ── Buses: every one the plugin declared, same rule as CLAP ──
     for (std::size_t bus = 0; bus < m_inputBuses.size(); ++bus) {
         AudioBus& target = m_inputBuses[bus];
-        const float* const* source =
-            bus == 0 ? context.inputs
-                     : (bus == 1 ? context.sidechainInputs : nullptr);
-        const std::uint16_t sourceChannels =
-            bus == 0 ? context.inputChannels
-                     : (bus == 1 ? context.sidechainInputChannels : 0);
-        const std::uint64_t sourceSilence =
-            bus == 0 ? context.inputSilenceMask
-                     : (bus == 1 ? context.sidechainSilenceMask : ~std::uint64_t{0});
-        const std::uint32_t supplied =
-            std::min<std::uint32_t>(sourceChannels, target.channels);
-        std::uint64_t silent = 0;
-        for (std::uint32_t channel = 0; channel < target.channels; ++channel) {
-            if (channel < supplied) {
-                target.pointers[channel] = const_cast<float*>(source[channel]);
-                if (channel < 64 &&
-                    (sourceSilence & (std::uint64_t{1} << channel)) != 0) {
-                    silent |= std::uint64_t{1} << channel;
-                }
-                continue;
-            }
-            float* own = target.storage.data() + std::size_t(channel) * m_maxBlockSize;
-            target.pointers[channel] = own;
-            std::fill_n(own, context.frames, 0.0f);
-            if (channel < 64) silent |= std::uint64_t(1) << channel;
-        }
+        const auto silent = target.bindInput(context, bus, m_maxBlockSize);
         m_inputBufferDescs[bus].channelBuffers32 = target.pointers.data();
         m_inputBufferDescs[bus].silenceFlags = silent;
     }
     for (std::size_t bus = 0; bus < m_outputBuses.size(); ++bus) {
         AudioBus& target = m_outputBuses[bus];
-        const std::uint32_t supplied =
-            bus == 0 ? std::min<std::uint32_t>(context.outputChannels, target.channels) : 0;
-        for (std::uint32_t channel = 0; channel < target.channels; ++channel) {
-            target.pointers[channel] =
-                channel < supplied
-                    ? context.outputs[channel]
-                    : target.storage.data() + std::size_t(channel) * m_maxBlockSize;
-        }
+        target.bindOutput(context, bus, m_maxBlockSize);
         m_outputBufferDescs[bus].channelBuffers32 = target.pointers.data();
         m_outputBufferDescs[bus].silenceFlags = 0;
     }
@@ -1121,7 +1103,10 @@ PluginProcessDisposition Vst3Instance::process(
     if (context.transport.looping) transport.state |= ProcessContext::kCycleActive;
     transport.sampleRate = m_sampleRate;
     transport.projectTimeSamples = context.sampleTime;
-    transport.continousTimeSamples = context.sampleTime;
+    if (context.steadyTime >= 0) {
+        transport.state |= ProcessContext::kContTimeValid;
+        transport.continousTimeSamples = context.steadyTime;
+    }
     transport.tempo = context.transport.tempo;
     transport.projectTimeMusic = context.transport.ppqPosition;
     transport.barPositionMusic = context.transport.barStartPpq;
@@ -1173,7 +1158,7 @@ PluginProcessDisposition Vst3Instance::process(
     }
 
     // ── What the plugin moved itself ──
-    if (context.outputEvents) {
+    {
         const int32 changed = m_outputChanges->getParameterCount();
         for (int32 i = 0; i < changed; ++i) {
             IParamValueQueue* queue = m_outputChanges->getParameterData(i);
@@ -1189,6 +1174,11 @@ PluginProcessDisposition Vst3Instance::process(
             const auto found = m_parameterIndexById.find(id);
             if (found != m_parameterIndexById.end()) {
                 const std::uint32_t index = found->second;
+                if (m_parameters[index].isReadOnly) {
+                    m_readOnlyValues[index].store(toPlain(index, value), std::memory_order_relaxed);
+                    continue;
+                }
+                if (!context.outputEvents) continue;
                 PluginEvent out;
                 out.kind = PluginEvent::Kind::ParamValue;
                 out.frameOffset = std::uint32_t(std::max<int32>(offset, 0));
@@ -1197,7 +1187,8 @@ PluginProcessDisposition Vst3Instance::process(
                 context.outputEvents->push(out);
             }
         }
-
+    }
+    if (context.outputEvents) {
         const int32 eventCount = m_outputEvents->getEventCount();
         for (int32 i = 0; i < eventCount; ++i) {
             Event event{};

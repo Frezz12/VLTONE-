@@ -15,9 +15,12 @@ class QTimer;
 class QLabel;
 class QMimeData;
 class RackDeviceCard;
+class RackModulationPanel;
+class PatternWindow;
+class QToolButton;
 namespace ui {
 class MiniModuleRack;
-class Knob;
+class FaderWidget;
 } // namespace ui
 
 class RackWidget final : public QWidget {
@@ -26,6 +29,8 @@ class RackWidget final : public QWidget {
     explicit RackWidget(daw::EngineController*, QWidget* parent = nullptr);
     ~RackWidget() override;
     void setChannel(const QString&);
+    void setPattern(const QString& patternId, const QString& clipId = {});
+    PatternWindow* patternEditor() const { return m_pattern; }
     QString channelId() const {
         return m_channel;
     }
@@ -44,6 +49,7 @@ class RackWidget final : public QWidget {
     void sendAutomationRequested(const QString& channel, const QString& send);
     void channelRequested(const QString&);
     void trackCreated();
+    void patternRequested(const QString& patternId, const QString& clipId);
 
   protected:
     bool eventFilter(QObject*, QEvent*) override;
@@ -79,9 +85,13 @@ class RackWidget final : public QWidget {
     QScrollArea* m_sendScroll = nullptr;
     QHBoxLayout* m_row = nullptr;
     ui::MiniModuleRack* m_mini = nullptr;
+    RackModulationPanel* m_modulation = nullptr;
+    PatternWindow* m_pattern = nullptr;
+    QToolButton* m_patternBack = nullptr;
     QHash<QString, QPointer<RackDeviceCard>> m_cards;
     QHash<QString, QPointer<QWidget>> m_groups;
-    QHash<QString, QPointer<ui::Knob>> m_sendKnobs;
+    QHash<QString, QPointer<ui::FaderWidget>> m_sendFaders;
+    QHash<QString, QPointer<QLabel>> m_sendValues;
     QHash<QString, std::shared_ptr<std::optional<float>>> m_sendBefore;
     QSet<QString> m_selection;
     QHash<QString, QSet<QString>> m_channelSelection;

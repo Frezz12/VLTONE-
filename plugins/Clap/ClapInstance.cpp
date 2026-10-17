@@ -1,5 +1,5 @@
 #include "Clap/ClapInstance.hpp"
-#include "Common/RealtimeSort.hpp"
+#include "Host/PluginMidi.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,64 +54,11 @@ struct VectorWriter {
 /// sink. Sized for nothing: `try_push` may refuse, and CLAP allows that.
 struct OutputEvents {
     EventSink* sink = nullptr;
-    const std::vector<clap_id>* parameterIds = nullptr;
+    const std::unordered_map<clap_id, std::uint32_t>* parameterIndices = nullptr;
 
     static bool validSize(const clap_event_header_t* event,
                           std::size_t wanted) noexcept {
         return event && event->size >= wanted;
-    }
-
-    static bool convertMidi(const clap_event_midi_t& midi,
-                            PluginEvent& out) noexcept {
-        const std::uint8_t status = midi.data[0];
-        const std::uint8_t type = status & 0xF0;
-        out.channel = std::int16_t(status & 0x0F);
-        out.noteId = -1;
-
-        switch (type) {
-            case 0x80:
-                out.kind = PluginEvent::Kind::NoteOff;
-                out.key = midi.data[1] & 0x7F;
-                out.value = double(midi.data[2] & 0x7F) / 127.0;
-                return true;
-            case 0x90:
-                out.kind = (midi.data[2] & 0x7F) == 0
-                               ? PluginEvent::Kind::NoteOff
-                               : PluginEvent::Kind::NoteOn;
-                out.key = midi.data[1] & 0x7F;
-                out.value = double(midi.data[2] & 0x7F) / 127.0;
-                return true;
-            case 0xA0:
-                out.kind = PluginEvent::Kind::PolyPressure;
-                out.key = midi.data[1] & 0x7F;
-                out.value = double(midi.data[2] & 0x7F) / 127.0;
-                return true;
-            case 0xB0:
-                out.kind = PluginEvent::Kind::MidiController;
-                out.paramIndex = midi.data[1] & 0x7F;
-                out.value = double(midi.data[2] & 0x7F) / 127.0;
-                return true;
-            case 0xC0:
-                out.kind = PluginEvent::Kind::MidiController;
-                out.paramIndex = 130; // VST3-compatible program-change id.
-                out.value = double(midi.data[1] & 0x7F) / 127.0;
-                return true;
-            case 0xD0:
-                out.kind = PluginEvent::Kind::MidiController;
-                out.paramIndex = 128; // VST3-compatible channel-pressure id.
-                out.value = double(midi.data[1] & 0x7F) / 127.0;
-                return true;
-            case 0xE0: {
-                out.kind = PluginEvent::Kind::MidiController;
-                out.paramIndex = 129; // VST3-compatible pitch-bend id.
-                const std::uint32_t bend = std::uint32_t(midi.data[1] & 0x7F) |
-                                           (std::uint32_t(midi.data[2] & 0x7F) << 7);
-                out.value = double(bend) / 16383.0;
-                return true;
-            }
-            default:
-                return false;
-        }
     }
 
     static bool tryPush(const clap_output_events_t* list,
@@ -147,12 +94,10 @@ struct OutputEvents {
                                    : PluginEvent::Kind::ParamGestureEnd;
                 }
                 // Map the opaque id back to our index; drop what we do not know.
-                if (!self->parameterIds) return false;
-                const auto found = std::find(self->parameterIds->begin(),
-                                             self->parameterIds->end(), id);
-                if (found == self->parameterIds->end()) return false;
-                out.paramIndex =
-                    std::uint32_t(found - self->parameterIds->begin());
+                if (!self->parameterIndices) return false;
+                const auto found = self->parameterIndices->find(id);
+                if (found == self->parameterIndices->end()) return false;
+                out.paramIndex = found->second;
                 break;
             }
             case CLAP_EVENT_NOTE_ON:
@@ -189,7 +134,7 @@ struct OutputEvents {
             }
             case CLAP_EVENT_MIDI: {
                 if (!validSize(event, sizeof(clap_event_midi_t))) return false;
-                if (!convertMidi(*reinterpret_cast<const clap_event_midi_t*>(event), out)) {
+                if (!decodePluginMidi(reinterpret_cast<const clap_event_midi_t*>(event)->data, out)) {
                     return false;
                 }
                 break;
@@ -372,11 +317,13 @@ void ClapInstance::pumpMainThread() {
 void ClapInstance::readParameters() {
     m_parameters.clear();
     m_parameterIds.clear();
+    m_parameterIndexById.clear();
     if (!m_params || !m_params->count || !m_params->get_info) return;
 
     const std::uint32_t count = m_params->count(m_plugin);
     m_parameters.reserve(count);
     m_parameterIds.reserve(count);
+    m_parameterIndexById.reserve(count);
     for (std::uint32_t i = 0; i < count; ++i) {
         clap_param_info_t raw{};
         if (!m_params->get_info(m_plugin, i, &raw)) continue;
@@ -391,10 +338,13 @@ void ClapInstance::readParameters() {
         info.maxValue = raw.max_value;
         info.defaultValue = raw.default_value;
         info.isAutomatable = (raw.flags & CLAP_PARAM_IS_AUTOMATABLE) != 0;
+        info.isReadOnly = (raw.flags & CLAP_PARAM_IS_READONLY) != 0;
+        if (info.isReadOnly) info.isAutomatable = false;
         info.isStepped = (raw.flags & CLAP_PARAM_IS_STEPPED) != 0;
         info.isBypass = (raw.flags & CLAP_PARAM_IS_BYPASS) != 0;
         m_parameters.push_back(std::move(info));
         m_parameterIds.push_back(raw.id);
+        m_parameterIndexById.emplace(raw.id, std::uint32_t(m_parameters.size() - 1));
     }
 }
 
@@ -432,12 +382,7 @@ void ClapInstance::allocateBuses(std::uint32_t maxBlockSize) {
             // something valid, so fall back to stereo rather than to nothing.
             if (!m_audioPorts->get(m_plugin, bus, isInput, &info)) info.channel_count = 2;
             AudioBus& target = buses[bus];
-            target.channels = info.channel_count;
-            target.storage.assign(std::size_t(info.channel_count) * maxBlockSize, 0.0f);
-            target.pointers.resize(info.channel_count);
-            for (std::uint32_t channel = 0; channel < info.channel_count; ++channel) {
-                target.pointers[channel] = target.storage.data() + std::size_t(channel) * maxBlockSize;
-            }
+            target.allocate(info.channel_count, maxBlockSize);
         }
         // Only after every bus is built: `resize` above may reallocate, and a
         // pointer taken into an earlier bus's vector would dangle.
@@ -741,11 +686,7 @@ PluginProcessDisposition ClapInstance::process(
     const PluginProcessContext& context) noexcept {
     // Nothing will be written, so say so rather than leaving the caller's
     // buffer holding whatever the arena recycled into it.
-    auto silence = [&] {
-        for (std::uint16_t channel = 0; channel < context.outputChannels; ++channel) {
-            std::fill_n(context.outputs[channel], context.frames, 0.0f);
-        }
-    };
+    const auto silence = [&] { clearPluginOutputs(context); };
     if (!m_processing || !m_plugin || !m_plugin->process) {
         // Returning here without writing left the caller holding the arena's
         // previous contents, which the graph then plays again every block.
@@ -754,14 +695,28 @@ PluginProcessDisposition ClapInstance::process(
     }
     // A block longer than what the plugin was activated for would overrun the
     // per-bus buffers sized in `activate`.
-    if (context.frames > m_maxBlockSize || m_outputBuses.empty()) {
+    if (context.frames > m_maxBlockSize) {
         silence();
-        return PluginProcessDisposition::Continue;
+        return PluginProcessDisposition::Error;
     }
 
     // ── Events in, converted to CLAP's layout ──
     std::uint32_t orderCount = 0;
     for (const PluginEvent& event : context.inputEvents) {
+        const bool rawMidi = event.kind == PluginEvent::Kind::MidiController ||
+            ((!m_pitchCapabilities.perNote || event.preferMidi) &&
+             (event.kind == PluginEvent::Kind::NoteOn || event.kind == PluginEvent::Kind::NoteOff ||
+              event.kind == PluginEvent::Kind::NoteChoke || event.kind == PluginEvent::Kind::PolyPressure));
+        if (rawMidi) {
+            std::array<std::uint8_t, 3> bytes;
+            if (orderCount >= m_inputEventScratch.size() || !encodePluginMidi(event, bytes)) continue;
+            auto& out = m_inputEventScratch[orderCount].midi; out = {};
+            out.header.size = sizeof(out); out.header.time = event.frameOffset;
+            out.header.space_id = CLAP_CORE_EVENT_SPACE_ID; out.header.type = CLAP_EVENT_MIDI;
+            std::copy(bytes.begin(), bytes.end(), out.data);
+            m_eventOrder[orderCount++] = &out.header;
+            continue;
+        }
         switch (event.kind) {
             case PluginEvent::Kind::ParamValue: {
                 if (event.paramIndex >= m_parameterIds.size()) break;
@@ -786,14 +741,6 @@ PluginProcessDisposition ClapInstance::process(
             case PluginEvent::Kind::NoteOff:
             case PluginEvent::Kind::NoteChoke: {
                 if (orderCount >= m_inputEventScratch.size()) break;
-                if (!m_pitchCapabilities.perNote || event.preferMidi) {
-                    auto& out = m_inputEventScratch[orderCount].midi; out = {};
-                    out.header.size = sizeof(out); out.header.time = event.frameOffset;
-                    out.header.space_id = CLAP_CORE_EVENT_SPACE_ID; out.header.type = CLAP_EVENT_MIDI;
-                    out.port_index = 0; out.data[0] = std::uint8_t((event.kind == PluginEvent::Kind::NoteOn ? 0x90 : 0x80) | (event.channel & 15));
-                    out.data[1] = std::uint8_t(event.key); out.data[2] = std::uint8_t(std::clamp(std::lround(event.value*127),0L,127L));
-                    m_eventOrder[orderCount++] = &out.header; break;
-                }
                 clap_event_note_t& out = m_inputEventScratch[orderCount].note;
                 out = {};
                 out.header.size = sizeof(out);
@@ -809,48 +756,6 @@ PluginProcessDisposition ClapInstance::process(
                 out.channel = event.channel;
                 out.key = event.key;
                 out.velocity = event.value;
-                m_eventOrder[orderCount++] = &out.header;
-                break;
-            }
-            case PluginEvent::Kind::MidiController: {
-                if (event.channel < 0 || event.channel >= 16 ||
-                    event.paramIndex > 130 ||
-                    orderCount >= m_inputEventScratch.size()) {
-                    break;
-                }
-
-                clap_event_midi_t& out = m_inputEventScratch[orderCount].midi;
-                out = {};
-                out.header.size = sizeof(out);
-                out.header.time = event.frameOffset;
-                out.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
-                out.header.type = CLAP_EVENT_MIDI;
-                out.port_index = 0;
-                const std::uint8_t channel = std::uint8_t(event.channel);
-                const auto midi7 = [](double value) noexcept {
-                    return std::uint8_t(std::clamp(
-                        std::lround(std::clamp(value, 0.0, 1.0) * 127.0), 0L, 127L));
-                };
-
-                if (event.paramIndex <= 127) {
-                    out.data[0] = std::uint8_t(0xB0 | channel);
-                    out.data[1] = std::uint8_t(event.paramIndex);
-                    out.data[2] = midi7(event.value);
-                } else if (event.paramIndex == 128) {
-                    out.data[0] = std::uint8_t(0xD0 | channel);
-                    out.data[1] = midi7(event.value);
-                } else if (event.paramIndex == 129) {
-                    const auto bend = std::uint32_t(std::clamp(
-                        std::lround(std::clamp(event.value, 0.0, 1.0) * 16383.0),
-                        0L, 16383L));
-                    out.data[0] = std::uint8_t(0xE0 | channel);
-                    out.data[1] = std::uint8_t(bend & 0x7F);
-                    out.data[2] = std::uint8_t((bend >> 7) & 0x7F);
-                } else if (event.paramIndex == 130) {
-                    out.data[0] = std::uint8_t(0xC0 | channel);
-                    out.data[1] = midi7(event.value);
-                }
-
                 m_eventOrder[orderCount++] = &out.header;
                 break;
             }
@@ -878,14 +783,8 @@ PluginProcessDisposition ClapInstance::process(
         }
     }
 
-    // CLAP requires the input list to be sorted by time. The caller's events
-    // already are, but interleaving params and notes into one list can break
-    // that, so sort — stable, to keep same-frame ordering deterministic.
-    engine::stableRealtimeSort(
-        m_eventOrder.begin(), m_eventOrder.begin() + orderCount,
-        [](const clap_event_header_t* a, const clap_event_header_t* b) {
-            return a->time < b->time;
-        });
+    // Conversion is one-to-one and preserves the already sorted host
+    // stream, including ties. A second realtime sort adds no ordering.
 
     struct InputEvents {
         const clap_event_header_t* const* items;
@@ -902,7 +801,7 @@ PluginProcessDisposition ClapInstance::process(
         return static_cast<const InputEvents*>(list->ctx)->items[index];
     };
 
-    OutputEvents outputs{context.outputEvents, &m_parameterIds};
+    OutputEvents outputs{context.outputEvents, &m_parameterIndexById};
     clap_output_events_t outEvents{};
     outEvents.ctx = &outputs;
     outEvents.try_push = &OutputEvents::tryPush;
@@ -937,50 +836,15 @@ PluginProcessDisposition ClapInstance::process(
 
     for (std::size_t bus = 0; bus < m_inputBuses.size(); ++bus) {
         AudioBus& target = m_inputBuses[bus];
-        const float* const* source =
-            bus == 0 ? context.inputs
-                     : (bus == 1 ? context.sidechainInputs : nullptr);
-        const std::uint16_t sourceChannels =
-            bus == 0 ? context.inputChannels
-                     : (bus == 1 ? context.sidechainInputChannels : 0);
-        const std::uint64_t silenceMask =
-            bus == 0 ? context.inputSilenceMask
-                     : (bus == 1 ? context.sidechainSilenceMask : ~std::uint64_t{0});
-        const std::uint32_t supplied =
-            std::min<std::uint32_t>(sourceChannels, target.channels);
-        std::uint64_t constant = 0;
-        for (std::uint32_t channel = 0; channel < target.channels; ++channel) {
-            if (channel < supplied) {
-                target.pointers[channel] = const_cast<float*>(source[channel]);
-                if (channel < 64 &&
-                    (silenceMask & (std::uint64_t{1} << channel)) != 0) {
-                    constant |= std::uint64_t{1} << channel;
-                }
-                continue;
-            }
-            // Re-point and re-zero every block: a plugin is allowed to write
-            // into an input buffer it was given, so last block's silence
-            // cannot be assumed to still be silent.
-            float* own = target.storage.data() + std::size_t(channel) * m_maxBlockSize;
-            target.pointers[channel] = own;
-            std::fill_n(own, frames, 0.0f);
-            if (channel < 64) constant |= std::uint64_t(1) << channel;
-        }
+        const auto silent = target.bindInput(context, bus, m_maxBlockSize);
         m_inputBufferDescs[bus].data32 = target.pointers.data();
         // Truthful, and it lets a plugin skip the silent sidechain entirely.
-        m_inputBufferDescs[bus].constant_mask = constant;
+        m_inputBufferDescs[bus].constant_mask = silent;
     }
 
     for (std::size_t bus = 0; bus < m_outputBuses.size(); ++bus) {
         AudioBus& target = m_outputBuses[bus];
-        const std::uint32_t supplied =
-            bus == 0 ? std::min<std::uint32_t>(context.outputChannels, target.channels) : 0;
-        for (std::uint32_t channel = 0; channel < target.channels; ++channel) {
-            target.pointers[channel] =
-                channel < supplied
-                    ? context.outputs[channel]
-                    : target.storage.data() + std::size_t(channel) * m_maxBlockSize;
-        }
+        target.bindOutput(context, bus, m_maxBlockSize);
         m_outputBufferDescs[bus].data32 = target.pointers.data();
         m_outputBufferDescs[bus].constant_mask = 0;
     }

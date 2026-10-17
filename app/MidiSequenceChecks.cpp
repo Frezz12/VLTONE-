@@ -67,8 +67,13 @@ bool TimelineWidget::checkMidiSequenceForTest(const QString& images) {
     ui::graphics::SceneRecorder header(timeline.size(), 1);
     { QPainter p(&header); p.setClipRect(timeline.rect()); timeline.drawMidiClipHeaders(p); }
     QImage title;
-    for (const auto& mesh : header.takeMeshes())
-        if (mesh.texture.width() > title.width()) title = mesh.texture;
+    const auto findTitle = [&](const auto& self, const auto& meshes) -> void {
+        for (const auto& mesh : meshes) {
+            if (mesh.texture.width() > title.width()) title = mesh.texture;
+            if (mesh.group) self(self, mesh.group->meshes);
+        }
+    };
+    findTitle(findTitle, header.takeMeshes());
     ui::graphics::SceneRecorder frame(timeline.size(), 1);
     { QPainter p(&frame); timeline.drawStaticFrame(p, QRegion(timeline.rect())); }
     const auto countTitle = [&](const auto& self, const std::vector<ui::graphics::SceneMesh>& meshes) -> int {
@@ -222,6 +227,81 @@ bool TimelineWidget::checkMidiSequenceForTest(const QString& images) {
         partial.save(QDir(images).filePath("repaint-partial.png"));
     }
     check(full == partial, "partial repaint matches a full frame for off-grid notes");
+
+    // Dense rows should stay a handful of GPU batches as the note count grows.
+    // Also exercise narrow damage and fractional DPI, including stacked notes:
+    // grouping by colour must not change their compositing order.
+    auto dense = *clip();
+    dense.id = "sequence-render-fixture";
+    dense.durationSeconds = 16;
+    dense.offsetSeconds = dense.contentOffsetBeats = 0;
+    dense.midiView.stepBeats = .25;
+    dense.notes.clear();
+    for (int n = 0; n < 128; ++n) {
+        daw::NoteModel note;
+        note.startBeats = n * .25; note.lengthBeats = .125;
+        note.pitch = dense.midiView.pitch; note.velocity = 100;
+        dense.notes.push_back(note);
+    }
+    const double savedScale = timeline.m_pixelsPerSecond;
+    timeline.m_pixelsPerSecond = 64;
+    ui::graphics::SceneRecorder recorder(timeline.size());
+    { QPainter painter(&recorder); painter.setClipRect(timeline.rect());
+      timeline.drawMidiSequence(painter, *controller.project().findTrack(track), dense,
+                                QRectF(0, 30, 1024, 50), 1); }
+    const auto meshCount = [](const auto& self, const auto& meshes) -> std::size_t {
+        std::size_t count = meshes.size();
+        for (const auto& mesh : meshes) if (mesh.group) count += self(self, mesh.group->meshes);
+        return count;
+    };
+    const auto meshes = recorder.takeMeshes();
+    check(recorder.supported() && meshCount(meshCount, meshes) <= 16,
+          "128 equal-velocity steps share bounded GPU batches");
+
+    auto stacked = dense.notes[15];
+    stacked.startBeats += .02; stacked.velocity = 50; stacked.muted = true;
+    dense.notes.push_back(stacked);
+    stacked.pitch += 2; dense.notes.push_back(stacked);
+    bool repaintMatches = true;
+    for (double dpr : {1., 1.5, 2.}) for (double scale : {4., 60., 64., 173.25, 320.}) {
+        timeline.m_pixelsPerSecond = scale;
+        const QRectF bounds(-2.25, 32.5, dense.durationSeconds * scale, 70);
+        QImage image(QSize(int(timeline.width() * dpr), int(timeline.height() * dpr)), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr); image.fill(Qt::transparent);
+        const auto draw = [&](QImage& target, QRect damage) {
+            QPainter painter(&target); painter.setRenderHint(QPainter::Antialiasing);
+            painter.setClipRect(damage);
+            timeline.drawMidiSequence(painter, *controller.project().findTrack(track), dense, bounds, 2);
+        };
+        draw(image, timeline.rect());
+        QImage damaged = image;
+        for (int x = 8; x < timeline.width(); x += 122) draw(damaged, QRect(x, 58, 18, 40));
+        repaintMatches &= image == damaged;
+        if (image != damaged) {
+            std::fprintf(stderr, "Sequence repaint mismatch: dpr=%.1f scale=%.2f\n", dpr, scale);
+            if (!images.isEmpty()) {
+                const QString name = QString("/sequence-repaint-%1-%2").arg(dpr).arg(scale);
+                image.save(images + name + "-full.png");
+                damaged.save(images + name + "-partial.png");
+            }
+        }
+    }
+    check(repaintMatches, "batched steps preserve full/partial painting at fractional DPI and all zoom levels");
+
+    timeline.m_pixelsPerSecond = 60;
+    dense.notes.clear();
+    const QRectF distantBody(0, 30, 960, 70);
+    QImage distant(timeline.size(), QImage::Format_ARGB32_Premultiplied); distant.fill(Qt::transparent);
+    { QPainter painter(&distant);
+      timeline.drawMidiSequence(painter, *controller.project().findTrack(track), dense, distantBody, 3); }
+    const QRect interior = ui::sequence::Layout(distantBody, true, timeline.width()).steps.toAlignedRect().adjusted(5, 1, -5, -1);
+    const QRgb well = distant.pixel(interior.topLeft());
+    bool unobstructed = true;
+    for (int y = interior.top(); y <= interior.bottom(); ++y)
+        for (int x = interior.left(); x <= interior.right(); ++x) unobstructed &= distant.pixel(x, y) == well;
+    check(unobstructed, "distant sequence stays unobstructed by a zoom-to-edit message");
+    timeline.m_pixelsPerSecond = savedScale;
+
     std::string bytes; daw::ProjectModel restored;
     const bool roundtrip = daw::ProjectSerializer::serializeDocument(controller.project(), bytes).isOk() &&
         daw::ProjectSerializer::deserializeDocument(restored, bytes).isOk();
@@ -264,5 +344,99 @@ bool TimelineWidget::checkMidiSequenceForTest(const QString& images) {
         (narrow.part != SequencePart::Step && narrow.part != SequencePart::Velocity), "distant zoom has no invisible step targets");
     controller.setTrackHeight(track, 24); timeline.update();
     check(layout().sequence.isEmpty(), "collapsed lane has no invisible header buttons");
+
+    // Exercise the arrangement's real copy/paste keys and a single click on
+    // the destination Pattern, with the playhead deliberately elsewhere.
+    {
+        daw::EngineController patterns{};
+        if (!patterns.initialize(48000, 512, false).isOk()) return false;
+        const auto pattern = patterns.addPattern("Clipboard Pattern");
+        const auto owner = patterns.project().findTrack(pattern)->clips.front().id;
+        const auto a = patterns.addTrack(daw::TrackKind::Midi, "Kick");
+        const auto b = patterns.addTrack(daw::TrackKind::Midi, "Snare");
+        patterns.moveTrackToFolder(a, pattern);
+        patterns.moveTrackToFolder(b, pattern);
+        const auto first = patterns.addMidiClip(a, .5, .5);
+        const auto second = patterns.addMidiClip(b, 1.0, .5);
+        patterns.addNote(a, first, 60, 0, .5);
+        patterns.addNote(b, second, 62, 0, .5);
+        const auto destination = patterns.duplicateClipAt(pattern, owner, 4.0);
+        TimelineWidget arrangement(&patterns);
+        arrangement.setAttribute(Qt::WA_DontShowOnScreen);
+        arrangement.resize(1040, 400);
+        arrangement.m_pixelsPerSecond = 120;
+        arrangement.m_scrollSeconds = 0;
+        arrangement.setTool(Tool::Select);
+        arrangement.show();
+        QApplication::processEvents();
+        const auto q = [](const std::string& value) { return QString::fromStdString(value); };
+        const auto find = [&](const std::string& lane, const std::string& clipId) {
+            return arrangement.findClipModel(q(lane), q(clipId));
+        };
+        const auto key = [&](int code) {
+            QKeyEvent press(QEvent::KeyPress, code, Qt::ControlModifier);
+            QApplication::sendEvent(&arrangement, &press);
+            QKeyEvent release(QEvent::KeyRelease, code, Qt::ControlModifier);
+            QApplication::sendEvent(&arrangement, &release);
+        };
+        const auto selectDestination = [&] {
+            const QPointF at = arrangement.clipRect(arrangement.laneForTrackId(q(pattern)),
+                                                    *find(pattern, destination)).center();
+            QMouseEvent press(QEvent::MouseButtonPress, at, arrangement.mapToGlobal(at),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&arrangement, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, at, arrangement.mapToGlobal(at),
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(&arrangement, &release);
+        };
+        for (const bool multiple : {false, true}) {
+            QVector<ui::ClipSel> selected{{q(a), q(first)}};
+            if (multiple) selected.push_back({q(b), q(second)});
+            arrangement.selectClips(selected);
+            key(Qt::Key_C);
+            selectDestination();
+            check(arrangement.m_selectedClipId == q(destination), "one click selects the destination Pattern");
+            patterns.seekSeconds(20.0);
+            const auto undo = patterns.undoDepth();
+            key(Qt::Key_V);
+            const auto pasted = arrangement.m_selection;
+            bool placed = pasted.size() == (multiple ? 2 : 1);
+            for (const auto& ref : pasted) {
+                const auto* inserted = arrangement.findClipModel(ref.trackId, ref.clipId);
+                const bool kick = ref.trackId == q(a);
+                placed &= inserted && inserted->kind == daw::ClipKind::Midi &&
+                    inserted->patternClipId == destination && inserted->startSeconds == (kick ? 4.5 : 5.0) &&
+                    inserted->notes.size() == 1 && inserted->notes.front().pitch == (kick ? 60 : 62) &&
+                    inserted->contentId != find(kick ? a : b, kick ? first : second)->contentId;
+            }
+            check(placed && patterns.undoDepth() == undo + 1 &&
+                      find(pattern, owner)->durationSeconds == 2.0 && find(pattern, destination)->durationSeconds == 2.0,
+                  multiple ? "Ctrl+V preserves lanes and Pattern-relative offsets for multiple MIDI clips"
+                           : "Ctrl+V places one MIDI clip in the clicked Pattern independently of the playhead");
+            patterns.undo();
+            bool removed = true;
+            for (const auto& ref : pasted) removed &= !arrangement.findClipModel(ref.trackId, ref.clipId);
+            check(removed, "one undo removes the complete Pattern paste");
+            patterns.redo();
+            bool restored = true;
+            for (const auto& ref : pasted) {
+                const auto* inserted = arrangement.findClipModel(ref.trackId, ref.clipId);
+                restored &= inserted && inserted->patternClipId == destination;
+            }
+            check(restored, "redo retains the destination Pattern ownership");
+            patterns.undo();
+        }
+        // With no Pattern selected, ordinary paste still follows the playhead.
+        arrangement.selectClips({{q(a), q(first)}});
+        key(Qt::Key_C);
+        arrangement.selectClips({});
+        patterns.seekSeconds(1.0);
+        key(Qt::Key_V);
+        const auto* ordinary = arrangement.m_selection.size() == 1
+            ? arrangement.findClipModel(arrangement.m_selection.front().trackId,
+                                        arrangement.m_selection.front().clipId) : nullptr;
+        check(ordinary && ordinary->patternClipId == owner && ordinary->startSeconds == 1.0,
+              "ordinary arrangement paste still follows the playhead");
+    }
     return ok;
 }

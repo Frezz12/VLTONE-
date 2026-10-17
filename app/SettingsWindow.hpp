@@ -7,6 +7,8 @@
 #include <functional>
 #include <QHash>
 #include <QString>
+#include <QPointer>
+#include <QVector>
 
 namespace daw { class EngineController; }
 
@@ -30,6 +32,8 @@ class QSlider;
 class QRadioButton;
 class QFileSystemWatcher;
 class QWidget;
+class QTimer;
+class QHBoxLayout;
 
 /// The unified, non-modal settings window: one place for Audio, Themes and
 /// Keyboard Shortcuts, titled with the application name. Replaces the standalone
@@ -60,6 +64,13 @@ public:
         kShortcutsTab,
         kInterfaceTab,
         kMixerTab,
+        kBackgroundsTab,
+        kTimelineTab,
+        kFontsTab,
+        kPerformanceTab,
+        kPluginsTab,
+        kWebBrowserTab,
+        kPageCount,
     };
 
     /// Bring a specific settings page to the front.
@@ -70,6 +81,7 @@ public:
     void reloadRecordingPage();
     bool checkAudioPageForTest() const;
     static bool checkWheelRoutingForTest();
+    bool checkOrganizationForTest();
     void showQuickImportError(const QString& message);
     /// Import and apply a .vlttheme delivered by a file picker, Finder or
     /// Explorer. The operation owns a private copy before returning success.
@@ -102,6 +114,7 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     QLineEdit* m_timelineBackgroundPath = nullptr;
@@ -112,8 +125,12 @@ private:
     void constrainToScreen();
     void ensurePage(int index);
     void refreshCurrentPage();
-    std::array<std::function<QWidget*()>, kMixerTab + 1> m_pageFactories;
+    std::array<std::function<QWidget*()>, kPageCount> m_pageFactories;
     QWidget* buildThemesTab();
+    QWidget* buildBackgroundsTab();
+    QWidget* buildTimelineTab();
+    QWidget* buildFontsTab();
+    QWidget* buildPerformanceTab();
     QWidget* buildInterfaceTab();
     QWidget* buildMixerTab();
     QWidget* buildThemeEditorTab();
@@ -131,6 +148,12 @@ private:
     void applySelectedSavedTheme();
     void refreshShortcutEditors();
     void refreshNavigationAppearance();
+    void preparePage(QWidget* page);
+    void refreshSectionLinks();
+    void buildSearchIndex();
+    void updateSearch();
+    void activateSearchResult(QTreeWidgetItem* item);
+    void revealSetting(QWidget* target);
     /// Push the working palette to the app (live), persisting it as "custom".
     void applyEditTheme();
     /// Repaint every colour swatch from the working palette.
@@ -140,6 +163,25 @@ private:
     ShortcutManager* m_shortcuts = nullptr;
     QTreeWidget* m_navigation = nullptr;
     QStackedWidget* m_pages = nullptr;
+    QStackedWidget* m_content = nullptr;
+    QLineEdit* m_search = nullptr;
+    QTreeWidget* m_searchResults = nullptr;
+    QLabel* m_searchStatus = nullptr;
+    QLabel* m_pageCategory = nullptr;
+    QLabel* m_pageHint = nullptr;
+    QComboBox* m_sectionLinks = nullptr;
+    QTimer* m_searchTimer = nullptr;
+    QHBoxLayout* m_footerRow = nullptr;
+    QPushButton* m_audioApply = nullptr;
+    QVector<QPointer<QWidget>> m_sections;
+    struct SearchEntry {
+        int page;
+        QString title;
+        QString path;
+        QString terms;
+        QPointer<QWidget> target;
+    };
+    QVector<SearchEntry> m_searchIndex;
     QHash<int, QTreeWidgetItem*> m_navigationItems;
     QLabel* m_pageIcon = nullptr;
     QLabel* m_pageTitle = nullptr;

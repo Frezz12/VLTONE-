@@ -536,9 +536,9 @@ ProjectSaveDialog::ProjectSaveDialog(const QString& name, const QString& author,
 
     auto* chooseCover = new QPushButton(tr("Choose Image…"), this);
     chooseCover->setAccessibleName(tr("Choose project cover image"));
-    m_removeCover = new QPushButton(tr("Use Timeline"), this);
-    m_removeCover->setObjectName(QStringLiteral("ProjectUseTimelineButton"));
-    m_removeCover->setAccessibleName(tr("Use a timeline snapshot as the project preview"));
+    m_removeCover = new QPushButton(tr("Use Window Snapshot"), this);
+    m_removeCover->setObjectName(QStringLiteral("ProjectUseWindowSnapshotButton"));
+    m_removeCover->setAccessibleName(tr("Use a snapshot of the whole window as the project preview"));
     auto* coverButtons = new QVBoxLayout;
     coverButtons->setContentsMargins(0, 0, 0, 0);
     coverButtons->setSpacing(8);
@@ -687,23 +687,23 @@ void ProjectSaveDialog::chooseCover() {
     if (!path.isEmpty()) setCoverPath(path);
 }
 
-void ProjectSaveDialog::setTimelinePreview(const QImage& image) {
-    m_timelinePreview = image;
+void ProjectSaveDialog::setWindowPreview(const QImage& image) {
+    m_windowPreview = image;
     setCoverPath(m_coverPath);
 }
 
 void ProjectSaveDialog::setCoverPath(const QString& path) {
     m_coverPath = path.isEmpty() ? QString() : normalizedPath(path);
     showCover(m_cover, m_coverPath, m_cover->size());
-    if (m_coverPath.isEmpty() && !m_timelinePreview.isNull()) {
-        QPixmap preview = QPixmap::fromImage(m_timelinePreview).scaled(
+    if (m_coverPath.isEmpty() && !m_windowPreview.isNull()) {
+        QPixmap preview = QPixmap::fromImage(m_windowPreview).scaled(
             m_cover->size() * m_cover->devicePixelRatioF(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
         preview.setDevicePixelRatio(m_cover->devicePixelRatioF());
         m_cover->setPixmap(preview);
-        m_cover->setAccessibleName(tr("Timeline snapshot"));
+        m_cover->setAccessibleName(tr("Window snapshot"));
     }
     m_previewHint->setText(m_coverPath.isEmpty()
-        ? tr("Timeline snapshot. Updated each time you save.")
+        ? tr("Whole window snapshot. Updated each time you save.")
         : tr("Custom cover. Your image is kept when you save."));
     m_removeCover->setEnabled(!m_coverPath.isEmpty());
 }
@@ -1498,7 +1498,7 @@ bool checkProjectDialogsForTest(QWidget* parent) {
             preview = QImage(960, 540, QImage::Format_RGB32);
             preview.fill(th().background);
         }
-        check(saveProjectPreview(folder, preview), "timeline preview saved");
+        check(saveProjectPreview(folder, preview), "window preview saved");
         check(QImage(projectPreviewPath(folder)).size() == preview.size().scaled(QSize(960, 540), Qt::KeepAspectRatio), "preview reopens at bounded resolution");
         check(!saveProjectPreview(folder, QImage()) && !QImage(projectPreviewPath(folder)).isNull(),
               "empty capture preserves the last preview");
@@ -1553,9 +1553,9 @@ bool checkProjectDialogsForTest(QWidget* parent) {
     check(!empty.findChild<QPushButton*>(QStringLiteral("ProjectPrimaryButton"))->isEnabled() &&
           empty.findChild<QPushButton*>(QStringLiteral("ProjectBrowseButton"))->isEnabled(),
           "empty library still allows browsing disk");
-    save.setTimelinePreview(QImage(projectPreviewPath(fixtures.front())));
+    save.setWindowPreview(QImage(projectPreviewPath(fixtures.front())));
     check(save.options().coverPath.isEmpty() && !save.findChild<QLabel*>(QStringLiteral("ProjectCover"))->pixmap().isNull(),
-          "save dialog previews timeline without treating it as a custom cover");
+          "save dialog previews the window without treating it as a custom cover");
     QImage updated(1920, 1080, QImage::Format_RGB32);
     updated.fill(Qt::darkGreen);
     check(saveProjectPreview(fixtures.front(), updated) &&
@@ -1571,12 +1571,12 @@ bool checkProjectDialogsForTest(QWidget* parent) {
     customManifest.close();
     check(readSummary(customFolder).coverPath == customCover, "saved custom cover takes priority over automatic preview");
     ProjectSaveDialog custom(QStringLiteral("Custom cover"), {}, artwork, temporary.path(), parent);
-    custom.setTimelinePreview(QImage(projectPreviewPath(fixtures.front())));
+    custom.setWindowPreview(QImage(projectPreviewPath(fixtures.front())));
     check(custom.options().coverPath == artwork, "automatic preview never replaces a chosen image");
-    custom.findChild<QPushButton*>(QStringLiteral("ProjectUseTimelineButton"))->click();
+    custom.findChild<QPushButton*>(QStringLiteral("ProjectUseWindowSnapshotButton"))->click();
     check(custom.options().coverPath.isEmpty() &&
           !custom.findChild<QLabel*>(QStringLiteral("ProjectCover"))->pixmap().isNull(),
-          "Use Timeline clears only the custom cover and restores the snapshot");
+          "Use Window Snapshot clears only the custom cover and restores the snapshot");
     auto* nameField = save.findChild<QLineEdit*>(QStringLiteral("ProjectName"));
     nameField->setText(QStringLiteral("bad/name"));
     check(!save.findChild<QPushButton*>(QStringLiteral("ProjectPrimaryButton"))->isEnabled(),

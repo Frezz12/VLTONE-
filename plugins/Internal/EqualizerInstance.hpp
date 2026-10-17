@@ -64,7 +64,8 @@ public:
     void setAnalyzerConfig(const AnalyzerConfig& config) noexcept;
     AnalyzerConfig analyzerConfig() const noexcept;
     void setAuditionBand(int band) noexcept;
-    Telemetry consumeTelemetry() noexcept;
+    Telemetry telemetry(bool consumeMeters = false) noexcept;
+    Telemetry consumeTelemetry() noexcept { return telemetry(true); }
 
     void captureComparison(char slot);
     std::array<double, kParameterCount> comparison(char slot) const;

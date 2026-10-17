@@ -9,7 +9,7 @@ inline constexpr double kDefaultRetuneMs = 20;
 inline constexpr double kDefaultTune = 68.3772233983162; // 100 * (1 - sqrt(20 / 200)).
 
 // Keep the original normalized `tune` parameter in projects/automation. Only
-// its presentation is in milliseconds; 0 ms still retains the anti-click ramp.
+// its presentation is in milliseconds; 0 ms selects immediate note correction.
 double retuneMilliseconds(double tune) noexcept;
 double tuneFromMilliseconds(double milliseconds) noexcept;
 

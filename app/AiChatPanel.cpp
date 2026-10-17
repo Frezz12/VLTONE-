@@ -1959,20 +1959,15 @@ void AiChatPanel::sendMusic() {
 
 bool AiChatPanel::insertGenerated(const QString& path,
                                   const QString& trackName) {
-    const std::size_t mark = m_controller->undoDepth();
+    const auto group = m_controller->beginUndoGroup();
     const std::string track =
-        m_controller->addTrack(daw::TrackKind::Audio, trackName.toStdString());
-    const std::string clip = m_controller->importAudio(
-        path.toStdString(), track, m_controller->positionSeconds());
-    if (clip.empty()) {
-        // Undo our own `addTrack` rather than leaving an empty lane behind: a
-        // failed generation should cost the project nothing.
-        m_controller->undo();
-        emit projectChanged();
+        m_controller->importAudioToNewTrack(path.toStdString(),
+            m_controller->positionSeconds(), trackName.toStdString());
+    if (track.empty()) {
+        m_controller->releaseUndoGroup(group);
         return false;
     }
-    // Two edits the user thinks of as one arrival, so they undo as one.
-    m_controller->collapseUndo(mark, "Generate music");
+    m_controller->collapseUndo(group, "Generate music");
     if (m_selection) m_selection->setTracks({QString::fromStdString(track)});
     emit projectChanged();
     return true;

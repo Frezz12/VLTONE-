@@ -35,7 +35,7 @@ AudioPluginStateSnapshot AudioRuntime::pluginStateSnapshot(const AudioPluginAddr
     bool includeState, const std::optional<std::string>& packagedSample) {
     AudioPluginStateSnapshot out;
     out.address = address;
-    const engine::RealtimeEngine::RenderGate gate(engine);
+    std::optional<engine::RealtimeEngine::RenderGate> gate(std::in_place, engine);
     auto* node = pluginNode(address);
     if (node && (node->faultBypassed() || safetyStopped.load(std::memory_order_acquire))) {
         const auto saved = lastGoodPluginStates.find(node->instanceId());
@@ -89,6 +89,9 @@ AudioPluginStateSnapshot AudioRuntime::pluginStateSnapshot(const AudioPluginAddr
     }
     // Packaged sampler paths are a document representation, not a native
     // checkpoint. Keep the previous native snapshot for a live replacement.
+    // The captured value owns its bytes: copying it into the recovery cache
+    // does not need to keep the audio callback parked.
+    gate.reset();
     if (includeState && !packagedSample) retainPluginSnapshot(snapshot);
     return snapshot;
 }
@@ -126,13 +129,15 @@ AudioPluginStateSnapshot AudioRuntime::snapshotPluginNode(plugins::PluginNode& p
         dynamic_cast<plugins::mini::MiniModuleInstance*>(instance);
     const auto parameters = instance->parameters();
     for (const auto& parameter : parameters) {
-        const double value = instance->parameterValue(parameter.index);
+        if (parameter.isReadOnly) continue;
+        const double value = node->modulation().manual(parameter.index, instance->parameterValue(parameter.index));
         if (!parameter.id.empty() && std::isfinite(value))
-            out.parameters.push_back({parameter.id, value, false});
+            out.parameters.push_back({parameter.id, value, node->modulation().mapped(parameter.index)});
     }
 
     for (const auto& event : node->pendingParameterEvents()) {
         if (event.paramIndex >= parameters.size() || !std::isfinite(event.value)) continue;
+        if (parameters[event.paramIndex].isReadOnly) continue;
         const auto& id = parameters[event.paramIndex].id;
         if (id.empty()) continue;
         const auto found = std::find_if(out.pending.begin(), out.pending.end(), [&](const auto& p) { return p.id == id; });

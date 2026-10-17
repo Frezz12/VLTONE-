@@ -1,4 +1,5 @@
 #include "EngineController.hpp"
+#include "model/ModulationRouting.hpp"
 #include "platform/Log.hpp"
 #include "model/MiniModules.hpp"
 
@@ -19,6 +20,7 @@ bool EngineController::applyChannelSnapshot(const std::string& channelId,
     const bool master = channelId == kMasterChannelId;
     if (!modules || (!master && !track) || state.miniModules.size() > plugins::mini::kMaxModules) return false;
     const auto previous = m_project;
+    *mutableRackModulation(channelId) = state.modulation;
     modules->clear();
     for (const auto& slot : state.miniModules) modules->push_back(slot.model);
     if (master) {
@@ -38,8 +40,10 @@ bool EngineController::applyChannelSnapshot(const std::string& channelId,
                     track->sends.push_back(send);
         }
     }
+    replaceModulationAutomation(m_project, channelId, state.modulationAutomation);
+    invalidateAutomationReadoutCache();
     const ChainReplacement replacement{channelId, state.inserts};
-    if (!applyChains(std::span(&replacement, 1))) { m_project = previous; return false; }
+    if (!applyChains(std::span(&replacement, 1))) { m_project = previous; rebuildGraph(); return false; }
     if (auto* groups = mutableRackGroups(channelId)) *groups = state.rackGroups;
     syncAllTrackGains();
     return true;

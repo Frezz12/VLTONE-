@@ -32,6 +32,8 @@ const std::array<ParameterInfo, kParameterCount>& parametersImpl() {
             out[index] = ParameterInfo{index, std::move(id), std::move(name),
                                        std::move(unit), minimum, maximum,
                                        initial, automatable, stepped, false};
+            out[index].isLogarithmic = out[index].id.ends_with("frequency") || out[index].id.ends_with(".q") ||
+                out[index].id.ends_with("detector.low") || out[index].id.ends_with("detector.high");
         };
 
         add(globalParameter(GlobalParam::ProcessingMode), "processing.mode",
@@ -325,7 +327,7 @@ const PluginDescriptor& EqualizerInstance::staticDescriptor() noexcept {
         d.format = Format::Internal;
         d.uid = std::string(kUid);
         d.path = std::string(kUid);
-        d.name = "VLTONE Equalizer";
+        d.name = "EQ";
         d.vendor = "VLTONE";
         d.version = "1.0";
         d.stateSchemaVersion = kStateVersion;
@@ -527,7 +529,9 @@ EqualizerInstance::Coefficients EqualizerInstance::design(
     Coefficients out;
     if (!(sampleRate > 0.0)) return out;
     frequency = std::clamp(frequency, 5.0, sampleRate * 0.475);
-    q = std::clamp(q, 0.025, 40.0);
+    // The public Q is capped at 40. A high-order cut scales its final pair's
+    // Butterworth Q, so the internal coefficient must allow that extra range.
+    q = std::clamp(q, 0.025, 640.0);
     const double omega = 2.0 * kPi * frequency / sampleRate;
     const double sn = std::sin(omega);
     const double cs = std::cos(omega);
@@ -547,8 +551,7 @@ EqualizerInstance::Coefficients EqualizerInstance::design(
             break;
         case FilterType::LowShelf: {
             const double rootA = std::sqrt(a);
-            const double shelfAlpha = sn * std::sqrt(2.0) * 0.5;
-            const double two = 2.0 * rootA * shelfAlpha;
+            const double two = 2.0 * rootA * alpha;
             b0 = a * ((a + 1.0) - (a - 1.0) * cs + two);
             b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cs);
             b2 = a * ((a + 1.0) - (a - 1.0) * cs - two);
@@ -559,8 +562,7 @@ EqualizerInstance::Coefficients EqualizerInstance::design(
         }
         case FilterType::HighShelf: {
             const double rootA = std::sqrt(a);
-            const double shelfAlpha = sn * std::sqrt(2.0) * 0.5;
-            const double two = 2.0 * rootA * shelfAlpha;
+            const double two = 2.0 * rootA * alpha;
             b0 = a * ((a + 1.0) + (a - 1.0) * cs + two);
             b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cs);
             b2 = a * ((a + 1.0) + (a - 1.0) * cs - two);
@@ -648,7 +650,7 @@ void EqualizerInstance::buildChain(FilterChain& chain, const BandState& band,
         chain.count = std::uint32_t(sections);
         for (int section = 0; section < sections; ++section)
             chain.sections[section].c = design(
-                band.type, band.frequency, 0.70710678118,
+                band.type, band.frequency, band.q,
                 gain / double(sections), sampleRate);
         return;
     }
@@ -670,8 +672,12 @@ void EqualizerInstance::buildChain(FilterChain& chain, const BandState& band,
     }
     const int pairs = order / 2;
     for (int pair = 0; pair < pairs && section < chain.sections.size(); ++pair) {
-        const double q = 1.0 / (2.0 * std::cos(
-            kPi * double(2 * pair + 1) / double(2 * order)));
+        double q = 1.0 / (2.0 * std::cos(
+            kPi * double(2 * pair + 1 + (order & 1)) / double(2 * order)));
+        // Q controls the resonant pair; the remaining pairs retain the cut's
+        // Butterworth slope. Applying resonance to every pair would multiply
+        // the boost with the selected order. A first-order (6 dB) cut has no Q.
+        if (pair == pairs - 1) q *= band.q / 0.7071067811865476;
         chain.sections[section++].c = design(band.type, band.frequency, q,
                                              0.0, sampleRate);
     }
@@ -1314,7 +1320,7 @@ void EqualizerInstance::publishAnalyzerFrame() noexcept {
     publish(4, m_sideSpectrum, (flags & 8u) != 0);
 }
 
-Telemetry EqualizerInstance::consumeTelemetry() noexcept {
+Telemetry EqualizerInstance::telemetry(bool consumeMeters) noexcept {
     Telemetry telemetry;
     for (std::size_t i = 0; i < kSpectrumBinCount; ++i) {
         telemetry.pre[i] = m_preSpectrum[i].load(std::memory_order_relaxed);
@@ -1324,10 +1330,14 @@ Telemetry EqualizerInstance::consumeTelemetry() noexcept {
     for (std::size_t i = 0; i < kBandCount; ++i)
         telemetry.dynamicGainDb[i] =
             m_dynamicTelemetry[i].load(std::memory_order_relaxed);
-    telemetry.inputLeft = m_inputPeakLeft.exchange(0.0f, std::memory_order_relaxed);
-    telemetry.inputRight = m_inputPeakRight.exchange(0.0f, std::memory_order_relaxed);
-    telemetry.outputLeft = m_outputPeakLeft.exchange(0.0f, std::memory_order_relaxed);
-    telemetry.outputRight = m_outputPeakRight.exchange(0.0f, std::memory_order_relaxed);
+    const auto peak = [consumeMeters](std::atomic<float>& value) {
+        return consumeMeters ? value.exchange(0.0f, std::memory_order_relaxed)
+                             : value.load(std::memory_order_relaxed);
+    };
+    telemetry.inputLeft = peak(m_inputPeakLeft);
+    telemetry.inputRight = peak(m_inputPeakRight);
+    telemetry.outputLeft = peak(m_outputPeakLeft);
+    telemetry.outputRight = peak(m_outputPeakRight);
     telemetry.sidechainPresent = m_sidechainPresent.load(std::memory_order_relaxed);
     return telemetry;
 }

@@ -13,6 +13,11 @@ struct LoudnessLevels {
     float momentary = std::numeric_limits<float>::quiet_NaN();
     float shortTerm = std::numeric_limits<float>::quiet_NaN();
     float integrated = std::numeric_limits<float>::quiet_NaN();
+    // Unweighted stereo measurements from the same final output. VU uses
+    // rectified average amplitude, calibrated to a sine's peak amplitude.
+    float vuLeft = 0, vuRight = 0;
+    float rmsLeft = 0, rmsRight = 0;
+    float correlation = 0;
 };
 
 /// Stereo/mono K-weighted loudness. Audio-thread work and storage are bounded:
@@ -50,6 +55,11 @@ private:
     unsigned m_sliceFrames = 4800, m_frames = 0;
     double m_energy = 0;
     bool m_integrating = false;
+    double m_vuCoefficient = 0, m_energyCoefficient = 0;
+    std::array<double, 2> m_rectified{}, m_vu{}, m_rmsEnergy{};
+    double m_crossEnergy = 0;
+    std::array<std::atomic<float>, 2> m_publishedVu{}, m_publishedRms{};
+    std::atomic<float> m_correlation{0};
     std::atomic<bool> m_reset{false};
     std::atomic<float> m_momentary{std::numeric_limits<float>::quiet_NaN()};
     std::atomic<float> m_shortTerm{std::numeric_limits<float>::quiet_NaN()};

@@ -650,6 +650,35 @@ int main() {
                   near(cut[2].lengthBeats, 0.5),
               "splitting at a point only touches the note that spans it");
 
+        auto stairSource = makeNote("stairs", 60, 0.1, 1.0, 73);
+        stairSource.pan = -0.4f;
+        stairSource.muted = true;
+        stairSource.color = 0x12ABCD;
+        const auto stairs = mt::splitAtGrid({stairSource}, 0.25, 2);
+        bool stairProperties = stairs.size() == 5;
+        double position = stairSource.startBeats;
+        for (std::size_t i = 0; i < stairs.size(); ++i) {
+            auto expected = stairSource;
+            if (i) expected.id.clear();
+            expected.startBeats = stairs[i].startBeats;
+            expected.lengthBeats = stairs[i].lengthBeats;
+            expected.pitch += 2 * int(i);
+            stairProperties &= stairs[i] == expected && near(stairs[i].startBeats, position);
+            position += stairs[i].lengthBeats;
+        }
+        check(stairProperties && near(position, 1.1),
+              "grid stairs preserve endpoints, properties and first identity");
+        const auto down = mt::splitAtGrid({makeNote("low", 2, 0, 1)}, 0.25, -2);
+        const auto up = mt::splitAtGrid({makeNote("high", 125, 0, 1)}, 0.25, 2);
+        check(down.size() == 4 && down[1].pitch == 0 && down.back().pitch == 0 &&
+              up.size() == 4 && up[1].pitch == 127 && up.back().pitch == 127,
+              "stairs clamp at both MIDI pitch limits");
+        const auto shortTail = mt::splitAtGrid({makeNote("tail", 60, 0.24, 0.52)}, 0.25, -1);
+        check(shortTail.size() == 2 && near(shortTail.front().startBeats, 0.24) &&
+              near(shortTail.back().startBeats + shortTail.back().lengthBeats, 0.76) &&
+              shortTail.front().lengthBeats >= 1.0 / 32 && shortTail.back().lengthBeats >= 1.0 / 32,
+              "tiny first and last fragments merge without extending the source note");
+
         check(mt::setMuted(source, true)[0].muted &&
                   !mt::toggleMuted(mt::setMuted(source, true))[0].muted,
               "mute and toggle");
@@ -660,6 +689,119 @@ int main() {
         check(near(start, 0.0) && near(end, 4.0), "the span covers every note");
         check(mt::pitchName(60) == "C5" && mt::pitchName(61) == "C#5",
               "pitch naming matches the keyboard (FL numbering: 60 is C5)");
+    }
+
+    // Tool previews publish to the real MIDI source without editing the song.
+    {
+        daw::EngineController controller{};
+        controller.initialize(48000, 512, false);
+        const auto track = controller.addTrack(daw::TrackKind::Midi, "Preview");
+        const auto clip = controller.addMidiClip(track, 0, 4);
+        const mt::Notes original{makeNote("selected", 60, 0, 4), makeNote("untouched", 55, 0, 4)};
+        controller.setClipNotes(track, clip, original, "Fixture");
+        const auto playerFor = [&](const std::string& id) -> daw::engine::MidiClipPlayerNode* {
+            const auto graph = controller.routingGraph();
+            const auto* ids = controller.trackNodes(id);
+            if (graph && ids) for (const auto& entry : graph->nodes)
+                if (entry.id == ids->midiClips)
+                    return dynamic_cast<daw::engine::MidiClipPlayerNode*>(entry.node);
+            return nullptr;
+        };
+        auto* player = playerFor(track);
+        if (!check(player != nullptr, "preview has a realtime MIDI source")) return 1;
+        daw::engine::MidiBuffer events;
+        events.reserve(128);
+        daw::engine::ProcessContext context;
+        context.frames = 64; context.sampleRate = 48000; context.playing = true;
+        context.transport.tempo = 120; context.transport.ppqPosition = 0.5;
+        context.midiOutput = &events;
+        const auto nextBlock = [&] {
+            events.clear(); playerFor(track)->process(context);
+            context.transport.ppqPosition += 64.0 / 24000.0;
+        };
+        const auto eventFor = [&](int key, bool on) {
+            return std::any_of(events.events().begin(), events.events().end(), [&](const auto& e) {
+                return e.data1 == key && (on ? e.isNoteOn() : e.isNoteOff());
+            });
+        };
+        const auto documentNotes = [&] { return controller.project().findTrack(track)->clips.front().notes; };
+        nextBlock();
+        check(eventFor(60, true) && eventFor(55, true), "original notes sound before preview");
+        const auto depth = controller.undoDepth();
+        const auto revision = controller.midiNotesRevision(track);
+        const int owner = 0, otherOwner = 1;
+        auto preview = original; preview.front().pitch = 72;
+        controller.previewClipNotes(&owner, track, clip, preview);
+        nextBlock();
+        check(eventFor(60, false) && eventFor(72, true) && !eventFor(55, false) &&
+              documentNotes() == original && controller.undoDepth() == depth &&
+              controller.midiNotesRevision(track) == revision,
+              "preview changes sounding notes immediately, preserves held unselected notes, document and undo");
+        preview.front().pitch = 74;
+        controller.previewClipNotes(&owner, track, clip, preview);
+        nextBlock();
+        check(eventFor(72, false) && eventFor(74, true), "changing tool settings releases the previous preview voice");
+        controller.clearClipNotePreview(&otherOwner);
+        check(controller.clipNotePreviewActive(&owner), "another editor cannot cancel the active preview");
+        controller.clearClipNotePreview(&owner);
+        nextBlock();
+        check(eventFor(74, false) && eventFor(60, true) && !eventFor(55, false) &&
+              documentNotes() == original && controller.undoDepth() == depth,
+              "cancel releases preview voices and restores original playback without history");
+        controller.previewClipNotes(&owner, track, clip, preview);
+        nextBlock();
+        controller.setClipNotes(track, clip, preview, "Apply Preview");
+        controller.clearClipNotePreview(&owner);
+        nextBlock();
+        check(!eventFor(74, false) && !eventFor(74, true) && documentNotes() == preview &&
+              controller.undoDepth() == depth + 1,
+              "Apply keeps the exact heard notes without retriggering and adds one undo");
+        controller.undo(); nextBlock();
+        check(documentNotes() == original && eventFor(74, false) && eventFor(60, true),
+              "undo restores both saved and sounding notes");
+        controller.redo(); nextBlock();
+        check(documentNotes() == preview && eventFor(74, true), "redo restores the accepted preview");
+        controller.previewClipNotes(&owner, track, clip, original);
+        controller.setTempo(130);
+        check(playerFor(track)->notes()->front().key == 60,
+              "transport updates keep the temporary playback projection");
+        controller.setClipNotes(track, clip, {makeNote("external", 67, 0, 4)}, "External Edit");
+        check(!controller.clipNotePreviewActive(&owner) && playerFor(track)->notes()->front().key == 67,
+              "a document edit invalidates stale preview playback");
+        controller.clearClipNotePreview(&owner);
+
+        const auto linked = controller.duplicateLinkedClips({{track, clip}});
+        controller.previewClipNotes(&owner, track, clip, {makeNote("linked-preview", 71, 0, 4)});
+        const auto linkedPlayback = playerFor(track)->notes();
+        check(!linked.empty() && linkedPlayback->size() == 2 &&
+              std::all_of(linkedPlayback->begin(), linkedPlayback->end(), [](const auto& n) { return n.key == 71; }) &&
+              documentNotes().front().pitch == 67,
+              "linked clip instances hear the preview without changing their shared saved content");
+        controller.clearClipNotePreview(&owner);
+        const auto restored = playerFor(track)->notes();
+        check(std::all_of(restored->begin(), restored->end(), [](const auto& n) { return n.key == 67; }),
+              "cancel restores every linked clip instance");
+
+        daw::ClipModel layered;
+        layered.kind = daw::ClipKind::Midi;
+        layered.durationSeconds = 2; layered.offsetSeconds = 0.5;
+        daw::TakeModel take;
+        take.id = "take"; take.lengthSeconds = 4;
+        take.notes = {makeNote("take-note", 48, 0, 8)};
+        layered.takes.push_back(take);
+        layered.comp.push_back({take.id, 0, 4});
+        const auto layeredId = controller.insertClipCopy(track, layered, 10);
+        const mt::Notes takePreview{makeNote("take-preview", 76, 0, 8)};
+        controller.previewClipNotes(&owner, track, layeredId, takePreview);
+        const auto heardTake = playerFor(track)->notes();
+        controller.setClipNotes(track, layeredId, takePreview, "Apply Take Preview");
+        controller.clearClipNotePreview(&owner);
+        const auto appliedTake = playerFor(track)->notes();
+        check(!layeredId.empty() && heardTake->back().key == 76 &&
+              heardTake->size() == appliedTake->size() &&
+              near(heardTake->back().startBeats, appliedTake->back().startBeats) &&
+              near(heardTake->back().lengthBeats, appliedTake->back().lengthBeats),
+              "trimmed take preview uses exactly the same audible timing as Apply");
     }
 
     // ── setClipNotes: the undoable landing point ──

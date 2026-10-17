@@ -4,6 +4,8 @@
 #include "Host/PluginEditorHost.hpp"
 
 #include <atomic>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -46,6 +48,7 @@ public:
     /// The plugin moved a parameter itself — from its own editor, or from an
     /// internal modulation source.
     virtual void onParameterChanged(std::uint32_t index, double plainValue) noexcept = 0;
+    virtual void onParameterEdited(std::uint32_t index, double value) noexcept { onParameterChanged(index, value); }
     virtual void onParameterGesture(std::uint32_t index, bool begin) noexcept = 0;
     /// Reported latency changed, usually on a preset load. The host has to
     /// recompile the graph for delay compensation to follow.
@@ -107,6 +110,26 @@ public:
     virtual std::span<const ParameterInfo> parameters() const noexcept = 0;
     virtual std::int32_t parameterIndexForId(std::string_view id) const noexcept = 0;
     virtual double parameterValue(std::uint32_t index) const noexcept = 0;
+    // Cached/native conversions only: callable on the audio thread.
+    virtual double parameterToNormalized(std::uint32_t index, double plain) const noexcept {
+        const auto list = parameters();
+        if (index >= list.size()) return 0.0;
+        const auto& p = list[index];
+        if (p.isLogarithmic && p.minValue > 0.0 && p.maxValue > p.minValue)
+            return std::clamp(std::log(std::clamp(plain, p.minValue, p.maxValue) / p.minValue) / std::log(p.maxValue / p.minValue), 0.0, 1.0);
+        const double span = p.maxValue - p.minValue;
+        return span == 0.0 ? 0.0 : std::clamp((plain - p.minValue) / span, 0.0, 1.0);
+    }
+    virtual double parameterFromNormalized(std::uint32_t index, double value) const noexcept {
+        const auto list = parameters();
+        if (index >= list.size()) return 0.0;
+        const auto& p = list[index];
+        double plain = p.minValue + std::clamp(value, 0.0, 1.0) * (p.maxValue - p.minValue);
+        if (p.isLogarithmic && p.minValue > 0.0 && p.maxValue > p.minValue)
+            plain = p.minValue * std::pow(p.maxValue / p.minValue, std::clamp(value, 0.0, 1.0));
+        if (p.isStepped) plain = std::round(plain);
+        return std::clamp(plain, std::min(p.minValue, p.maxValue), std::max(p.minValue, p.maxValue));
+    }
     virtual std::string parameterText(std::uint32_t index, double plainValue) const = 0;
 
     /// Opaque, format-defined. The host stores it and hands it back verbatim.
@@ -133,6 +156,9 @@ public:
     /// this whether or not an editor is open, and a GUI that never gets it
     /// tends to freeze. Cheap when there is nothing to do.
     virtual void pumpMainThread() {}
+    /// Opt in only when all format-owned work is represented by this latch or
+    /// PluginListener notifications. Legacy formats retain compatibility pumps.
+    virtual bool needsMainThreadPump() const noexcept { return true; }
 
     /// Called after an offline block, with all process workers stopped, when
     /// the listener requested a restart. Formats may service non-structural

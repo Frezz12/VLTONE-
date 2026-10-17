@@ -18,7 +18,11 @@
 
 #include <QString>
 
-ContextPanelPage::ContextPanelPage(QWidget* parent) : QWidget(parent) {
+ContextPanelPage::ContextPanelPage(QWidget* parent, Section section) : QWidget(parent) {
+    if (section == Section::Plugins) {
+        buildPluginPage();
+        return;
+    }
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(16, 16, 16, 16);
     column->setSpacing(8);
@@ -85,24 +89,13 @@ ContextPanelPage::ContextPanelPage(QWidget* parent) : QWidget(parent) {
     });
     column->addWidget(reduce);
 
-    auto* reduceMotion = new QCheckBox(tr("Reduce plugin-search motion"), this);
-    reduceMotion->setToolTip(
-        tr("Open and close the plugin search immediately and disable its idle glow."));
-    reduceMotion->setChecked(settings.value("ui/reduceMotion", false).toBool());
-    connect(reduceMotion, &QCheckBox::toggled, this, [this](bool on) {
-        ui::ScrollPreferences::instance().setReducedMotion(on);
-        emit changed();
-    });
-    connect(&ui::ScrollPreferences::instance(),&ui::ScrollPreferences::changed,this,[reduceMotion] {
-        const QSignalBlocker blocker(reduceMotion);
-        reduceMotion->setChecked(ui::ScrollPreferences::instance().reducedMotion());
-    });
-    column->addWidget(reduceMotion);
+    column->addStretch(1);
+}
 
-    column->addSpacing(10);
-    column->addWidget(ui::separatorLine(Qt::Horizontal, 0, this));
+void ContextPanelPage::buildPluginPage() {
+    auto* column = new QVBoxLayout(this);
     column->addWidget(ui::sectionLabel(tr("PLUGIN SEARCH"), this));
-
+    QSettings settings;
     auto* pluginForm = new QFormLayout;
     pluginForm->setContentsMargins(0, 0, 0, 0);
     pluginForm->setHorizontalSpacing(12);
@@ -113,6 +106,7 @@ ContextPanelPage::ContextPanelPage(QWidget* parent) : QWidget(parent) {
                          const QList<QPair<QString, QString>>& choices,
                          const QString& fallback) {
         auto* combo = new QComboBox(this);
+        combo->setObjectName(QStringLiteral("PluginSetting.") + key);
         for (const auto& [text, value] : choices) combo->addItem(text, value);
         const QString saved = settings.value(key, fallback).toString();
         const int selected = combo->findData(saved);

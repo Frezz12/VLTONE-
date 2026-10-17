@@ -113,7 +113,15 @@ std::vector<Scenario> scenarios() {
     drums.creativity = 0.55;
     drums.rhythmicDensity = 0.68;
 
+    auto eightBarMelody = melody;
+    eightBarMelody.bars = 8;
+    for (auto segment : melody.harmony) {
+        segment.startBeats += 16;
+        eightBarMelody.harmony.push_back(std::move(segment));
+    }
+
     return {{"melody_busy_arrangement", melody, 0.80, 0.95, 0.72},
+            {"melody_eight_bar_phrase", eightBarMelody, 0.80, 0.95, 0.72},
             {"bass_minor_progression", bass, 0.72, 0.95, 0.60},
             {"chords_dorian_progression", chords, 0.88, 0.95, 0.85},
             {"drums_four_on_floor", drums, 0.80, 1.00, 0.60}};
@@ -151,6 +159,24 @@ bool hasCadentialEnding(const ai::CompositionRequest& request,
 bool hasMotifDevelopment(const ai::CompositionRequest& request,
                          const ai::CompositionCandidate& candidate) {
     if (!phraseRole(request.role) || request.bars < 3) return false;
+    if (request.role == ai::CompositionRole::Melody) {
+        // A phrase may answer its two-bar motif with a rest, a displaced ending
+        // or a changed contour. Requiring every bar to have identical rhythm
+        // rewards the one-bar repetition this generator deliberately replaces.
+        std::vector<std::pair<int, int>> first, answer;
+        const double phrase = 2 * request.beatsPerBar;
+        for (const auto& note : candidate.notes) {
+            if (note.startBeats < phrase)
+                first.emplace_back(int(std::lround(note.startBeats * 16)), note.pitch);
+            else if (note.startBeats < 2 * phrase)
+                answer.emplace_back(int(std::lround((note.startBeats - phrase) * 16)), note.pitch);
+        }
+        if (first.empty() || answer.empty() || first == answer) return false;
+        int sharedOnsets = 0;
+        for (const auto& note : answer)
+            sharedOnsets += std::any_of(first.begin(), first.end(), [&](const auto& original) { return original.first == note.first; });
+        return sharedOnsets >= int(std::ceil(std::min(first.size(), answer.size()) * .5));
+    }
     std::vector<std::vector<const ai::CompositionNoteEvent*>> bars(
         std::size_t(request.bars));
     for (const auto& note : candidate.notes) {
@@ -233,7 +259,7 @@ std::vector<Evaluation> evaluate() {
 
 std::string report(const std::vector<Evaluation>& evaluations) {
     std::ostringstream out;
-    out << "composition-eval-v2\n"
+    out << "composition-eval-v3\n"
         << "scenario\trank\tcandidate_id\tnote_hash\tnotes\ttotal\tharmony"
            "\trhythm\tregister\trepetition\tvoice_leading\tcadence"
            "\tmotif_development\n";
@@ -263,7 +289,9 @@ std::vector<std::string> gateFailures(
             if (!ai::validateCompositionCandidate(scenario.request, candidate)
                      .valid())
                 failures.push_back(scenario.name + ": invalid candidate");
-            fingerprints.insert(noteFingerprint(candidate.notes));
+            auto musicalNotes = candidate.notes;
+            for (auto& note : musicalNotes) note.velocity = 100;
+            fingerprints.insert(noteFingerprint(musicalNotes));
             scoreSum += candidate.score.total;
             lowestHarmony =
                 std::min(lowestHarmony, candidate.score.harmony.value);

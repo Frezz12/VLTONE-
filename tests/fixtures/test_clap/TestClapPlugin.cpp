@@ -179,6 +179,7 @@ const clap_plugin_params_t kParams = {
 // the crash real sidechain-capable plugins hit, and a one-bus fixture cannot
 // catch it.
 std::uint32_t portsCount(const clap_plugin_t* plugin, bool isInput) {
+    if (std::getenv("DAW_TEST_CLAP_EVENT_ONLY")) return 0;
     if (TestPlugin::of(plugin)->isInstrument) return isInput ? 0 : 1;
     return isInput ? 2 : 1;
 }
@@ -287,9 +288,17 @@ void pluginReset(const clap_plugin_t* plugin) {
 clap_process_status pluginProcess(const clap_plugin_t* plugin,
                                   const clap_process_t* process) {
     auto* self = TestPlugin::of(plugin);
-    if (!self->processing || !process || process->audio_outputs_count == 0) {
+    if (!self->processing || !process) {
         return CLAP_PROCESS_ERROR;
     }
+    if (std::getenv("DAW_TEST_CLAP_EVENT_ONLY")) {
+        if (process->audio_inputs_count || process->audio_outputs_count) return CLAP_PROCESS_ERROR;
+        for (std::uint32_t i = 0; i < process->in_events->size(process->in_events); ++i)
+            if (!process->out_events->try_push(process->out_events, process->in_events->get(process->in_events, i)))
+                return CLAP_PROCESS_ERROR;
+        return CLAP_PROCESS_CONTINUE;
+    }
+    if (process->audio_outputs_count == 0) return CLAP_PROCESS_ERROR;
     if (std::getenv("DAW_TEST_CLAP_VALIDATE_STEADY_TIME")) {
         if (process->steady_time < self->nextSteadyTime) return CLAP_PROCESS_ERROR;
         self->nextSteadyTime = process->steady_time + process->frames_count;

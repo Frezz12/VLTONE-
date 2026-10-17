@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include "UiPerformance.hpp"
 
 namespace ui::graphics {
 namespace {
@@ -17,6 +18,7 @@ namespace {
 thread_local QCache<QByteArray, QImage> assets(16 * 1024);
 struct GlyphAsset { QImage image; QRectF bounds; };
 thread_local QCache<QByteArray, GlyphAsset> glyphAssets(16 * 1024);
+thread_local QCache<QByteArray, QVector<SceneVertex>> smallPaths(4 * 1024);
 QVector<SceneVertex> rectangleTriangles(const QRectF& r) {
     const float l = r.left(), t = r.top(), b = r.bottom(), right = r.right();
     return {{l,t,0,0}, {right,t,0,0}, {l,b,0,0},
@@ -36,6 +38,40 @@ QVector<SceneVertex> triangulate(const QPainterPath& path, qreal dpr) {
         result.append({float(triangles.vertices[index * 2]), float(triangles.vertices[index * 2 + 1]), 0, 0});
     }
     return result;
+}
+void groupSharedClips(std::vector<SceneMesh>& meshes) {
+    // A separate QSGClipNode for every coloured sequencer cell forces repeated
+    // stencil/scissor changes. Consecutive primitives with the same mask can
+    // share one parent clip without reordering or combining their opacity.
+    const auto compatible = [](const SceneMesh& mesh) {
+        // Waveform tiles own shared vertex buffers and move by their own
+        // matrix. Keep their identity separate from freshly emitted cells.
+        return mesh.clip && !mesh.group && !mesh.visualId && mesh.transform.isIdentity() &&
+               mesh.vertices.isDetached();
+    };
+    std::size_t write = 0;
+    for (std::size_t first = 0; first < meshes.size();) {
+        std::size_t end = first + 1;
+        if (compatible(meshes[first]))
+            while (end < meshes.size() && compatible(meshes[end]) && meshes[end].clip == meshes[first].clip) ++end;
+        if (end == first + 1) {
+            if (write != first) meshes[write] = std::move(meshes[first]);
+        } else {
+            SceneMesh batch; batch.clip = meshes[first].clip;
+            auto group = std::make_shared<SceneMeshGroup>();
+            group->meshes.reserve(end - first);
+            for (auto i = first; i < end; ++i) {
+                meshes[i].clip.reset();
+                group->bytes += qint64(meshes[i].vertices.size()) * sizeof(SceneVertex);
+                group->meshes.push_back(std::move(meshes[i]));
+            }
+            batch.group = std::move(group);
+            meshes[write] = std::move(batch);
+            ui::perf::sample("scene.clip.nodes.saved", double(end - first - 1));
+        }
+        ++write; first = end;
+    }
+    meshes.resize(write);
 }
 }
 class SceneRecorder::Engine final : public QPaintEngine, public SceneGeometrySink {
@@ -68,6 +104,7 @@ public:
             auto group = std::make_shared<SceneMeshGroup>();
             group->meshes.assign(std::make_move_iterator(meshes.begin() + sectionStart),
                                  std::make_move_iterator(meshes.end()));
+            groupSharedClips(group->meshes);
             for (const auto& mesh : group->meshes) {
                 group->bytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
                 if (mesh.group) group->bytes += mesh.group->bytes;
@@ -104,16 +141,37 @@ public:
         // Bound each tessellation input before entering Qt's triangulator.
         // Larger curves must be split into visible tiles by their scene source.
         if (!allSupported || path.elementCount() > 32768) { allSupported = false; return {}; }
-        return triangulate(path, dpr);
+        // Icons, outlines and clip masks repeat at different viewport origins.
+        // Cache only small local paths; waveform/note batches already have
+        // their own caches and must not pay for serializing a large path.
+        if (path.isEmpty() || path.elementCount() > 128) return triangulate(path, dpr);
+        const QPointF origin = path.boundingRect().topLeft();
+        const auto local = path.translated(-origin);
+        QByteArray key;
+        QDataStream stream(&key, QIODevice::WriteOnly);
+        stream << dpr << local;
+        auto* cached = smallPaths.object(key);
+        if (!cached) {
+            auto vertices = triangulate(local, dpr);
+            const int cost = int((vertices.size() * sizeof(SceneVertex) + key.size()) / 1024 + 1);
+            smallPaths.insert(key, new QVector<SceneVertex>(std::move(vertices)), cost);
+            cached = smallPaths.object(key);
+        }
+        if (!cached) return triangulate(path, dpr);
+        auto vertices = *cached;
+        for (auto& vertex : vertices) {
+            vertex.x += float(origin.x()); vertex.y += float(origin.y());
+        }
+        return vertices;
     }
     void appendMesh(SceneMesh mesh) {
         if (mesh.vertices.isEmpty()) return;
         if (!admit(qint64(mesh.vertices.size()) * sizeof(SceneVertex))) return;
         // Coalesce consecutive equal fills without reordering translucent
         // primitives or merging across a retained section boundary.
-        if (mesh.texture.isNull() && !mesh.clip && mesh.transform.isIdentity() && meshes.size() > mergeBarrier) {
+        if (mesh.texture.isNull() && mesh.transform.isIdentity() && meshes.size() > mergeBarrier) {
             auto& previous = meshes.back();
-            if (!previous.group && !previous.visualId && previous.texture.isNull() && !previous.clip && previous.transform.isIdentity() &&
+            if (!previous.group && !previous.visualId && previous.texture.isNull() && previous.clip == mesh.clip && previous.transform.isIdentity() &&
                 previous.color == mesh.color && previous.opacity == mesh.opacity &&
                 previous.vertices.size() + mesh.vertices.size() <= 256 * 1024) {
                 previous.vertices += mesh.vertices;
@@ -122,11 +180,13 @@ public:
         }
         meshes.push_back(std::move(mesh));
     }
-    void appendGroup(std::shared_ptr<const SceneMeshGroup> group, QPointF origin) override {
+    void appendGroup(std::shared_ptr<const SceneMeshGroup> group, QPointF origin,
+                     bool snapTranslation = true) override {
         if (!group) { allSupported = false; return; }
         if (!admit(group->bytes)) return;
         SceneMesh mesh;
         mesh.group = std::move(group);
+        mesh.snapTranslation = snapTranslation;
         mesh.transform = painter()->worldTransform();
         mesh.transform.translate(origin.x(), origin.y());
         mesh.clip = currentClip();
@@ -143,20 +203,39 @@ public:
         meshes.push_back(std::move(mesh));
         mergeBarrier = meshes.size();
     }
-    void appendTriangles(const QPointF* vertices, int count, const QColor& color) override {
+    void appendTriangles(const QPointF* vertices, int count, const QColor& color, QPointF origin) override {
         if (count < 0 || qint64(count) * sizeof(SceneVertex) > 64 * 1024 * 1024 - geometryBytes) {
             allSupported = false; return;
         }
+        if (!count) return;
+        const auto clip = currentClip();
+        if (clip && clip->bounds.isEmpty()) return;
+        const float opacity = float(painter()->opacity());
+        auto transform = painter()->worldTransform();
+        transform.translate(origin.x(), origin.y());
+        if (meshes.size() > mergeBarrier) {
+            auto& previous = meshes.back();
+            if (!previous.group && !previous.visualId && previous.texture.isNull() &&
+                previous.clip == clip && previous.transform.isIdentity() && previous.color == color &&
+                previous.opacity == opacity && previous.vertices.size() + count <= 256 * 1024) {
+                if (!admit(qint64(count) * sizeof(SceneVertex))) return;
+                // Dense cells/glyphs share a fill. Append into its existing
+                // buffer instead of allocating and copying a temporary mesh.
+                for (int i=0;i<count;++i) {
+                    const auto point = transform.map(vertices[i]);
+                    previous.vertices.append({float(point.x()),float(point.y()),0,0});
+                }
+                return;
+            }
+        }
         SceneMesh mesh;
-        mesh.color = color; mesh.opacity = float(painter()->opacity());
+        mesh.color = color; mesh.opacity = opacity;
         mesh.vertices.reserve(count);
-        const auto transform = painter()->worldTransform();
         for (int i = 0; i < count; ++i) {
             const auto point = transform.map(vertices[i]);
             mesh.vertices.append({float(point.x()), float(point.y()), 0, 0});
         }
-        mesh.clip = currentClip();
-        if (mesh.clip && mesh.clip->bounds.isEmpty()) return;
+        mesh.clip = clip;
         appendMesh(std::move(mesh));
     }
     std::shared_ptr<const SceneClip> currentClip() {
@@ -199,16 +278,31 @@ public:
             if (clip->bounds.isEmpty() || !clip->bounds.intersects(bounds)) return {};
             // Most controls and grid primitives lie entirely inside a simple
             // viewport clip. Boolean path clipping adds no information there.
-            if (!clip->rectangular || !clip->bounds.contains(bounds)) path = path.intersected(activeClipPath);
+            if (!clip->bounds.contains(bounds) ||
+                (!clip->rectangular && !activeClipPath.contains(bounds)))
+                path = path.intersected(activeClipPath);
         }
         return path;
     }
     void fill(const QPainterPath& path, const QBrush& brush) {
         if (brush.style() == Qt::NoBrush || path.isEmpty()) return;
-        const auto transformed = clipped(painter()->worldTransform().map(path));
+        auto transformed = painter()->worldTransform().map(path);
+        const auto clip = currentClip();
+        const auto bounds = transformed.controlPointRect();
+        if (clip && (clip->bounds.isEmpty() || !clip->bounds.intersects(bounds))) return;
+        // Retain the original small shape (icons, fades, note outlines). Its
+        // curved clipping mask is already available to the GPU. Repeated path
+        // boolean operations changed the tessellation on every zoom frame.
+        // Only trim genuinely off-screen coordinates, using a simple box to
+        // keep the triangulator bounded at extreme timeline zoom levels.
+        if (clip && !clip->bounds.adjusted(-1, -1, 1, 1).contains(bounds)) {
+            QPainterPath box; box.addRect(clip->bounds);
+            transformed = transformed.intersected(box);
+        }
         if (transformed.isEmpty()) return;
         SceneMesh mesh;
         mesh.vertices = makeTriangles(transformed);
+        if (clip && (!clip->rectangular || !clip->bounds.contains(bounds))) mesh.clip = clip;
         mesh.color = brush.color();
         mesh.opacity = float(painter()->opacity());
         if (brush.style() != Qt::SolidPattern) {
@@ -307,20 +401,28 @@ public:
         const auto transform = painter()->worldTransform();
         const auto clip = currentClip();
         if (painter()->pen().style() != Qt::NoPen || painter()->brush().style() != Qt::SolidPattern ||
-            transform.type() > QTransform::TxScale || (clip && !clip->rectangular)) {
+            transform.type() > QTransform::TxScale) {
             QPaintEngine::drawRects(rects, count);
             return;
         }
+        if (count <= 0) return;
+        if (qint64(count) * 6 * sizeof(SceneVertex) > 64 * 1024 * 1024 - geometryBytes) {
+            allSupported = false; return;
+        }
+        SceneMesh mesh;
+        mesh.color = painter()->brush().color();
+        mesh.opacity = float(painter()->opacity());
+        mesh.vertices.reserve(count * 6);
+        // Curved clip boundaries belong to one shared GPU mask, not a boolean
+        // intersection and tessellation for every note rectangle.
+        if (clip && !clip->rectangular) mesh.clip = clip;
         for (int i = 0; i < count; ++i) {
             auto visible = transform.mapRect(rects[i]);
             if (clip) visible &= clip->bounds;
             if (visible.isEmpty()) continue;
-            SceneMesh mesh;
-            mesh.vertices = rectangleTriangles(visible);
-            mesh.color = painter()->brush().color();
-            mesh.opacity = float(painter()->opacity());
-            appendMesh(std::move(mesh));
+            mesh.vertices += rectangleTriangles(visible);
         }
+        appendMesh(std::move(mesh));
     }
     void drawRects(const QRect* rects, int count) override {
         for (int i = 0; i < count; ++i) { const QRectF r(rects[i]); drawRects(&r, 1); }
@@ -331,8 +433,7 @@ public:
         const auto transform = painter()->worldTransform();
         const auto clip = currentClip();
         if (pen.style() != Qt::SolidLine || pen.brush().style() != Qt::SolidPattern ||
-            pen.isCosmetic() || pen.capStyle() == Qt::RoundCap || transform.type() > QTransform::TxScale ||
-            (clip && !clip->rectangular)) {
+            pen.isCosmetic() || pen.capStyle() == Qt::RoundCap || transform.type() > QTransform::TxScale) {
             QPaintEngine::drawLines(lines, count);
             return;
         }
@@ -357,6 +458,7 @@ public:
             if (visible.isEmpty()) continue;
             SceneMesh mesh;
             mesh.vertices = rectangleTriangles(visible);
+            if (clip && !clip->rectangular) mesh.clip = clip;
             mesh.color = pen.color();
             mesh.opacity = float(painter()->opacity());
             appendMesh(std::move(mesh));
@@ -389,11 +491,12 @@ public:
         SceneMesh mesh;
         const auto transform = painter()->worldTransform();
         const auto clip = currentClip();
-        if (transform.type() <= QTransform::TxScale && (!clip || clip->rectangular)) {
+        if (transform.type() <= QTransform::TxScale) {
             auto visible = transform.mapRect(target);
             if (clip) visible &= clip->bounds;
             if (visible.isEmpty()) return;
             mesh.vertices = rectangleTriangles(visible);
+            if (clip && !clip->rectangular) mesh.clip = clip;
         } else {
             QPainterPath path; path.addRect(target);
             mesh.vertices = makeTriangles(clipped(transform.map(path)));
@@ -477,7 +580,10 @@ SceneRecorder::SceneRecorder(QSize size, qreal dpr, std::shared_ptr<SceneRecordi
 }
 SceneRecorder::~SceneRecorder() = default;
 QPaintEngine* SceneRecorder::paintEngine() const { return m_engine.get(); }
-std::vector<SceneMesh> SceneRecorder::takeMeshes() { return std::move(m_engine->meshes); }
+std::vector<SceneMesh> SceneRecorder::takeMeshes() {
+    groupSharedClips(m_engine->meshes);
+    return std::move(m_engine->meshes);
+}
 bool SceneRecorder::supported() const { return m_engine->allSupported; }
 int SceneRecorder::metric(PaintDeviceMetric metric) const {
     switch (metric) {

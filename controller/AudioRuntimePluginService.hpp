@@ -19,6 +19,8 @@ struct AudioPluginNotice {
 };
 
 struct AudioPluginServiceResult {
+    // Structural changes only; parameter notices are compared to the document
+    // by EngineController before marking it dirty.
     bool changed = false, scanned = false;
     std::vector<AudioPluginNotice> notices;
     std::string error;

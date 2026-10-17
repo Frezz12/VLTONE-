@@ -248,6 +248,10 @@ From an ordinary PowerShell prompt, the complete build is one command:
 .\packaging\windows\build.ps1
 ```
 
+Pass `-DisableReverb` to omit the internal Reverb effect and its editor for a
+particular Windows build. Its sources remain available; other builds include it
+by default. The equivalent CMake option is `-DDAW_ENABLE_REVERB=OFF`.
+
 The script locates Visual Studio, activates the pinned compiler/SDK, validates
 Qt and its required modules, bootstraps the pinned vcpkg checkout,
 configures and builds Release x64, runs all registered Windows CTest tests

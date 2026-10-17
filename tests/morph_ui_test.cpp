@@ -6,6 +6,7 @@
 #include "cloud/PublishPreflight.hpp"
 #include "platform/AudioFileDecoder.hpp"
 #include <QAccessible>
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -153,6 +154,30 @@ int main(int argc, char **argv) {
   panel.resize(1536, 864);
   panel.show();
   QTest::qWait(80);
+  {
+    panel.resize(panel.sizeHint());
+    const auto resizeConnection = QObject::connect(
+        &panel, &MorphPanel::preferredHeightChanged, &panel,
+        [&panel](int height) { panel.resize(panel.width(), height); });
+    auto *balance = panel.findChild<QPushButton *>("morphBalanceDetails");
+    auto *details = panel.findChild<QPushButton *>("morphModulationDetails");
+    check(balance && details, "Balance disclosure is available");
+    if (balance && details) {
+      for (int repeat = 0; repeat < 3; ++repeat) {
+        balance->click();
+        QApplication::processEvents();
+        check(panel.height() == qRound(1098 * .75) && details->isChecked(),
+              "Balance opens with its content height");
+        details->click();
+        QApplication::processEvents();
+        check(panel.height() == 648 && !balance->isChecked() &&
+                  panel.findChild<QScrollArea *>()->verticalScrollBar()->maximum() == 0,
+              "Balance closes without empty space or accumulated height");
+      }
+    }
+    QObject::disconnect(resizeConnection);
+    panel.resize(1536, 864);
+  }
   auto *depth = panel.findChild<ui::Knob *>("chorus.depth");
   check(depth, "dedicated native editor");
   if (!depth)
@@ -197,6 +222,64 @@ int main(int argc, char **argv) {
   }
   auto *access = QAccessible::queryAccessibleInterface(depth);
   check(access && access->valueInterface(), "accessible native knob values");
+  {
+    auto *routing = panel.findChild<QComboBox *>("morph.routing");
+    const auto before = panel.currentState();
+    const auto history = controller.undoDepth();
+    QSignalSpy activated(routing, &QComboBox::activated);
+    QTest::mouseClick(routing, Qt::LeftButton);
+    QTest::qWait(30);
+    check(routing->view()->isVisible() &&
+              routing->view()->objectName() == "morphChoiceList",
+          "routing opens the custom light popup");
+    const int next = (routing->currentIndex() + 1) % routing->count();
+    const auto row = routing->model()->index(next, routing->modelColumn());
+    QTest::mouseMove(routing->view()->viewport(),
+                     routing->view()->visualRect(row).center());
+    // Qt suppresses the opening mouse release. Move into the popup and allow
+    // its double-click guard to expire before issuing a separate selection.
+    QTest::qWait(QApplication::doubleClickInterval());
+    QTest::mouseClick(routing->view()->viewport(), Qt::LeftButton,
+                      Qt::NoModifier, routing->view()->visualRect(row).center());
+    QTest::qWait(40);
+    check(!routing->view()->isVisible() &&
+              panel.currentState().values[Routing] == next &&
+              controller.undoDepth() == history + 1 && activated.size() == 1,
+          "custom popup selection updates routing with one undo");
+    if (controller.undoDepth() > history)
+      controller.undo();
+    check(QTest::qWaitFor([&] { return same(before, panel.currentState()); }),
+          "custom popup selection follows controller undo");
+    routing->showPopup();
+    QTest::keyClick(routing->view(), Qt::Key_Escape);
+    check(!routing->view()->isVisible() && same(before, panel.currentState()),
+          "Escape dismisses the popup without changing the sound");
+
+    panel.findChild<QPushButton *>("morphModulationDetails")->click();
+    QComboBox *destination = nullptr;
+    for (auto *combo : panel.findChildren<QComboBox *>())
+      if (combo->accessibleName() == "Modulation destination 1")
+        destination = combo;
+    check(destination, "modulation destination is accessible by name");
+    if (destination) {
+      const auto destinationHistory = controller.undoDepth();
+      destination->showPopup();
+      QTest::qWait(30);
+      check(destination->view()->verticalScrollBar()->maximum() > 0,
+            "long custom menus can scroll to every destination");
+      QTest::keyClick(destination->view(), Qt::Key_End);
+      QTest::keyClick(destination->view(), Qt::Key_Return);
+      check(!destination->view()->isVisible() &&
+                panel.currentState().values[matrixTarget(0)] ==
+                    destination->itemData(destination->count() - 1).toUInt(),
+            "custom menus retain End and Enter keyboard selection");
+      if (controller.undoDepth() > destinationHistory)
+        controller.undo();
+      QTest::qWait(40);
+    }
+    panel.findChild<QPushButton *>("morphModulationDetails")->click();
+    panel.findChild<QScrollArea *>()->verticalScrollBar()->setValue(0);
+  }
   {
     QTest::qWait(60);
     app.knobPaints = 0;
@@ -661,6 +744,23 @@ int main(int argc, char **argv) {
       tick();
     QTest::qWait(60);
     panel.grab().save(out + "/morph-flow.png");
+    panel.resize(panel.sizeHint());
+    QTest::qWait(40);
+    panel.grab().save(out + "/morph-default.png");
+    panel.resize(1536, 864);
+    QTest::qWait(40);
+    auto *routing = panel.findChild<QComboBox *>("morph.routing");
+    routing->showPopup();
+    QTest::qWait(30);
+    routing->view()->window()->grab().save(out + "/morph-dropdown.png");
+    routing->hidePopup();
+    QTimer::singleShot(30, &panel, [&] {
+      if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+        menu->grab().save(out + "/morph-presets.png");
+        menu->close();
+      }
+    });
+    panel.findChild<QPushButton *>("morphPresetMenu")->click();
     auto *advanced = panel.findChild<QPushButton *>("morphAdvanced");
     advanced->click();
     QTest::qWait(40);

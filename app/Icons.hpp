@@ -59,6 +59,8 @@ enum class Glyph {
     Workspace,
     /// One piano-roll note, paired with Chord for slide target selection.
     SingleNote,
+    /// A warp marker moving onto a beat, and audio with automatic alignment.
+    WarpQuantize, WarpAlign,
     /// An open arc, meant to be rotated by the caller to indicate work in
     /// flight. It carries no animation of its own.
     Spinner

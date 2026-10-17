@@ -1,4 +1,5 @@
 #pragma once
+#include <QHash>
 
 class QMenu;
 #include "UiFrameClock.hpp"
@@ -282,6 +283,8 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     bool checkMoveGuidePaintForTest();
     bool checkBottomInsetInvalidationForTest();
     bool checkScrollCacheForTest();
+    bool checkTrackHeightInvalidationForTest();
+    void refreshTrackHeights();
     int laneTopForTest(int lane) const { return laneTop(lane); }
     int bottomInsetForTest() const { return m_bottomInset; }
     Tool activeToolForTest() const { return tool(); }
@@ -296,6 +299,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     quint64 gpuLaneTileBuildsForTest() const { return m_gpuLaneTiles.builds(); }
     /// Horizontal navigation state for the headless middle-drag check.
     double horizontalScrollForTest() const { return m_scrollSeconds; }
+    void setHorizontalScrollForTest(double seconds) { setHorizontalScroll(seconds); }
     double pixelsPerSecondForTest() const { return m_pixelsPerSecond; }
     bool hasNavigationControlsForTest() const {
         return m_horizontalScrollBar && m_verticalScrollBar;
@@ -312,8 +316,10 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// can click on a lane it has just created.
     int laneCentreForTest(int lane) const;
     static bool checkInterruptedPointerGestureForTest();
+    static bool checkMarqueeSelectionForTest();
     static bool checkTrackPresentationForTest();
     static bool checkClipEdgesForTest();
+    static bool checkTimelineRenderingForTest();
     /// Geometry probes for the real-mouse region drag check.
     double regionStartSecondsForTest() const { return m_regionStart; }
     int regionFirstLaneForTest() const { return m_regionLaneA; }
@@ -417,7 +423,8 @@ private:
     mutable std::vector<int> m_laneOffsets;
     mutable std::unordered_map<std::string, int> m_laneById;
     mutable std::uint64_t m_layoutGeometryRevision = 0, m_layoutStructureRevision = 0,
-                          m_layoutUndoRevision = 0, m_layoutCompRevision = 0;
+                          m_layoutUndoRevision = 0, m_layoutCompRevision = 0,
+                          m_layoutHeightRevision = 0, m_laneLayoutBuilds = 0;
     mutable const daw::TrackModel* m_layoutData = nullptr;
     mutable std::size_t m_layoutTrackCount = 0;
     struct ClipIntervals {
@@ -481,7 +488,9 @@ private:
     void paintSequenceSteps(double beat);
     void finishSequence(bool cancel = false);
     void drawMidiClipHeaders(QPainter& p);
-    void drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip, const QRectF& body, const QColor& text);
+    void drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
+                            const QRectF& body, const QColor& text,
+                            qreal viewportRight = -1, bool cacheHeader = true);
     void drawMidiSequence(QPainter& p, const daw::TrackModel& track,
                           const daw::ClipModel& clip, const QRectF& body,
                           std::uint64_t revision);
@@ -529,6 +538,7 @@ private:
     bool duplicateClipDrag();
     void moveClipDragToLane(int grabbedLane);
     void autoScrollMarquee(const QPoint& pointer);
+    void updateMarqueeSelection();
     bool eraseClipsAlong(const QPoint& from, const QPoint& to);
 
     // ── The cycle region ──
@@ -681,6 +691,7 @@ private:
     /// project at 60 Hz.
     void drawStaticFrame(QPainter& p, const QRegion& paintRegion);
     void drawRecordingOverlays(QPainter& p);
+    void drawMarquee(QPainter& p);
     /// Draw persistent Pattern clips on the parent lane, with linked child MIDI
     /// notes as their compact overview. The parent lane stays visible expanded.
     /// One automation lane's clips: the body, and the curve drawn inside it.
@@ -882,6 +893,7 @@ private:
     bool m_staticFrameValid = false;
     bool m_staticViewportDirty = false;
     double m_staticFrameScroll = 0.0;
+    int m_staticFrameScrollY = 0;
     double m_staticFrameScale = 0.0;
     std::uint64_t m_staticFramePaintCount = 0;
     std::uint64_t m_clipWaveformRevision = 0;
@@ -916,6 +928,7 @@ private:
     /// and refreshes the static cache for those pixels.
     QRegion m_playbackOnlyDirty;
     QRegion m_recordingOnlyDirty;
+    QRegion m_marqueeOnlyDirty;
     QRegion m_lastRecordingRegion;
     /// Animated wallpaper invalidation is independent of the project cache:
     /// a new video frame must not redraw every clip and waveform.
@@ -966,7 +979,6 @@ private:
     bool m_panning = false;
     QPointF m_lastPointerPosition;
     QPointF m_panLastPosition;
-    double m_panVerticalRemainder = 0.0;
     bool m_dragging = false;
     bool m_scrubbing = false;
     bool m_projectGestureActive = false;
@@ -1059,6 +1071,7 @@ private:
     bool m_marqueeScrollScheduled = false;
     QPoint m_marqueeOrigin;
     QPoint m_marqueeCurrent;
+    QHash<QString, QRect> m_marqueeHits;
 
     // SelectRegion (time-selection) tool. A committed region spans a time range
     // across one or more lanes; its contents can be deleted or dragged.

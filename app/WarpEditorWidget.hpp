@@ -5,6 +5,7 @@
 #include "WarpTools.hpp"
 #include "AudioMusicalAnalysis.hpp"
 #include <QWidget>
+#include <QColor>
 #include <atomic>
 #include <future>
 #include <map>
@@ -46,7 +47,6 @@ public:
 signals:
     void edited();
     void liveEdited();
-    void closeRequested();
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -63,9 +63,13 @@ private:
     void pollAnalysis();
     void showTempo(const daw::analysis::TempoEstimate& tempo);
     void rebuildPreview();
+    bool ownsPreview() const;
     void updateInspector();
     void updateStyle();
     void arrangeInspector();
+    void fitView(bool range = false);
+    void zoomView(double factor);
+    QColor waveColor() const;
     void setRange(double begin, double end);
     void extractGroove();
     void loadGrooves();
@@ -80,10 +84,10 @@ private:
     QWidget *m_body, *m_previewBar, *m_waveHost;
     QHBoxLayout* m_bodyLayout;
     QScrollArea* m_inspector;
-    QToolButton *m_options, *m_before, *m_after;
-    QPushButton *m_alignButton;
+    QToolButton *m_options, *m_before, *m_after, *m_alignButton;
     WarpOverview* m_overview;
-    QCheckBox *m_enabled, *m_snap, *m_pitch;
+    QToolButton *m_enabled, *m_snap;
+    QCheckBox *m_pitch;
     QComboBox *m_grid, *m_mode;
     QSpinBox *m_strength, *m_sensitivity;
     QSpinBox *m_swing, *m_tolerance;
@@ -97,7 +101,8 @@ private:
     daw::ClipWarpModel m_previewBase, m_lastMap;
     daw::warptools::Proposal m_proposal;
     bool m_previewing = false;
-    bool m_inspectorOpen = true;
+    bool m_inspectorOpen = false;
+    QColor m_clipColor;
     double m_rangeBegin = 0, m_rangeFinish = 0;
     double m_lastPosition = -1, m_lastStart = -1, m_lastTempo = -1;
     std::uint64_t m_projectGeneration = 0;

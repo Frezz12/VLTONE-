@@ -121,6 +121,7 @@ void SamplerInstance::deactivate() {
 
 void SamplerInstance::stopProcessing() {
     m_processing = false;
+    m_playbackPosition.store(-1.0,std::memory_order_relaxed);
     // Every format may clear its tails here, and a sampler that kept its voices
     // would resume a note the transport has already left behind.
     for (Voice& voice : m_voices) voice.kill();
@@ -764,18 +765,22 @@ void SamplerInstance::renderSlice(const PluginProcessContext& context,
     }
 
     if (!audio) {
+        m_playbackPosition.store(-1.0,std::memory_order_relaxed);
         if (!context.offline)
             m_sourceTransition.process(engine::AudioBlock(slice, channels, frames), frames);
         return;
     }
     const double tempo = context.transport.tempo > 0.0 ? context.transport.tempo : 120.0;
     auto stretchBank = m_stretchBanks[std::clamp(settings.stretchMode, 1, 4) - 1].read();
+    const Voice* latest = nullptr;
     for (std::size_t index = 0; index < kMaxVoices; ++index) {
         auto& voice = m_voices[index];
         if (!voice.active()) continue;
         voice.render(*sample, settings, slice, channels, frames, m_sampleRate, tempo,
                      m_globalPhase, stretchBank ? stretchBank->voices[index].get() : nullptr);
+        if (voice.active() && (!latest || voice.startedAt() > latest->startedAt())) latest = &voice;
     }
+    m_playbackPosition.store(latest ? latest->position()/audio->sampleRate() : -1.0,std::memory_order_relaxed);
 
     if (!context.offline)
         m_sourceTransition.process(engine::AudioBlock(slice, channels, frames), frames);
@@ -823,6 +828,7 @@ PluginProcessDisposition SamplerInstance::process(
 }
 
 void SamplerInstance::reset() noexcept {
+    m_playbackPosition.store(-1.0,std::memory_order_relaxed);
     m_sourceTransition.reset();
     m_renderAudio = nullptr;
     m_sourceOutputInitialized = false;
@@ -833,11 +839,11 @@ void SamplerInstance::reset() noexcept {
 }
 
 std::uint32_t SamplerInstance::tailSamples() const noexcept {
-    // The release is what keeps sounding after the last note-off; the reverb
-    // tail is already inside the sample, so it is not counted twice.
+    // Include the amplitude safety ramp and the five-millisecond choke, even
+    // for zero Release. The precomputed reverb tail is inside the sample.
     const double release =
         m_values[std::uint32_t(Param::AmpRelease)].load(std::memory_order_relaxed);
-    return std::uint32_t(release * m_sampleRate);
+    return std::uint32_t(std::ceil(std::max(release + kAmpRampSeconds, 0.005) * m_sampleRate));
 }
 
 } // namespace daw::plugins::sampler

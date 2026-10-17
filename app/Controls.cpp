@@ -1,3 +1,4 @@
+#include <QScopeGuard>
 #include "PluginStyle.hpp"
 #include "Controls.hpp"
 #include "graphics/RetainedScene.hpp"
@@ -236,6 +237,12 @@ double faderPositionFromGain(double gain) {
 QString formatGainDb(double gain) {
     if (gain <= 0.00001) return QStringLiteral("−∞ dB");
     return QString::asprintf("%+.1f dB", dbFromGain(gain));
+}
+
+QString formatPan(double pan) {
+    if (std::abs(pan) < 0.01) return QStringLiteral("C");
+    return (pan < 0 ? QStringLiteral("L") : QStringLiteral("R")) +
+           QString::number(int(std::round(std::abs(pan) * 100.0)));
 }
 
 // ── The one slider look ────────────────────────────────────────────────────
@@ -666,6 +673,7 @@ public:
     void setText(const QString& text) {
         if (m_text == text) return;
         m_text = text;
+        setAccessibleName(text);
         QFont f = font();
         f.setPixelSize(11);
         f.setBold(true);
@@ -943,7 +951,14 @@ void IconButton::paintEvent(QPaintEvent*) {
     const qreal side = baseSide * (1.0 - 0.07 * press);
     const QRectF box(r.center().x() - side / 2, r.center().y() - side / 2,
                      side, side);
-    if (icon().isNull()) {
+    if (m_glyph == icons::Glyph::Close && property("pluginWindowClose").toBool()) {
+        // Paint the shell's compact X directly so its diagonal tips remain
+        // balanced instead of scaling the already-inset general glyph again.
+        const QRectF cross = box.adjusted(1.5, 1.5, -1.5, -1.5);
+        p.setPen(QPen(tint, 1.1, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(cross.topLeft(), cross.bottomRight());
+        p.drawLine(cross.topRight(), cross.bottomLeft());
+    } else if (icon().isNull()) {
         icons::paint(p, m_glyph, box, tint);
     } else {
         const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
@@ -1133,7 +1148,7 @@ FaderWidget::FaderWidget(Qt::Orientation orientation, QWidget* parent)
         setMinimumSize(80, 22);
         setFixedHeight(22);
     }
-    setCursor(Qt::OpenHandCursor);
+    setCursor(m_orientation == Qt::Vertical ? Qt::SizeVerCursor : Qt::SizeHorCursor);
     setToolTip(tr("Drag to set level · double-click for unity · Shift for fine"));
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             [this] { m_capScene.reset(); m_staticSceneDirty = true; update(); });
@@ -1181,6 +1196,7 @@ void FaderWidget::setCompactKnob(bool compact) {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
     m_compactKnob = compact;
+    setCursor(m_compactKnob ? Qt::SizeVerCursor : Qt::SizeHorCursor);
     updateGeometry();
     update();
 }
@@ -1579,7 +1595,6 @@ void FaderWidget::mousePressEvent(QMouseEvent* ev) {
     m_dragStartCoord = int((m_orientation == Qt::Vertical || m_compactKnob)
                                ? ev->position().y()
                                : ev->position().x());
-    setCursor(Qt::ClosedHandCursor);
     showBubble();
     update();
 }
@@ -1610,9 +1625,12 @@ void FaderWidget::mouseMoveEvent(QMouseEvent* ev) {
 }
 
 void FaderWidget::mouseReleaseEvent(QMouseEvent*) {
+    finishEditing();
+}
+
+void FaderWidget::finishEditing() {
     if (!m_dragging) return;
     m_dragging = false;
-    setCursor(Qt::OpenHandCursor);
     ValueBubble::dismiss();
     update();
     emit editFinished();
@@ -1649,6 +1667,26 @@ void FaderWidget::contextMenuEvent(QContextMenuEvent* event) {
 
 void FaderWidget::wheelEvent(QWheelEvent* ev) {
     ev->ignore();
+}
+
+void FaderWidget::keyPressEvent(QKeyEvent* event) {
+    const double step = (event->modifiers() & Qt::ShiftModifier) ? .0025 : .01;
+    double position = faderPositionFromGain(m_gain);
+    switch (event->key()) {
+    case Qt::Key_Left:
+    case Qt::Key_Down: position -= step; break;
+    case Qt::Key_Right:
+    case Qt::Key_Up: position += step; break;
+    case Qt::Key_PageDown: position -= step * 10; break;
+    case Qt::Key_PageUp: position += step * 10; break;
+    case Qt::Key_Home: position = 0; break;
+    case Qt::Key_End: position = 1; break;
+    default: QWidget::keyPressEvent(event); return;
+    }
+    setGain(gainFromFaderPosition(std::clamp(position, 0.0, 1.0)));
+    emit gainChanged(m_gain);
+    emit editFinished();
+    event->accept();
 }
 
 // ── MiniSlider ──
@@ -2478,6 +2516,7 @@ void Knob::finishEditing() {
 }
 
 double Knob::fraction() const {
+    if (m_toNormalized) return std::clamp(m_toNormalized(m_value), 0.0, 1.0);
     if (m_logarithmic && m_min > 0.0 && m_max > m_min) {
         const double value = std::clamp(m_value, m_min, m_max);
         return std::clamp(std::log(value / m_min) /
@@ -2490,6 +2529,7 @@ double Knob::fraction() const {
 
 double Knob::valueForFraction(double valueFraction) const {
     const double f = std::clamp(valueFraction, 0.0, 1.0);
+    if (m_fromNormalized) return m_fromNormalized(f);
     if (m_logarithmic && m_min > 0.0 && m_max > m_min)
         return m_min * std::pow(m_max / m_min, f);
     return m_min + (m_max - m_min) * f;
@@ -2522,6 +2562,25 @@ void Knob::commit(double value) {
     emit valueChanged(m_value);
 }
 
+void Knob::paintModulation(QPainter& p, const QRectF& ring, bool vertical) const {
+    if (!m_modulated) return;
+    const auto& t = th();
+    p.save(); p.setOpacity(1); p.setBrush(Qt::NoBrush);
+    QColor color = t.accent; color.setAlpha(185);
+    p.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap));
+    QPointF point;
+    if (vertical) {
+        const double x = ring.right();
+        p.drawLine(QPointF(x, ring.bottom() - m_modLow * ring.height()), QPointF(x, ring.bottom() - m_modHigh * ring.height()));
+        point = QPointF(x, ring.bottom() - m_modEffective * ring.height());
+    } else {
+        const auto arc = ring.adjusted(-3, -3, 3, 3);
+        p.drawArc(arc, int((225 - m_modLow * 270) * 16), int(-(m_modHigh - m_modLow) * 270 * 16));
+        const double angle = (225 - m_modEffective * 270) * kDegToRad;
+        point = arc.center() + QPointF(std::cos(angle), -std::sin(angle)) * (arc.width() / 2);
+    }
+    p.setPen(QPen(t.well(), 1)); p.setBrush(t.textPrimary); p.drawEllipse(point, 2.5, 2.5); p.restore();
+}
 void Knob::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -2543,6 +2602,7 @@ void Knob::paintEvent(QPaintEvent*) {
     const double radius = ring.width() / 2.0;
     const double pen = m_bare ? 2.0 : (digital ? 2.4 : (m_compact ? 2.5 : 3.0));
 
+    const auto modulationOverlay = qScopeGuard([&] { paintModulation(p, ring); });
     if (m_visualStyle == VisualStyle::Slicer) {
         const QRectF face = m_bare ? QRectF(rect()) : QRectF((width()-52.)/2.,0,52,52);
         pluginStyle::knob(p, face, fraction(), m_dragging, isEnabled(), hasFocus());
@@ -3101,7 +3161,7 @@ void ModeSwitch::paintEvent(QPaintEvent*) {
 
 LevelMeter::LevelMeter(Qt::Orientation orientation, int channels,
                        QWidget* parent)
-    : QWidget(parent), m_orientation(orientation),
+    : FrameWidget(parent), m_orientation(orientation),
       m_channels(std::clamp(channels, 1, 2)) {
     if (orientation == Qt::Vertical) {
         setFixedWidth(m_channels == 2 ? 14 : 8);
@@ -3122,34 +3182,35 @@ void LevelMeter::setPeaks(float left, float right) {
     m_decayClock.start();
     const float release = float(std::pow(0.80, dt / 0.033));
     const float in[2] = {left, right};
-    bool dirty = false;
     // A single-channel rail combines both sides, so it still tracks both.
     const int tracked = m_style == Style::Rail ? 2 : m_channels;
     for (int i = 0; i < tracked; ++i) {
-        const float v = std::max(0.0f, in[i]);
+        const float v = std::isfinite(in[i]) ? std::max(0.0f, in[i]) : 0.0f;
         // Fast attack, slow release so short transients stay readable.
         const float next = v > m_level[i] ? v : m_level[i] * release + v * (1.0f - release);
-        if (std::abs(next - m_level[i]) > 0.0005f) dirty = true;
         m_level[i] = next;
         const float previousHold = m_hold[i];
         if (v > previousHold) {
             m_hold[i] = v;
         } else if (v < previousHold) {
-            m_hold[i] = std::max(0.0f, previousHold - float(0.006 * dt / 0.033));
+            m_hold[i] = std::max(v, previousHold - float(0.006 * dt / 0.033));
         }
-        if (std::abs(m_hold[i] - previousHold) > 0.0005f) dirty = true;
-        if (v >= 0.999f && !m_clipped) {
-            m_clipped = true;
-            dirty = true;
-        }
+        if (v >= 0.999f) m_clipped = true;
     }
-    if (dirty) update();
+    updateIfChanged();
 }
 
 void LevelMeter::clearClip() {
     m_clipped = false;
     if (m_style == Style::Console) m_hold[0] = m_hold[1] = 0.0f;
-    update();
+    updateIfChanged();
+}
+
+void LevelMeter::clearLevels() {
+    m_level[0] = m_level[1] = m_hold[0] = m_hold[1] = 0.f;
+    m_clipped = false;
+    m_decayClock.invalidate();
+    updateIfChanged();
 }
 
 void LevelMeter::mousePressEvent(QMouseEvent* event) {
@@ -3163,7 +3224,7 @@ void LevelMeter::setPeakHold(float peak) {
     const bool clipped = peak >= 1.0f;
     if (clipped == m_clipped) return;
     m_clipped = clipped;
-    update();
+    updateIfChanged();
 }
 
 namespace {
@@ -3190,13 +3251,42 @@ float meterStop(double db) {
 }
 } // namespace
 
+std::array<int, 5> LevelMeter::displayState() const {
+    QRectF area(rect());
+    if (m_style == Style::Console) area = area.marginsRemoved(m_scaleInsets);
+    qreal length = m_orientation == Qt::Vertical ? area.height() : area.width();
+    if (m_style == Style::Panel) length -= 6; // clip lamp and gap
+    const qreal pixels = std::max(qreal(0), length) * devicePixelRatioF() * 2;
+    const auto position = [pixels](float value) { return int(std::lround(meterScale(value) * pixels)); };
+    // Compare on the logarithmic display scale against the last requested
+    // image. Sub-pixel changes accumulate, including on very quiet signals.
+    if (m_style == Style::Rail && m_channels == 1)
+        return {position(std::max(m_level[0], m_level[1])), 0,
+                position(std::max(m_hold[0], m_hold[1])), 0, int(m_clipped)};
+    return {position(m_level[0]), m_channels > 1 ? position(m_level[1]) : 0,
+            position(m_hold[0]), m_channels > 1 ? position(m_hold[1]) : 0, int(m_clipped)};
+}
+
+void LevelMeter::updateIfChanged() {
+    const auto next = displayState();
+    if (next == m_displayed) return;
+    m_displayed = next;
+    update();
+}
+
+bool LevelMeter::hasVisibleLevel() const {
+    return m_level[0] > .0001f || m_level[1] > .0001f ||
+           m_hold[0] > .0001f || m_hold[1] > .0001f;
+}
+
 void LevelMeter::drawBar(QPainter& p, const QRectF& r, float level,
                          float hold) const {
     const Theme& t = th();
     const qreal radius = m_style == Style::Panel ? 2.0 : 0.0;
     p.setPen(Qt::NoPen);
     p.setBrush(t.well());
-    p.drawRoundedRect(r, radius, radius);
+    if (radius > 0) p.drawRoundedRect(r, radius, radius);
+    else p.drawRect(r);
 
     const float f = meterScale(level);
     if (f > 0.001f) {
@@ -3213,12 +3303,14 @@ void LevelMeter::drawBar(QPainter& p, const QRectF& r, float level,
         // Green to about −18, warming through −6, amber at unity, and red only
         // in the headroom above 0 dBFS — where the signal really is too loud.
         grad.setColorAt(0.0, QColor(0x4C, 0xC4, 0x8A));
-        grad.setColorAt(meterStop(-18.0), QColor(0x7A, 0xD0, 0x6D));
-        grad.setColorAt(meterStop(-6.0), QColor(0xC8, 0xCC, 0x58));
-        grad.setColorAt(meterStop(0.0), QColor(0xE8, 0xC0, 0x4A));
+        static const auto stops = std::array{meterStop(-18.0), meterStop(-6.0), meterStop(0.0)};
+        grad.setColorAt(stops[0], QColor(0x7A, 0xD0, 0x6D));
+        grad.setColorAt(stops[1], QColor(0xC8, 0xCC, 0x58));
+        grad.setColorAt(stops[2], QColor(0xE8, 0xC0, 0x4A));
         grad.setColorAt(1.0, QColor(0xE0, 0x4B, 0x4B));
         p.setBrush(grad);
-        p.drawRoundedRect(bar, radius, radius);
+        if (radius > 0) p.drawRoundedRect(bar, radius, radius);
+        else p.drawRect(bar);
     }
 
     const float h = meterScale(hold);
@@ -3253,6 +3345,7 @@ void LevelMeter::paintEvent(QPaintEvent*) {
     QPainter p(this); paintScene(p, QRegion(rect()));
 }
 void LevelMeter::paintScene(QPainter& p, const QRegion&) {
+    m_displayed = displayState();
     p.setRenderHint(QPainter::Antialiasing, m_style == Style::Panel);
 
     if (m_style == Style::Console) {
@@ -3615,7 +3708,7 @@ QHash<QAction*, NewTrackSpec> addTrackKindItems(QMenu& menu) {
         // Two folders, because they are two different things: a drawer, and a
         // bus with tracks in it.
         {QT_TRANSLATE_NOOP("ui", "Add Folder"), {daw::TrackKind::Folder, false}},
-        {QT_TRANSLATE_NOOP("ui", "Add Summing Folder"), {daw::TrackKind::Folder, true}},
+        {QT_TRANSLATE_NOOP("ui", "Add Bus Folder"), {daw::TrackKind::Folder, true}},
     };
     QHash<QAction*, NewTrackSpec> byAction;
     for (const auto& entry : entries) {

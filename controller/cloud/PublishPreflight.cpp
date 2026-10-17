@@ -11,7 +11,7 @@
 namespace daw::cloud {
 namespace {
 
-constexpr std::array<std::string_view, 18> kBuiltinUids{
+constexpr std::array<std::string_view, 19> kBuiltinUids{
     "daw.gain",
     "daw.stereo-utility",
     "daw.reverse",
@@ -23,6 +23,7 @@ constexpr std::array<std::string_view, 18> kBuiltinUids{
     "daw.graphit",
     "daw.compressor",
     "daw.cla2a",
+    "daw.1073",
     "daw.channel-color",
     "daw.doubler",
     "daw.doubler-pro",
@@ -204,6 +205,7 @@ bool isSupportedBuiltinV1(const InsertModel& insert) noexcept {
 
 const char* publishIssueKindName(PublishIssueKind kind) noexcept {
     switch (kind) {
+        case PublishIssueKind::LocalModulation: return "local_modulation";
         case PublishIssueKind::ClipContentFormat: return "clip_content_format";
         case PublishIssueKind::LocalWarp: return "local_warp";
         case PublishIssueKind::ThirdPartyPlugin: return "third_party_plugin";
@@ -216,6 +218,21 @@ const char* publishIssueKindName(PublishIssueKind kind) noexcept {
 
 PublishPreflightReport inspectForPublishV1(const ProjectModel& project) {
     PublishPreflightReport report;
+    const auto localModulation = [&](const modulation::Rack& rack, const std::string& location) {
+        if (!rack.sources.empty() || !rack.routes.empty()) report.blockers.push_back({
+            PublishIssueKind::LocalModulation, location, {}, {}, "Modulation",
+            "Rack modulation is currently available in local projects only."});
+    };
+    localModulation(project.masterModulation, "master");
+    for (const auto& track : project.tracks) {
+        localModulation(track.modulation, "track:" + track.id);
+        if (std::any_of(track.clips.begin(), track.clips.end(), [](const auto& clip) {
+                return clip.kind == ClipKind::Automation &&
+                    (clip.automation.target.kind == AutomationTargetKind::ModulatorRate ||
+                     clip.automation.target.kind == AutomationTargetKind::ModulationDepth);
+            })) report.blockers.push_back({PublishIssueKind::LocalModulation, "track:" + track.id, {}, {},
+                "Modulation", "Rack modulation is currently available in local projects only."});
+    }
     std::unordered_map<std::string, std::string> seenAssets;
     std::unordered_set<std::string> contentIds;
     for (const auto& track : project.tracks) {

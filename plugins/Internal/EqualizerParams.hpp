@@ -26,10 +26,18 @@ enum class FilterType : std::uint32_t {
 enum class Slope : std::uint32_t {
     Db6 = 0, Db12, Db18, Db24, Db36, Db48, Db72, Db96,
 };
+constexpr bool supportsQ(FilterType type, Slope slope) noexcept {
+    return slope != Slope::Db6 || (type != FilterType::LowCut && type != FilterType::HighCut);
+}
 constexpr FilterType filterTypeForNewBand(double frequency) noexcept {
     if (frequency < 100.0) return FilterType::LowCut;
     if (frequency > 15000.0) return FilterType::HighCut;
     return FilterType::Bell;
+}
+constexpr double qForNewBand(FilterType type) noexcept {
+    // The cut chain uses this value for a flat, non-resonant passband.
+    return type == FilterType::LowCut || type == FilterType::HighCut
+        ? 0.7071067811865476 : 1.0;
 }
 enum class Placement : std::uint32_t { Stereo = 0, Left, Right, Mid, Side };
 enum class DetectorMode : std::uint32_t { Band = 0, Free };
@@ -103,6 +111,7 @@ struct BandState {
     DetectorMode detectorMode = DetectorMode::Band;
     double detectorLow = 20.0;
     double detectorHigh = 20000.0;
+    bool operator==(const BandState&) const = default;
 };
 
 struct AnalyzerConfig {

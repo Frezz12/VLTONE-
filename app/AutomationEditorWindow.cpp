@@ -1393,11 +1393,11 @@ struct WhatEntry {
 
 Q_DECLARE_METATYPE(WhatEntry)
 
-void AutomationEditorWindow::reloadTargetFields() {
+void AutomationEditorWindow::reloadTargetFields(const daw::AutomationTarget* selection) {
     if (!m_controller || !m_channel) return;
     const daw::ClipModel* c = clip();
     if (!c) return;
-    const daw::AutomationTarget& target = c->automation.target;
+    const daw::AutomationTarget target = selection ? *selection : c->automation.target;
 
     m_reloading = true;
 
@@ -1457,7 +1457,7 @@ void AutomationEditorWindow::reloadTargetFields() {
                     {daw::AutomationTargetKind::PluginParameter,
                      QString::fromStdString(insert.id), {}});
     }
-    // Pick the entry that matches the clip's target.
+    // Keep the requested selection while rebuilding its dependent fields.
     for (int i = 0; i < m_what->count(); ++i) {
         const WhatEntry entry = m_what->itemData(i).value<WhatEntry>();
         if (entry.kind != target.kind) continue;
@@ -1508,17 +1508,20 @@ daw::AutomationTarget AutomationEditorWindow::targetFromFields() const {
 }
 
 void AutomationEditorWindow::applyTargetFromFields() {
-    if (!m_controller) return;
-    const daw::AutomationTarget target = targetFromFields();
-    // A plugin slot chosen but no parameter yet is a half-made target: the
-    // parameter list is about to be rebuilt, and re-pointing at nothing would
-    // silence the curve in between.
+    const auto* c = clip();
+    if (!m_controller || !c) return;
+    auto target = targetFromFields();
+    const auto& previous = c->automation.target;
+    if (target.channelId != previous.channelId || target.kind != previous.kind ||
+        target.slotId != previous.slotId)
+        target.parameterId.clear();
+    // Resolve the newly chosen channel/slot before committing. Reloading from
+    // the clip here would restore the old target and hide the parameter field.
+    reloadTargetFields(&target);
+    target = targetFromFields();
+    // A plugin without automatable parameters must not replace a valid target.
     if (target.kind == daw::AutomationTargetKind::PluginParameter &&
-        target.parameterId.empty()) {
-        reloadTargetFields();
-        if (m_parameter && m_parameter->count() > 0) applyTargetFromFields();
-        return;
-    }
+        target.parameterId.empty()) return;
     m_controller->setAutomationTarget(m_trackId.toStdString(),
                                       m_clipId.toStdString(), target);
     reloadTargetFields();

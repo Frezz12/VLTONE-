@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -41,11 +42,15 @@ QuickImportSettingsPage::QuickImportSettingsPage(QWidget* parent) : QWidget(pare
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(12);
     layout->addWidget(intro);
-    layout->addSpacing(4);
-    layout->addLayout(form);
-    layout->addWidget(m_detectTempo);
-    layout->addWidget(m_detectKey);
-    layout->addWidget(m_applyKeyToPitch);
+    auto* destination = new QGroupBox(tr("Import destination"), this);
+    destination->setLayout(form);
+    layout->addWidget(destination);
+    auto* analysis = new QGroupBox(tr("Audio analysis"), this);
+    auto* analysisColumn = new QVBoxLayout(analysis);
+    analysisColumn->addWidget(m_detectTempo);
+    analysisColumn->addWidget(m_detectKey);
+    analysisColumn->addWidget(m_applyKeyToPitch);
+    layout->addWidget(analysis);
     layout->addWidget(m_error);
     layout->addStretch();
 

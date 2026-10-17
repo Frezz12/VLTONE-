@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(VLTONE
-    VERSION 0.5.0
+    VERSION 0.5.1
     DESCRIPTION "VLTONE digital audio workstation"
     LANGUAGES C CXX)
 
@@ -166,7 +166,8 @@ foreach(directory tests app)
         foreach(consumer IN LISTS consumers)
             get_target_property(kind ${consumer} TYPE)
             get_target_property(libraries ${consumer} LINK_LIBRARIES)
-            if(kind STREQUAL "EXECUTABLE" AND "daw_controller" IN_LIST libraries)
+            get_target_property(no_worker ${consumer} VLT_TEST_NO_OFFLINE_WORKER)
+            if(kind STREQUAL "EXECUTABLE" AND "daw_controller" IN_LIST libraries AND NOT no_worker)
                 add_dependencies(${consumer} daw_worker)
             endif()
         endforeach()

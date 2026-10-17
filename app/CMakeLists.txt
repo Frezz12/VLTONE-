@@ -325,6 +325,25 @@ if(DAW_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
+    qt_add_executable(flux_ui_test
+        ../tests/flux_ui_test.cpp FluxPanel.cpp FluxPanel.hpp FluxWidgets.cpp FluxWidgets.hpp
+        Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(flux_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(flux_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
+    # Flux tests exercise native state and editing; no offline media worker is used.
+    set_property(TARGET flux_ui_test PROPERTY VLT_TEST_NO_OFFLINE_WORKER TRUE)
+    if(APPLE)
+        target_link_libraries(flux_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME flux_ui_test COMMAND flux_ui_test)
+    set_tests_properties(flux_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 180)
+    if(WIN32)
+        set_tests_properties(flux_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     qt_add_executable(morph_ui_test
         ../tests/morph_ui_test.cpp MorphPanel.cpp MorphPanel.hpp
         Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp
@@ -339,6 +358,23 @@ if(DAW_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 180)
     if(WIN32)
         set_tests_properties(morph_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
+    qt_add_executable(vlt1073_ui_test
+        ../tests/vlt1073_ui_test.cpp Vlt1073Panel.cpp Vlt1073Panel.hpp
+        Controls.cpp Controls.hpp Icons.cpp GlassPanel.cpp GlassPanel.hpp UiConstants.cpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(vlt1073_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(vlt1073_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
+    if(APPLE)
+        target_link_libraries(vlt1073_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME vlt1073_ui_test COMMAND vlt1073_ui_test)
+    set_tests_properties(vlt1073_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 180)
+    if(WIN32)
+        set_tests_properties(vlt1073_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
@@ -389,6 +425,25 @@ if(DAW_BUILD_TESTS)
     if(WIN32)
         set_tests_properties(delay_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
+    if(DAW_ENABLE_REVERB)
+    qt_add_executable(reverb_ui_test
+        ../tests/reverb_ui_test.cpp ReverbPanel.cpp ReverbPanel.hpp ReverbWidgets.cpp ReverbWidgets.hpp RackParameterBinding.cpp RackParameterBinding.hpp
+        WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(reverb_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(reverb_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
+    if(APPLE)
+        target_link_libraries(reverb_ui_test PRIVATE "-framework CoreFoundation")
+    endif()
+    add_test(NAME reverb_ui_test COMMAND reverb_ui_test)
+    set_tests_properties(reverb_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 90)
+    if(WIN32)
+        set_tests_properties(reverb_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
     endif()
 
     qt_add_executable(utility_ui_test
@@ -446,6 +501,12 @@ list(REMOVE_ITEM DAW_APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/UiPerformance.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ScrollMotion.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ScrollMotion.hpp")
 
+if(NOT DAW_ENABLE_REVERB)
+    list(REMOVE_ITEM DAW_APP_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/ReverbPanel.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ReverbPanel.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ReverbWidgets.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ReverbWidgets.hpp")
+endif()
+
 qt_add_executable(daw ${DAW_APP_SOURCES})
 if(WIN32)
     # QImageReader discovers this at runtime; linking QtGui alone does not
@@ -464,7 +525,7 @@ endif()
 # They share a wire protocol and the plugin compatibility checks.
 add_dependencies(daw daw_scan creator_tools)
 # Built-in effect editors use Qt Widgets/QPainter; no web documents are bundled.
-foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test)
+foreach(native_target vlt1073_ui_test modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test reverb_ui_test)
     if(TARGET ${native_target})
         target_sources(${native_target} PRIVATE
             NativePluginView.cpp NativePluginView.hpp Controls.cpp Controls.hpp
@@ -473,6 +534,14 @@ foreach(native_target modulation_ui_test compressor_ui_test delay_ui_test pitch_
     endif()
 endforeach()
 if(DAW_BUILD_TESTS)
+    add_test(NAME sampler_rack_ui_test COMMAND daw --selftest)
+    set_tests_properties(sampler_rack_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RACK_ONLY=1;DAW_SELFTEST_RACK_SAMPLER_ONLY=1"
+        TIMEOUT 30)
+    add_test(NAME equalizer_rack_ui_test COMMAND daw --selftest)
+    set_tests_properties(equalizer_rack_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RACK_ONLY=1;DAW_SELFTEST_RACK_EQ_ONLY=1"
+        TIMEOUT 30)
     add_test(NAME rack_ui_test COMMAND daw --selftest)
     set_tests_properties(rack_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_RACK_ONLY=1;DAW_TEST_SCAN_PATH=$<TARGET_FILE:daw_scan>"
@@ -486,6 +555,17 @@ if(DAW_BUILD_TESTS)
     set_tests_properties(plugin_drag_lifecycle_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 30)
     add_test(NAME midi_sequence_ui_test COMMAND daw --pianoworkflowcheck)
+    add_test(NAME piano_split_ui_test COMMAND daw --pianoworkflowcheck)
+    add_test(NAME midi_tools_preview_ui_test COMMAND daw --pianoworkflowcheck)
+    set_tests_properties(midi_tools_preview_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60)
+    set_tests_properties(piano_split_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_PIANO_SPLIT_CHECK_ONLY=1"
+        TIMEOUT 60)
+    add_test(NAME midi_generator_ui_test COMMAND daw --pianoworkflowcheck)
+    set_tests_properties(midi_generator_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_MIDI_GENERATOR_CHECK_ONLY=1"
+        TIMEOUT 60)
     set_tests_properties(midi_sequence_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SEQUENCE_CHECK_ONLY=1"
         TIMEOUT 60)
@@ -512,7 +592,7 @@ if(TARGET browser_navigation_test)
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
 endif()
 
-foreach(native_target morph_ui_test modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test)
+foreach(native_target flux_ui_test morph_ui_test vlt1073_ui_test modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test reverb_ui_test)
     if(TARGET ${native_target})
         # Test captures must use the same Latin/Cyrillic faces as the app.
         qt_add_resources(${native_target} "${native_target}_fonts"
@@ -612,6 +692,10 @@ if(DAW_BUILD_TESTS)
     endforeach()
     add_test(NAME tempo_scrub_ui_test COMMAND $<TARGET_FILE:daw> --tempocheck)
     add_test(NAME mixer_fader_input_test COMMAND $<TARGET_FILE:daw> --mixerwheelcheck)
+    add_test(NAME sampler_meter_ui_test COMMAND $<TARGET_FILE:daw> --samplercheck)
+    set_tests_properties(sampler_meter_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_SAMPLER_METER_CHECK_ONLY=1"
+        TIMEOUT 30 RUN_SERIAL TRUE)
     foreach(color_scale 1 1.5 2)
         add_test(NAME channel_color_ui_${color_scale} COMMAND $<TARGET_FILE:daw> --channel-color-check)
         set_tests_properties(channel_color_ui_${color_scale} PROPERTIES
@@ -687,6 +771,14 @@ if(DAW_BUILD_TESTS)
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         endif()
     endforeach()
+    add_test(NAME marquee_selection_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+    set_tests_properties(marquee_selection_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_MARQUEE_CHECK_ONLY=1"
+        TIMEOUT 60 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(marquee_selection_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME track_presentation_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
     set_tests_properties(track_presentation_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_TRACK_PRESENTATION_CHECK_ONLY=1"
@@ -902,6 +994,10 @@ qt6_deploy_runtime_dependencies(
 endif()
 
 if(DAW_BUILD_TESTS)
+    add_test(NAME master_panel_ui_test COMMAND daw --selftest)
+    set_tests_properties(master_panel_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_MASTER_ONLY=1"
+        TIMEOUT 60)
     qt_add_executable(forum_content_installer_test
         ../tests/forum_content_installer_test.cpp
         VltContentInstaller.cpp VltPackageArchive.cpp MiniModuleLibrary.cpp CreatorProject.cpp CreatorSubgraphs.cpp

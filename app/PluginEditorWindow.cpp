@@ -1,11 +1,17 @@
 #include "PluginStyle.hpp"
 #include "PluginEditorWindow.hpp"
+#include "PluginEditorChrome.hpp"
 
 #include "Controls.hpp"
 #include "EqualizerPanel.hpp"
+#include "EqualizerStyle.hpp"
 #include "CompressorPanel.hpp"
 #include "Cla2aPanel.hpp"
+#include "Vlt1073Panel.hpp"
 #include "DelayPanel.hpp"
+#if DAW_ENABLE_REVERB
+#include "ReverbPanel.hpp"
+#endif
 #include "UtilityPanel.hpp"
 #include "RackParameterBinding.hpp"
 #include "Internal/UtilityInstance.hpp"
@@ -13,6 +19,7 @@
 #include "PitchCorrectorPanel.hpp"
 #include "ModulationPanel.hpp"
 #include "MorphPanel.hpp"
+#include "FluxPanel.hpp"
 #include "GravityPanel.hpp"
 #include "InternalEditorFrame.hpp"
 #include "EngineController.hpp"
@@ -432,6 +439,7 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
       m_insertKey(m_insertId.toStdString()) {
     setAttribute(Qt::WA_DeleteOnClose);
     setProperty("dawPluginEditor", true);
+    setProperty("vlt.pluginChrome", true);
     setFocusPolicy(Qt::StrongFocus);
     m_nativeKeyboard = std::make_unique<PluginEditorNativeKeyboard>(this);
     m_layout = new QVBoxLayout(this);
@@ -460,10 +468,12 @@ PluginEditorWindow::PluginEditorWindow(daw::EngineController* controller,
     // this valid editor before its asynchronous initialization can finish.
     if (const auto* plugin = m_controller
             ? m_controller->insertModel(m_channelKey, m_insertKey) : nullptr) {
-        setWindowTitle(QString::fromStdString(plugin->name));
+        setWindowTitle(eqUi::displayName(plugin->uid, plugin->name));
         m_pluginUid = QString::fromStdString(plugin->uid);
         setProperty("vlt.pitchChrome", plugin->format == daw::PluginFormat::Internal &&
                     plugin->uid == "daw.pitch-corrector");
+        setProperty("vlt.eqChrome", plugin->format == daw::PluginFormat::Internal &&
+                    plugin->uid == "daw.equalizer");
     } else {
         setWindowTitle(tr("Plugin"));
     }
@@ -566,6 +576,13 @@ void PluginEditorWindow::scheduleEditorInitialization(int delayMs) {
     showLoadingState();
     QTimer::singleShot(std::max(0, delayMs), this, [this, generation] {
         if (generation != m_loadGeneration || !m_editorInitialized) return;
+        if (auto* frame = qobject_cast<InternalEditorFrame*>(parentWidget());
+            frame && frame->isInteracting()) {
+            // Vendor construction can block the GUI thread and replace mouse
+            // capture. Let the first title gesture finish before entering it.
+            scheduleEditorInitialization(kNativeMapRetryMs);
+            return;
+        }
         // Plugins can request main-thread callbacks during construction and
         // state restore. This is the real loading turn, not merely a label.
         if (m_controller) (void)m_controller->pumpPluginEvents();
@@ -597,16 +614,16 @@ void PluginEditorWindow::hideLoadingState() {
 void PluginEditorWindow::buildWrapper() {
     m_wrapper = new QWidget(this);
     m_wrapper->setObjectName(QStringLiteral("PluginWrapper"));
-    m_wrapper->setFixedHeight(28);
+    m_wrapper->setFixedHeight(32);
     auto* row = new QHBoxLayout(m_wrapper);
-    row->setContentsMargins(6, 2, 6, 3);
+    row->setContentsMargins(8, 3, 8, 3);
     row->setSpacing(6);
 
     m_power = new ui::IconButton(icons::Glyph::Power,
                                  tr("Enable or bypass this plugin"), m_wrapper);
     m_power->setObjectName(QStringLiteral("PluginPower"));
     m_power->setCheckable(true);
-    m_power->setButtonSize(24, 22);
+    m_power->setButtonSize(24, 24);
     m_power->setProperty("consoleButton", true);
     m_power->setFocusPolicy(Qt::StrongFocus);
     m_power->setAccessibleName(tr("Plugin enabled"));
@@ -805,7 +822,7 @@ void PluginEditorWindow::rebuildEditorContent() {
     m_contentIdentity = plugin ? plugin->identity : daw::PluginIdentity{};
     QString title = tr("Plugin");
     if (plugin) {
-        title = QString::fromStdString(plugin->name);
+        title = eqUi::displayName(plugin->uid, plugin->name);
         m_pluginUid = QString::fromStdString(plugin->uid);
     }
     setWindowTitle(title);
@@ -873,16 +890,31 @@ void PluginEditorWindow::rebuildEditorContent() {
         return;
     }
 
-    if (trustedInternal && descriptorUid == "daw.morph") {
+    if (trustedInternal && descriptorUid == "daw.flux") {
+        auto* panel = new FluxPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &FluxPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &FluxPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("flux"));
+        setMinimumSize(panel->minimumSizeHint() + QSize(0, 39));
+        m_fallbackContentSize = panel->sizeHint() + QSize(0, 39);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.morph") {
         auto* panel = new MorphPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
         connect(panel, &MorphPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
         connect(panel, &MorphPanel::automationRequested, this,
                 [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        connect(panel, &MorphPanel::preferredHeightChanged, this, [this](int height) {
+            m_fallbackContentSize = QSize(width() - dockWidth(), height + m_wrapper->height());
+            applyRequestedContentSize(requestedContentSize());
+        });
         m_contentRow->insertWidget(0, panel, 1);
         emit builtInPanelReady(panel, QStringLiteral("morph"));
-        setMinimumSize(800, 579);
-        m_fallbackContentSize = QSize(1152, 807);
+        setMinimumSize(panel->minimumSizeHint() + QSize(0, 39));
+        m_fallbackContentSize = panel->sizeHint() + QSize(0, 39);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && daw::plugins::utility::isUtilityUid(descriptorUid)) {
         auto* binding = new RackParameterBinding(m_controller, m_channelId, m_insertId, this);
@@ -909,10 +941,8 @@ void PluginEditorWindow::rebuildEditorContent() {
                 });
         m_contentRow->insertWidget(0, m_generic, 1);
         emit builtInPanelReady(equalizerPanel, QStringLiteral("equalizer"));
-        // The branded EQ view itself is 820x520 minimum; this host widget also
-        // owns the 39 px plugin header above it.
-        setMinimumSize(820, 559);
-        m_fallbackContentSize = QSize(1040, 680);
+        setMinimumSize(equalizerPanel->minimumSize() + QSize(0, m_wrapper->height()));
+        m_fallbackContentSize = QSize(1080, 640 + m_wrapper->height());
         resize(m_fallbackContentSize);
     } else if (trustedInternal &&
                (daw::plugins::modulation::isModulationUid(descriptorUid) ||
@@ -934,6 +964,19 @@ void PluginEditorWindow::rebuildEditorContent() {
         setMinimumSize(rack ? 800 : 360, pro ? 659 : 529);
         m_fallbackContentSize = QSize(rack ? 1040 : 440, pro ? 700 : 570);
         resize(m_fallbackContentSize);
+#if DAW_ENABLE_REVERB
+    } else if (trustedInternal && descriptorUid == "daw.reverb") {
+        auto* panel = new ReverbPanel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &ReverbPanel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &ReverbPanel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("reverb"));
+        setMinimumSize(panel->minimumSize() + QSize(0, m_wrapper->height()));
+        m_fallbackContentSize = QSize(1120, 748);
+        resize(m_fallbackContentSize);
+#endif
     } else if (trustedInternal && descriptorUid == "daw.delay") {
         auto* panel = new DelayPanel(m_controller, m_channelId, m_insertId, this);
         m_generic = panel;
@@ -944,6 +987,17 @@ void PluginEditorWindow::rebuildEditorContent() {
         emit builtInPanelReady(panel, QStringLiteral("delay"));
         setMinimumSize(960, 459);
         m_fallbackContentSize = QSize(1100, 499);
+        resize(m_fallbackContentSize);
+    } else if (trustedInternal && descriptorUid == "daw.1073") {
+        auto* panel = new Vlt1073Panel(m_controller, m_channelId, m_insertId, this);
+        m_generic = panel;
+        connect(panel, &Vlt1073Panel::projectEdited, this, &PluginEditorWindow::projectEdited);
+        connect(panel, &Vlt1073Panel::automationRequested, this,
+                [this](const QString& id) { emit automationRequested(m_channelId, m_insertId, id); });
+        m_contentRow->insertWidget(0, panel, 1);
+        emit builtInPanelReady(panel, QStringLiteral("1073"));
+        setMinimumSize(252, 633);
+        m_fallbackContentSize = QSize(315, 782);
         resize(m_fallbackContentSize);
     } else if (trustedInternal && descriptorUid == "daw.cla2a") {
         auto* panel = new Cla2aPanel(m_controller, m_channelId, m_insertId, this);
@@ -1060,6 +1114,14 @@ void PluginEditorWindow::tryAttachNativeEditor(std::uint64_t generation,
         // The slot was replaced while its old GUI was loading. Never call a
         // retired instance; start again against the live slot instead.
         scheduleEditorInitialization(0);
+        return;
+    }
+
+    if (auto* frame = qobject_cast<InternalEditorFrame*>(parentWidget());
+        frame && frame->isInteracting()) {
+        QTimer::singleShot(kNativeMapRetryMs, this, [this, generation, attempt] {
+            tryAttachNativeEditor(generation, attempt);
+        });
         return;
     }
 
@@ -1180,7 +1242,7 @@ void PluginEditorWindow::refreshWrapper() {
     m_rightChannel->setChecked(model->editorChannel ==
                                daw::PluginEditorChannel::Right);
 
-    m_pluginName->setText(QString::fromStdString(model->name));
+    m_pluginName->setText(eqUi::displayName(model->uid, model->name));
     m_pluginName->setToolTip(m_pluginName->text());
 
     const bool supports =
@@ -1848,7 +1910,7 @@ bool PluginEditorWindow::checkIdleForTest(daw::EngineController& controller,
                                 nativeSize.height() + editor->m_wrapper->height());
         return editor->size() == contentSize &&
                editor->m_container && editor->m_container->size() == nativeSize &&
-               frame.size() == contentSize + QSize(2, 24);
+               frame.size() == contentSize + QSize(2, 28);
     };
     const bool smallEditorFits = fitsNativeSize(QSize(320, 120));
     // Simulate the same host callback a plugin sends when it changes its GUI.
@@ -2069,6 +2131,7 @@ void PluginEditorWindow::buildGenericRow(int index) {
     name->setText(name->fontMetrics().elidedText(name->toolTip(), Qt::ElideRight, 140));
     auto* slider = new ui::GlassSlider(Qt::Horizontal, rows);
     slider->setRange(0, kSliderSteps);
+    slider->setEnabled(!parameter.isReadOnly);
     slider->setAccessibleName(QString::fromStdString(parameter.name));
     name->setBuddy(slider);
     slider->setProperty("genericRow", index);
@@ -2289,8 +2352,8 @@ PluginEditorWindow { background: %BG%; }
 )").replace("%RADIUS%", QString::number(Theme::cornerRadius))
         .replace("%BG%", t.background.name())
         .replace("%SURFACE%", t.surface.name())
-        .replace("%HEADER%", t.headerBackground.name())
-        .replace("%TOP%", mixColors(t.headerBackground, t.surfaceElevated, 0.32).name())
+        .replace("%HEADER%", pluginEditorChromeSurface(t).name())
+        .replace("%TOP%", mixColors(pluginEditorChromeSurface(t), t.surfaceElevated, 0.025).name())
         .replace("%WELL_TOP%", t.wellTop().name())
         .replace("%WELL_EDGE%", t.edgeDark(t.well()).name())
         .replace("%LIGHT%", t.edgeLight(t.headerBackground).name())
@@ -2303,6 +2366,10 @@ PluginEditorWindow { background: %BG%; }
         .replace("%TEXT%", t.textPrimary.name())
         .replace("%TEXT2%", t.textSecondary.name()));
     m_dockToggle->setIcon(icons::icon(icons::Glyph::Automation, t.textSecondary, 16));
+    if (m_pluginUid == QStringLiteral("daw.equalizer")) {
+        setStyleSheet(styleSheet() + QStringLiteral(
+            "PluginEditorWindow { background: %1; }").arg(eqUi::canvas().name()));
+    }
     if (property("vlt.pitchChrome").toBool()) {
         setStyleSheet(styleSheet() + QStringLiteral(
             "PluginEditorWindow { background: transparent; }"));

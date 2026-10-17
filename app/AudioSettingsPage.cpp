@@ -8,6 +8,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -42,7 +43,12 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     m_outputs = m_controller->enumerateOutputDevices();
     m_inputs = m_controller->enumerateInputDevices();
 
+    auto* layout = new QVBoxLayout(this);
+    auto* deviceGroup = new QGroupBox(tr("Audio device"), this);
+    auto* deviceColumn = new QVBoxLayout(deviceGroup);
     auto* form = new QFormLayout;
+    deviceColumn->addLayout(form);
+    layout->addWidget(deviceGroup);
     m_driverCombo = new QComboBox;
     m_driverCombo->setObjectName(QStringLiteral("AudioDriverType"));
     form->addRow(tr("Driver Type"), m_driverCombo);
@@ -65,6 +71,8 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     m_channelRow = new QWidget;
     auto* channelButtons = new QHBoxLayout(m_channelRow);
     channelButtons->setContentsMargins(0, 0, 0, 0);
+    channelButtons->setSizeConstraint(QLayout::SetMinimumSize);
+    m_channelRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_inputConfig = new QPushButton(tr("Input Config..."));
     m_inputConfig->setObjectName(QStringLiteral("AsioInputConfig"));
     m_outputConfig = new QPushButton(tr("Output Config..."));
@@ -74,27 +82,40 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     m_channelLabel = new QLabel(tr("Channel Configuration"));
     form->addRow(m_channelLabel, m_channelRow);
 
+    auto* latencyGroup = new QGroupBox(tr("Quality and latency"), this);
+    auto* latencyColumn = new QVBoxLayout(latencyGroup);
+    auto* latencyForm = new QFormLayout;
     m_sampleRateCombo = new QComboBox;
     m_sampleRateCombo->setObjectName(QStringLiteral("AudioSampleRate"));
-    form->addRow(tr("Sample Rate"), m_sampleRateCombo);
+    latencyForm->addRow(tr("Sample Rate"), m_sampleRateCombo);
     m_bufferCombo = new QComboBox;
     m_bufferCombo->setObjectName(QStringLiteral("AudioBufferSize"));
-    form->addRow(tr("Buffer Size"), m_bufferCombo);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->addLayout(form);
+    latencyForm->addRow(tr("Buffer Size"), m_bufferCombo);
+    latencyColumn->addLayout(latencyForm);
+    m_latencySummary = new QLabel(latencyGroup);
+    m_latencySummary->setObjectName(QStringLiteral("AudioLatencySummary"));
+    m_latencySummary->setWordWrap(true);
+    m_latencySummary->setAccessibleName(tr("Buffer duration"));
+    latencyColumn->addWidget(m_latencySummary);
+    auto* latencyHint = new QLabel(tr("A smaller buffer responds faster; a larger buffer gives the audio engine more time. This is one buffer's duration, not total input-to-output latency."), latencyGroup);
+    latencyHint->setWordWrap(true);
+    latencyHint->setProperty("role", "secondary");
+    latencyColumn->addWidget(latencyHint);
+    layout->addWidget(latencyGroup);
 
     m_deviceNote = new QLabel;
     m_deviceNote->setWordWrap(true);
-    m_deviceNote->setStyleSheet(QStringLiteral("color:palette(mid);"));
-    layout->addWidget(m_deviceNote);
+    m_deviceNote->setProperty("role", "secondary");
+    deviceColumn->addWidget(m_deviceNote);
 
     m_bufferNote = new QLabel;
     m_bufferNote->setWordWrap(true);
-    m_bufferNote->setStyleSheet(QStringLiteral("color:#c08040;"));
+    m_bufferNote->setProperty("role", "secondary");
     m_bufferNote->setVisible(false);
     layout->addWidget(m_bufferNote);
 
+    auto* monitorGroup = new QGroupBox(tr("Monitoring"), this);
+    auto* monitorColumn = new QVBoxLayout(monitorGroup);
     m_cpuStatusBar = new QCheckBox(
         tr("Show audio CPU load in the bottom status bar"), this);
     m_cpuStatusBar->setObjectName(QStringLiteral("ShowCpuStatusBar"));
@@ -106,21 +127,22 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
         QSettings().setValue(ui::kCpuStatusBarVisibleSetting, visible);
         emit cpuStatusBarVisibilityChanged(visible);
     });
-    layout->addWidget(m_cpuStatusBar);
-    layout->addStretch(1);
+    monitorColumn->addWidget(m_cpuStatusBar);
+    layout->addWidget(monitorGroup);
 
     m_controlPanel = new QPushButton(tr("Hardware Setup..."));
     m_controlPanel->setObjectName(QStringLiteral("AsioHardwareSetup"));
     auto* applyButton = new QPushButton(tr("Apply"));
     applyButton->setObjectName(QStringLiteral("ApplyAudioSettings"));
+    applyButton->setProperty("accentAction", true);
     auto* buttons = new QHBoxLayout;
     buttons->addWidget(m_controlPanel);
     buttons->addStretch(1);
-    buttons->addWidget(applyButton);
     auto* reconnect = new QPushButton(tr("Reconnect"), this);
     reconnect->setObjectName(QStringLiteral("ReconnectAudioDevice"));
     reconnect->setAccessibleName(tr("Reconnect audio device"));
     buttons->addWidget(reconnect);
+    buttons->addWidget(applyButton);
     connect(reconnect, &QPushButton::clicked, this, [this] {
         const auto result = m_controller->recoverAudioDevice(true);
         syncSettledConfiguration();
@@ -128,6 +150,7 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
         m_bufferNote->show();
     });
     layout->addLayout(buttons);
+    layout->addStretch(1);
 
     QSet<QString> hostApis;
     for (const auto& device : m_outputs)
@@ -161,6 +184,8 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     connect(m_outputConfig, &QPushButton::clicked, this,
             &AudioSettingsPage::configureOutput);
     connect(applyButton, &QPushButton::clicked, this, &AudioSettingsPage::apply);
+    connect(m_sampleRateCombo, &QComboBox::currentIndexChanged, this, &AudioSettingsPage::updateLatencySummary);
+    connect(m_bufferCombo, &QComboBox::currentIndexChanged, this, &AudioSettingsPage::updateLatencySummary);
     connect(m_controlPanel, &QPushButton::clicked, this, [this] {
         const auto* device = selectedOutput();
         if (!device) return;
@@ -186,6 +211,15 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     });
 
     populateDeviceLists();
+    updateLatencySummary();
+}
+
+void AudioSettingsPage::updateLatencySummary() {
+    const double rate = m_sampleRateCombo->currentData().toDouble();
+    const int frames = m_bufferCombo->currentData().toInt();
+    m_latencySummary->setText(rate > 0.0 && frames > 0
+        ? tr("%1 ms per buffer · %2 samples").arg(1000.0 * frames / rate, 0, 'f', 2).arg(frames)
+        : tr("Choose an audio device to see buffer duration."));
 }
 
 bool AudioSettingsPage::isAsioSelected() const {
@@ -331,6 +365,7 @@ void AudioSettingsPage::refreshDeviceCapabilities() {
                "PortAudio never receives an invalid mixed-driver stream."));
     }
     m_controlPanel->setEnabled(m_selectedDevice.hasControlPanel);
+    updateLatencySummary();
 }
 
 void AudioSettingsPage::configureInputs() {
@@ -474,7 +509,8 @@ void AudioSettingsPage::apply() {
     preferences.config = settled;
     ui::saveAudioPreferences(preferences);
     syncSettledConfiguration();
-    m_bufferNote->setVisible(false);
+    m_bufferNote->setText(tr("Audio settings applied."));
+    m_bufferNote->setVisible(true);
 }
 
 bool AudioSettingsPage::checkForTest() const {

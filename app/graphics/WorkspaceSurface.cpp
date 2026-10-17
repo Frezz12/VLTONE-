@@ -468,13 +468,22 @@ WorkspaceSurface::~WorkspaceSurface() {
 void WorkspaceSurface::invalidate() {
     if (!m_source || m_stopping) return;
     m_layers.clear();
-    m_offscreenLayers.clear(); m_offscreenBytes = 0;
+    m_offscreenLayers.clear(); m_offscreenRecency.clear(); m_offscreenBytes = 0;
     requestCapture();
+}
+QImage WorkspaceSurface::grabImage() {
+    if (m_stopping || !m_source || !m_source->isVisible() || !m_window->isExposed()) return {};
+    // Saving can run before the next scheduled frame. Record the current UI
+    // now, then let Quick synchronize and read back its native child surface.
+    invalidate();
+    capture();
+    return m_stopping ? QImage() : m_window->grabWindow();
 }
 void WorkspaceSurface::discardOffscreenLayer(quintptr id) {
     const auto found = m_offscreenLayers.find(id);
     if (found == m_offscreenLayers.end()) return;
     m_offscreenBytes -= found->second.bytes;
+    m_offscreenRecency.erase(found->second.recency);
     m_offscreenLayers.erase(found);
 }
 void WorkspaceSurface::requestFrame() {
@@ -505,10 +514,9 @@ void WorkspaceSurface::resizeSurface() {
     for (QWidget* widget : m_source->findChildren<QWidget*>()) {
         if (widget->property("vlt.nativeOverlay").toBool() &&
             widget->isVisible() && !widget->isWindow()) {
-            widget->raise();
             // Qt's QObject order may already put the frame last even though
             // raising the native Quick sibling just covered its HWND/NSView.
-            if (widget->windowHandle()) widget->windowHandle()->raise();
+            raiseNativeOverlay(widget);
         }
     }
     m_item->setSize(m_source->size());
@@ -721,11 +729,12 @@ void WorkspaceSurface::capture() {
             if (bytes <= budget) {
                 while (!m_offscreenLayers.empty() &&
                        (m_offscreenBytes + bytes > budget || m_offscreenLayers.size() >= 4096)) {
-                    const auto oldest = std::min_element(m_offscreenLayers.begin(), m_offscreenLayers.end(),
-                        [](const auto& a, const auto& b) { return a.second.used < b.second.used; });
-                    discardOffscreenLayer(oldest->first);
+                    discardOffscreenLayer(m_offscreenRecency.front());
                 }
-                m_offscreenLayers.emplace(it->first, OffscreenLayer{std::move(it->second), bytes, m_revision});
+                discardOffscreenLayer(it->first);
+                m_offscreenRecency.push_back(it->first);
+                m_offscreenLayers.emplace(it->first, OffscreenLayer{std::move(it->second), bytes,
+                    std::prev(m_offscreenRecency.end())});
                 m_offscreenBytes += bytes;
             }
         }
@@ -1138,7 +1147,10 @@ bool WorkspaceSurface::eventFilter(QObject* object, QEvent* event) {
         // Qt can omit their Paint events; exposure later must still reveal
         // current model pixels, rather than the old retained layer.
         m_collectedWidgetUpdates = collectWidgetUpdates(m_source, m_dirty, m_geometryExposure);
-        if (!m_dirty.isEmpty()) requestCapture(m_geometryExposure || !m_collectedWidgetUpdates);
+        // Ordinary widget geometry events already invalidate the hierarchy
+        // below. Native overlays are absent from the scene: their exposure
+        // must not turn each playback/meter update into a full widget walk.
+        if (!m_dirty.isEmpty()) requestCapture(!m_collectedWidgetUpdates);
         // Keep pending geometry exposure until Qt's backing-store update,
         // even if Quick captured an earlier frame in the meantime.
         m_geometryExposure = false;

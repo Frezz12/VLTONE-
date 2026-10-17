@@ -3,7 +3,10 @@
 #include "graphics/WidgetUpdates.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include "graphics/RetainedScene.hpp"
+#include "graphics/TextureStore.hpp"
+#include "graphics/StretchableRect.hpp"
 #include "UiFrameClock.hpp"
+#include "UiPerformance.hpp"
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QDragEnterEvent>
@@ -29,14 +32,172 @@
 #include <QToolButton>
 #include <QWidget>
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <vector>
+#include <functional>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
 #endif
+
+static bool checkStretchableRects() {
+    using namespace ui::graphics;
+    const auto rasterize = [](const std::vector<SceneMesh>& meshes, qreal dpr) {
+        QImage image(QSize(180 * dpr, 80 * dpr), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr); image.fill(Qt::transparent);
+        QPainter p(&image);
+        const auto triangles = [](const QVector<SceneVertex>& vertices) {
+            QPainterPath path; path.setFillRule(Qt::WindingFill);
+            for (int i = 0; i + 2 < vertices.size(); i += 3) {
+                path.moveTo(vertices[i].x, vertices[i].y);
+                path.lineTo(vertices[i + 1].x, vertices[i + 1].y);
+                path.lineTo(vertices[i + 2].x, vertices[i + 2].y);
+                path.closeSubpath();
+            }
+            return path;
+        };
+        std::function<void(const std::vector<SceneMesh>&)> draw = [&](const auto& list) {
+            for (const auto& mesh : list) {
+                p.save();
+                if (mesh.clip) {
+                    if (mesh.clip->rectangular) p.setClipRect(mesh.clip->bounds, Qt::IntersectClip);
+                    else p.setClipPath(triangles(mesh.clip->triangles), Qt::IntersectClip);
+                }
+                p.setWorldTransform(mesh.transform, true);
+                p.setOpacity(p.opacity() * mesh.opacity);
+                if (mesh.group) draw(mesh.group->meshes);
+                else { p.setPen(Qt::NoPen); p.setBrush(mesh.color); p.drawPath(triangles(mesh.vertices)); }
+                p.restore();
+            }
+        };
+        draw(meshes); p.end(); return image;
+    };
+    for (qreal dpr : {1., 1.25, 1.5, 2.}) for (int style = 0; style < 3; ++style) {
+        const bool outline = style != 0;
+        std::array<std::shared_ptr<const SceneMeshGroup>, 3> previous;
+        for (qreal width : {1., 2.5, 8., 15.25, 80.25, 120.3}) {
+            std::array<QImage, 3> images;
+            for (int cached = 0; cached < 3; ++cached) {
+                SceneRecorder recorder(QSize(180, 80), dpr);
+                {
+                    QPainter p(&recorder);
+                    QPainterPath clip; clip.addRoundedRect(QRectF(8, 7, 100, 43), 4, 4);
+                    p.setClipPath(clip); p.setOpacity(.75);
+                    p.setPen(outline ? QPen(QColor(220, 240, 250), 1) : QPen(Qt::NoPen));
+                    p.setBrush(style == 2 ? QBrush(Qt::NoBrush) : QBrush(QColor(60, 120, 210)));
+                    const QRectF rect(8.37, 6.91, width, 38.25);
+                    if (cached) {
+                        if (!paintStretchableRoundedRect(p, rect, 2, cached == 1)) {
+                            if (cached != 1 || width >= 8) return false;
+                            p.drawRoundedRect(rect, 2, 2);
+                        }
+                    } else p.drawRoundedRect(rect, 2, 2);
+                }
+                if (!recorder.supported()) return false;
+                const auto meshes = recorder.takeMeshes();
+                if (cached == 1 && width >= 8) {
+                    if (meshes.size() != 3) return false;
+                    for (int i = 0; i < 3; ++i) {
+                        if (!meshes[i].group || meshes[i].snapTranslation ||
+                            (previous[i] && previous[i] != meshes[i].group)) return false;
+                        previous[i] = meshes[i].group;
+                    }
+                } else if (cached == 2) {
+                    for (const auto& mesh : meshes) if (mesh.group &&
+                        (!mesh.clip || std::any_of(mesh.group->meshes.begin(), mesh.group->meshes.end(),
+                            [](const auto& child) { return bool(child.group) || bool(child.clip); }))) return false;
+                }
+                images[cached] = rasterize(meshes, dpr);
+            }
+            for (int cached = 1; cached < 3; ++cached) {
+                int different = 0;
+                for (int y = 0; y < images[0].height(); ++y)
+                    for (int x = 0; x < images[0].width(); ++x)
+                        different += images[0].pixel(x, y) != images[cached].pixel(x, y);
+                // Triangulation can choose a different boundary sample, but a gap,
+                // doubled translucent seam or rescaled radius affects whole rows.
+                if (different > 32 * dpr) {
+                    std::cerr << "Stretchable rectangle differs: width=" << width
+                              << " dpr=" << dpr << " mode=" << cached << " pixels=" << different << '\n';
+                    return false;
+                }
+            }
+        }
+    }
+    // Dense MIDI previews are ordinary opaque rectangles under one curved
+    // clip. They must retain overlap coverage and produce one geometry batch.
+    for (qreal dpr : {1., 1.25, 1.5, 2.}) {
+        const auto paint = [](QPainter& p) {
+            QPainterPath mask; mask.addRoundedRect(QRectF(8,7,100,43),5,5);
+            p.setClipPath(mask); p.translate(.37,.21);
+            p.setPen(Qt::NoPen); p.setBrush(QColor(80,140,220));
+            QVector<QRectF> notes;
+            for (int i = 0; i < 128; ++i)
+                notes.append(QRectF(i%16*8-10,i/16*7-6,13,5));
+            p.drawRects(notes.constData(), int(notes.size()));
+        };
+        SceneRecorder recorder(QSize(180,80),dpr);
+        { QPainter p(&recorder); paint(p); }
+        const auto meshes = recorder.takeMeshes();
+        if (!recorder.supported() || meshes.size()!=1 || !meshes[0].clip || meshes[0].clip->rectangular)
+            return false;
+        const auto actual = rasterize(meshes,dpr);
+        QImage expected(actual.size(),actual.format());
+        expected.setDevicePixelRatio(dpr); expected.fill(Qt::transparent);
+        { QPainter p(&expected); paint(p); }
+        int different = 0;
+        for (int y = 0; y < actual.height(); ++y) for (int x = 0; x < actual.width(); ++x)
+            different += actual.pixel(x,y)!=expected.pixel(x,y);
+        if (different>32*dpr) {
+            std::cerr << "Batched MIDI rectangles changed clip/overlap coverage at DPR " << dpr
+                      << ": " << different << " pixels\n";
+            return false;
+        }
+    }
+    SceneRecorder dashed(QSize(50, 50));
+    // Paths and axis-aligned lines share the GPU mask just like note batches.
+    // Exercise holes, fractional placement and strokes crossing curved edges.
+    for (qreal dpr : {1., 1.25, 1.5, 2.}) for (bool hole : {false, true}) {
+        const auto paint = [hole](QPainter& p) {
+            QPainterPath mask; mask.addRoundedRect(QRectF(8,7,100,43),9,9);
+            if (hole) mask.addEllipse(QRectF(45,17,17,15));
+            p.setClipPath(mask); p.translate(.37,.21);
+            p.setPen(Qt::NoPen); p.setBrush(QColor(60,140,210,100));
+            QPainterPath fill; fill.addRoundedRect(QRectF(2,2,115,53),12,12);
+            p.drawPath(fill);
+            p.setPen(QPen(QColor(220,180,90,190),1.4,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+            p.setBrush(Qt::NoBrush);
+            QPainterPath curve; curve.moveTo(6,49); curve.cubicTo(25,4,66,50,109,6);
+            p.drawPath(curve);
+            p.setPen(QPen(Qt::white,1));
+            p.drawLine(QPointF(2,10),QPointF(120,10));
+            p.drawLine(QPointF(9,0),QPointF(9,60));
+        };
+        SceneRecorder recorder(QSize(180,80),dpr);
+        { QPainter p(&recorder); paint(p); }
+        if (!recorder.supported()) return false;
+        const auto meshes = recorder.takeMeshes();
+        for (const auto& mesh : meshes) if (!mesh.clip) return false;
+        const auto actual = rasterize(meshes,dpr);
+        QImage expected(actual.size(),actual.format());
+        expected.setDevicePixelRatio(dpr); expected.fill(Qt::transparent);
+        { QPainter p(&expected); paint(p); }
+        int different = 0;
+        for (int y=0;y<actual.height();++y) for (int x=0;x<actual.width();++x)
+            different += actual.pixel(x,y)!=expected.pixel(x,y);
+        if (different>80*dpr) {
+            std::cerr << "Shared path mask differs at DPR " << dpr << " hole=" << hole
+                      << ": " << different << " pixels\n";
+            return false;
+        }
+    }
+    QPainter p(&dashed); p.setBrush(Qt::red); p.setPen(QPen(Qt::white, 1, Qt::DashLine));
+    return !paintStretchableRoundedRect(p, QRectF(5, 5, 30, 20), 2);
+}
 
 class Canvas final : public ui::FrameWidget {
 public:
@@ -50,6 +211,7 @@ public:
     Qt::ScrollPhase wheelPhase = Qt::NoScrollPhase;
     ulong inputTimestamp = 0;
     bool overflow = false;
+    QPointF pan;
 protected:
     void mousePressEvent(QMouseEvent* event) override { lastMouse = event->position(); inputTimestamp = event->timestamp(); }
     void wheelEvent(QWheelEvent* event) override { wheelPixels = event->pixelDelta(); wheelPhase = event->phase(); }
@@ -67,6 +229,7 @@ protected:
             p.fillRect(rect(), palette().color(QPalette::Window));
             if (scene) scene->endRetainedSection();
         }
+        p.translate(pan);
         p.setPen(Qt::NoPen); p.setBrush(QColor(80, 160, 240));
         p.drawRoundedRect(QRectF(20, 20, 120, 60), 10, 10);
         p.setPen(Qt::white); p.drawText(QPointF(25, 50), QStringLiteral("Timeline 01"));
@@ -167,11 +330,199 @@ bool checkContextMenuRouting(Qt::ContextMenuTrigger trigger) {
     }
     return true;
 }
+// Optional hardware diagnostic. Keep timings out of the deterministic/offscreen
+// assertions: compositor, display and driver load all affect presentation.
+static int checkCadence() {
+    const auto run = [](int ms) {
+        QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
+    };
+    QWidget host;
+    host.setWindowFlag(Qt::WindowStaysOnTopHint);
+    host.setWindowTitle(QStringLiteral("GPU cadence check (closes automatically)"));
+    host.resize(480, 280);
+    Canvas canvas(&host); canvas.setGeometry(host.rect());
+    ui::graphics::WorkspaceSurface surface(&canvas);
+    bool failed = false;
+    QObject::connect(&surface, &ui::graphics::WorkspaceSurface::failed, &host,
+        [&](const QString& reason) { std::cerr << reason.toStdString() << '\n'; failed = true; });
+    host.show(); host.raise(); host.activateWindow(); run(500);
+    std::cout << "CADENCE active=" << host.isActiveWindow() << " platform=" << qApp->platformName().toStdString() << std::endl;
+    ui::FrameTimer timer(&canvas);
+    std::vector<double> ticks, submissions;
+    QElapsedTimer tickTime, pathTime;
+    bool sampling = false;
+    QObject::connect(&timer, &ui::FrameTimer::timeout, &canvas, [&] {
+        if (sampling && tickTime.isValid()) ticks.push_back(tickTime.nsecsElapsed() / 1e6);
+        tickTime.start();
+        canvas.pan = QPointF(std::fmod(pathTime.nsecsElapsed() / 1e7, 120.), 0);
+        canvas.update();
+    });
+    QObject::connect(&surface, &ui::graphics::WorkspaceSurface::frameMeasured, &canvas,
+        [&](double, double, double, double interval, double) {
+            if (sampling && interval > 0) submissions.push_back(interval);
+        });
+    for (int fps : {60, 240, 0}) {
+        ui::FrameClock::instance().setPreference(fps ? ui::FrameMode::Fixed : ui::FrameMode::Display,
+                                                fps ? fps : 60);
+        pathTime.start(); timer.start(); run(400);
+        sampling = true; ticks.clear(); submissions.clear(); run(2000);
+        sampling = false; timer.stop(); run(100);
+        const auto print = [&](const char* metric, std::vector<double> values) {
+            std::sort(values.begin(), values.end());
+            const double target = 1000. / std::min(fps ? double(fps) : 10000., host.screen()->refreshRate());
+            const auto gaps = std::count_if(values.begin(), values.end(), [&](double ms) { return ms > target * 1.5; });
+            if (!values.empty()) std::cout << "CADENCE fps=" << fps << " active=" << host.isActiveWindow() << " display=" << host.screen()->refreshRate()
+                << " metric=" << metric << " n=" << values.size() << " p50=" << values[values.size()/2]
+                << " p95=" << values[values.size()*95/100] << " max=" << values.back() << " gaps=" << gaps << std::endl;
+        };
+        print("callback", ticks); print("submission", submissions);
+        if (ticks.empty() || submissions.empty()) failed = true;
+        sampling = true; submissions.clear(); run(150); sampling = false;
+        if (!submissions.empty()) { std::cerr << "Cadence keeps an idle scene awake\n"; failed = true; }
+    }
+    ui::perf::flush();
+    return failed ? 1 : 0;
+}
+
+class CacheTestTexture final : public QSGTexture {
+public:
+    qint64 comparisonKey() const override { return qint64(this); }
+    QSize textureSize() const override { return {32, 32}; }
+    bool hasAlphaChannel() const override { return true; }
+    bool hasMipmaps() const override { return false; }
+};
+static bool checkTextureCacheAging(bool benchmark) {
+    if (!benchmark) {
+        constexpr qint64 cost = 32 * 32 * 4;
+        ui::graphics::TextureStore store(cost * 3);
+        const auto image = [] { return QImage(32, 32, QImage::Format_ARGB32_Premultiplied); };
+        const auto create = [] { return std::make_shared<CacheTestTexture>(); };
+        const auto a = image(), b = image(), c = image(), d = image();
+        std::weak_ptr<QSGTexture> first = store.get(a, create), second = store.get(b, create);
+        auto pinned = store.get(c, create);
+        auto touch = store.get(a, create); touch.reset();
+        if (!store.get(d, create) || first.expired() || !second.expired() || !pinned) {
+            std::cerr << "Texture eviction lost LRU order or a live resource\n"; return false;
+        }
+        // All entries pinned: reject pressure without releasing live textures.
+        auto holdA = store.get(a, create), holdD = store.get(d, create);
+        if (store.get(image(), create) || store.retainedBytes() != cost*3) return false;
+        holdA.reset(); holdD.reset();
+        for (int i = 0; i < 100; ++i) if (!store.get(image(), create)) return false;
+        if (store.get(c, create) != pinned) return false;
+        pinned.reset();
+        const auto count = store.retainedCount();
+        QImage oversized(64, 64, QImage::Format_ARGB32_Premultiplied);
+        if (store.get(oversized, create) || store.retainedCount() != count) return false;
+        if (store.get(image(), [] { return std::shared_ptr<QSGTexture>{}; })) return false;
+    }
+    for (int side : {128, 32}) {
+        ui::graphics::TextureStore store;
+        const auto insert = [&] {
+            QImage image(side, side, QImage::Format_ARGB32_Premultiplied);
+            return store.get(image, [] { return std::make_shared<CacheTestTexture>(); });
+        };
+        const int capacity = int(ui::graphics::TextureStore::budget / (side * side * 4));
+        for (int i = 0; i < capacity; ++i) if (!insert()) return false;
+        const auto before = store.statistics;
+        QElapsedTimer time; time.start();
+        for (int i = 0; i < 1000; ++i) if (!insert()) return false;
+        const auto visited = store.statistics.evictionVisits - before.evictionVisits;
+        if (benchmark) std::cout << "CACHE_AGING entries=" << store.retainedCount()
+            << " replacements=1000 visits=" << visited << " ms=" << time.nsecsElapsed()/1e6 << std::endl;
+        if (store.retainedBytes() > ui::graphics::TextureStore::budget ||
+            store.retainedCount() != capacity || store.statistics.evictions-before.evictions != 1000) return false;
+        // Eviction must not become a scan of all historical textures.
+        if (!benchmark && visited > 1000) {
+            std::cerr << "A full GPU cache scans old entries on every replacement\n"; return false;
+        }
+    }
+    return true;
+}
+
+class TextureChurnCanvas final : public ui::FrameWidget {
+public:
+    using ui::FrameWidget::FrameWidget;
+    std::vector<QImage> images;
+    int generation = 0;
+    void advance() {
+        images.clear();
+        for (int i = 0; i < 16; ++i) {
+            QImage image(32, 32, QImage::Format_ARGB32_Premultiplied);
+            image.fill(QColor::fromHsv((generation+i*13)%360, 100, 180));
+            images.push_back(std::move(image));
+        }
+        ++generation; update();
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this); p.fillRect(rect(), QColor(24,24,24));
+        for (int i = 0; i < images.size(); ++i) p.drawImage(QPoint((i%4)*40+8,(i/4)*40+8), images[i]);
+    }
+};
+static int checkTextureChurn() {
+    const auto run = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+    QWidget host; host.resize(200,200);
+    host.setWindowFlag(Qt::WindowStaysOnTopHint);
+    const auto screens = QGuiApplication::screens();
+    if (!screens.empty()) {
+        auto* screen = *std::max_element(screens.begin(), screens.end(),
+            [](auto* a, auto* b) { return a->refreshRate() < b->refreshRate(); });
+        host.setScreen(screen);
+        host.move(screen->availableGeometry().topLeft() + QPoint(80, 80));
+    }
+    host.setWindowTitle("GPU cache aging check (closes automatically)");
+    TextureChurnCanvas canvas(&host); canvas.setGeometry(host.rect()); canvas.advance();
+    ui::graphics::WorkspaceSurface surface(&canvas);
+    bool failed = false;
+    QObject::connect(&surface, &ui::graphics::WorkspaceSurface::failed, &host,
+        [&](const QString& reason) { std::cerr << reason.toStdString() << std::endl; failed = true; });
+    std::atomic<quint64> entries{0}, bytes{0}, visits{0}, evictions{0};
+    QObject::connect(surface.quickWindow(), &QQuickWindow::afterRendering, &surface, [&] {
+        const auto store = ui::graphics::TextureStore::forWindow(surface.quickWindow());
+        entries = store->retainedCount(); bytes = store->retainedBytes();
+        visits = store->statistics.evictionVisits; evictions = store->statistics.evictions;
+    }, Qt::DirectConnection);
+    ui::FrameClock::instance().setPreference(ui::FrameMode::Fixed, 240);
+    host.show(); host.raise(); host.activateWindow(); surface.quickWindow()->requestActivate(); run(500);
+    ui::FrameTimer timer(&canvas);
+    QObject::connect(&timer, &ui::FrameTimer::timeout, &canvas, [&] { canvas.advance(); });
+    std::vector<double> syncs, intervals;
+    int frames = 0;
+    QObject::connect(&surface, &ui::graphics::WorkspaceSurface::frameMeasured, &host,
+        [&](double, double sync, double, double interval, double) {
+            ++frames; syncs.push_back(sync); if (interval > 0) intervals.push_back(interval);
+        });
+    timer.start();
+    for (int phase = 0; phase < 3 && !failed; ++phase) {
+        frames = 0; syncs.clear(); intervals.clear(); QElapsedTimer elapsed; elapsed.start();
+        const quint64 oldVisits = visits, oldEvictions = evictions;
+        if (phase == 1) {
+            // Keep the same pressure even on a 60-Hz/background-throttled screen.
+            // Do not claim an aging result before the cache actually fills.
+            do { run(500); } while (elapsed.elapsed() < 20000 ||
+                (evictions < 1000 && elapsed.elapsed() < 60000));
+        } else run(3000);
+        const double seconds = elapsed.nsecsElapsed()/1e9;
+        std::sort(syncs.begin(),syncs.end()); std::sort(intervals.begin(),intervals.end());
+        const auto p95 = [](const auto& values) { return values.empty() ? 0. : values[(values.size()-1)*95/100]; };
+        std::cout << "TEXTURE_CHURN phase=" << phase << " fps=" << frames/seconds
+            << " display_hz=" << host.screen()->refreshRate() << " active=" << host.isActiveWindow()
+            << " sync_p95_ms=" << p95(syncs) << " interval_p95_ms=" << p95(intervals)
+            << " entries=" << entries.load() << " bytes=" << bytes.load()
+            << " visits=" << visits-oldVisits << " evictions=" << evictions-oldEvictions << std::endl;
+    }
+    timer.stop(); run(100);
+    if (!frames || bytes > ui::graphics::TextureStore::budget || evictions == 0) failed = true;
+    return failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     // Match the app's native hosting policy: editor frames must not promote
     // their complete QWidget sibling hierarchy above the Quick workspace.
     QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
     QApplication app(argc, argv);
+    if (!checkStretchableRects()) return 1;
     if (!ui::graphics::WorkspaceSurface::checkPointerRoutingForTest()) {
         std::cerr << "GPU input routing did not survive reentrant teardown\n";
         return 1;
@@ -180,6 +531,10 @@ int main(int argc, char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, preferences.path());
     app.setOrganizationName("VltGpuTest"); app.setApplicationName("Scene");
+    if (app.arguments().contains("--cadence")) return checkCadence();
+    if (app.arguments().contains("--cache-benchmark")) return checkTextureCacheAging(true) ? 0 : 1;
+    if (app.arguments().contains("--texture-churn")) return checkTextureChurn();
+    if (!checkTextureCacheAging(false)) return 1;
     const bool overrideWasSet = qEnvironmentVariableIsSet("VLT_GPU_WORKSPACE");
     const auto savedOverride = qgetenv("VLT_GPU_WORKSPACE");
     qunsetenv("VLT_GPU_WORKSPACE");
@@ -244,6 +599,34 @@ int main(int argc, char** argv) {
         p.fillRect(QRectF(1, 2, 20, 30), Qt::green);
     }
     if (!hidden.takeMeshes().empty()) { std::cerr << "A fully clipped primitive must produce no geometry\n"; return 1; }
+    // Axis-aligned grid strokes must keep the same bounds as the general
+    // QPainterPath stroker, including caps, reversal, clipping and transforms.
+    for (auto cap : {Qt::FlatCap, Qt::SquareCap}) for (bool vertical : {false, true}) {
+        ui::graphics::SceneRecorder lines(QSize(100, 100), 2);
+        {
+            QPainter p(&lines);
+            p.setClipRect(QRectF(12, 10, 60, 65));
+            p.translate(5, 7);
+            p.scale(1.5, 2);
+            p.setPen(QPen(Qt::cyan, 2, Qt::SolidLine, cap));
+            p.drawLine(vertical ? QLineF(20, 40, 20, 10) : QLineF(40, 20, 10, 20));
+        }
+        const auto meshes = lines.takeMeshes();
+        const qreal extension = cap == Qt::SquareCap ? 1 : 0;
+        const QRectF local = vertical ? QRectF(19, 10 - extension, 2, 30 + 2 * extension)
+                                      : QRectF(10 - extension, 19, 30 + 2 * extension, 2);
+        QTransform transform; transform.translate(5, 7); transform.scale(1.5, 2);
+        const QRectF expected = transform.mapRect(local).intersected(QRectF(12, 10, 60, 65));
+        QRectF actual;
+        if (meshes.size() != 1 || meshes.front().vertices.size() != 6) return 1;
+        for (const auto& vertex : meshes.front().vertices) {
+            if (!expected.contains(QPointF(vertex.x, vertex.y))) return 1;
+            if (actual.isNull()) actual = QRectF(vertex.x, vertex.y, .000001, .000001);
+            actual = actual.united(QRectF(vertex.x, vertex.y, .000001, .000001));
+        }
+        if (std::abs(actual.width() - expected.width()) > .00001 ||
+            std::abs(actual.height() - expected.height()) > .00001) return 1;
+    }
     // Clip state stays fixed in device coordinates through transforms and is
     // restored after nested clipping. Image UVs must still select the source
     // subrectangle after CPU rectangle clipping (and later atlas placement).
@@ -312,20 +695,29 @@ int main(int argc, char** argv) {
         std::cerr << "Scrolling an identical gradient recreated its texture\n"; return 1;
     }
     auto retained = std::make_shared<ui::graphics::SceneRecordingCache>();
-    const ui::graphics::SceneVertex* original = nullptr;
+    std::shared_ptr<const ui::graphics::SceneMeshGroup> original;
     for (int frame = 0; frame < 2; ++frame) {
         ui::graphics::SceneRecorder pass(QSize(320, 140), 2, retained);
         {
             QPainter p(&pass);
+            p.translate(7, 9);
+            p.setOpacity(.5);
             auto* sink = ui::graphics::sceneGeometrySink(p);
             const bool needsDrawing = sink->beginRetainedSection(42, frame == 0);
             if (needsDrawing != (frame == 0)) return 1;
             if (needsDrawing) { p.fillRect(QRectF(1, 2, 20, 30), Qt::red); sink->endRetainedSection(); }
         }
         const auto recorded = pass.takeMeshes();
-        if (recorded.size() != 1) return 1;
-        if (!original) original = recorded.front().vertices.constData();
-        else if (recorded.front().vertices.constData() != original) return 1;
+        if (recorded.size() != 1 || !recorded.front().group ||
+            !recorded.front().transform.isIdentity() || recorded.front().opacity != 1) return 1;
+        const auto group = recorded.front().group;
+        if (group->meshes.size() != 1 || group->meshes.front().opacity != .5 ||
+            group->meshes.front().vertices.front().x != 8 ||
+            group->meshes.front().vertices.front().y != 11) return 1;
+        if (!original) original = group;
+        else if (group != original) {
+            std::cerr << "Unchanged sections must reuse the complete immutable group\n"; return 1;
+        }
     }
     for (const auto viewport : {std::pair{QSize(321, 140), 2.}, std::pair{QSize(321, 140), 1.}}) {
         ui::graphics::SceneRecorder pass(viewport.first, viewport.second, retained);
@@ -336,6 +728,23 @@ int main(int argc, char** argv) {
         }
         p.fillRect(QRect(0, 0, 20, 20), Qt::red);
         sink->endRetainedSection();
+    }
+    auto mediaSection = std::make_shared<ui::graphics::SceneRecordingCache>();
+    for (int frame = 0; frame < 2; ++frame) {
+        ui::graphics::SceneRecorder pass(QSize(320, 140), 1, mediaSection);
+        {
+            QPainter p(&pass);
+            auto* sink = ui::graphics::sceneGeometrySink(p);
+            if (!sink->beginRetainedSection(77, false)) return 1;
+            p.fillRect(QRect(0, 0, 20, 20), Qt::red);
+            sink->appendVisual(123, QRectF(20, 0, 20, 20));
+            p.fillRect(QRect(40, 0, 20, 20), Qt::blue);
+            sink->endRetainedSection();
+        }
+        const auto result = pass.takeMeshes();
+        if (result.size() != 3 || result[1].visualId != 123 || result[0].group || result[2].group) {
+            std::cerr << "A retained section hid a Quick visual or changed its stacking order\n"; return 1;
+        }
     }
     ui::graphics::RetainedScene tiles;
     std::shared_ptr<const ui::graphics::SceneMeshGroup> firstGroup;
@@ -361,6 +770,25 @@ int main(int argc, char** argv) {
         tiles.paint(p, 123, QSize(320, 140), {}, [](QPainter& tile) { tile.fillRect(QRect(0, 0, 20, 20), Qt::red); });
     }
     if (rebuilt.takeMeshes().front().group == firstGroup || tiles.builds() != 2) return 1;
+    // Fill, touch and replace retained tiles: eviction must preserve recently
+    // reused geometry, and invalidation must unlink its recency entry as well.
+    tiles.clear();
+    const auto retainTile = [&](quint64 key) {
+        ui::graphics::SceneRecorder pass(QSize(32, 32), 2);
+        QPainter painter(&pass);
+        tiles.paint(painter, key, QSize(32, 32), {}, [](QPainter& local) {
+            local.fillRect(QRect(0, 0, 16, 16), Qt::green);
+        });
+    };
+    for (quint64 key = 0; key < 512; ++key) retainTile(key);
+    const auto fullBuilds = tiles.builds();
+    retainTile(0); retainTile(512); retainTile(0);
+    if (tiles.builds() != fullBuilds + 1) return 1;
+    retainTile(1); // Oldest untouched entry was evicted.
+    if (tiles.builds() != fullBuilds + 2) return 1;
+    tiles.invalidate([](quint64 key) { return key == 0 || key == 512; });
+    retainTile(0); retainTile(512);
+    if (tiles.builds() != fullBuilds + 4) return 1;
     const auto nativeTrigger = app.styleHints()->contextMenuTrigger();
     for (const auto trigger : {Qt::ContextMenuTrigger::Release, Qt::ContextMenuTrigger::Press}) {
         app.styleHints()->setContextMenuTrigger(trigger);
@@ -454,6 +882,27 @@ int main(int argc, char** argv) {
     QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
     QObject::disconnect(idleConnection);
     if (idleFrames) { std::cerr << "A static GPU workspace keeps rendering\n"; return 1; }
+    {
+        // A single pointer position needs one new scene, not a second submit
+        // caused by recording Quick item changes after its polish phase.
+        const auto frames = std::make_shared<std::atomic<int>>(0);
+        const auto connection = QObject::connect(surface->quickWindow(), &QQuickWindow::frameSwapped, &app,
+            [frames] { ++*frames; }, Qt::DirectConnection);
+        const int paintsBefore = canvas->paints;
+        for (int sample = 1; sample <= 20; ++sample) {
+            canvas->pan = QPointF(sample * .25, sample * .125);
+            canvas->update();
+        }
+        QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
+        QObject::disconnect(connection);
+        if (frames->load() != 1 || canvas->paints - paintsBefore != 1) {
+            std::cerr << "Coalesced input produced duplicate GPU frames: paints=" << canvas->paints - paintsBefore
+                      << " frames=" << frames->load() << '\n';
+            return 1;
+        }
+        canvas->pan = {}; canvas->update();
+        QTimer::singleShot(100, &loop, &QEventLoop::quit); loop.exec();
+    }
     canvas->overflow = true; canvas->update();
     QTimer::singleShot(150, &loop, &QEventLoop::quit); loop.exec();
     if (surface->quickWindow()->grabWindow().pixelColor(int(310*dpr), int(70*dpr)) != QColor(Qt::magenta)) {
@@ -807,6 +1256,21 @@ int main(int argc, char** argv) {
         rounded.move(15 + pass*5, 15 + pass*5);
         rounded.resize(85 - pass*5, 85 - pass*5);
         round();
+    }
+    // Mask changes do not require a move/resize. Cached descendant clips must
+    // follow both removing and restoring the mask during a local update.
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    rounded.clearMask(); rounded.update();
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    const QPoint maskCorner = rounded.mapTo(canvas, QPoint(1, 1));
+    if (surface->quickWindow()->grabWindow().pixelColor(int(maskCorner.x()*dpr), int(maskCorner.y()*dpr)) != QColor(Qt::yellow)) {
+        std::cerr << "Removing a mask retained an old descendant clip\n"; return 1;
+    }
+    round(); rounded.update();
+    QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+    if (surface->quickWindow()->grabWindow().pixelColor(int(maskCorner.x()*dpr), int(maskCorner.y()*dpr)) !=
+        behindRounded.pixelColor(int(maskCorner.x()*dpr), int(maskCorner.y()*dpr))) {
+        std::cerr << "Restoring a mask leaked cached descendant pixels\n"; return 1;
     }
     rounded.hide();
     DragControl dragSource(canvas), dropTarget(canvas);

@@ -20,7 +20,7 @@ template<class Node> struct SavedControl {
 };
 using Control = std::variant<SavedControl<engine::GainNode>, SavedControl<engine::SendNode>,
     SavedControl<engine::InputNode>, SavedControl<engine::ClipPlayerNode>,
-    SavedControl<engine::MidiClipPlayerNode>, SavedControl<plugins::PluginNode>>;
+    SavedControl<engine::MidiClipPlayerNode>, SavedControl<plugins::PluginNode>, SavedControl<engine::ModulationNode>>;
 struct BuiltinState {
     std::shared_ptr<plugins::PluginNode> node;
     std::vector<std::uint8_t> bytes;
@@ -93,6 +93,7 @@ AudioRuntime::TransactionId AudioRuntime::captureTransaction() {
     };
     remember(masterFader);
     for (const auto& [id, channel] : channels) {
+        for (const auto& [source, node] : channel.modulators) remember(node);
         remember(channel.clips); remember(channel.frozenPlayer); remember(channel.midiClips);
         remember(channel.input); remember(channel.fader); remember(channel.samplerFader);
         for (const auto& send : channel.sends) remember(send);

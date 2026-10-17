@@ -1,9 +1,11 @@
 #include "RackWidget.hpp"
+#include "RackModulationPanel.hpp"
 #include "Controls.hpp"
 #include "FileTypes.hpp"
 #include "Icons.hpp"
 #include "MiniModuleRack.hpp"
 #include "PluginPickerMenu.hpp"
+#include "PatternWindow.hpp"
 #include "RackDeviceCard.hpp"
 #include "RackDrag.hpp"
 #include "Theme.hpp"
@@ -47,7 +49,7 @@ class GroupHeader final : public QLabel {
         setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         setMinimumWidth(0);
         setFocusPolicy(Qt::StrongFocus);
-        setCursor(Qt::OpenHandCursor);
+        setCursor(Qt::SizeAllCursor);
     }
     std::function<void(Qt::KeyboardModifiers)> select;
     std::function<void(Qt::KeyboardModifiers)> click;
@@ -121,12 +123,27 @@ QString keyCommand(QKeyEvent* e) {
         return "delete";
     return {};
 }
+void preserveDeviceHeight(QScrollArea* scroll, const QWidget* chain) {
+    // Vertical scrolling is disabled. Keep every card's controls accessible.
+    // Reserve the horizontal bar too, so
+    // narrowing the rack cannot clip the bottom of a card.
+    if (auto* layout = chain->layout()) layout->activate();
+    const int minimum = std::max({0, chain->minimumHeight(), chain->minimumSizeHint().height()}) +
+        scroll->horizontalScrollBar()->sizeHint().height();
+    if (scroll->minimumHeight() != minimum) scroll->setMinimumHeight(minimum);
+}
 } // namespace
 RackWidget::RackWidget(daw::EngineController* c, QWidget* parent) : QWidget(parent), m_controller(c) {
     setObjectName("RackPanel");
     setFocusPolicy(Qt::StrongFocus);
     setMinimumWidth(0);
-    auto* root = new QHBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(2);
+    m_modulation = new RackModulationPanel(m_controller, this);
+    m_modulation->hide();
+    connect(m_modulation, &RackModulationPanel::edited, this, [this] { changed(); });
+    auto* root = new QHBoxLayout;
+    outer->addLayout(root, 1);
     root->setContentsMargins(8, 6, 8, 6);
     root->setSpacing(10);
     m_left = new QWidget(this);
@@ -135,9 +152,27 @@ RackWidget::RackWidget(daw::EngineController* c, QWidget* parent) : QWidget(pare
     auto* left = new QVBoxLayout(m_left);
     left->setContentsMargins(0, 0, 0, 0);
     left->setSpacing(0);
+    m_patternBack = new QToolButton(m_left);
+    m_patternBack->setObjectName("RackBackToPattern");
+    m_patternBack->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_patternBack->setIcon(icons::icon(icons::Glyph::ArrowLeft, th().textSecondary, 14));
+    m_patternBack->setText(tr("Back to Pattern"));
+    m_patternBack->setToolTip(tr("Back to Pattern"));
+    m_patternBack->setAccessibleName(tr("Back to Pattern"));
+    m_patternBack->setMinimumHeight(28);
+    left->addWidget(m_patternBack);
+    m_patternBack->hide();
+    connect(m_patternBack, &QAbstractButton::clicked, this, [this] {
+        const auto id = m_patternBack->property("patternId").toString();
+        if (id.isEmpty()) return;
+        const auto clip = m_pattern->patternId() == id ? m_pattern->patternClipId() : QString{};
+        setPattern(id, clip);
+        emit patternRequested(id, clip);
+    });
     root->addWidget(m_left);
     m_scroll = new QScrollArea(this);
     m_scroll->setObjectName("RackChainScroll");
+    m_scroll->setProperty("horizontalWheelScroll", true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setWidgetResizable(true);
     m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -151,26 +186,49 @@ RackWidget::RackWidget(daw::EngineController* c, QWidget* parent) : QWidget(pare
     m_chain->setAcceptDrops(true);
     m_chain->installEventFilter(this);
     m_row = new QHBoxLayout(m_chain);
+    // Recompute the scroll content's bounds when fixed-width modules are added
+    // or replaced; squeezing the layout below their minimum makes cards overlap.
+    m_row->setSizeConstraint(QLayout::SetMinAndMaxSize);
     m_row->setContentsMargins(8, 2, 8, 2);
     m_row->setSpacing(8);
     m_scroll->setWidget(m_chain);
+    m_pattern = new PatternWindow(m_controller, this);
+    m_pattern->hide();
+    connect(m_pattern, &PatternWindow::sourceRackRequested, this, [this](const QString& id) {
+        // Defer channel reconstruction until the row's click handler has returned.
+        QTimer::singleShot(0, this, [this, id] {
+            setChannel(id);
+            emit channelRequested(id);
+        });
+    });
     m_marker = new QWidget(m_chain);
     m_marker->setObjectName("RackInsertionMarker");
     m_marker->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_marker->hide();
     m_sends = new QWidget(this);
     m_sends->setObjectName("RackSends");
-    m_sends->setFixedWidth(156);
+    m_sends->setFixedWidth(144);
     auto* sends = new QVBoxLayout(m_sends);
     sends->setContentsMargins(0, 0, 0, 0);
     sends->setSpacing(3);
-    auto* caption = new QLabel(tr("SENDS"), m_sends);
-    caption->setFixedHeight(18);
-    sends->addWidget(caption);
+    auto* sendHeader = new QHBoxLayout;
+    sendHeader->setContentsMargins(2, 0, 0, 0);
+    sendHeader->addWidget(new QLabel(tr("SENDS"), m_sends), 1);
+    auto* add = new QToolButton(m_sends);
+    add->setObjectName("RackAddSend");
+    add->setText(QStringLiteral("+"));
+    add->setFixedSize(24, 24);
+    add->setToolTip(tr("+ Send"));
+    add->setAccessibleName(tr("+ Send"));
+    sendHeader->addWidget(add);
+    sends->addLayout(sendHeader);
+    connect(add, &QAbstractButton::clicked, this,
+            [this, add] { addSend(add->mapToGlobal(QPoint(0, add->height()))); });
     m_sendScroll = new QScrollArea(m_sends);
     m_sendScroll->setFrameShape(QFrame::NoFrame);
     m_sendScroll->setWidgetResizable(true);
-    m_sendScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_sendScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_sendScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     sends->addWidget(m_sendScroll, 1);
     root->addWidget(m_sends);
     m_rubber = new QRubberBand(QRubberBand::Rectangle, m_chain);
@@ -232,6 +290,7 @@ void RackWidget::setChannel(const QString& channel) {
         m_channelSelection.clear();
     m_project = project;
     m_channel = next;
+    m_modulation->setChannel(next);
     m_selection = m_channelSelection.value(next);
     m_anchor.clear();
     m_insertAt = -1;
@@ -252,17 +311,29 @@ void RackWidget::setChannel(const QString& channel) {
     if (audio) {
         m_mini = new ui::MiniModuleRack(m_controller, next, m_left, true);
         m_mini->setStripWidth(m_left->width());
-        m_left->layout()->addWidget(m_mini);
-        static_cast<QVBoxLayout*>(m_left->layout())->setAlignment(m_mini, Qt::AlignTop);
+        static_cast<QVBoxLayout*>(m_left->layout())->addWidget(m_mini, 1);
         connect(m_mini, &ui::MiniModuleRack::edited, this, [this](bool undoable) { changed(undoable); });
         connect(m_mini, &ui::MiniModuleRack::automateRequested, this,
                 [this](const QString& id, const QString& parameter) {
                     emit automationRequested(m_channel, id, parameter);
                 });
     }
+    if (track && track->kind == daw::TrackKind::Pattern && m_pattern->patternId() != next)
+        m_pattern->setPattern(next);
     sync();
     const int scroll = QSettings().value(settingsKey("scroll"), 0).toInt();
-    QTimer::singleShot(0, this, [this, scroll] { m_scroll->horizontalScrollBar()->setValue(scroll); });
+    QTimer::singleShot(0, this, [this, scroll, next, project] {
+        if (m_channel == next && m_project == project)
+            m_scroll->horizontalScrollBar()->setValue(scroll);
+    });
+}
+void RackWidget::setPattern(const QString& patternId, const QString& clipId) {
+    setChannel(patternId);
+    m_pattern->setPattern(patternId, clipId);
+    m_scroll->horizontalScrollBar()->setValue(0);
+    QTimer::singleShot(0, this, [this, patternId] {
+        if (m_channel == patternId) m_scroll->horizontalScrollBar()->setValue(0);
+    });
 }
 QString RackWidget::channelName() const {
     if (m_channel == daw::EngineController::kMasterChannelId)
@@ -279,6 +350,14 @@ void RackWidget::sync() {
                        (selectedTrack && daw::carriesAudio(*selectedTrack));
     m_left->setVisible(audio);
     m_sends->setVisible(audio && m_channel != daw::EngineController::kMasterChannelId);
+    const auto* parent = selectedTrack ? m_controller->project().findTrack(selectedTrack->parentId) : nullptr;
+    for (std::size_t depth = 0; parent && parent->kind != daw::TrackKind::Pattern &&
+            depth < m_controller->project().tracks.size(); ++depth)
+        parent = m_controller->project().findTrack(parent->parentId);
+    const QString parentPattern = parent && parent->kind == daw::TrackKind::Pattern
+        ? QString::fromStdString(parent->id) : QString{};
+    m_patternBack->setProperty("patternId", parentPattern);
+    m_patternBack->setVisible(!parentPattern.isEmpty());
     if (m_structureRevision != m_controller->projectRevision() ||
         m_structureGeneration != m_controller->projectGeneration() || m_structureChannel != m_channel) {
         m_structureRevision = m_controller->projectRevision();
@@ -307,6 +386,7 @@ void RackWidget::sync() {
             for (const auto& id : g.insertIds)
                 s << QString::fromStdString(id);
         }
+        for (const auto& source : m_controller->rackModulation(m_channel.toStdString()).sources) s << QString::fromStdString(source.id);
         if (structure != m_structure) {
             m_structure = structure;
             rebuild();
@@ -323,6 +403,7 @@ void RackWidget::sync() {
             card->sync();
     if (m_mini)
         m_mini->sync(true);
+    if (m_pattern->isVisible()) m_pattern->refresh();
 }
 void RackWidget::rebuild() {
     if (m_rebuilding)
@@ -331,11 +412,16 @@ void RackWidget::rebuild() {
     QPointer<QWidget> focused = QApplication::focusWidget();
     const bool hadFocus = focused && (focused == this || isAncestorOf(focused));
     const int scroll = m_scroll->horizontalScrollBar()->value();
+    // Keep the editor and its selection alive when effects or channel views change.
+    m_pattern->hide();
+    m_pattern->setParent(this);
     for (auto card : m_cards)
         if (card) {
             card->hide();
             card->setParent(this);
         }
+    m_modulation->hide();
+    m_modulation->setParent(this);
     while (auto* item = m_row->takeAt(0)) {
         delete item->widget();
         delete item;
@@ -380,8 +466,15 @@ void RackWidget::rebuild() {
         empty->setWordWrap(true);
         m_row->addWidget(empty, 1);
     } else {
+        if (track && track->kind == daw::TrackKind::Pattern) {
+            if (m_pattern->patternId() != m_channel) m_pattern->setPattern(m_channel);
+            m_row->addWidget(m_pattern);
+            m_pattern->show();
+        }
         if (track && track->instrument.isLoaded())
             addCard(track->instrument, m_row);
+        m_row->addWidget(m_modulation);
+        m_modulation->setVisible(!m_controller->rackModulation(m_channel.toStdString()).sources.empty() && !m_controller->hasCloudProjectBinding());
         const auto* chain = m_controller->channelInserts(m_channel.toStdString());
         if (chain)
             for (std::size_t i = 0; i < chain->size();) {
@@ -508,6 +601,7 @@ void RackWidget::rebuild() {
             setFocus(Qt::OtherFocusReason);
     }
     m_rebuilding = false;
+    preserveDeviceHeight(m_scroll, m_chain);
 }
 void RackWidget::finishEdits() {
     for (auto card : m_cards)
@@ -515,24 +609,24 @@ void RackWidget::finishEdits() {
             card->finishEdits();
     if (m_mini)
         m_mini->finishEdits();
-    for (auto knob : m_sendKnobs)
-        if (knob)
-            knob->finishEditing();
+    for (auto fader : m_sendFaders)
+        if (fader)
+            fader->finishEditing();
 }
 void RackWidget::refresh() {
+    m_modulation->refresh();
     if (!isVisible() || m_rebuilding)
         return;
     sync();
-    const auto visible = m_scroll->viewport()->rect();
     for (auto card : m_cards)
-        if (card && card->isVisible() &&
-            visible.intersects(QRect(card->mapTo(m_scroll->viewport(), QPoint()), card->size())))
+        if (ui::isVisibleInViewport(card))
             card->refresh(false);
     if (const auto* track = m_controller->project().findTrack(m_channel.toStdString()))
         for (const auto& send : track->sends) {
-            auto* knob = m_sendKnobs.value(QString::fromStdString(send.id)).data();
-            if (knob && !knob->isEditing()) {
-                QSignalBlocker block(knob);
+            const auto id = QString::fromStdString(send.id);
+            auto* fader = m_sendFaders.value(id).data();
+            if (fader && !fader->isEditing()) {
+                QSignalBlocker block(fader);
                 double value = send.level;
                 daw::AutomationTarget target;
                 target.kind = daw::AutomationTargetKind::SendLevel;
@@ -540,14 +634,17 @@ void RackWidget::refresh() {
                 target.sendId = send.id;
                 if (auto playing = m_controller->automationValueAtPlayhead(target))
                     value = *playing;
-                knob->setValue(value);
+                fader->setGain(value);
+                if (auto* label = m_sendValues.value(id).data())
+                    label->setText(ui::formatGainDb(value));
             }
         }
+    const auto& groups = m_controller->rackGroups(m_channel.toStdString());
     for (auto it = m_groups.begin(); it != m_groups.end(); ++it)
         if (it.value())
             if (auto* power = it.value()->findChild<ui::IconButton*>("RackGroupPower")) {
                 bool active = false;
-                for (const auto& g : m_controller->rackGroups(m_channel.toStdString()))
+                for (const auto& g : groups)
                     if (g.id == it.key().toStdString())
                         for (const auto& id : g.insertIds)
                             if (const auto* model = m_controller->insertModel(m_channel.toStdString(), id))
@@ -556,47 +653,58 @@ void RackWidget::refresh() {
             }
 }
 void RackWidget::rebuildSends() {
-    for (auto knob : m_sendKnobs)
-        if (knob)
-            knob->finishEditing();
-    m_sendKnobs.clear();
+    for (auto fader : m_sendFaders)
+        if (fader)
+            fader->finishEditing();
+    m_sendFaders.clear();
+    m_sendValues.clear();
     m_sendBefore.clear();
+    m_sends->setFixedWidth(144);
     delete m_sendScroll->takeWidget();
     auto* page = new QWidget;
-    auto* column = new QVBoxLayout(page);
-    column->setContentsMargins(1, 0, 1, 0);
-    column->setSpacing(3);
+    auto* strips = new QHBoxLayout(page);
+    strips->setSizeConstraint(QLayout::SetMinAndMaxSize);
+    strips->setContentsMargins(1, 0, 1, 0);
+    strips->setSpacing(4);
     if (const auto* track = m_controller->project().findTrack(m_channel.toStdString()))
         for (const auto& send : track->sends) {
             const auto id = QString::fromStdString(send.id);
             auto* frame = new QFrame(page);
             frame->setObjectName("RackSend");
-            frame->setFixedHeight(36);
+            frame->setFixedWidth(68);
             frame->setStyleSheet("#RackSend{background:" + th().well().name() +
                                 ";border:1px solid " + th().separator().name() +
-                                ";border-radius:8px;} QToolButton{border:0;border-radius:5px;padding:0;}"
+                                ";border-radius:4px;} QToolButton{border:0;border-radius:3px;padding:0;}"
                                 "QToolButton:hover{background:" + th().surface.name() + ";}");
-            auto* row = new QHBoxLayout(frame);
-            row->setContentsMargins(4, 2, 4, 2);
-            row->setSpacing(2);
-            auto* level = new ui::Knob({}, frame);
-            level->setBare(28);
-            level->setRange(0, daw::EngineController::kMaxSendLevel);
-            level->setDefaultValue(.5);
-            level->setValue(send.level);
-            level->setFormatter([](double v) { return ui::formatGainDb(v); });
+            auto* column = new QVBoxLayout(frame);
+            column->setContentsMargins(4, 3, 4, 4);
+            column->setSpacing(3);
+            auto* level = new ui::FaderWidget(frame);
+            level->setObjectName("RackSendFader");
+            level->setGain(send.level);
+            level->setFocusPolicy(Qt::TabFocus);
+            level->setValueBubbleEnabled(false);
             level->setAutomatable(true);
             level->setAccessibleName(tr("Send level"));
-            m_sendKnobs[id] = level;
+            m_sendFaders[id] = level;
+            auto* valueLabel = new QLabel(ui::formatGainDb(send.level), frame);
+            valueLabel->setAlignment(Qt::AlignCenter);
+            valueLabel->setFixedHeight(18);
+            auto valueFont = valueLabel->font();
+            valueFont.setPixelSize(10);
+            valueLabel->setFont(valueFont);
+            m_sendValues[id] = valueLabel;
             auto before = std::make_shared<std::optional<float>>();
             m_sendBefore[id] = before;
             auto* destination = new QToolButton(frame);
             const auto* target = m_controller->project().findTrack(send.destinationTrackId);
-            destination->setText(target ? QString::fromStdString(target->name) : tr("Missing"));
+            const auto targetName = target ? QString::fromStdString(target->name) : tr("Missing");
+            destination->setText(destination->fontMetrics().elidedText(targetName, Qt::ElideRight, 58));
             destination->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
             destination->setMinimumHeight(24);
-            destination->setToolTip(destination->text() + "\n" + tr("Change send destination"));
-            destination->setAccessibleName(tr("Change send destination"));
+            destination->setToolTip(targetName + "\n" + tr("Change send destination"));
+            destination->setAccessibleName(targetName + ": " + tr("Change send destination"));
+            level->setAccessibleName(targetName + ": " + tr("Send level"));
             auto* power = new ui::IconButton(icons::Glyph::Power, tr("Enable send"), frame);
             power->setButtonSize(24, 24);
             power->setAccessibleName(tr("Enable send"));
@@ -604,16 +712,31 @@ void RackWidget::rebuildSends() {
             power->setCheckable(true);
             power->setChecked(send.enabled);
             auto* pre = new QToolButton(frame);
+            // Reserve the full translated label, including the button style's insets.
+            pre->setText(tr("Post"));
+            pre->ensurePolished();
+            const int modeWidth = std::max(34, pre->sizeHint().width());
             pre->setText(send.preFader ? tr("Pre") : tr("Post"));
-            pre->setMinimumSize(30, 24);
+            pre->setMinimumSize(modeWidth, 24);
+            const int stripWidth = modeWidth + 34;
+            frame->setFixedWidth(stripWidth);
+            m_sends->setFixedWidth(stripWidth * 2 + 8);
+            destination->setText(destination->fontMetrics().elidedText(targetName, Qt::ElideRight, stripWidth - 10));
             pre->setToolTip(tr("Pre / post fader"));
             pre->setAccessibleName(tr("Pre / post fader"));
-            row->addWidget(power);
-            row->addWidget(destination, 1);
-            row->addWidget(level);
-            row->addWidget(pre);
-            column->addWidget(frame);
-            connect(level, &ui::Knob::valueChanged, this, [this, id, before](double value) {
+            column->addWidget(destination);
+            column->addWidget(valueLabel);
+            column->addWidget(level, 1);
+            auto* footer = new QHBoxLayout;
+            footer->setSpacing(2);
+            footer->addWidget(power);
+            footer->addWidget(pre, 1);
+            column->addLayout(footer);
+            strips->addWidget(frame);
+            connect(level, &ui::FaderWidget::gainChanged, this, [this, id, before, level, valueLabel](double value) {
+                value = std::clamp(value, 0.0, double(daw::EngineController::kMaxSendLevel));
+                level->setGain(value);
+                valueLabel->setText(ui::formatGainDb(value));
                 if (!*before)
                     if (const auto* t = m_controller->project().findTrack(m_channel.toStdString()))
                         for (const auto& s : t->sends)
@@ -621,14 +744,14 @@ void RackWidget::rebuildSends() {
                                 *before = s.level;
                 m_controller->setSendLevel(m_channel.toStdString(), id.toStdString(), float(value));
             });
-            connect(level, &ui::Knob::editFinished, this, [this, id, before] {
+            connect(level, &ui::FaderWidget::editFinished, this, [this, id, before] {
                 if (*before) {
                     m_controller->commitSendLevelEdit(m_channel.toStdString(), id.toStdString(), **before);
                     before->reset();
                     changed(false);
                 }
             });
-            connect(level, &ui::Knob::automateRequested, this,
+            connect(level, &ui::FaderWidget::automateRequested, this,
                     [this, id] { emit sendAutomationRequested(m_channel, id); });
             connect(destination, &QAbstractButton::clicked, this, [this, id, destination] {
                 addSend(destination->mapToGlobal(QPoint(0, destination->height())), id);
@@ -653,12 +776,7 @@ void RackWidget::rebuildSends() {
                 addSend(frame->mapToGlobal(at), id);
             });
         }
-    auto* add = new QPushButton(tr("+ Send"), page);
-    add->setFixedHeight(26);
-    column->addWidget(add);
-    column->addStretch(1);
-    connect(add, &QPushButton::clicked, this,
-            [this, add] { addSend(add->mapToGlobal(QPoint(0, add->height()))); });
+    strips->addStretch(1);
     m_sendScroll->setWidget(page);
 }
 void RackWidget::addSend(const QPoint& point, const QString& replace) {
@@ -712,6 +830,8 @@ bool RackWidget::insertPlugin(const daw::plugins::PluginDescriptor& descriptor, 
     const auto* track = m_controller->project().findTrack(channel);
     QString slot;
     if (descriptor.isInstrument) {
+        if (track && track->kind == daw::TrackKind::Pattern)
+            return m_pattern->addInstrument(descriptor);
         if (!track || !daw::trackAccepts(track->kind, daw::ClipKind::Midi))
             return false;
         if (!m_controller->setTrackInstrumentPlugin(channel, descriptor))
@@ -741,14 +861,16 @@ std::optional<daw::plugins::PluginDescriptor> RackWidget::pluginFromMime(const Q
     const bool audio = m_channel == daw::EngineController::kMasterChannelId ||
                        (track && daw::carriesAudio(*track));
     if (!descriptor || !audio || !m_controller->sharedPluginAllowed(*descriptor) ||
-        (descriptor->isInstrument && (!track || !daw::trackAccepts(track->kind, daw::ClipKind::Midi))))
+        (descriptor->isInstrument && (!track || (track->kind != daw::TrackKind::Pattern &&
+                                               !daw::trackAccepts(track->kind, daw::ClipKind::Midi)))))
         return std::nullopt;
     return descriptor;
 }
 void RackWidget::addDevice(const QPoint& at) {
     finishEdits();
     const auto* track = m_controller->project().findTrack(m_channel.toStdString());
-    const std::optional<bool> filter = track && daw::trackAccepts(track->kind, daw::ClipKind::Midi)
+    const std::optional<bool> filter = track && (track->kind == daw::TrackKind::Pattern ||
+                                                daw::trackAccepts(track->kind, daw::ClipKind::Midi))
                                            ? std::nullopt : std::optional<bool>(false);
     const auto channel = m_channel;
     const int index = m_insertAt;
@@ -757,6 +879,19 @@ void RackWidget::addDevice(const QPoint& at) {
             if (m_channel == channel)
                 insertPlugin(descriptor, index);
         });
+    if (!m_controller->hasCloudProjectBinding()) {
+        auto* before = menu->actions().isEmpty() ? nullptr : menu->actions().front();
+        for (const auto kind : {daw::modulation::Kind::Lfo, daw::modulation::Kind::Follower}) {
+            auto* action = new QAction(kind == daw::modulation::Kind::Lfo ? "LFO" : "Envelope Follower", menu);
+            menu->insertAction(before, action);
+            connect(action, &QAction::triggered, this, [this, channel, kind] {
+                if (m_channel != channel) return;
+                m_modulation->addSource(kind);
+                m_scroll->ensureWidgetVisible(m_modulation);
+            });
+        }
+        menu->insertSeparator(before);
+    }
     menu->exec(at);
     menu->deleteLater();
 }
@@ -866,6 +1001,14 @@ bool RackWidget::ownsFocus() const {
 bool RackWidget::command(const QString& action) {
     if (!ownsFocus())
         return false;
+    auto* focus = QApplication::focusWidget();
+    if (m_pattern->isVisible() && (focus == m_pattern || m_pattern->isAncestorOf(focus))) {
+        if (m_pattern->command(action)) return true;
+        // Unsupported source commands must not edit a stale device selection.
+        return true;
+    }
+    if (focus == m_modulation || m_modulation->isAncestorOf(focus))
+        return m_modulation->command(action);
     finishEdits();
     const auto selected = selectedDevices();
     const auto ids = ui::rack::ids(selected);
@@ -1112,6 +1255,7 @@ void RackWidget::updateDrop(const QPoint& global) {
     m_dropAt = chain ? int(chain->size()) : 0;
     m_dropGroup.clear();
     int markerX = m_row->contentsMargins().left();
+    if (m_pattern->isVisible()) markerX = m_pattern->geometry().right() + 3;
     if (const auto* track = m_controller->project().findTrack(m_channel.toStdString()))
         if (auto* instrument = m_cards.value(QString::fromStdString(track->instrument.id)).data())
             markerX = instrument->geometry().right() + 3;
@@ -1149,7 +1293,13 @@ void RackWidget::updateDrop(const QPoint& global) {
     updateGroupAppearance();
 }
 bool RackWidget::eventFilter(QObject* object, QEvent* event) {
-    if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) && ownsFocus()) {
+    if (object == m_chain && event->type() == QEvent::LayoutRequest && !m_rebuilding)
+        preserveDeviceHeight(m_scroll, m_chain);
+    const bool keyEvent = event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress;
+    auto* receiver = keyEvent ? qobject_cast<QWidget*>(object) : nullptr;
+    const bool sourceCommand = receiver && m_pattern && m_pattern->isVisible() &&
+        (receiver == m_pattern || m_pattern->isAncestorOf(receiver)) && !textInput(receiver);
+    if (keyEvent && (sourceCommand || ownsFocus())) {
         auto* key = static_cast<QKeyEvent*>(event);
         const auto action = keyCommand(key);
         if (!action.isEmpty()) {
@@ -1157,7 +1307,10 @@ bool RackWidget::eventFilter(QObject* object, QEvent* event) {
                 event->accept();
                 return true;
             }
-            command(action);
+            // The event receiver remains authoritative while focus settles
+            // after a drop or a channel switch.
+            if (sourceCommand) m_pattern->command(action);
+            else command(action);
             return true;
         }
     }
@@ -1289,7 +1442,6 @@ void RackWidget::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e);
     const bool narrow = width() < 850;
     m_left->setFixedWidth(narrow ? 148 : 176);
-    m_sends->setFixedWidth(narrow ? 132 : 156);
     if (m_mini)
         m_mini->setStripWidth(m_left->width());
 }

@@ -29,6 +29,7 @@ struct SceneMesh {
     bool smoothTexture = true; // False for already-antialiased, device-resolution UI pixels.
     float opacity = 1;
     QTransform transform;
+    bool snapTranslation = true;
     std::shared_ptr<const SceneClip> clip; // layer coordinates, before mesh transform
     std::shared_ptr<const SceneMeshGroup> group;
     quint64 visualId = 0;

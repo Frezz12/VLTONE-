@@ -28,7 +28,7 @@ See **[BUILD.md](BUILD.md)** for macOS and Windows instructions. Quick start on
 macOS:
 
 ```bash
-brew install cmake ninja qt qtmultimedia qtwebengine qtserialport portaudio rtmidi libsndfile nlohmann-json libarchive
+brew install cmake ninja qt qtmultimedia qtwebengine qtserialport qtimageformats portaudio rtmidi libsndfile nlohmann-json libarchive
 cmake --preset macos
 cmake --build build
 ./build/bin/VLTONE

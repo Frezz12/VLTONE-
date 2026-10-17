@@ -583,9 +583,11 @@ void CreatorCanvas::cancelConnection() {
 void CreatorCanvas::mousePressEvent(QMouseEvent *event) {
   if (event->button() == Qt::MiddleButton ||
       (m_space && event->button() == Qt::LeftButton)) {
+    ScrollMotion::cancel(this);
+    ScrollMotion::cancelZoom(this);
     m_panning = true;
-    m_panAt = event->pos();
-    setCursor(Qt::ClosedHandCursor);
+    m_panAt = event->position();
+    setCursor(Qt::SizeAllCursor);
     event->accept();
     return;
   }
@@ -611,10 +613,21 @@ void CreatorCanvas::mousePressEvent(QMouseEvent *event) {
 }
 void CreatorCanvas::mouseMoveEvent(QMouseEvent *event) {
   if (m_panning) {
-    const QPoint delta = event->pos() - m_panAt;
-    m_panAt = event->pos();
-    horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
-    verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+    if (event->type() == QEvent::MouseMove &&
+        !(event->buttons() & Qt::MiddleButton) && !(m_space && (event->buttons() & Qt::LeftButton))) {
+      ScrollMotion::cancel(this); m_panning = false; unsetCursor(); return;
+    }
+    const QPointF delta = event->position() - m_panAt;
+    m_panAt = event->position();
+    ScrollMotion::pan(this, -delta,
+        [this] { return QPointF(horizontalScrollBar()->value(), verticalScrollBar()->value()); },
+        [this](QPointF at) {
+          horizontalScrollBar()->setValue(qRound(at.x()));
+          verticalScrollBar()->setValue(qRound(at.y()));
+        },
+        [this](QPointF at) { return QPointF(
+          std::clamp(at.x(), double(horizontalScrollBar()->minimum()), double(horizontalScrollBar()->maximum())),
+          std::clamp(at.y(), double(verticalScrollBar()->minimum()), double(verticalScrollBar()->maximum()))); });
     return;
   }
   if (auto *port = static_cast<Port *>(m_port)) {
@@ -672,6 +685,8 @@ void CreatorCanvas::dropEvent(QDropEvent *event) {
 }
 void CreatorCanvas::mouseReleaseEvent(QMouseEvent *event) {
   if (m_panning) {
+    mouseMoveEvent(event);
+    ScrollMotion::finishPan(this);
     m_panning = false;
     unsetCursor();
     event->accept();

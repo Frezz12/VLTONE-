@@ -4,8 +4,10 @@
 #include "ProjectSerializer.hpp"
 #include "collaboration/MidiContentJson.hpp"
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 using namespace daw;
 static void check(bool value, const char *what) {
     if (!value) {
@@ -191,9 +193,97 @@ static void checkSuppressedMidiControllers() {
           "punch-out chases held notes, sustain and pitch bend together");
 }
 
+static void checkIndexedMidiControllers() {
+    using Player = engine::MidiClipPlayerNode;
+    Player player;
+    player.prepare({48000, 12000, 2});
+    auto curves = std::make_shared<Player::ControlCurves>();
+    // Reverse chronological order exercises the interval index independently
+    // of the source order retained for simultaneous controller writes.
+    for (int i = 4095; i >= 0; --i) {
+        const double at = i * 4.;
+        curves->push_back({at, at + 1, 0, 1, 0, 0,
+            {{at, double(i % 120 + 1) / 127, engine::curve::Shape::Hold}}});
+    }
+    curves->push_back({100, 104, 0, 7, 3, 0, {{100, .25, engine::curve::Shape::Hold}}});
+    curves->push_back({99, 104, 0, 7, 3, 0, {{99, .75, engine::curve::Shape::Hold}}});
+    curves->push_back({100, 100.5, 0, 64, 2, 0, {{100, 1, engine::curve::Shape::Hold}}});
+    curves->push_back({100, 100.5, 0, -2, 2, 0,
+        {{100, 12000. / 16383, engine::curve::Shape::Hold}}});
+    player.setControllers(curves);
+    const auto saved = player.controlState();
+    engine::MidiBuffer output; output.reserve(512);
+    engine::ProcessContext context;
+    context.frames = 12000; context.sampleRate = 48000; context.playing = true;
+    context.transport.tempo = 120; context.midiOutput = &output;
+    const auto process = [&](double beat) {
+        output.clear(); context.transport.ppqPosition = beat; player.process(context);
+    };
+    const auto overlapping = [&] {
+        std::vector<unsigned> values;
+        for (const auto& event : output.events()) if (event.status == 0xb3 && event.data1 == 7)
+            values.push_back(event.data2);
+        return values == std::vector<unsigned>{32, 95};
+    };
+    process(100);
+    check(output.size() == 5 && overlapping(),
+          "sparse controller intervals preserve original overlapping CC order after a deep seek");
+    process(100.5);
+    check(output.size() == 2 && output.events()[0].status == 0xb2 &&
+              output.events()[0].data1 == 64 && output.events()[0].data2 == 0 &&
+              output.events()[1].status == 0xe2 && output.events()[1].data1 == 0 &&
+              output.events()[1].data2 == 64 && output.events()[0].frameOffset == 0 &&
+              output.events()[1].frameOffset == 0,
+          "indexed controllers retain sustain and pitch resets at an exact block boundary");
+    process(101);
+    check(output.empty(), "expired controller intervals reset once and unchanged held values stay quiet");
+    process(100);
+    check(overlapping(), "a backward loop chases indexed overlapping controllers in source order");
+    player.setControllers({}); process(100.5);
+    check(output.size() == 2, "removing indexed controller content releases held sustain and bend");
+    player.restoreControlState(saved); process(100);
+    check(overlapping(), "restoring controller state restores its interval schedule");
+
+    // Force allocator ABA without relying on heap reuse: publish two new
+    // immutable vectors at the same address between successive audio blocks.
+    alignas(Player::ControlCurves) std::byte storage[sizeof(Player::ControlCurves)];
+    Player recycled;
+    recycled.prepare({48000, 12000, 2});
+    bool destroyed = true;
+    const auto publishRecycled = [&](std::size_t count, int cc, int channel, bool sustain) {
+        recycled.setControllers({});
+        check(destroyed, "retired controller storage is reclaimed on the publishing thread");
+        auto* replacement = std::construct_at(reinterpret_cast<Player::ControlCurves*>(storage));
+        destroyed = false;
+        replacement->resize(count);
+        (*replacement)[0] = {0, 4, 0, cc, channel, 0, {{0, .75, engine::curve::Shape::Hold}}};
+        if (sustain) (*replacement)[count - 1] =
+            {0, 4, 0, 64, 2, 0, {{0, 1, engine::curve::Shape::Hold}}};
+        recycled.setControllers(std::shared_ptr<const Player::ControlCurves>(replacement,
+            [&](const Player::ControlCurves* value) { std::destroy_at(value); destroyed = true; }));
+    };
+    const auto processRecycled = [&](double beat) {
+        output.clear(); context.transport.ppqPosition = beat; recycled.process(context);
+    };
+    publishRecycled(64, 7, 3, true); processRecycled(0);
+    check(output.size() == 2, "large recycled controller schedule holds sustain in the final bitmap bit");
+    publishRecycled(33, 7, 3, false); processRecycled(.5);
+    check(output.size() == 2 && output.events()[0].status == 0xb2 &&
+              output.events()[0].data1 == 64 && output.events()[0].data2 == 0 &&
+              output.events()[1].status == 0xb3 && output.events()[1].data1 == 7 &&
+              output.events()[1].data2 == 95,
+          "smaller controller snapshot at the same address clears old pending bits and releases sustain");
+    publishRecycled(33, 10, 5, false); processRecycled(1);
+    check(output.size() == 1 && output.events()[0].status == 0xb5 &&
+              output.events()[0].data1 == 10 && output.events()[0].data2 == 95,
+          "same-size controller snapshot at the same address chases the new controller routing");
+    recycled.setControllers({});
+}
+
 int main() {
     checkRecordingMonitoring();
     checkSuppressedMidiControllers();
+    checkIndexedMidiControllers();
     MidiRecording r;
     r.event(1, 0x92, 60, 111, 0, 1);
     r.event(2, 0x92, 60, 88, .25, 2);

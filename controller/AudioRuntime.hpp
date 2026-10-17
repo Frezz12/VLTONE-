@@ -19,6 +19,7 @@
 #include "Nodes/MidiClipPlayerNode.hpp"
 #include "Nodes/PreviewPlayerNode.hpp"
 #include "Nodes/TapNode.hpp"
+#include "Nodes/ModulationNode.hpp"
 
 #include <future>
 #include <memory>
@@ -81,6 +82,9 @@ public:
     /// Assemble on the control thread, then publish after resource/automation
     /// updates. A failed compile leaves the published topology untouched.
     void buildGraph(const AudioGraphSpec& spec);
+    bool updateModulation(const std::string& channelId, const modulation::Rack& rack);
+    float modulationValue(const std::string& channelId, const std::string& sourceId) const;
+    std::string modulationStatus(const std::string& channelId, const std::string& routeId) const;
     /// Returns true when reconciliation applied stored plugin parameters.
     bool buildSession(AudioSessionSpec session);
     using TransactionId = std::uint64_t;
@@ -184,7 +188,14 @@ public:
     std::optional<EqualizerResponse> equalizerResponse(const AudioPluginAddress& address) const;
     std::optional<std::array<double, 180>> modulationResponse(const AudioPluginAddress& address) const;
     std::optional<GravitySnapshot> gravitySnapshot(const AudioPluginAddress& address);
+#if DAW_ENABLE_REVERB
+    std::optional<ReverbSnapshot> reverbSnapshot(const AudioPluginAddress& address) const;
+    bool setReverbComparisonState(const AudioPluginAddress& address, const plugins::reverb::State& state);
+#endif
     std::optional<MorphSnapshot> morphSnapshot(const AudioPluginAddress& address) const;
+    std::optional<FluxSnapshot> fluxSnapshot(const AudioPluginAddress& address) const;
+    std::optional<plugins::flux::FluxTelemetry> fluxTelemetry(const AudioPluginAddress& address) const;
+    bool setFluxState(const AudioPluginAddress& address, const plugins::flux::State& state);
     bool setMorphCanvas(const AudioPluginAddress& address, const plugins::morph::MorphCanvasProgram& program,
         const std::string& category);
     bool setInsertPresetReference(const AudioPluginAddress& address, std::string kind, std::string name);
@@ -317,6 +328,14 @@ private:
         std::vector<std::shared_ptr<engine::SendNode>> sends;
         std::vector<std::string> sendIds;
         std::shared_ptr<const AudioContentSpec::PluginCurves> automation;
+        modulation::Rack modulation;
+        std::unordered_map<std::string, std::shared_ptr<engine::ModulationNode>> modulators;
+        std::unordered_map<std::string, std::string> modulationStatus;
+        struct ModulationTarget {
+            std::shared_ptr<plugins::PluginNode> node;
+            std::vector<plugins::PluginModulation::Route> routes;
+        };
+        std::vector<ModulationTarget> modulationTargets;
         TrackNodes ids;
     };
 
@@ -348,9 +367,12 @@ private:
     static bool matchesCheckpointProjectState(const AudioPluginCheckpoint::Side& side,
         const AudioPluginStateEdit* projectState);
     static void applyPluginAutomation(TrackChannel& channel);
+    void connectModulation(TrackChannel& channel, const std::string& id, const modulation::Rack& rack);
+    static void refreshModulation(TrackChannel& channel);
     static void clearGraphIds(ClipFxChannel& channel);
     static engine::NodeId connectSlots(engine::AudioGraph& graph,
-        std::span<InsertSlot> slots, std::vector<engine::NodeId>& ids, engine::NodeId head);
+        std::span<InsertSlot> slots, std::vector<engine::NodeId>& ids, engine::NodeId head,
+        engine::NodeId analysisSource = engine::kInvalidNode);
     static engine::NodeId connectMiniModules(engine::AudioGraph& graph,
         TrackChannel& channel, const std::vector<AudioGraphSpec::MiniModuleRoute>& routes,
         bool postFx, engine::NodeId head, engine::NodeId* first = nullptr);

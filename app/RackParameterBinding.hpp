@@ -10,7 +10,9 @@ namespace ui {
 class Knob;
 }
 class QComboBox;
+class QDoubleSpinBox;
 class QAbstractButton;
+class QLabel;
 
 /// One slot's control-thread binding, shared by every compact presentation.
 /// No widget retains a DSP pointer, including while an editor is also open.
@@ -24,6 +26,8 @@ class RackParameterBinding final : public QObject {
     }
     const daw::plugins::ParameterInfo* info(const QString& id) const;
     ui::Knob* knob(const QString& id, QWidget* parent, int width = 62);
+    QWidget* slider(const QString& id, QWidget* parent);
+    QDoubleSpinBox* number(const QString& id, QWidget* parent);
     QComboBox* choice(const QString& id, const QStringList& labels, QWidget* parent);
     QAbstractButton* toggle(const QString& id, const QString& text, QWidget* parent);
     double value(const QString& id) const;
@@ -31,6 +35,7 @@ class RackParameterBinding final : public QObject {
     void finish(const QString& id);
     void finishAll();
     void refresh();
+    static void refreshModulation(ui::Knob*, daw::EngineController*, const std::string& channel, const std::string& slot, const std::string& parameter);
     void automate(const QString& id);
     bool available() const;
     daw::EngineController* controller() const {
@@ -55,6 +60,7 @@ class RackParameterBinding final : public QObject {
     struct Control {
         QString id;
         QPointer<QWidget> widget;
+        QPointer<QLabel> readout;
     };
     std::vector<Control> m_controls;
 };

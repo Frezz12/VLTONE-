@@ -17,6 +17,7 @@
 #include <QSettings>
 #include <QShowEvent>
 #include <QToolButton>
+#include <QToolBar>
 #include <QPainterPath>
 #include <QCheckBox>
 #include <QComboBox>
@@ -34,6 +35,14 @@
 #include <QTimer>
 #include <QWheelEvent>
 #include <QApplication>
+
+namespace {
+QColor waveInk(const QColor& surface) {
+    const auto linear = [](double v) { return v <= .04045 ? v / 12.92 : std::pow((v + .055) / 1.055, 2.4); };
+    const double luminance = .2126 * linear(surface.redF()) + .7152 * linear(surface.greenF()) + .0722 * linear(surface.blueF());
+    return luminance < .18 ? QColor(245, 248, 252) : QColor(22, 28, 36);
+}
+}
 
 class WarpCanvas : public ui::FrameWidget {
 public:
@@ -54,6 +63,7 @@ public:
     }
     void cancel() {
         if (dragging) { e->m_controller->cancelWarpEdit(); dragging = false; releaseMouse(); emit e->liveEdited(); }
+        if (panning) { e->m_view.start = panStart; panning = false; releaseMouse(); unsetCursor(); }
         if (ranging) e->setRange(oldRange.first, oldRange.second);
         if (marquee) e->m_selected = oldSelection;
         ranging = marquee = false; e->m_dragLabel->hide(); e->redraw();
@@ -70,9 +80,12 @@ protected:
         }
         p.drawPixmap(0, 0, cache);
         if (const auto* c = e->clip(); c && !c->warp.empty()) {
-            const double play = daw::secondsToBeats(e->m_controller->positionSeconds() - c->startSeconds, e->m_controller->tempo());
-            if (play >= 0 && play <= c->warp.markers.back().targetBeats) {
-                p.setPen(QPen(theme.cursor, 1.5)); p.drawLine(QPointF(x(play), 0), QPointF(x(play), height()));
+            const double play = daw::secondsToBeats(e->m_controller->presentationPositionSeconds() - c->startSeconds, e->m_controller->tempo());
+            if (play >= 0 && play <= daw::secondsToBeats(c->durationSeconds, e->m_controller->tempo()) && x(play) >= 0 && x(play) <= width()) {
+                p.setPen(QPen(QColor(0, 0, 0, 110), 3)); p.drawLine(QPointF(x(play), 0), QPointF(x(play), height()));
+                p.setPen(QPen(Qt::white, 1.5)); p.drawLine(QPointF(x(play), 0), QPointF(x(play), height()));
+                p.setPen(Qt::NoPen); p.setBrush(theme.cursor);
+                p.drawPolygon(QPolygonF{QPointF(x(play) - 5, 0), QPointF(x(play) + 5, 0), QPointF(x(play), 7)});
             }
         }
         if (marquee) { auto fill = theme.accent; fill.setAlpha(28); p.setBrush(fill); p.setPen(theme.accent); p.drawRect(selection.normalized()); }
@@ -80,37 +93,44 @@ protected:
     void paintContent(QPainter& p) {
         const auto& theme = ThemeManager::instance().theme();
         p.setRenderHint(QPainter::Antialiasing);
-        QPainterPath shape; shape.addRoundedRect(rect(), Theme::cornerRadius, Theme::cornerRadius); p.setClipPath(shape);
-        p.fillRect(rect(), theme.well());
+        QPainterPath shape; shape.addRoundedRect(rect(), 8, 8); p.setClipPath(shape);
+        const QColor surface = e->waveColor(), ink = waveInk(surface);
+        QColor gridInk = ink; gridInk.setAlpha(25);
+        QColor detailInk = ink; detailInk.setAlpha(160);
+        p.fillRect(rect(), surface);
+        p.fillRect(QRect(0, 0, width(), 28), theme.surface);
         const auto* c = e->clip();
-        if (!c || c->warp.empty()) { p.setPen(theme.textSecondary); p.drawText(rect(), Qt::AlignCenter, tr("Right-click an audio clip and choose Warp Editor")); return; }
+        if (!c || c->warp.empty()) { p.setPen(ink); p.drawText(rect().adjusted(24, 32, -24, -16), Qt::AlignCenter | Qt::TextWordWrap,
+            e->m_clipId.isEmpty() ? tr("Open Warp from an audio clip") : tr("Warp is unavailable for this clip. Check the message below.")); return; }
         const auto& map = e->m_previewing && e->m_after->isChecked() ? e->m_proposal.map : c->warp;
         const double tempo = e->m_controller->tempo();
         const double origin = daw::secondsToBeats(c->startSeconds, tempo);
         const double beatUnit = 4. / std::max(1, e->m_controller->project().timeSigDenominator);
         const double step = std::max(beatUnit, std::pow(2., std::ceil(std::log2(e->m_view.span / std::max(1., width() / 65.)))));
-        p.setPen(theme.gridLine);
+        p.setPen(gridInk);
         for (double at = std::floor((origin + e->m_view.start) / step) * step - origin; at <= e->m_view.start + e->m_view.span; at += step) {
-            const double px = x(at); p.setPen(theme.gridLine); p.drawLine(QPointF(px, 28), QPointF(px, height()));
+            const double px = x(at); p.setPen(gridInk); p.drawLine(QPointF(px, 28), QPointF(px, height()));
             p.setPen(theme.textSecondary);
             const int beatsPerBar = std::max(1, e->m_controller->project().timeSigNumerator);
             const double absolute = std::floor(std::max(0., origin + at) / beatUnit + 1e-7);
-            p.drawText(QRectF(px + 4, 2, 65, 23), Qt::AlignLeft | Qt::AlignVCenter,
-                QString("%1.%2").arg(int(absolute) / beatsPerBar + 1).arg(int(absolute) % beatsPerBar + 1));
+            const auto label = QString("%1.%2").arg(int(absolute) / beatsPerBar + 1).arg(int(absolute) % beatsPerBar + 1);
+            if (px + 4 + p.fontMetrics().horizontalAdvance(label) < width() - 4)
+                p.drawText(QRectF(px + 4, 2, 65, 23), Qt::AlignLeft | Qt::AlignVCenter, label);
         }
         if (e->m_rangeFinish > e->m_rangeBegin) {
-            auto fill = theme.accent; fill.setAlpha(23);
+            auto fill = ink; fill.setAlpha(26);
             p.fillRect(QRectF(x(e->m_rangeBegin), 0, x(e->m_rangeFinish) - x(e->m_rangeBegin), height()), fill);
-            fill.setAlpha(65); p.fillRect(QRectF(x(e->m_rangeBegin), 0, x(e->m_rangeFinish) - x(e->m_rangeBegin), 27), fill);
+            fill = theme.accent; fill.setAlpha(55); p.fillRect(QRectF(x(e->m_rangeBegin), 0, x(e->m_rangeFinish) - x(e->m_rangeBegin), 27), fill);
         }
         const QRectF waveArea(0, 49, width(), std::max(10, height() - 68));
+        p.setPen(gridInk); p.drawLine(QPointF(0, waveArea.center().y()), QPointF(width(), waveArea.center().y()));
         auto paintSegment = [&](double a, double b, double source, double speed) {
             const QRectF area(x(a), waveArea.top(), x(b) - x(a), waveArea.height());
             if (!area.intersects(rect())) return;
             ui::PeakPaint how; how.sourceStartSeconds = source;
             how.secondsPerPixel = speed * 60. / tempo * e->m_view.span / std::max(1, width() - 24);
             how.clipLeft = std::max(0., area.left()); how.clipRight = std::min(double(width()), area.right());
-            how.color = map.enabled ? theme.waveform : theme.textSecondary;
+            how.color = ink; if (!map.enabled) how.color.setAlpha(110);
             how.samples = e->m_audio.get();
             ui::paintPeaks(p, e->m_peaks.get(), area, how);
         };
@@ -120,7 +140,7 @@ protected:
                 const double speed = daw::warpSpeedAt(map, a.targetBeats, tempo);
                 paintSegment(a.targetBeats, b.targetBeats, a.sourceSeconds, speed);
                 if (x(b.targetBeats) - x(a.targetBeats) > 65) {
-                    p.setPen(theme.textSecondary);
+                    p.setPen(detailInk);
                     p.drawText(QRectF(x(a.targetBeats) + 6, 28, x(b.targetBeats) - x(a.targetBeats) - 12, 19),
                         Qt::AlignCenter, QString::number(1 / speed, 'f', 2) + "x");
                 }
@@ -134,7 +154,8 @@ protected:
                 t.sourceSeconds >= map.markers.back().sourceSeconds) continue;
             const double px = x(daw::warpBeatAt(map, t.sourceSeconds));
             const bool uncertain = t.confidence < .65;
-            p.setPen(QPen(uncertain ? theme.textSecondary : theme.waveform, 1, Qt::DotLine));
+            auto transientInk = ink; transientInk.setAlpha(uncertain ? 60 : 105);
+            p.setPen(QPen(transientInk, 1, Qt::DotLine));
             p.drawLine(QPointF(px, 51), QPointF(px, height() - 14));
             p.setBrush(Qt::NoBrush);
             p.drawEllipse(QPointF(px, 49), uncertain ? 2.5 : 3.5, uncertain ? 2.5 : 3.5);
@@ -153,16 +174,23 @@ protected:
         for (const auto& marker : map.markers) {
             const double px = x(marker.targetBeats);
             const bool selected = e->m_selected.contains(marker.id);
-            p.setPen(QPen(selected ? theme.accentHighlight : theme.accent, selected ? 2 : 1));
+            p.setPen(QPen(selected ? ink : detailInk, selected ? 2 : 1));
             p.drawLine(QPointF(px, 28), QPointF(px, height() - 12));
-            p.setBrush(selected ? theme.accentHighlight : theme.accent);
+            p.setBrush(selected ? ink : surface);
             if (marker.locked) { p.drawRoundedRect(QRectF(px - 4, 33, 8, 7), 1, 1); p.setBrush(Qt::NoBrush); p.drawArc(QRectF(px - 3, 28, 6, 9), 0, 180 * 16); }
             else p.drawPolygon(QPolygonF{QPointF(px - 5, 29), QPointF(px + 5, 29), QPointF(px, 39)});
         }
-        if (!e->m_audio) { p.setPen(theme.textSecondary); p.drawText(waveArea, Qt::AlignCenter, tr("Source audio is unavailable.")); }
+        if (!e->m_audio) { p.setPen(ink); p.drawText(waveArea, Qt::AlignCenter, tr("Source audio is unavailable.")); }
     }
     void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::MiddleButton) {
+            if (!e->clip()) return;
+            ui::ScrollMotion::cancel(this); setFocus();
+            panStart = e->m_view.start; panX = event->position().x(); panning = true;
+            grabMouse(); setCursor(Qt::ClosedHandCursor); event->accept(); return;
+        }
         if (event->button() != Qt::LeftButton) return;
+        ui::ScrollMotion::cancel(this);
         setFocus(); const auto* c = e->clip(); if (!c || !c->warp.enabled) return;
         if (event->position().y() < 27) {
             oldRange = {e->m_rangeBegin, e->m_rangeFinish}; ranging = true;
@@ -191,6 +219,10 @@ protected:
         e->updateInspector(); e->redraw();
     }
     void mouseMoveEvent(QMouseEvent* event) override {
+        if (panning) {
+            e->m_view.start = std::max(0., panStart - (event->position().x() - panX) / std::max(1, width() - 24) * e->m_view.span);
+            e->redraw(); return;
+        }
         if (ranging) { e->setRange(std::min(startBeat, beat(event->position().x())), std::max(startBeat, beat(event->position().x()))); return; }
         if (marquee) {
             selection.setBottomRight(event->position());
@@ -210,6 +242,7 @@ protected:
         } else setCursor(hit(event->position().x()) >= 0 ? Qt::SizeHorCursor : Qt::CrossCursor);
     }
     void mouseReleaseEvent(QMouseEvent* event) override {
+        if (panning && event->button() == Qt::MiddleButton) { panning = false; releaseMouse(); unsetCursor(); return; }
         if (ranging || marquee) { ranging = marquee = false; e->redraw(); return; }
         if (dragging && event->button() == Qt::LeftButton) {
             dragging = false; releaseMouse(); e->m_controller->commitWarpEdit(); e->m_dragLabel->hide(); emit e->edited(); e->redraw();
@@ -221,6 +254,9 @@ protected:
     }
     void keyPressEvent(QKeyEvent* event) override {
         if (event->key() == Qt::Key_Escape) { cancel(); e->cancelPreview(); return; }
+        if (event->key() == Qt::Key_F && !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+            e->fitView(event->modifiers() & Qt::ShiftModifier); return;
+        }
         if (e->m_previewing) { ui::FrameWidget::keyPressEvent(event); return; }
         if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) { e->deleteMarkers(); return; }
         if (event->matches(QKeySequence::SelectAll)) {
@@ -292,6 +328,8 @@ protected:
 private:
     WarpEditorWidget* e;
     bool dragging = false;
+    bool panning = false;
+    double panStart = 0, panX = 0;
     bool dirty = true, marquee = false, ranging = false;
     QPixmap cache;
     ui::WaveformStyle cachedStyle = ui::waveformStyle();
@@ -308,13 +346,15 @@ public:
     explicit WarpOverview(WarpEditorWidget* editor) : ui::FrameWidget(editor), e(editor) {
         setObjectName("WarpOverview"); setAccessibleName(tr("Warp overview navigation"));
         setToolTip(tr("Drag to navigate · Drag the edges to zoom · Arrow keys to pan"));
-        setFocusPolicy(Qt::StrongFocus); setFixedHeight(32); setCursor(Qt::OpenHandCursor);
+        setFocusPolicy(Qt::StrongFocus); setFixedHeight(32); setCursor(Qt::SizeHorCursor);
     }
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this); const auto& t = ThemeManager::instance().theme();
-        p.setRenderHint(QPainter::Antialiasing); p.setPen(t.separator()); p.setBrush(t.well());
+        const auto surface = e->waveColor(); const auto ink = waveInk(surface);
+        p.setRenderHint(QPainter::Antialiasing); p.setPen(t.separator()); p.setBrush(surface);
         p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 8, 8);
+        QPainterPath shape; shape.addRoundedRect(rect().adjusted(1, 1, -1, -1), 8, 8); p.setClipPath(shape);
         const auto* c = e->clip(); if (!c || c->warp.empty()) return;
         auto map = e->m_previewing && e->m_after->isChecked() ? e->m_proposal.map : c->warp;
         if (!map.enabled) {
@@ -327,13 +367,13 @@ protected:
             QRectF area(a.targetBeats / length * width(), 3, (b.targetBeats - a.targetBeats) / length * width(), height() - 6);
             ui::PeakPaint how; how.sourceStartSeconds = a.sourceSeconds;
             how.secondsPerPixel = (b.sourceSeconds - a.sourceSeconds) / std::max(1., area.width());
-            how.clipLeft = area.left(); how.clipRight = area.right(); how.color = t.textSecondary;
+            how.clipLeft = area.left(); how.clipRight = area.right(); how.color = ink; how.color.setAlpha(130);
             ui::paintPeaks(p, e->m_peaks.get(), area, how);
         }
-        auto fill = t.accent; fill.setAlpha(35); p.setBrush(fill); p.setPen(t.accent);
+        auto fill = ink; fill.setAlpha(28); p.setBrush(fill); p.setPen(ink);
         const double left = e->m_view.start / length * width(), right = (e->m_view.start + e->m_view.span) / length * width();
         p.drawRoundedRect(QRectF(left, 1, right - left, height() - 2), 6, 6);
-        p.setPen(QPen(t.accent, 2));
+        p.setPen(QPen(ink, 2));
         p.drawLine(QPointF(left + 3, 10), QPointF(left + 3, height() - 10));
         p.drawLine(QPointF(right - 3, 10), QPointF(right - 3, height() - 10));
     }
@@ -374,43 +414,40 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     : QWidget(parent), m_controller(controller) {
     setObjectName("WarpEditor"); setAccessibleName(tr("Warp audio editor"));
     m_projectGeneration = controller->projectGeneration();
-    auto* layout = new QVBoxLayout(this); layout->setContentsMargins(12, 8, 12, 8); layout->setSpacing(6);
+    auto* layout = new QVBoxLayout(this); layout->setContentsMargins(8, 8, 8, 8); layout->setSpacing(7);
     layout->setSizeConstraint(QLayout::SetNoConstraint);
-    auto* header = new QHBoxLayout; header->setSpacing(10);
-    auto* brand = new QLabel("Warp", this); brand->setObjectName("WarpBrand");
-    auto titleFont = font(); titleFont.setBold(true); brand->setFont(titleFont); header->addWidget(brand);
+    auto titleFont = font(); titleFont.setBold(true);
     m_title = new QLabel(tr("Select an audio clip"), this); m_title->setMinimumWidth(0);
-    m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); header->addWidget(m_title, 1);
-    m_analysisLabel = new QLabel(this); m_analysisLabel->setObjectName("WarpAnalysisState"); header->addWidget(m_analysisLabel);
-    m_options = new QToolButton(this); m_options->setObjectName("WarpInspectorButton"); m_options->setCheckable(true); m_options->setChecked(true);
-    m_options->setAccessibleName(tr("Warp settings")); m_options->setToolTip(tr("Warp settings")); m_options->setFixedSize(28, 28); header->addWidget(m_options);
-    auto* close = new QToolButton(this); close->setObjectName("WarpCloseButton"); close->setAccessibleName(tr("Close Warp")); close->setToolTip(tr("Close Warp")); close->setFixedSize(28, 28);
-    header->addWidget(close); connect(close, &QToolButton::clicked, this, &WarpEditorWidget::closeRequested); layout->addLayout(header);
+    m_title->setObjectName("WarpClipInfo"); m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_analysisLabel = new QLabel(this); m_analysisLabel->setObjectName("WarpAnalysisState");
 
-    m_tools = new QWidget(this); auto* toolGroups = new QBoxLayout(QBoxLayout::LeftToRight, m_tools);
-    toolGroups->setContentsMargins(0, 0, 0, 0); toolGroups->setSpacing(6);
-    auto* editGroup = new QWidget(m_tools); auto* editTools = new QHBoxLayout(editGroup); editTools->setContentsMargins(0, 0, 0, 0); editTools->setSpacing(6);
-    auto* timingGroup = new QWidget(m_tools); auto* tools = new QHBoxLayout(timingGroup); tools->setContentsMargins(0, 0, 0, 0); tools->setSpacing(6);
-    toolGroups->addWidget(editGroup); toolGroups->addWidget(timingGroup, 1);
-    auto check = [&](const QString& text) { auto* w = new QCheckBox(text, editGroup); w->setAccessibleName(text); editTools->addWidget(w); return w; };
-    m_enabled = check(tr("Warp")); m_enabled->setObjectName("WarpEnabled"); m_snap = check(tr("Snap")); m_snap->setChecked(true);
+    auto* toolbar = new QToolBar(this); m_tools = toolbar; toolbar->setObjectName("WarpToolbar");
+    toolbar->setIconSize(QSize(18, 18)); toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    auto button = [&](const QString& text, const char* name, icons::Glyph glyph, auto callback) {
+        auto* b = new QToolButton(toolbar); b->setObjectName(name); b->setText(text);
+        b->setAccessibleName(text); b->setToolTip(text); b->setFocusPolicy(Qt::StrongFocus);
+        b->setProperty("glyph", int(glyph)); b->setIconSize(QSize(18, 18)); toolbar->addWidget(b);
+        connect(b, &QToolButton::clicked, this, callback); return b;
+    };
+    m_enabled = button(tr("Enable Warp"), "WarpEnabled", icons::Glyph::Power, [] {}); m_enabled->setCheckable(true);
+    m_snap = button(tr("Snap to grid · Alt: temporarily disable"), "WarpSnap", icons::Glyph::Magnet, [] {}); m_snap->setCheckable(true); m_snap->setChecked(true);
     m_enabled->setToolTip(tr("Match the clip to the project tempo. Turn off to restore its original timing and duration."));
     m_grid = new QComboBox(m_tools); m_grid->setAccessibleName(tr("Warp grid")); m_grid->setObjectName("WarpGrid");
     m_grid->addItem(tr("Project grid"), 0.);
     for (const auto& item : {std::pair{"1/4", 1.}, {"1/8", .5}, {"1/16", .25}, {"1/32", .125}, {"1/8 triplet", 1./3}}) m_grid->addItem(item.first, item.second);
-    m_grid->setMinimumWidth(110); m_grid->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); m_grid->setMinimumContentsLength(11); editTools->addWidget(m_grid);
-    auto* fit = new QPushButton(tr("Fit"), editGroup); fit->setObjectName("WarpFit"); fit->setAccessibleName(tr("Fit")); editTools->addWidget(fit);
-    connect(fit, &QPushButton::clicked, this, [this] { if (const auto* c = clip(); c && !c->warp.empty()) m_view = {0, c->warp.markers.back().targetBeats}; redraw(); });
-    editTools->addStretch();
-    auto button = [&](const QString& text, const char* name, auto callback) {
-        auto* b = new QPushButton(text, m_tools); b->setObjectName(name); b->setAccessibleName(text); tools->addWidget(b);
-        connect(b, &QPushButton::clicked, this, callback); return b;
-    };
-    button(tr("Quantize"), "WarpQuantize", [this] { quantize(); });
-    m_strength = new QSpinBox(m_tools); m_strength->setObjectName("WarpStrength"); m_strength->setRange(0, 100); m_strength->setValue(100); m_strength->setSuffix("%");
-    m_strength->setAccessibleName(tr("Timing strength")); m_strength->setToolTip(tr("Timing strength")); tools->addWidget(m_strength);
-    m_alignButton = button(tr("Suggest alignment"), "WarpSuggest", [this] { previewAlignment(); });
-    tools->addStretch();
+    m_grid->setSizeAdjustPolicy(QComboBox::AdjustToContents); toolbar->addWidget(m_grid); toolbar->addSeparator();
+    auto* quantizeButton = button(tr("Quantize selected markers"), "WarpQuantize", icons::Glyph::WarpQuantize, [this] { quantize(); });
+    quantizeButton->setToolTip(tr("Align markers to the grid using the timing settings. With no selection, align all markers in the range."));
+    m_alignButton = button(tr("Suggest alignment"), "WarpSuggest", icons::Glyph::WarpAlign, [this] { previewAlignment(); });
+    m_alignButton->setToolTip(tr("Detect audio attacks and preview automatic timing alignment. Compare Before / After, then Apply or Cancel."));
+    button(tr("Delete selected markers"), "WarpDelete", icons::Glyph::Trash, [this] { deleteMarkers(); });
+    auto* space = new QWidget(toolbar); space->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred); toolbar->addWidget(space);
+    button(tr("Zoom out"), "WarpZoomOut", icons::Glyph::ZoomOut, [this] { zoomView(1.5); });
+    button(tr("Zoom in"), "WarpZoomIn", icons::Glyph::ZoomIn, [this] { zoomView(1 / 1.5); });
+    button(tr("Fit clip · F"), "WarpFit", icons::Glyph::ZoomFit, [this] { fitView(); });
+    button(tr("Fit range · Shift+F"), "WarpFitRange", icons::Glyph::Crosshair, [this] { fitView(true); });
+    toolbar->addSeparator();
+    m_options = button(tr("Warp settings"), "WarpInspectorButton", icons::Glyph::Inspector, [] {}); m_options->setCheckable(true);
     layout->addWidget(m_tools);
 
     m_previewBar = new QWidget(this); m_previewBar->setObjectName("WarpPreviewBar"); auto* previewRow = new QHBoxLayout(m_previewBar);
@@ -424,7 +461,7 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     auto* apply = new QPushButton(tr("Apply"), m_previewBar); apply->setObjectName("WarpApply"); previewRow->addWidget(apply);
     auto* cancel = new QPushButton(tr("Cancel"), m_previewBar); cancel->setObjectName("WarpCancel"); previewRow->addWidget(cancel);
     connect(apply, &QPushButton::clicked, this, &WarpEditorWidget::applyPreview); connect(cancel, &QPushButton::clicked, this, &WarpEditorWidget::cancelPreview);
-    connect(m_after, &QToolButton::toggled, this, [this](bool after) { if (m_previewing) { m_controller->auditionWarpPreview(after); redraw(); } });
+    connect(m_after, &QToolButton::toggled, this, [this](bool after) { if (ownsPreview()) { m_controller->auditionWarpPreview(after); redraw(); } });
     m_previewBar->hide(); layout->addWidget(m_previewBar);
 
     m_body = new QWidget(this); m_bodyLayout = new QHBoxLayout(m_body); m_bodyLayout->setContentsMargins(0, 0, 0, 0); m_bodyLayout->setSpacing(8);
@@ -433,7 +470,7 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     m_overview = new WarpOverview(this); waveLayout->addWidget(m_overview); m_bodyLayout->addWidget(m_waveHost, 1);
     m_dragLabel = new QLabel(m_canvas); m_dragLabel->setObjectName("WarpDragReadout"); m_dragLabel->setAttribute(Qt::WA_TransparentForMouseEvents); m_dragLabel->hide();
     m_inspector = new QScrollArea(m_body); m_inspector->setObjectName("WarpInspector"); m_inspector->setWidgetResizable(true); m_inspector->setFrameShape(QFrame::NoFrame);
-    m_inspector->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); m_inspector->setFixedWidth(248);
+    m_inspector->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); m_inspector->setFixedWidth(236);
     auto* options = new QWidget; auto* form = new QFormLayout(options); form->setContentsMargins(10, 8, 10, 8); form->setSpacing(8); form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow); form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     const auto section = [&](const QString& text) { auto* label = new QLabel(text, options); label->setFont(titleFont); form->addRow(label); };
     const auto spin = [&](const QString& name, int from, int to, int value, const QString& suffix) {
@@ -444,6 +481,7 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     };
     section(tr("Timing"));
     m_tempoLabel = new QLabel(tr("Detecting tempo…"), options); m_tempoLabel->setWordWrap(true); form->addRow(m_tempoLabel);
+    m_strength = spin(tr("Timing strength"), 0, 100, 100, "%"); m_strength->setObjectName("WarpStrength"); form->addRow(tr("Strength"), m_strength);
     m_groove = new QComboBox(options); m_groove->setObjectName("WarpGroove"); m_groove->setAccessibleName(tr("Groove")); form->addRow(tr("Groove"), m_groove); loadGrooves();
     m_swing = spin(tr("Swing"), 50, 75, 50, "%"); m_swing->setObjectName("WarpSwing"); form->addRow(tr("Swing"), m_swing);
     m_swingUnit = new QComboBox(options); m_swingUnit->addItem("1/8", .5); m_swingUnit->addItem("1/16", .25); m_swingUnit->setAccessibleName(tr("Swing division")); form->addRow(tr("Division"), m_swingUnit);
@@ -472,9 +510,11 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     for (auto* combo : options->findChildren<QComboBox*>()) { combo->setMinimumContentsLength(4); combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); }
     m_inspector->setWidget(options); m_bodyLayout->addWidget(m_inspector); layout->addWidget(m_body, 1);
     m_status = new QLabel(tr("Double-click: marker · Drag ruler: range · Ctrl+wheel: zoom"), this); m_status->setMinimumWidth(0); m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); layout->addWidget(m_status);
+    m_status->setObjectName("WarpHint");
+    auto* info = new QHBoxLayout; info->setSpacing(10); info->addWidget(m_title, 1); info->addWidget(m_analysisLabel); layout->addLayout(info);
 
     connect(m_options, &QToolButton::toggled, this, [this](bool open) { m_inspectorOpen = open; arrangeInspector(); });
-    connect(m_enabled, &QCheckBox::toggled, this, [this](bool value) { if (const auto* c = clip()) { auto w = c->warp; w.enabled = value; this->apply(w, "Toggle Warp"); } });
+    connect(m_enabled, &QToolButton::toggled, this, [this](bool value) { if (const auto* c = clip()) { auto w = c->warp; w.enabled = value; this->apply(w, "Toggle Warp"); } });
     connect(m_pitch, &QCheckBox::toggled, this, [this](bool value) { if (const auto* c = clip()) { auto w = c->warp; w.preservePitch = value; this->apply(w, "Warp Preserve Pitch"); } });
     connect(m_mode, &QComboBox::currentIndexChanged, this, [this](int value) { if (const auto* c = clip()) { auto w = c->warp; w.mode = value + 1; this->apply(w, "Warp Algorithm"); } });
     connect(m_sensitivity, &QSpinBox::editingFinished, this, [this] {
@@ -503,11 +543,14 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
     m_frameTimer = new ui::FrameTimer(this);
     const auto refreshPlayhead = [this] {
         const auto* c = clip(); if (!c) return;
-        const double position = m_controller->positionSeconds();
+        const double position = m_controller->presentationPositionSeconds();
         if (position == m_lastPosition) return;
         const double old = m_canvas->x(daw::secondsToBeats(m_lastPosition - c->startSeconds, m_controller->tempo()));
         const double now = m_canvas->x(daw::secondsToBeats(position - c->startSeconds, m_controller->tempo())); m_lastPosition = position;
-        m_canvas->update(QRegion(QRect(int(old) - 3, 0, 7, m_canvas->height())) | QRegion(QRect(int(now) - 3, 0, 7, m_canvas->height())));
+        QRegion damage;
+        for (double x : {old, now}) if (x >= -8 && x <= m_canvas->width() + 8)
+            damage += QRect(int(x) - 7, 0, 15, m_canvas->height());
+        if (!damage.isEmpty()) m_canvas->update(damage);
     };
     connect(m_frameTimer, &ui::FrameTimer::timeout, this, refreshPlayhead);
     m_transportPoll = new QTimer(this);
@@ -522,7 +565,7 @@ WarpEditorWidget::WarpEditorWidget(daw::EngineController* controller, QWidget* p
 }
 
 WarpEditorWidget::~WarpEditorWidget() {
-    if (m_previewing) m_controller->cancelWarpPreview();
+    if (ownsPreview()) m_controller->cancelWarpPreview();
     for (auto& job : m_jobs) job.cancelled->store(true);
 }
 void WarpEditorWidget::finishPendingEdit() { m_canvas->finish(); cancelPreview(); }
@@ -538,18 +581,23 @@ double WarpEditorWidget::grid() const {
     return seconds > 0 ? daw::secondsToBeats(seconds, m_controller->tempo()) : .25;
 }
 bool WarpEditorWidget::setClip(const QString& trackId, const QString& clipId) {
+    if (m_projectGeneration != m_controller->projectGeneration()) clearClip();
     m_canvas->cancel();
     cancelPreview();
-    if (!m_controller->initializeClipWarp(trackId.toStdString(), clipId.toStdString())) return false;
+    const auto* target = m_controller->audioClip(trackId.toStdString(), clipId.toStdString());
+    const bool firstOpen = target && target->warp.empty();
+    const bool ready = m_controller->initializeClipWarp(trackId.toStdString(), clipId.toStdString());
     if (m_clipId != clipId) {
         if (!m_clipId.isEmpty()) m_views[m_clipId] = m_view;
         m_trackId = trackId; m_clipId = clipId; m_selected.clear(); m_rangeBegin = m_rangeFinish = 0;
         const auto* c = clip();
-        m_view = m_views.contains(clipId) ? m_views[clipId] : View{0, c->warp.markers.back().targetBeats};
+        m_view = m_views.contains(clipId) ? m_views[clipId] : View{0, c && !c->warp.empty() ? c->warp.markers.back().targetBeats : 8};
         m_audio.reset(); m_analysisBegin = -1;
     }
     m_trackId = trackId;
-    refresh(); m_canvas->setFocus(); return true;
+    refresh(); m_canvas->setFocus();
+    if (ready && firstOpen) emit edited();
+    return ready;
 }
 void WarpEditorWidget::clearClip() {
     cancelPreview();
@@ -560,7 +608,7 @@ void WarpEditorWidget::clearClip() {
 }
 void WarpEditorWidget::refresh() {
     if (m_projectGeneration != m_controller->projectGeneration()) { clearClip(); return; }
-    if (m_previewing && !m_controller->warpPreviewActive()) {
+    if (m_previewing && !ownsPreview()) {
         m_previewing = false; m_previewBar->hide(); m_previewBase = {}; redraw();
         m_status->setText(tr("Preview cancelled because the clip or project changed."));
     }
@@ -571,16 +619,22 @@ void WarpEditorWidget::refresh() {
             }
     }
     const auto* c = clip();
+    const auto reason = m_controller->warpUnavailableReason(m_trackId.toStdString(), m_clipId.toStdString());
+    if (const auto* track = m_controller->project().findTrack(m_trackId.toStdString())) {
+        const auto color = colorFromRgb(track->color);
+        if (m_clipColor != color) { m_clipColor = color; redraw(); }
+    }
     if (!c || c->warp.empty()) {
         m_tools->setEnabled(false); m_pitch->setEnabled(false); m_mode->setEnabled(false); m_sensitivity->setEnabled(false);
-        m_title->setText(tr("Select an audio clip")); m_analysisLabel->clear();
+        m_title->setText(c ? QString::fromStdString(c->name) : tr("Select an audio clip")); m_analysisLabel->clear();
+        if (!m_clipId.isEmpty()) m_status->setText(reason.empty() ? tr("The source audio is unavailable or too short for Warp.") : QString::fromStdString(reason));
+        m_status->setToolTip(m_status->text());
         if (m_audio) {
             for (auto& job : m_jobs) job.cancelled->store(true);
             ++m_generation; m_audio.reset(); m_peaks.reset(); m_transients.clear(); m_analysisBegin = -1;
         }
         m_inspector->setEnabled(false); m_lastMap = {}; redraw(); return;
     }
-    const auto reason = m_controller->warpUnavailableReason(m_trackId.toStdString(), m_clipId.toStdString());
     m_tools->setEnabled(reason.empty());
     m_inspector->setEnabled(reason.empty());
     m_pitch->setEnabled(reason.empty()); m_mode->setEnabled(reason.empty()); m_sensitivity->setEnabled(reason.empty());
@@ -591,6 +645,7 @@ void WarpEditorWidget::refresh() {
     m_enabled->setChecked(c->warp.enabled); m_pitch->setChecked(c->warp.preservePitch); m_mode->setCurrentIndex(c->warp.mode - 1);
     if (!m_sensitivity->hasFocus()) m_sensitivity->setValue(int(c->warp.sensitivity));
     if (reason.empty()) analyze(); else m_status->setText(QString::fromStdString(reason));
+    m_status->setToolTip(m_status->text());
     m_alignButton->setEnabled(c->warp.enabled && bool(m_audio));
     updateInspector();
     if (m_lastMap != c->warp || m_lastTempo != m_controller->tempo() || m_lastStart != c->startSeconds) {
@@ -662,31 +717,47 @@ void WarpEditorWidget::resetMap() {
 void WarpEditorWidget::redraw() {
     m_canvas->redraw(); m_overview->update();
 }
+QColor WarpEditorWidget::waveColor() const {
+    const auto& t = ThemeManager::instance().theme();
+    return mixColors(m_clipColor.isValid() ? m_clipColor : Theme::audioAccent(), t.surface, t.dark ? .38 : .18);
+}
+void WarpEditorWidget::fitView(bool range) {
+    const auto* c = clip(); if (!c || c->warp.empty()) return;
+    ui::ScrollMotion::cancel(m_canvas);
+    m_view = range && m_rangeFinish > m_rangeBegin ? View{m_rangeBegin, std::max(.02, m_rangeFinish - m_rangeBegin)} :
+        View{0, c->warp.enabled ? c->warp.markers.back().targetBeats : daw::secondsToBeats(c->durationSeconds, m_controller->tempo())};
+    redraw(); m_canvas->setFocus();
+}
+void WarpEditorWidget::zoomView(double factor) {
+    if (!clip()) return;
+    ui::ScrollMotion::cancel(m_canvas);
+    const double center = m_view.start + m_view.span * .5;
+    m_view.span = std::clamp(m_view.span * factor, .02, 100000.);
+    m_view.start = std::max(0., center - m_view.span * .5);
+    redraw(); m_canvas->setFocus();
+}
 void WarpEditorWidget::updateStyle() {
     const auto& t = ThemeManager::instance().theme();
     setStyleSheet(QString(
         "#WarpEditor { background: %1; }"
         "#WarpInspector, #WarpInspector > QWidget > QWidget { background: %2; border-radius: 8px; }"
         "#WarpPreviewBar { background: %2; border: 1px solid %3; border-radius: 8px; }"
-        "#WarpAnalysisState { color: %4; }"
+        "#WarpAnalysisState, #WarpClipInfo, #WarpHint { color: %4; }"
         "#WarpDragReadout { background: %2; color: %5; border: 1px solid %3; border-radius: 8px; padding: 8px; }"
         "#WarpApply { background: %6; color: %7; }"
-        "#WarpEditor QToolButton:checked { background: %6; color: %7; }")
+        "#WarpPreviewBar QToolButton:checked { background: %6; color: %7; }"
+        "QToolBar#WarpToolbar { background: %1; border: 1px solid %3; border-radius: 8px; padding: 3px; spacing: 2px; }"
+        "QToolBar#WarpToolbar QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; }"
+        "QToolBar#WarpToolbar QToolButton:hover { background: %2; }"
+        "QToolBar#WarpToolbar QToolButton:checked { background: %8; border-color: %6; }"
+        "QToolBar#WarpToolbar QToolButton:focus { border-color: %6; }")
         .arg(t.surface.name(), t.surfaceElevated.name(), t.separator().name(), t.textSecondary.name(),
-             t.textPrimary.name(), t.accent.name(), t.accentText().name()));
-    m_options->setIcon(icons::icon(icons::Glyph::Inspector, t.textPrimary));
-    findChild<QToolButton*>("WarpCloseButton")->setIcon(icons::icon(icons::Glyph::Close, t.textPrimary));
-    m_alignButton->setIcon(icons::icon(icons::Glyph::Grid, t.textPrimary));
+             t.textPrimary.name(), t.accent.name(), t.accentText().name(), mixColors(t.surface, t.accent, .22).name()));
+    for (auto* button : m_tools->findChildren<QToolButton*>())
+        if (button->property("glyph").isValid()) button->setIcon(icons::icon(icons::Glyph(button->property("glyph").toInt()), t.textPrimary));
 }
 void WarpEditorWidget::arrangeInspector() {
-    const bool compact = width() < 900;
-    static_cast<QBoxLayout*>(m_tools->layout())->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    if (compact) {
-        m_bodyLayout->removeWidget(m_inspector);
-        m_inspector->setGeometry(std::max(0, m_body->width() - 248), 0, 248, m_body->height());
-    } else if (m_bodyLayout->indexOf(m_inspector) < 0) m_bodyLayout->addWidget(m_inspector);
-    m_inspector->setVisible(m_inspectorOpen); if (compact && m_inspectorOpen) m_inspector->raise();
-    m_alignButton->setText(compact ? tr("Suggest") : tr("Suggest alignment"));
+    m_inspector->setVisible(m_inspectorOpen);
     m_analysisLabel->setVisible(width() >= 600);
     m_overview->setVisible(height() >= 240); m_status->setVisible(height() >= 220);
 }
@@ -710,6 +781,10 @@ void WarpEditorWidget::updateInspector() {
     const auto* c = clip(); if (!c || c->warp.empty()) return;
     const QSignalBlocker a(m_rangeStart), b(m_rangeEnd), d(m_markerTarget), f(m_markerLock);
     const double length = c->warp.markers.back().targetBeats;
+    const bool movable = std::any_of(c->warp.markers.begin(), c->warp.markers.end(), [this](const auto& m) { return !m.locked && m_selected.contains(m.id); });
+    findChild<QToolButton*>("WarpDelete")->setEnabled(c->warp.enabled && movable && !m_previewing);
+    findChild<QToolButton*>("WarpQuantize")->setEnabled(c->warp.enabled && !m_previewing);
+    findChild<QToolButton*>("WarpFitRange")->setEnabled(m_rangeFinish > m_rangeBegin);
     m_rangeStart->setRange(1, length + 1); m_rangeEnd->setRange(1, length + 1);
     if (!m_rangeStart->hasFocus()) m_rangeStart->setValue(m_rangeFinish > m_rangeBegin ? m_rangeBegin + 1 : 1);
     if (!m_rangeEnd->hasFocus()) m_rangeEnd->setValue(m_rangeFinish > m_rangeBegin ? m_rangeFinish + 1 : length + 1);
@@ -758,6 +833,7 @@ daw::warptools::AlignParams WarpEditorWidget::alignParams(bool attacks) const {
 }
 void WarpEditorWidget::previewAlignment() {
     m_canvas->finish();
+    if (m_previewing && !ownsPreview()) cancelPreview();
     m_previewAttacks = m_transients;
     if (!m_previewing) {
         if (!m_controller->beginWarpPreview(m_trackId.toStdString(), m_clipId.toStdString())) return;
@@ -768,7 +844,7 @@ void WarpEditorWidget::previewAlignment() {
 }
 void WarpEditorWidget::rebuildPreview() {
     if (!m_previewing) return;
-    if (!m_controller->warpPreviewActive()) { cancelPreview(); return; }
+    if (!ownsPreview()) { cancelPreview(); return; }
     m_proposal = daw::warptools::align(m_previewBase, m_previewAttacks, alignParams(true));
     if (!m_controller->updateWarpPreview(m_proposal.map)) {
         cancelPreview(); m_status->setText(tr("This proposal exceeds the supported stretch range.")); return;
@@ -783,6 +859,7 @@ void WarpEditorWidget::rebuildPreview() {
 }
 void WarpEditorWidget::applyPreview() {
     if (!m_previewing) return;
+    if (!ownsPreview()) { cancelPreview(); return; }
     const bool applied = m_controller->commitWarpPreview();
     m_previewing = false; m_previewBase = {}; m_previewBar->hide();
     m_status->setText(applied ? tr("Timing applied · Undo restores the previous map") : tr("No timing changes"));
@@ -790,8 +867,12 @@ void WarpEditorWidget::applyPreview() {
 }
 void WarpEditorWidget::cancelPreview() {
     if (!m_previewing) return;
-    m_controller->cancelWarpPreview(); m_previewing = false; m_previewBase = {}; m_previewBar->hide();
+    if (ownsPreview()) m_controller->cancelWarpPreview();
+    m_previewing = false; m_previewBase = {}; m_previewBar->hide();
     m_status->setText(tr("Preview cancelled · Original timing restored")); updateInspector(); redraw();
+}
+bool WarpEditorWidget::ownsPreview() const {
+    return m_previewing && m_controller->warpPreviewActiveFor(m_trackId.toStdString(), m_clipId.toStdString());
 }
 void WarpEditorWidget::loadGrooves() {
     m_grooves = daw::miditools::groovePresets();
@@ -925,7 +1006,7 @@ void WarpEditorWidget::pollAnalysis() {
                     if (m_analysisCache.size() >= 3) m_analysisCache.erase(m_analysisCache.begin());
                     m_analysisCache.push_back({m_audio, m_analysisBegin, m_analysisEnd, daw::analysis::kWarpAnalysisVersion, std::move(result)});
                 }
-                if (!m_previewing) m_status->setText(tr("%1 transient suggestions · Double-click to add · Ctrl+wheel to zoom").arg(m_transients.size()));
+                if (!m_previewing) m_status->setText(tr("Double-click: marker · Drag ruler: range · Ctrl+wheel: zoom"));
                 // An already auditioned proposal stays frozen until the user
                 // asks again; a late analysis result never changes the sound.
                 redraw();

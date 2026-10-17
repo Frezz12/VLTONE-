@@ -47,6 +47,10 @@ int main() {
         check(std::isnan(meter.levels().shortTerm), "initial window has no invented reading");
         feed(meter, rate, 3.1, .0707945784f);
         const auto levels = meter.levels();
+        check(near(levels.vuLeft,.0707945784f,.001f) && near(levels.vuRight,levels.vuLeft,.0001f),
+              "VU rectified average is sine calibrated at each sample rate");
+        check(near(levels.rmsLeft,.0707945784f/std::sqrt(2.f),.001f) && near(levels.correlation,-1,.001f),
+              "RMS and opposite-polarity stereo correlation use unweighted audio");
         std::printf("rate %.0f: M %.3f S %.3f I %.3f\n", rate, levels.momentary, levels.shortTerm, levels.integrated);
         check(near(levels.momentary, -23) && near(levels.shortTerm, -23) && near(levels.integrated, -23),
               "calibrated 1 kHz antiphase stereo reads -23 LUFS at each device rate");

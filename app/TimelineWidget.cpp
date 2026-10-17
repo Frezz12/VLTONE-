@@ -1,6 +1,7 @@
 #include "ScrollMotion.hpp"
 #include "AudioImportPreparation.hpp"
 #include "TimelineWidget.hpp"
+#include "graphics/StretchableRect.hpp"
 #include "ClipLibraryDrag.hpp"
 #include "ClipInfoDialog.hpp"
 #include <QDrag>
@@ -138,12 +139,17 @@ QPainterPath clipBodyPath(QPainter& p, const QRectF& span, qreal roundedRadius =
 
 void drawClipBody(QPainter& p, const QRectF& span, const QColor& fill,
                   qreal captionHeight = 0, const QColor& tint = Qt::transparent) {
+    ui::perf::Scope timing("timeline.clip.body.ms");
     if (span.isEmpty()) return;
     const qreal dpr = p.device()->devicePixelRatioF();
     const auto body = ui::pixelAlignedRect(span, dpr);
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
-    const auto shape = clipBodyPath(p, body);
+    const auto fillShape = [&](const QColor& color) {
+        p.setPen(Qt::NoPen); p.setBrush(color);
+        if (!ui::graphics::paintStretchableRoundedRect(p, body, ui::clipCornerRadius(body), body.width() > 16384))
+            p.fillPath(clipBodyPath(p, body), color);
+    };
     captionHeight = std::clamp(captionHeight, 0.0, body.height());
     if (captionHeight > 0) {
         const qreal split = std::clamp(std::round((body.top() + captionHeight) * dpr) / dpr,
@@ -163,11 +169,11 @@ void drawClipBody(QPainter& p, const QRectF& span, const QColor& fill,
         // second mask on the curved outer edge would multiply its coverage.
         p.setClipRect(QRectF(body.left() - 1, body.top() - 1, body.width() + 2,
                             split - body.top() + 1), Qt::IntersectClip);
-        p.fillPath(shape, header);
+        fillShape(header);
         p.restore();
         p.setClipRect(body.adjusted(-1, split - body.top(), 1, 1), Qt::IntersectClip);
     }
-    p.fillPath(shape, fill);
+    fillShape(fill);
     p.restore();
 }
 
@@ -184,6 +190,7 @@ QColor clipHeaderText(const QColor& base, bool selected) {
 // edge; neither the neighbour nor a waveform can erase the separator.
 void drawClipOutline(QPainter& p, const QRectF& body, const QColor& color,
                      bool selected = false, Qt::PenStyle style = Qt::SolidLine) {
+    ui::perf::Scope timing("timeline.clip.outline.ms");
     const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
     const QRectF bounds = ui::pixelAlignedRect(body, dpr);
     const qreal stroke = std::min({std::round((selected ? 2.0 : 1.0) * dpr) / dpr,
@@ -194,7 +201,9 @@ void drawClipOutline(QPainter& p, const QRectF& body, const QColor& color,
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(color, stroke, style));
-    p.drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset), radius, radius);
+    const auto outline = bounds.adjusted(inset, inset, -inset, -inset);
+    if (!ui::graphics::paintStretchableRoundedRect(p, outline, radius, outline.width() > 16384))
+        p.drawRoundedRect(outline, radius, radius);
     p.restore();
 }
 
@@ -279,7 +288,6 @@ const QCursor& arrangementToolCursor(icons::Glyph glyph) {
     painter.end();
 
     const QPoint hot = glyph == icons::Glyph::Brush   ? QPoint(6, 18)
-                     : glyph == icons::Glyph::Knife   ? QPoint(5, 19)
                      : glyph == icons::Glyph::Glue    ? QPoint(6, 19)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
@@ -341,6 +349,7 @@ struct ArrangementClipboardClip {
     QString trackId;
     daw::ClipModel clip;
     double relativeStart = 0.0;
+    std::optional<double> patternRelativeStart;
     daw::EngineController::PatternClipMembers patternMembers;
 };
 
@@ -424,6 +433,8 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
     m_horizontalScrollBar->setToolTip(tr("Move left or right through the project"));
     connect(m_horizontalScrollBar, &QScrollBar::valueChanged, this,
             [this](int value) {
+                ui::ScrollMotion::cancel(this);
+                ui::ScrollMotion::cancelZoom(this);
                 noteManualNavigation();
                 setHorizontalScroll(
                     double(value) / kTimelineScrollUnitsPerSecond);
@@ -784,8 +795,57 @@ void TimelineWidget::autoScrollMarquee(const QPoint& pointer) {
             m_marqueeScrollScheduled = false;
             if (!m_marqueeActive) return;
             autoScrollMarquee(m_marqueeCurrent);
-            update();
+            updateMarqueeSelection();
         });
+    }
+}
+
+void TimelineWidget::updateMarqueeSelection() {
+    ui::perf::Scope timing("timeline.marquee.hit_test.ms");
+    const QRect box = QRect(m_marqueeOrigin, m_marqueeCurrent).normalized();
+    QVector<ClipRef> selection;
+    QHash<QString, QRect> hits;
+    QRegion changed;
+    if (box.width() > 3 || box.height() > 3) {
+        const auto& project = m_controller->project();
+        const auto& rows = visibleRows();
+        const auto [first, last] = lanesInRect(box);
+        for (int lane = first; lane < last; ++lane) {
+            const auto& track = project.tracks[rows[lane].index];
+            const QString trackId = QString::fromStdString(track.id);
+            for (const auto index : clipsInRange(track, box.left(), box.right())) {
+                const auto& clip = track.clips[index];
+                const QRectF body = clipRect(lane, clip);
+                if (!body.intersects(box)) continue;
+                const QString id = QString::fromStdString(clip.id);
+                selection.push_back({trackId, id});
+                // Selection also changes handles and expanded take controls.
+                const QRect bounds = QRectF(body.left() + m_scrollSeconds * m_pixelsPerSecond,
+                    m_laneOffsets[lane], body.width(), laneHeightAt(lane))
+                    .adjusted(-kClipPaintOutset, -kClipPaintOutset,
+                              kClipPaintOutset, kClipPaintOutset).toAlignedRect();
+                hits.insert(id, bounds);
+                if (!m_marqueeHits.contains(id)) changed += bounds;
+            }
+        }
+    }
+    for (auto it = m_marqueeHits.cbegin(); it != m_marqueeHits.cend(); ++it)
+        if (!hits.contains(it.key())) changed += it.value();
+    m_marqueeHits = std::move(hits);
+    m_selection = std::move(selection);
+    m_selectedClipId = m_selection.isEmpty() ? QString() : m_selection.front().clipId;
+    if (!changed.isEmpty()) {
+        // Content coordinates stay valid while edge scrolling moves the view,
+        // and retire highlights in previously visited, now off-screen tiles.
+        const int tileWidth = std::max(1, std::min(512, width()));
+        m_gpuLaneTiles.invalidate([&](quint64 key) {
+            return changed.intersects(QRect(int(key >> 32) * tileWidth,
+                int(quint32(key)) * 256, tileWidth, 256));
+        });
+        m_gpuMidiHeaders.clear();
+        const QRegion visible = changed.translated(-qRound(m_scrollSeconds * m_pixelsPerSecond),
+            tracksTop() - m_scrollY).intersected(rect());
+        if (!visible.isEmpty()) update(visible);
     }
 }
 
@@ -929,6 +989,8 @@ bool TimelineWidget::copySelection() {
                 item.trackId = ref.trackId;
                 item.clip = clip;
                 item.relativeStart = clip.startSeconds - origin;
+                if (const auto* owner = project.patternOwner(clip))
+                    item.patternRelativeStart = clip.startSeconds - owner->startSeconds;
                 if (clip.kind == daw::ClipKind::Pattern) {
                     for (const auto& memberTrack : project.tracks) {
                         for (const auto& member : memberTrack.clips) {
@@ -972,6 +1034,8 @@ bool TimelineWidget::cutSelection() {
             item.trackId = QString::fromStdString(candidate.trackId);
             item.clip = *found;
             item.relativeStart = found->startSeconds - m_regionStart;
+            if (const auto* owner = m_controller->project().patternOwner(*found))
+                item.patternRelativeStart = found->startSeconds - owner->startSeconds;
             if (found->kind == daw::ClipKind::Pattern) {
                 for (const auto& memberTrack :
                      m_controller->project().tracks) {
@@ -1011,17 +1075,45 @@ bool TimelineWidget::cutSelection() {
 bool TimelineWidget::pasteClipboard() {
     const auto clipboard = arrangementClipboard();
     if (clipboard.empty()) return false;
+    std::string patternId;
+    double patternStart = 0.0;
+    if (m_selection.size() == 1 && std::all_of(clipboard.begin(), clipboard.end(),
+            [](const auto& item) { return item.clip.kind == daw::ClipKind::Midi; })) {
+        const auto& selected = m_selection.front();
+        const auto* target = findClipModel(selected.trackId, selected.clipId);
+        if (target && target->kind == daw::ClipKind::Pattern) {
+            // Keep each sound on its own instrument lane. Validate the entire
+            // selection before writing anything, including nested mixer folders.
+            for (const auto& item : clipboard) {
+                const auto* track = m_controller->project().findTrack(item.trackId.toStdString());
+                while (track && track->kind != daw::TrackKind::Pattern)
+                    track = m_controller->project().findTrack(track->parentId);
+                if (!track || track->id != selected.trackId.toStdString()) return false;
+            }
+            patternId = target->id;
+            patternStart = target->startSeconds;
+        }
+    }
     const double at = std::max(0.0, m_controller->positionSeconds());
     const auto undoGroup = m_controller->beginUndoGroup();
     QVector<ClipRef> pasted;
     for (const auto& item : clipboard) {
-        const std::string id = item.clip.kind == daw::ClipKind::Pattern
-            ? m_controller->insertPatternClipCopy(
-                  item.trackId.toStdString(), item.clip, item.patternMembers,
-                  at + item.relativeStart)
-            : m_controller->insertClipCopy(
-                  item.trackId.toStdString(), item.clip,
-                  at + item.relativeStart);
+        std::string id;
+        if (!patternId.empty()) {
+            auto source = item.clip;
+            source.patternClipId = patternId;
+            source.patternPartId.clear();
+            id = m_controller->insertClipCopy(item.trackId.toStdString(), source,
+                patternStart + item.patternRelativeStart.value_or(item.relativeStart));
+        } else {
+            id = item.clip.kind == daw::ClipKind::Pattern
+                ? m_controller->insertPatternClipCopy(
+                      item.trackId.toStdString(), item.clip, item.patternMembers,
+                      at + item.relativeStart)
+                : m_controller->insertClipCopy(
+                      item.trackId.toStdString(), item.clip,
+                      at + item.relativeStart);
+        }
         if (!id.empty()) pasted.push_back({item.trackId, QString::fromStdString(id)});
     }
     if (pasted.isEmpty()) {
@@ -1527,9 +1619,21 @@ void TimelineWidget::setWaveformScale(double scale) {
 void TimelineWidget::refreshClipWaveforms() {
     const auto revision = m_controller->clipWaveformRevision();
     if (m_clipWaveformRevision == revision) return;
+    std::vector<std::string> changed;
+    const bool localized = m_controller->clipWaveformChangesSince(m_clipWaveformRevision, changed);
     m_clipWaveformRevision = revision;
-    m_staticFrameValid = false;
-    update();
+    if (!localized) {
+        m_staticFrameValid = false;
+        update();
+        return;
+    }
+    // A bake changes its own lane and any collapsed ancestors. Preserve all
+    // other tiles, including those retained outside the current viewport.
+    for (const auto& track : m_controller->project().tracks) {
+        if (std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) {
+                return std::binary_search(changed.begin(), changed.end(), clip.id);
+            })) invalidateTrack(QString::fromStdString(track.id));
+    }
 }
 
 void TimelineWidget::setShowBars(bool showBars) {
@@ -1594,14 +1698,20 @@ void TimelineWidget::applyHorizontalZoom(
 
 void TimelineWidget::zoomBy(double factor, std::optional<double> pointerX) {
     if (!std::isfinite(factor) || factor <= 0.0) return;
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     applyHorizontalZoom(m_pixelsPerSecond * factor, pointerX);
 }
 
 void TimelineWidget::setHorizontalZoom(double pixelsPerSecond) {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     applyHorizontalZoom(pixelsPerSecond, std::nullopt);
 }
 
 void TimelineWidget::zoomToFit() {
+    ui::ScrollMotion::cancel(this);
+    ui::ScrollMotion::cancelZoom(this);
     noteManualNavigation();
     const double duration = std::max(4.0, arrangementDuration());
     m_pixelsPerSecond = std::clamp((width() - 40) / duration,
@@ -1731,9 +1841,12 @@ double TimelineWidget::snapMoveStart(double originalStart, double rawStart,
 const std::vector<daw::TrackRow>& TimelineWidget::visibleRows() const {
     const auto& project = m_controller->project();
     if (!m_laneGeometryValid || m_layoutGeometryRevision != m_controller->clipGeometryRevision() ||
+        m_layoutHeightRevision != m_controller->trackHeightRevision() ||
         m_layoutStructureRevision != project.structureRevision() ||
         m_layoutUndoRevision != m_controller->projectRevision() || m_layoutCompRevision != ui::compLayoutRevision() ||
         m_layoutData != project.tracks.data() || m_layoutTrackCount != project.tracks.size()) {
+        ui::perf::Scope timing("timeline.lane_layout.ms");
+        ++m_laneLayoutBuilds;
         m_layoutRows = daw::visibleTracks(project);
         m_laneOffsets.clear(); m_laneById.clear();
         m_laneOffsets.reserve(m_layoutRows.size() + 1); m_laneById.reserve(m_layoutRows.size());
@@ -1743,6 +1856,7 @@ const std::vector<daw::TrackRow>& TimelineWidget::visibleRows() const {
             m_laneOffsets.push_back(m_laneOffsets.back() + ui::laneHeightForTrack(project.tracks[row.index]));
         }
         m_layoutGeometryRevision = m_controller->clipGeometryRevision();
+        m_layoutHeightRevision = m_controller->trackHeightRevision();
         m_layoutStructureRevision = project.structureRevision();
         m_layoutUndoRevision = m_controller->projectRevision(); m_layoutCompRevision = ui::compLayoutRevision();
         m_layoutData = project.tracks.data(); m_layoutTrackCount = project.tracks.size();
@@ -1751,9 +1865,36 @@ const std::vector<daw::TrackRow>& TimelineWidget::visibleRows() const {
     return m_layoutRows;
 }
 
+void TimelineWidget::refreshTrackHeights() {
+    // Tiles above the first resized lane retain their project-space geometry.
+    // Read the old offsets before clampVerticalScroll rebuilds them once.
+    const auto& project = m_controller->project();
+    int unchangedHeight = 0;
+    if (m_laneGeometryValid && m_layoutData == project.tracks.data() &&
+        m_layoutTrackCount == project.tracks.size() &&
+        m_layoutStructureRevision == project.structureRevision() &&
+        m_laneOffsets.size() == m_layoutRows.size() + 1) {
+        for (std::size_t i = 0; i < m_layoutRows.size(); ++i) {
+            if (ui::laneHeightForTrack(project.tracks[m_layoutRows[i].index]) !=
+                m_laneOffsets[i + 1] - m_laneOffsets[i]) break;
+            unchangedHeight = m_laneOffsets[i + 1];
+        }
+    }
+    m_gpuLaneTiles.invalidate([firstRow = unchangedHeight / 256](quint64 key) {
+        return quint32(key) >= quint32(firstRow);
+    });
+    m_gpuMidiHeaders.clear();
+    clampVerticalScroll();
+    const int top = std::clamp(tracksTop() + unchangedHeight - m_scrollY,
+                               std::min(tracksTop(), height()), height());
+    update(QRect(0, top, width(), height() - top));
+}
+
 void TimelineWidget::update() {
     m_laneGeometryValid = false;
     if (m_collectingGestureDamage) { m_gestureRequestedPaint = true; return; }
+    // A document/theme change also affects previously visited off-screen tiles.
+    m_gpuLaneTiles.clear();
     update(QRegion(rect()));
 }
 void TimelineWidget::update(const QRect& region) { update(QRegion(region)); }
@@ -1844,9 +1985,12 @@ void TimelineWidget::setVerticalScroll(int y) {
         scheduleNavigationSync();
         return;
     }
+    // Pending edit damage uses the old viewport. Do not move it to another row.
+    if (!m_staticDirty.isEmpty()) m_staticFrameValid = false;
     m_scrollY = clamped;
     scheduleNavigationSync();
-    update(rect());
+    m_requestedPlayheadSeconds.reset();
+    ui::FrameClock::instance().request(this, QRegion(rect()));
     // The header column is a second view of the same lanes; it follows this one
     // rather than keeping a scroll position of its own.
     emit verticalScrollChanged(m_scrollY);
@@ -1868,6 +2012,7 @@ void TimelineWidget::setHorizontalScroll(double seconds) {
         scheduleNavigationSync();
         return;
     }
+    if (!m_staticDirty.isEmpty()) m_staticFrameValid = false;
     m_scrollSeconds = clamped;
     m_playbackOnlyDirty = {};
     scheduleNavigationSync();
@@ -2063,6 +2208,7 @@ QRectF TimelineWidget::clipSpanRect(const daw::ClipModel& clip,
 
 QRectF TimelineWidget::clipHeaderRect(const daw::TrackModel& track,
                                      const daw::ClipModel& clip, QRectF body) const {
+    ui::perf::Scope timing("timeline.clip.header.layout.ms");
     // Audio can intentionally share a waveform region. Names and MIDI
     // controls still need their own space before the next clip starts.
     for (const auto index : clipsInRange(track, int(body.left()), int(body.right()))) {
@@ -2109,6 +2255,7 @@ const TimelineWidget::ClipIntervals& TimelineWidget::clipIntervals(
     const auto undo = m_controller->projectRevision();
     bool rebuild = cached.data != track.clips.data() || cached.entries.size() != track.clips.size();
     if (!rebuild && (cached.geometryRevision != geometry || cached.undoRevision != undo)) {
+        ui::perf::Scope validation("timeline.clip_index.validate.ms");
         for (const auto& entry : cached.entries) {
             const auto& clip = track.clips[entry.index];
             const auto id = cached.ids.find(clip.id);
@@ -2523,6 +2670,7 @@ bool TimelineWidget::duplicateActiveTake() {
 }
 
 bool TimelineWidget::isClipSelected(const QString& clipId) const {
+    if (m_marqueeActive) return m_marqueeHits.contains(clipId);
     for (const auto& ref : m_selection)
         if (ref.clipId == clipId) return true;
     return false;
@@ -2822,6 +2970,7 @@ void TimelineWidget::refreshRecordingFrame() {
 
 void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
                               const QColor& laneFill) {
+    ui::perf::Scope timing("timeline.grid.ms");
     if (ui::gridOpacity() == 0) return;
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -2835,7 +2984,7 @@ void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
     // divisions for the complete viewport on every one of those frames made a
     // visually tiny repaint retain almost all of a full paint's fixed cost.
     // Include the widest antialiased line and iterate only the actual clip.
-    const QRectF dirty = p.clipBoundingRect().intersected(QRectF(rect()));
+    const QRectF dirty = p.clipBoundingRect();
     if (dirty.isEmpty()) { p.restore(); return; }
     const int margin = int(std::ceil(lineWidth / 2.0)) + 1;
     const int dirtyLeft = std::max(0, int(std::floor(dirty.left())) - margin);
@@ -2869,7 +3018,8 @@ void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
         // Centre hairlines on a physical pixel, so subpixel widths stay fine
         // instead of spreading across two pixels on a 100% display.
         const qreal x = (std::floor(secondsToX(time) * dpr) + 0.5) / dpr;
-        p.drawLine(QPointF(x, tracksTop()), QPointF(x, height()));
+        p.drawLine(QPointF(x, std::max(double(tracksTop()), dirty.top())),
+                   QPointF(x, dirty.bottom()));
     };
     if (!overview && grid > 0.0) {
         const double stepSeconds = grid * secondsPerBeat;
@@ -3306,13 +3456,17 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
 
         // Pass 2 — waveforms, fades, names, mono/stereo dots.
         for (const PaintedClip& painted : visibleClips) {
+            ui::perf::Scope timing("timeline.clip.content.ms");
             const auto& clip = *painted.model;
             const QRectF& r = painted.body;
             const bool selected = isClipSelected(QString::fromStdString(clip.id));
             const QColor base = clip.muted ? QColor(101, 105, 113) : trackColor;
             p.save();
             const auto restoreClip = qScopeGuard([&] { p.restore(); });
-            p.setClipPath(clipBodyPath(p, r), Qt::IntersectClip);
+            {
+                ui::perf::Scope timing("timeline.clip.mask.ms");
+                p.setClipPath(clipBodyPath(p, r), Qt::IntersectClip);
+            }
             if (compact) {
                 p.save();
                 p.setClipRect(r.adjusted(1, 1, -1, -1), Qt::IntersectClip);
@@ -3335,7 +3489,6 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
                 // a plain clip shows its own waveform. Same picture whether or
                 // not the editor is open, so opening it changes nothing above.
                 p.save();
-                p.setClipPath(clipBodyPath(p, r), Qt::IntersectClip);
                 drawCompLane(p, track, clip, content, midiNotesRevision);
                 p.restore();
                 if (clip.kind == daw::ClipKind::Audio) {
@@ -3385,13 +3538,17 @@ void TimelineWidget::drawLanes(QPainter& p, bool midiHeaders) {
                 }
             }
             if (clip.muted) {
+                ui::perf::Scope timing("timeline.clip.muted.ms");
                 // Grey the content, not merely the border: mute remains clear
                 // even on tracks whose own colour is already subdued.
                 p.save();
                 if (selected) p.setClipRect(content, Qt::IntersectClip);
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor(55, 58, 64, 118));
-                p.drawPath(clipBodyPath(p, r.adjusted(1, 1, -1, -1), 4));
+                const auto mutedBody = ui::pixelAlignedRect(r.adjusted(1, 1, -1, -1), p.device()->devicePixelRatioF());
+                const auto mutedRadius = ui::clipCornerRadius(mutedBody, 4);
+                if (!ui::graphics::paintStretchableRoundedRect(p, mutedBody, mutedRadius, false))
+                    p.drawPath(clipBodyPath(p, mutedBody, 4));
                 p.restore();
                 if (clip.kind == daw::ClipKind::Audio) {
                     // Editing affordances stay bright even while the content
@@ -3812,6 +3969,7 @@ double TimelineWidget::automationBeatsAtX(const daw::ClipModel& clip, int x) con
 void TimelineWidget::drawAutomationClips(QPainter& p,
                                          const daw::TrackModel& track,
                                          int laneY, int bodyH) {
+    ui::perf::Scope timing("timeline.automation.paint.ms");
     const Theme& t = th();
     const double tempo = m_controller->project().tempo;
     const QRegion paintRegion = p.clipRegion();
@@ -3960,6 +4118,7 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
 
 void TimelineWidget::drawFolderPreview(
     QPainter& p, const daw::TrackModel& folder, int laneY, int bodyH) {
+    ui::perf::Scope timing("timeline.folder.paint.ms");
     const auto& project = m_controller->project();
     const auto stamp = std::array{project.structureRevision(), m_controller->projectRevision()};
     if (m_folderPreviewStamp != stamp) {
@@ -4061,6 +4220,7 @@ QString TimelineWidget::linkedName(const daw::ClipModel& clip) const {
 
 void TimelineWidget::drawPatternClips(
     QPainter& p, const daw::TrackModel& pattern, int laneY, int bodyH) {
+    ui::perf::Scope timing("timeline.pattern.paint.ms");
     const Theme& t = th();
     const auto& project = m_controller->project();
     const QRegion paintRegion = p.clipRegion();
@@ -4142,7 +4302,6 @@ void TimelineWidget::drawPatternClips(
             const int basePitch = low - (span - used) / 2;
             const double rowH = content.height() / double(span);
             p.save();
-            p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
             p.setRenderHint(QPainter::Antialiasing, false);
             const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
             const QRectF visible = content.intersected(paintRegion.boundingRect());
@@ -4475,6 +4634,7 @@ void TimelineWidget::drawCompEditor(QPainter& p, int lane,
 
 void TimelineWidget::drawFades(QPainter& p, const daw::ClipModel& clip,
                                const QRectF& r) {
+    ui::perf::Scope timing("timeline.clip.fades.ms");
     const double inW = clip.fadeInSeconds * m_pixelsPerSecond;
     const double outW = clip.fadeOutSeconds * m_pixelsPerSecond;
     const bool sel = isClipSelected(QString::fromStdString(clip.id));
@@ -4484,7 +4644,7 @@ void TimelineWidget::drawFades(QPainter& p, const daw::ClipModel& clip,
     p.setRenderHint(QPainter::Antialiasing, true);
     auto fadePath = [&](bool fadeIn, double width, double curve) {
         QPainterPath path;
-        const int steps = std::clamp(int(std::ceil(width / 6.0)), 12, 96);
+        const int steps = curve == 0.0 ? 1 : std::clamp(int(std::ceil(width / 6.0)), 12, 96);
         for (int i = 0; i <= steps; ++i) {
             const double x = double(i) / steps;
             const double gain = fadeGainAt(fadeIn ? x : 1.0 - x, curve);
@@ -4508,6 +4668,7 @@ void TimelineWidget::drawFades(QPainter& p, const daw::ClipModel& clip,
         p.setPen(Qt::NoPen);
         p.setBrush(wedge);
         p.drawPath(fill);
+        p.setBrush(Qt::NoBrush);
         p.setPen(QPen(line, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(curve);
     }
@@ -4519,6 +4680,7 @@ void TimelineWidget::drawFades(QPainter& p, const daw::ClipModel& clip,
         p.setPen(Qt::NoPen);
         p.setBrush(wedge);
         p.drawPath(fill);
+        p.setBrush(Qt::NoBrush);
         p.setPen(QPen(line, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(curve);
     }
@@ -5001,8 +5163,7 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
         const double highest = double(index.highestPitch());
         const double range = std::max(4.0, highest - lowest);
         const QRegion paintRegion = p.clipRegion();
-        QPainterPath path;
-        bool any = false;
+        QVector<QRectF> rectangles;
         const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
         index.forEachVisible(
             take.notes, fromBeat, toBeat,
@@ -5021,17 +5182,16 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
                         noteRect.toAlignedRect().adjusted(-1, -1, 1, 1))) {
                     return;
                 }
-                path.addRect(noteRect);
-                any = true;
+                rectangles.push_back(noteRect);
             });
-        if (!any) return;
+        if (rectangles.isEmpty()) return;
 
         p.save();
         p.setClipRect(vis, Qt::IntersectClip);
         p.setRenderHint(QPainter::Antialiasing, false);
         p.setPen(Qt::NoPen);
         p.setBrush(color);
-        p.drawPath(path);
+        p.drawRects(rectangles.constData(), int(rectangles.size()));
         p.restore();
         return;
     }
@@ -5047,6 +5207,7 @@ void TimelineWidget::drawTakeAudio(QPainter& p, const daw::ClipModel& clip,
 void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
                                    const QRectF& area, const QRectF& body,
                                    std::uint64_t midiNotesRevision) {
+    ui::perf::Scope timing("timeline.midi.paint.ms");
     if (area.height() < 6.0 || area.width() < 2.0) return;
     if (clip.notes.empty()) return;   // an empty clip is just its coloured box
 
@@ -5090,8 +5251,7 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
     const double toBeat =
         (painted.right() - sourceX + 1.0) / pxPerBeat;
 
-    QPainterPath path;
-    bool any = false;
+    QVector<QRectF> rectangles;
     const QRegion paintRegion = p.clipRegion();
     const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
     index.forEachVisible(
@@ -5108,22 +5268,21 @@ void TimelineWidget::drawMidiNotes(QPainter& p, const daw::ClipModel& clip,
                     noteRect.toAlignedRect().adjusted(-1, -1, 1, 1))) {
                 return;
             }
-            path.addRect(noteRect);
-            any = true;
+            rectangles.push_back(noteRect);
         });
-    if (!any) return;
+    if (rectangles.isEmpty()) return;
 
-    // Clipped to the clip's own rounded body: a tempo change moves the notes
-    // but not the clip's length, so without this they would spill past its
-    // right edge — and a note on the lowest row would poke out of the rounded
-    // bottom corners.
+    // Every caller already clips content to the same rounded clip body.
+    // Intersect only with the note area here; repeating the curved mask on
+    // every zoom/scroll frame adds path work without changing its bounds.
     p.save();
-    p.setClipPath(clipBodyPath(p, body), Qt::IntersectClip);
     p.setClipRect(area, Qt::IntersectClip);
     p.setRenderHint(QPainter::Antialiasing, false);
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(255, 255, 255));
-    p.drawPath(path);          // one fill for the whole clip, not one per note
+    // Independent rectangles need no polygon boolean operations/tessellation.
+    // Overlapping notes remain visible instead of cancelling via odd-even fill.
+    p.drawRects(rectangles.constData(), int(rectangles.size()));
     p.restore();
 }
 
@@ -5377,8 +5536,8 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
         }
 
         // The mixer is an opaque overlay over the lower part of this widget. Do
-        // not render lanes beneath it. Retained tiles include the full height
-        // so resizing the mixer changes their clip without rebuilding them.
+        // not build hidden tiles. Each retained tile still contains its entire
+        // cell, so partially exposing it only changes its clip.
         const int laneViewportBottom = std::max(
             0, height() - m_bottomInset - kTimelineScrollExtent);
         const QRegion laneRegion =
@@ -5386,7 +5545,7 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
         if (!laneRegion.isEmpty()) {
             p.save();
             p.setClipRegion(laneRegion, Qt::IntersectClip);
-            if (ui::graphics::isSceneRecording(p)) {
+            if (ui::graphics::isSceneRecording(p) && !ui::ScrollMotion::isZooming(this)) {
                 // The time origin of each tile is stable. Wheel input updates
                 // only its scene-graph transform. Keep this same origin during
                 // clip gestures too, so selecting, cutting or moving a clip
@@ -5395,31 +5554,33 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
                 const double offset = m_scrollSeconds * m_pixelsPerSecond;
                 const qint64 first = qint64(std::floor(offset / tileWidth));
                 const qint64 last = qint64(std::floor((offset + width()) / tileWidth));
+                const int top = tracksTop();
+                const int firstRow = m_scrollY / 256;
+                const int visibleHeight = visibleLaneHeight();
+                const int lastRow = visibleHeight > 0
+                    ? (m_scrollY + visibleHeight - 1) / 256 : firstRow - 1;
                 for (qint64 tile = first; tile <= last; ++tile) {
                     const double left = double(tile) * tileWidth;
-                    for (int row = tracksTop() / 256; row * 256 < height() - kTimelineScrollExtent; ++row) {
-                        m_gpuLaneTiles.paint(p, (quint64(tile) << 16) | quint64(row), QSize(tileWidth, 256), QPointF(left - offset, row * 256),
+                    for (int row = firstRow; row <= lastRow; ++row) {
+                        // Both axes are anchored to project coordinates. A pan
+                        // moves immutable groups, building only newly exposed rows.
+                        m_gpuLaneTiles.paint(p, (quint64(tile) << 32) | quint32(row), QSize(tileWidth, 256),
+                            QPointF(left - offset, top + row * 256 - m_scrollY),
                             [&](QPainter& local) {
-                                local.translate(0, -row * 256);
+                                local.translate(0, -top);
                                 QScopedValueRollback<double> scroll(m_scrollSeconds, left / m_pixelsPerSecond);
+                                QScopedValueRollback<int> scrollY(m_scrollY, row * 256);
                                 local.setRenderHint(QPainter::Antialiasing, true);
-                                // Keep damage local in both time and track coordinates.
-                                local.setClipRect(QRect(0, row * 256, tileWidth, 256));
-                                local.setClipRect(QRect(0, tracksTop(), tileWidth,
-                                    std::max(0, height() - kTimelineScrollExtent - tracksTop())), Qt::IntersectClip);
+                                local.setClipRect(QRect(0, top, tileWidth, 256));
                                 drawLanes(local, false);
                             });
                     }
                 }
                 // Viewport-anchored controls cannot live in time tiles: each
                 // tile would repeat the header at its own temporary origin.
-                // These controls stay anchored to the viewport while their
-                // visibility under the mixer changes. Keep their geometry at
-                // full height and apply the current lane clip to the group.
-                m_gpuMidiHeaders.paint(p, 0, size(), {}, [&](QPainter& local) {
-                    QScopedValueRollback<int> inset(m_bottomInset, 0);
-                    drawMidiClipHeaders(local);
-                });
+                // Individual headers retain their local geometry while the
+                // current lane clip handles occlusion by the mixer.
+                drawMidiClipHeaders(p);
             } else drawLanes(p);
             p.restore();
         }
@@ -5473,18 +5634,21 @@ void TimelineWidget::drawStaticFrame(QPainter& p,
             }
         }
 
-        // Rubber-band selection rectangle.
-        if (m_marqueeActive) {
-            const Theme& t = th();
-            const QRect box = QRect(m_marqueeOrigin, m_marqueeCurrent).normalized();
-            p.setPen(QPen(t.accent, 1.0, Qt::DashLine));
-            p.setBrush(QColor(t.accent.red(), t.accent.green(), t.accent.blue(), 40));
-            p.drawRect(box);
-        }
-
         drawRuler(p);
         p.restore();
     }
+}
+
+void TimelineWidget::drawMarquee(QPainter& p) {
+    if (!m_marqueeActive) return;
+    const Theme& t = th();
+    p.save();
+    p.setClipRect(QRect(0, tracksTop(), width(), visibleLaneHeight()), Qt::IntersectClip);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(t.accent, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(QColor(t.accent.red(), t.accent.green(), t.accent.blue(), 40));
+    p.drawRoundedRect(QRectF(QRect(m_marqueeOrigin, m_marqueeCurrent).normalized()), 4.0, 4.0);
+    p.restore();
 }
 
 void TimelineWidget::drawRecordingOverlays(QPainter& p) {
@@ -5496,7 +5660,8 @@ void TimelineWidget::drawRecordingOverlays(QPainter& p) {
     p.save();
     p.setClipRect(QRect(0, tracksTop(), width(), visibleLaneHeight()), Qt::IntersectClip);
     const QRegion dirty = p.clipRegion();
-    for (std::size_t lane = 0; lane < rows.size(); ++lane) {
+    const auto [first, last] = lanesInRect(dirty.boundingRect());
+    for (int lane = first; lane < last; ++lane) {
         const auto& track = project.tracks[rows[lane].index];
         if (std::find(targets.begin(), targets.end(), track.id) == targets.end()) continue;
         const int y = tracksTop() - m_scrollY + m_laneOffsets[lane];
@@ -5540,7 +5705,7 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
         const qreal dpr = p.device()->devicePixelRatioF();
         const QSize tileSize(std::max(1, std::min(512, width())), height());
         if (!m_staticFrameValid || !m_lastPaintWasScene || !m_staticDirty.isEmpty() ||
-            m_staticFrameScroll != m_scrollSeconds || m_staticFrameScale != m_pixelsPerSecond ||
+            m_staticFrameScale != m_pixelsPerSecond ||
             m_gpuMidiHeaderSize != size() || m_gpuTileDpr != dpr)
             m_gpuMidiHeaders.clear();
         m_gpuMidiHeaderSize = size();
@@ -5550,9 +5715,14 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
         } else if (!m_staticDirty.isEmpty()) {
             const double offset = m_scrollSeconds * m_pixelsPerSecond;
             m_gpuLaneTiles.invalidate([&](quint64 key) {
-                const auto tile = qint64(key >> 16);
-                const int row = int(key & 0xffff);
-                const QRectF bounds(double(tile) * tileSize.width() - offset, row * 256., tileSize.width(), 256.);
+                const auto tile = qint64(key >> 32);
+                const int row = int(quint32(key));
+                const QRectF bounds(double(tile) * tileSize.width() - offset,
+                    tracksTop() + row * 256. - m_scrollY, tileSize.width(), 256.);
+                // Lane-wide edits affect that lane at every previously visited
+                // time, including tiles currently outside the viewport.
+                if (m_staticDirty.boundingRect().width() >= width())
+                    return m_staticDirty.intersects(QRect(0, int(bounds.top()), width(), 256));
                 return m_staticDirty.intersects(bounds.toAlignedRect());
             });
         }
@@ -5562,7 +5732,8 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
         if (hasTimelineBackground()) drawTimelineBackground(p);
         const bool reuse = !viewportDirty && m_lastPaintWasScene && m_staticFrameValid && m_staticDirty.isEmpty() &&
             m_staticFrameScroll == m_scrollSeconds && m_staticFrameScale == m_pixelsPerSecond &&
-            (!(m_playbackOnlyDirty | m_recordingOnlyDirty).isEmpty() || m_backgroundFrameRepaint);
+            m_staticFrameScrollY == m_scrollY &&
+            (!(m_playbackOnlyDirty | m_recordingOnlyDirty | m_marqueeOnlyDirty).isEmpty() || m_backgroundFrameRepaint);
         if (scene->beginRetainedSection(1, !reuse)) {
             p.save();
             drawStaticFrame(p, QRegion(rect()));
@@ -5572,6 +5743,7 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
         if (m_rightRadius > 0)
             p.setClipPath(rightRoundedShape(QRectF(rect()), std::min<double>(m_rightRadius, height() / 2.0)), Qt::IntersectClip);
         drawRecordingOverlays(p);
+        drawMarquee(p);
         drawKnifeGuide(p);
         drawPlayhead(p, playheadX, playheadTrail);
         drawTimedNotebookText(p);
@@ -5580,9 +5752,11 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
         m_lastPlayheadTrailPx = playheadTrail;
         m_playbackOnlyDirty = {};
         m_recordingOnlyDirty = {};
+        m_marqueeOnlyDirty = {};
         m_staticDirty = {};
         m_staticFrameValid = true;
         m_staticFrameScroll = m_scrollSeconds;
+        m_staticFrameScrollY = m_scrollY;
         m_staticFrameScale = m_pixelsPerSecond;
         m_lastPaintWasScene = true;
         m_backgroundFrameRepaint = false;
@@ -5608,25 +5782,50 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
     }
 
     bool scrolledPlate = false;
-    if (m_staticFrameValid && m_staticFrameScroll != m_scrollSeconds) {
+    if (m_staticFrameValid && (m_staticFrameScroll != m_scrollSeconds || m_staticFrameScrollY != m_scrollY)) {
         const double shift = (m_staticFrameScroll - m_scrollSeconds) * m_pixelsPerSecond;
         const double rounded = std::round(shift);
+        const int shiftY = m_staticFrameScrollY - m_scrollY;
+        const auto pixelAligned = [dpr](double value) {
+            return std::abs(value * dpr - std::round(value * dpr)) < 1e-7;
+        };
         // Integer logical shifts preserve both QPainter's text/grid alignment
         // and the source raster. Fractional input remains immediate through
         // normal painting, without repeatedly filtering an already-filtered image.
         const bool reusable = m_staticDirty.isEmpty() && m_staticFrameScale == m_pixelsPerSecond &&
             std::abs(shift - rounded) < 1e-7 && std::abs(rounded) < width() / 2 &&
-            std::abs(rounded * dpr - std::round(rounded * dpr)) < 1e-7 &&
+            std::abs(shiftY) < visibleLaneHeight() / 2 &&
+            pixelAligned(rounded) && pixelAligned(shiftY) &&
+            // Fractional-DPR rounded clips produce different antialiasing
+            // masks for a whole frame and its repair strips. Repaint that
+            // compatibility case instead of carrying coverage into the body.
+            (m_rightRadius == 0 || pixelAligned(1)) &&
             !m_projectGestureActive && !m_marqueeActive && !m_dropActive && !m_regionPicking;
         if (reusable) {
             ui::perf::Scope scrollTiming("timeline.static.scroll.ms");
-            m_staticFrame.scroll(int(std::lround(rounded * dpr)), 0, m_staticFrame.rect());
+            m_staticFrame.scroll(int(std::lround(rounded * dpr)), int(std::lround(shiftY * dpr)), m_staticFrame.rect());
             const int edge = std::min(width(), int(std::abs(rounded)) + m_rightRadius + 4);
             // Both edges restore viewport-anchored borders/corners. The ruler
             // is cheap and may change label spacing at a digit boundary.
             m_staticDirty += QRegion(QRect(0, 0, edge, height())) |
                 QRegion(QRect(width() - edge, 0, edge, height())) |
-                QRegion(QRect(0, 0, width(), tracksTop() + 2));
+                QRegion(QRect(0, 0, width(), tracksTop() + std::abs(shiftY) + 2));
+            if (shiftY) {
+                const int bottom = std::max(tracksTop(), height() - m_bottomInset -
+                    kTimelineScrollExtent - std::abs(shiftY) - m_rightRadius - 4);
+                m_staticDirty += QRect(0, bottom, width(), height() - bottom);
+            }
+            if (rounded != 0) {
+                // MIDI controls follow the viewport's left edge. Restore their
+                // whole caption strips after a horizontal/diagonal plate move.
+                const auto& rows = visibleRows();
+                const auto [first, last] = lanesInRect(rect());
+                for (int lane = first; lane < last; ++lane) {
+                    const auto& track = m_controller->project().tracks[rows[lane].index];
+                    if (track.kind != daw::TrackKind::Midi || ui::laneHeightFor(track.height) < 36) continue;
+                    m_staticDirty += QRect(0, laneTop(lane) + kClipVerticalInset - 2, width(), 28);
+                }
+            }
             scrolledPlate = true;
         } else {
             m_staticFrameValid = false;
@@ -5636,26 +5835,30 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
     // Cursor and live-recording damage restore the static layer, then redraw
     // overlays. Edits, navigation, resize and theme changes invalidate the
     // plate explicitly and cannot be mistaken for an overlay-only frame.
+    const QRegion overlayDirty = m_playbackOnlyDirty | m_recordingOnlyDirty | m_marqueeOnlyDirty;
     const bool playbackOnly =
         m_staticFrameValid && m_staticDirty.intersected(paintRegion).isEmpty() &&
-        !(m_playbackOnlyDirty | m_recordingOnlyDirty).isEmpty() &&
-        paintRegion.subtracted(m_playbackOnlyDirty | m_recordingOnlyDirty).isEmpty();
+        !overlayDirty.isEmpty() && paintRegion.subtracted(overlayDirty).isEmpty();
     const bool backgroundOnly =
         m_staticFrameValid && m_backgroundFrameRepaint && m_staticDirty.intersected(paintRegion).isEmpty();
     ui::perf::sample("timeline.static.invalid.pixels", m_staticDirty.boundingRect().width() * double(m_staticDirty.boundingRect().height()));
     if (!playbackOnly && !backgroundOnly) {
         const QRegion staticDirty =
             !m_staticFrameValid ? QRegion(rect()) :
-            scrolledPlate ? m_staticDirty.intersected(paintRegion) : paintRegion;
+            scrolledPlate ? m_staticDirty.intersected(paintRegion) :
+            paintRegion.subtracted(overlayDirty).united(m_staticDirty.intersected(paintRegion));
         QPainter cachePainter(&m_staticFrame);
         cachePainter.setClipRegion(staticDirty);
         cachePainter.setCompositionMode(QPainter::CompositionMode_Source);
-        if (hasTimelineBackground() || m_rightRadius > 0)
-            cachePainter.fillRect(rect(), Qt::transparent);
+        // An odd logical size at fractional DPR ends in a partially covered
+        // physical pixel, even without rounded corners. Clear it too so its
+        // background coverage cannot accumulate across cache repairs.
+        cachePainter.fillRect(QRectF(QPointF{}, m_staticFrame.deviceIndependentSize()), Qt::transparent);
         cachePainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
         drawStaticFrame(cachePainter, staticDirty);
         m_staticFrameValid = true;
         m_staticFrameScroll = m_scrollSeconds;
+        m_staticFrameScrollY = m_scrollY;
         m_staticFrameScale = m_pixelsPerSecond;
     }
 
@@ -5678,6 +5881,7 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
     }
 
     drawRecordingOverlays(p);
+    drawMarquee(p);
     drawKnifeGuide(p);
     drawPlayhead(p, playheadX, playheadTrail);
     drawTimedNotebookText(p);
@@ -5690,6 +5894,7 @@ void TimelineWidget::paintScene(QPainter& p, const QRegion& paintRegion) {
     drawCountIn(p);
     m_playbackOnlyDirty = m_playbackOnlyDirty.subtracted(paintRegion);
     m_recordingOnlyDirty = m_recordingOnlyDirty.subtracted(paintRegion);
+    m_marqueeOnlyDirty = m_marqueeOnlyDirty.subtracted(paintRegion);
     m_staticDirty = m_staticDirty.subtracted(paintRegion);
     m_backgroundFrameRepaint = false;
     if (m_navigationInputTime.isValid()) {
@@ -5708,11 +5913,11 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
     if (arrangementRowAt(pos.y()) >= 1) {
         const auto* label = arrangementLabelAt(arrangementRowAt(pos.y()), pos.x());
         const bool edge = label && std::abs(pos.x() - (((label->startBeats + label->durationBeats) * 60.0 / m_controller->tempo() - m_scrollSeconds) * m_pixelsPerSecond)) <= 6;
-        setCursor(edge ? Qt::SizeHorCursor : label ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        setCursor(edge ? Qt::SizeHorCursor : label ? Qt::SizeAllCursor : Qt::ArrowCursor);
         return;
     }
     if (m_dragging) {
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeAllCursor);
         return;
     }
     if (m_trimming || m_fading || m_stretching) {
@@ -5724,7 +5929,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
         return;
     }
     if (pos.y() < ui::kLoopStripHeight) {
-        setCursor(loopGrabAt(pos.x()) == LoopGrab::Move ? Qt::OpenHandCursor
+        setCursor(loopGrabAt(pos.x()) == LoopGrab::Move ? Qt::SizeAllCursor
                                                         : Qt::SizeHorCursor);
         return;
     }
@@ -5733,11 +5938,11 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
         return;
     }
     if (m_regionMovePending || m_regionMoving) {
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeAllCursor);
         return;
     }
     if (regionContains(pos)) {
-        setCursor(Qt::OpenHandCursor);
+        setCursor(Qt::SizeAllCursor);
         return;
     }
     if (m_swiping) {
@@ -5779,7 +5984,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
             setCursor(arrangementToolCursor(icons::Glyph::Eraser));
             return;
         case Tool::Mute:
-            setCursor(arrangementToolCursor(icons::Glyph::Power));
+            setCursor(arrangementToolCursor(icons::Glyph::Close));
             return;
         case Tool::Draw:
             setCursor(arrangementToolCursor(icons::Glyph::Brush));
@@ -5809,7 +6014,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
             else if (over && hit.fade != Fade::None) setCursor(Qt::SizeHorCursor);
             else if (over && hit.gainHandle) setCursor(Qt::SizeVerCursor);
             else if (over && hit.edge != Edge::None) setCursor(Qt::SizeHorCursor);
-            else setCursor(over ? Qt::OpenHandCursor
+            else setCursor(over ? Qt::SizeAllCursor
                                 : arrangementToolCursor(icons::Glyph::Pointer));
             return;
         case Tool::SelectRegion:
@@ -5824,10 +6029,11 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     m_lastPointerPosition = ev->position();
     setFocus(Qt::MouseFocusReason);
     if (ev->button() == Qt::MiddleButton) {
+        ui::ScrollMotion::cancel(this);
+        ui::ScrollMotion::cancelZoom(this);
         m_panning = true;
         m_panLastPosition = ev->position();
-        m_panVerticalRemainder = 0.0;
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeAllCursor);
         ev->accept();
         return;
     }
@@ -5848,7 +6054,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
                 m_labelGrabBeat = xToSeconds(pos.x()) * m_controller->tempo() / 60.0;
                 m_labelProjectRevision = m_controller->projectRevision();
                 m_labelResize = std::abs(pos.x() - (((label->startBeats + label->durationBeats) * 60.0 / m_controller->tempo() - m_scrollSeconds) * m_pixelsPerSecond)) <= 6;
-                setCursor(m_labelResize ? Qt::SizeHorCursor : Qt::ClosedHandCursor);
+                setCursor(m_labelResize ? Qt::SizeHorCursor : Qt::SizeAllCursor);
             }
         }
         ev->accept(); return;
@@ -5905,7 +6111,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
             case LoopGrab::None:
                 break;
         }
-        setCursor(m_loopGrab == LoopGrab::Move ? Qt::ClosedHandCursor
+        setCursor(m_loopGrab == LoopGrab::Move ? Qt::SizeAllCursor
                                                : Qt::SizeHorCursor);
         update();
         return;
@@ -5972,7 +6178,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_moveGuidesActive = false;
         m_selection.clear();
         m_selectedClipId.clear();
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeAllCursor);
         update();
         return;
     }
@@ -6713,7 +6919,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_dragPressPosition = pos;
         m_dragGrabOffset = xToSeconds(pos.x()) - hit.startSeconds;
         captureClipDragOrigins();
-        setCursor(Qt::ClosedHandCursor);
+        setCursor(Qt::SizeAllCursor);
         emit clipSelected(hit.trackId, hit.clipId);
         update();
         return;
@@ -6724,6 +6930,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
     m_selection.clear();
     m_selectedClipId.clear();
     m_marqueeActive = true;
+    m_marqueeHits.clear();
     m_marqueeOrigin = pos;
     m_marqueeCurrent = pos;
     update();
@@ -6831,15 +7038,14 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         const QPointF delta = position - m_panLastPosition;
         m_panLastPosition = position;
         if (delta.x() != 0.0) noteManualNavigation();
-        setHorizontalScroll(
-            m_scrollSeconds - delta.x() / m_pixelsPerSecond);
-        const int vertical = ui::wholeScrollPixels(-delta.y(), m_panVerticalRemainder);
-        if (vertical) setVerticalScroll(m_scrollY + vertical);
-        // Discard motion beyond a bound so reversing the hand responds at
-        // once, without first having to undo a fractional overscroll.
-        if ((m_scrollY == 0 && m_panVerticalRemainder < 0.0) ||
-            (m_scrollY == maxVerticalScroll() && m_panVerticalRemainder > 0.0))
-            m_panVerticalRemainder = 0.0;
+        ui::ScrollMotion::pan(this, -delta,
+            [this] { return QPointF(m_scrollSeconds * m_pixelsPerSecond, m_scrollY); },
+            [this](QPointF at) {
+                setHorizontalScroll(at.x() / m_pixelsPerSecond);
+                setVerticalScroll(int(std::lround(at.y())));
+            },
+            [this](QPointF at) { return QPointF(std::max(0., at.x()),
+                std::clamp(at.y(), 0., double(maxVerticalScroll()))); });
         ev->accept();
         return;
     }
@@ -7088,9 +7294,14 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     }
 
     if (m_marqueeActive) {
+        QRegion damage(QRect(m_marqueeOrigin, m_marqueeCurrent).normalized().adjusted(-2, -2, 2, 2));
         m_marqueeCurrent = pos;
         autoScrollMarquee(pos);
-        update();
+        updateMarqueeSelection();
+        damage += QRect(m_marqueeOrigin, m_marqueeCurrent).normalized().adjusted(-2, -2, 2, 2);
+        damage &= rect();
+        m_marqueeOnlyDirty += damage;
+        ui::FrameClock::instance().request(this, damage);
         return;
     }
 
@@ -7344,6 +7555,17 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         return;
     }
     if (ev->button() == Qt::MiddleButton && m_panning) {
+        // A release may carry a newer position than the last delivered move.
+        // Consume it now so a coalesced move cannot leave the viewport behind
+        // the hand. Interrupted gestures release at their last known position.
+        if (ev->position() != m_panLastPosition) {
+            QMouseEvent finalMove(QEvent::MouseMove, ev->position(), ev->scenePosition(),
+                                 ev->globalPosition(), Qt::NoButton, Qt::MiddleButton,
+                                 ev->modifiers(), ev->source(), ev->pointingDevice());
+            finalMove.setTimestamp(ev->timestamp());
+            mouseMoveEvent(&finalMove);
+        }
+        ui::ScrollMotion::finishPan(this);
         m_panning = false;
         updateCursor(ev->position().toPoint());
         ev->accept();
@@ -7468,29 +7690,12 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
         emit projectEdited();
     }
     if (m_marqueeActive) {
+        m_marqueeCurrent = ev->position().toPoint();
+        updateMarqueeSelection();
         m_marqueeActive = false;
-        const QRect box = QRect(m_marqueeOrigin, m_marqueeCurrent).normalized();
-        // A bare click (no drag) leaves the selection empty.
-        if (box.width() > 3 || box.height() > 3) {
-            m_selection.clear();
-            const auto& project = m_controller->project();
-            const auto& rows = visibleRows();
-            for (int lane = 0; lane < int(rows.size()); ++lane) {
-                const auto& track = project.tracks[rows[size_t(lane)].index];
-                for (const auto& clip : track.clips) {
-                    if (clipRect(lane, clip).intersects(box)) {
-                        m_selection.push_back(
-                            {QString::fromStdString(track.id),
-                             QString::fromStdString(clip.id)});
-                    }
-                }
-            }
-            if (!m_selection.isEmpty()) {
-                m_selectedClipId = m_selection.front().clipId;
-                emit clipSelected(m_selection.front().trackId, m_selectedClipId);
-            }
-        }
-        update();
+        m_marqueeHits.clear();
+        if (!m_selection.isEmpty())
+            emit clipSelected(m_selection.front().trackId, m_selectedClipId);
     }
     if (m_erasing) {
         eraseClipsAlong(m_lastErasePoint, ev->position().toPoint());
@@ -7521,6 +7726,7 @@ bool TimelineWidget::hasActivePointerGesture() const {
 
 void TimelineWidget::finishInterruptedPointerGesture() {
     if (!hasActivePointerGesture()) return;
+    if (m_panning) ui::ScrollMotion::cancel(this);
     // Use the last position reported with a button held. A later hover or a
     // popup's position must not move the playhead or extend the selection.
     const Qt::MouseButton button = m_panning ? Qt::MiddleButton : Qt::LeftButton;
@@ -7650,12 +7856,27 @@ void TimelineWidget::wheelEvent(QWheelEvent* ev) {
     ui::perf::Scope timing("timeline.wheel.ms");
     if (ev->phase() == Qt::ScrollBegin) m_wheelScrollRemainder = 0.0;
     if (ev->modifiers() & Qt::ControlModifier) {
-        ui::ScrollMotion::cancel(this);
-        const std::optional<double> pointerX =
-            ev->position().y() >= tracksTop()
-                ? std::optional<double>(ev->position().x())
-                : std::nullopt;
-        zoomBy(ui::wheelZoomFactor(*ev), pointerX);
+        const double viewportWidth = std::max(1, width() - kTimelineScrollExtent);
+        const bool overTracks = ev->position().y() >= tracksTop();
+        const double anchorX = overTracks ? std::clamp(ev->position().x(), 0.0, viewportWidth)
+                                         : viewportWidth * 0.5;
+        const double focus = overTracks ? m_scrollSeconds + anchorX / m_pixelsPerSecond
+                                        : m_controller->presentationPositionSeconds();
+        // Keep the event's anchor throughout the transition, even if the
+        // pointer leaves the canvas before the final animation frame.
+        ui::ScrollMotion::zoom(this, {ui::wheelZoomFactor(*ev), 1.0},
+            !ev->pixelDelta().isNull() || ev->phase() == Qt::ScrollMomentum,
+            [this] { return QPointF(m_pixelsPerSecond, 1.0); },
+            [this, anchorX, focus](QPointF scale) {
+                const double next = std::clamp(scale.x(), ui::kMinTimelineZoom, ui::kMaxTimelineZoom);
+                if (next == m_pixelsPerSecond) return;
+                noteManualNavigation();
+                m_pixelsPerSecond = next;
+                setHorizontalScroll(focus - anchorX / next);
+                scheduleNavigationSync();
+                update(rect());
+                emit horizontalZoomChanged(next);
+            });
     } else if (ev->modifiers() & Qt::ShiftModifier) {
         // Some platforms already transpose Shift+wheel onto X.
         const QPointF delta = ui::scrollPixels(*ev);
@@ -7836,7 +8057,7 @@ void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
         populateSequenceMenu(menu, hit);
         menu.addSeparator();
     } else if (hit.kind == daw::ClipKind::Pattern) {
-        openPattern = menu.addAction(tr("Open Pattern Editor"));
+        openPattern = menu.addAction(tr("Open Pattern in Rack"));
         menu.addSeparator();
     } else if (hit.kind == daw::ClipKind::Audio) {
         autoWarp = menu.addAction(tr("Auto Warp"));

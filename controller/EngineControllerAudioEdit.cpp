@@ -167,11 +167,11 @@ bool EngineController::applyAudioEdit(const AudioEditTarget& target,const AudioE
             auto* c=findClip(a.trackId,a.clipId);
             c->musicalAnalysis={};
             m_clipDisplayPaths.erase(c->id);
+            noteClipWaveformChange(c->id);
             tracks.insert(a.trackId);
         }
         m_sharedClipSampleCache.clear();
         for(const auto& id:tracks) { m_recoveryTrackParts.erase(id); deferClipSync(id); }
-        ++m_clipWaveformRevision;
     }
     updateTimelineDuration();
     return true;

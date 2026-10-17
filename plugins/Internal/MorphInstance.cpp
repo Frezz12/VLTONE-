@@ -260,6 +260,7 @@ void MorphInstance::reset() noexcept {
   for (unsigned i = 0; i < Count; ++i)
     m_targets[i] = m_current[i] = parameterValue(i);
   m_steps = {};
+  m_rampingCount = 0;
   m_controlPhase = 0;
   m_phases = {0, .17, .39, .61};
   m_lfoPhase = {};
@@ -302,6 +303,7 @@ void MorphInstance::reset() noexcept {
 void MorphInstance::control(const PluginProcessContext &ctx,
                             unsigned offset) noexcept {
   const auto &p = m_programs[m_front];
+  const auto table = parameterTable();
   auto desired = m_targets;
   const double samplesPerBeat = m_rate * 60 / m_tempo;
   const double beatsPerBar = 4. * std::max(1, ctx.transport.timeSigNumerator) /
@@ -384,7 +386,7 @@ void MorphInstance::control(const PluginProcessContext &ctx,
     const unsigned src = unsigned(m_targets[matrixSource(slot)]),
                    dest = unsigned(m_targets[matrixTarget(slot)]);
     if (src && modulationTarget(dest)) {
-      const auto &info = parameterTable()[dest];
+      const auto &info = table[dest];
       desired[dest] += sources[src] * m_targets[matrixAmount(slot)] *
                        (info.maxValue - info.minValue);
     }
@@ -408,8 +410,9 @@ void MorphInstance::control(const PluginProcessContext &ctx,
   desired[Drive] += influence * c.edge * .3;
   desired[FlangerFeedback] += influence * c.edge * .22;
   desired[PhaserResonance] += influence * c.edge * .2;
+  m_rampingCount = 0;
   for (unsigned i = 0; i < MatrixStart; ++i) {
-    const auto &info = parameterTable()[i];
+    const auto &info = table[i];
     desired[i] = std::clamp(desired[i], info.minValue, info.maxValue);
     const bool immediate = i == Routing || i == ChorusSync ||
                            i == FlangerSync || i == PhaserSync ||
@@ -422,6 +425,8 @@ void MorphInstance::control(const PluginProcessContext &ctx,
       const double duration = (i == Mix || i == Output) ? .005 : .02;
       m_steps[i] = (desired[i] - m_current[i]) *
                    std::min(1., 16 / (m_rate * duration)) / 16;
+      if (m_steps[i] != 0)
+        m_rampingParameters[m_rampingCount++] = i;
     }
   }
   x = std::clamp(desired[MorphX], -1., 1.);
@@ -636,28 +641,38 @@ std::array<double, 2> MorphInstance::modules(Core &core,
 }
 double MorphInstance::saturate(double x, unsigned ch, bool feedback) noexcept {
   const double amount = m_current[Drive];
-  auto &previous = (feedback ? m_previousFeedbackDrive : m_previousDrive)[ch];
+  auto &history = (feedback ? m_previousFeedbackDrive : m_previousDrive)[ch];
+  const double previous = history.input;
   const double gain = m_driveGain, driven = std::clamp(x * gain, -12., 12.);
   const double delta = driven - previous;
   if (amount < 1.e-8) {
-    previous = driven;
+    history.input = driven;
+    history.foldValid = false;
     return x;
   }
   double result = 0;
   const double mode = m_current[DriveMode];
+  bool foldValid = false;
   for (unsigned k = 0; k < 3; ++k) {
     const double w = std::max(0., 1 - std::abs(mode - k));
     if (w <= 0)
       continue;
-    result +=
-        w * (std::abs(delta) < 1.e-5
-                 ? transfer((driven + previous) * .5, k)
-                 : (primitive(driven, k) - primitive(previous, k)) / delta);
+    if (k == 2 && std::abs(delta) >= 1.e-5) {
+      const double current = primitive(driven, k);
+      const double before = history.foldValid ? history.foldPrimitive
+                                               : primitive(previous, k);
+      result += w * (current - before) / delta;
+      history.foldPrimitive = current;
+      foldValid = true;
+    } else {
+      result += w * (std::abs(delta) < 1.e-5
+                         ? transfer((driven + previous) * .5, k)
+                         : (primitive(driven, k) - primitive(previous, k)) / delta);
+    }
   }
   const double aligned = (driven + previous) * .5 / gain;
-  previous = driven;
-  if (amount < 1.e-8)
-    return x;
+  history.input = driven;
+  history.foldValid = foldValid;
   // Both terms of the ADAA parallel blend have the same half-sample phase.
   // A feedback shaper must remain non-expanding. Input Drive may add gain;
   // feedback Drive divides by its input gain to keep the loop below unity.
@@ -857,8 +872,12 @@ MorphInstance::process(const PluginProcessContext &ctx) noexcept {
               (duckTarget - m_duck);
     if (!m_controlPhase)
       control(ctx, f);
-    for (unsigned i = 0; i < MatrixStart; ++i)
+    // Stable parameters need no per-sample writes. The list is rebuilt at
+    // every control tick, including timestamped automation events.
+    for (unsigned r = 0; r < m_rampingCount; ++r) {
+      const auto i = m_rampingParameters[r];
       m_current[i] += m_steps[i];
+    }
     for (unsigned ch = 0; ch < 2; ++ch) {
       for (unsigned s = 0; s < 8; ++s)
         m_allpassCoefficients[ch][s] += m_allpassSteps[ch][s];

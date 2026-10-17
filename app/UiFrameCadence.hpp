@@ -14,7 +14,11 @@ public:
         // early delivery is still that frame, not a reason to wait another
         // vsync. Absolute deadlines keep this tolerance from accumulating
         // into a higher average frame rate.
-        const auto tolerance = std::min<qint64>(3000000, period / 2);
+        // At 240 Hz, alternating +/-1.25 ms delivery jitter makes successive
+        // ticks 2.5 ms early relative to one another. Half a period (2.08 ms)
+        // rejects every second tick. The absolute deadline still caps the
+        // average rate when the tolerance extends to a whole period.
+        const auto tolerance = std::min<qint64>(3000000, period);
         return !m_deadlineNs || !period || now + tolerance >= m_deadlineNs;
     }
     void advance(qint64 now, qint64 period) {

@@ -213,8 +213,8 @@ private:
             // Presses usually land on the embedded line editor. Keep their
             // subsequent moves/releases with this field, including outside it.
             grabMouse();
-            setCursor(Qt::ClosedHandCursor);
-            lineEdit()->setCursor(Qt::ClosedHandCursor);
+            setCursor(Qt::SizeVerCursor);
+            lineEdit()->setCursor(Qt::SizeVerCursor);
             event->accept();
             return true;
         }

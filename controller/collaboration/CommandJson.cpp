@@ -621,6 +621,8 @@ json sharedInsertToJson(const InsertModel& insert, std::uint32_t schemaVersion) 
                 {"rightParameters", parametersToJson(insert.rightParameters)},
                 {"assetBindings", bindingsToJson(insert.assetBindings)}};
     if (schemaVersion >= 6 && !insert.parameterFingerprint.empty()) out["parameterFingerprint"] = insert.parameterFingerprint;
+    // Old peers reject this field instead of routing an analyzer to the mix.
+    if (insert.analysisOnly) out["analysisOnly"] = true;
     if (schemaVersion >= 6 && !insert.profileSeed.empty()) out["profileSeed"] = insert.profileSeed;
     if (insert.sidechainTrackIds.size() > 1) out["sidechainTrackIds"] = insert.sidechainTrackIds;
     if (insert.slideDelivery || insert.slideBendRange != 2 || insert.slideReleaseReserve != 2) { out["slideDelivery"]=insert.slideDelivery; out["slideBendRange"]=insert.slideBendRange; out["slideReleaseReserve"]=insert.slideReleaseReserve; }
@@ -633,9 +635,10 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert, std::uint32_t 
                        "pluginVersion", "stateSchemaVersion", "mix",
                        "channelMode", "sidechainTrackId", "stateAsset",
                        "rightStateAsset", "parameters", "rightParameters",
-                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve","parameterFingerprint","profileSeed"}) ||
+                       "assetBindings"}, {"sidechainTrackIds","slideDelivery","slideBendRange","slideReleaseReserve","parameterFingerprint","profileSeed","analysisOnly"}) ||
         !value.at("id").is_string() || !value.at("name").is_string() ||
         !value.at("bypassed").is_boolean() ||
+        (value.contains("analysisOnly") && !value.at("analysisOnly").is_boolean()) ||
         !value.at("format").is_string() || !value.at("uid").is_string() ||
         !value.at("vendor").is_string() ||
         !value.at("pluginVersion").is_string() ||
@@ -657,6 +660,7 @@ bool sharedInsertFromJson(const json& value, InsertModel& insert, std::uint32_t 
     insert.id = value.at("id").get<std::string>();
     insert.name = value.at("name").get<std::string>();
     insert.bypassed = value.at("bypassed").get<bool>();
+    insert.analysisOnly = value.value("analysisOnly", false);
     insert.format = pluginFormatFromString(format);
     insert.uid = value.at("uid").get<std::string>();
     insert.vendor = value.at("vendor").get<std::string>();

@@ -7,6 +7,7 @@
 #include <QPoint>
 #include <QTimer>
 #include <memory>
+#include <list>
 #include <unordered_map>
 #include "SceneSnapshot.hpp"
 #include "GraphicsQualityPolicy.hpp"
@@ -31,6 +32,8 @@ public:
     explicit WorkspaceSurface(QWidget* source);
     ~WorkspaceSurface() override;
     QQuickWindow* quickWindow() const { return m_window; }
+    /// Explicit snapshot for project previews; includes pending widget changes.
+    QImage grabImage();
     void invalidate();
     void refreshPresentationMode();
     void setFrameContextProvider(std::function<void(FrameStats&)> provider) { m_frameContext = std::move(provider); }
@@ -82,7 +85,8 @@ private:
         QRegion parentMask;
     };
     std::unordered_map<quintptr, CachedLayer> m_layers;
-    struct OffscreenLayer { CachedLayer cached; qint64 bytes; quint64 used; };
+    struct OffscreenLayer { CachedLayer cached; qint64 bytes; std::list<quintptr>::iterator recency; };
+    std::list<quintptr> m_offscreenRecency;
     std::unordered_map<quintptr, OffscreenLayer> m_offscreenLayers;
     qint64 m_offscreenBytes = 0;
     void discardOffscreenLayer(quintptr id);

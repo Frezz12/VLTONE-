@@ -218,18 +218,18 @@ void EngineController::captureMidiEvent(const std::string &track, int status, in
     }
 }
 
-void EngineController::captureMidiParameter(const std::string &trackId, const std::string &slot,
+bool EngineController::captureMidiParameter(const std::string &trackId, const std::string &slot,
                                             const std::string &parameter, double plain,
                                             MidiInputStamp stamp, bool retrospective) {
     const auto *track = m_project.findTrack(trackId);
     if (!track || track->instrument.id != slot || !std::isfinite(plain))
-        return;
+        return false;
     const auto parameters = insertParameters(trackId, slot);
     const auto found = std::find_if(parameters.begin(), parameters.end(), [&](const auto &p) {
         return p.id == parameter && p.isAutomatable;
     });
     if (found == parameters.end())
-        return;
+        return false;
     const double span = found->maxValue - found->minValue;
     const double value = span > 0 ? std::clamp((plain - found->minValue) / span, 0.0, 1.0) : 0.0;
     const auto order = ++m_midiEventOrder;
@@ -247,12 +247,14 @@ void EngineController::captureMidiParameter(const std::string &trackId, const st
             pruneRetrospectiveMidi(stamp.timeNs);
         }
     }
+    bool captured = false;
     for (auto &capture : m_captures) {
         if (!capture.midi || capture.trackId != trackId || stamp.timeNs < capture.midiStart.timeNs)
             continue;
         const double beat = std::max(0.0, stamp.transportBeats - capture.midiStart.transportBeats);
         capture.midiLastBeat = std::max(capture.midiLastBeat, beat);
         capture.midiInputReceived = true;
+        captured = true;
         const bool firstTouch = std::none_of(
             capture.midiRecording.data.lanes.begin(), capture.midiRecording.data.lanes.end(),
             [&](const auto &lane) { return lane.cc == -1 && lane.parameterId == parameter; });
@@ -262,6 +264,7 @@ void EngineController::captureMidiParameter(const std::string &trackId, const st
         capture.midiRecording.parameter({}, parameter, found->name, value, beat, order);
         m_runtime->setPluginAutomationOverride(pluginAddress(trackId, slot), parameter);
     }
+    return captured;
 }
 
 void EngineController::seedMidiControllers(const std::string &track, MidiRecording &recording) {

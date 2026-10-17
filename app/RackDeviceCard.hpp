@@ -31,6 +31,8 @@ class RackDeviceCard final : public QFrame {
         return m_expanded;
     }
     void setExpanded(bool);
+    bool collapsed() const { return m_collapsed; }
+    void setCollapsed(bool);
   signals:
     void selected(const QString& id, Qt::KeyboardModifiers);
     void clicked(const QString& id, Qt::KeyboardModifiers);
@@ -51,6 +53,7 @@ class RackDeviceCard final : public QFrame {
     void configurePins();
     void sidechainMenu();
     void updateTheme();
+    void updateCollapsed();
     daw::EngineController* m_controller;
     QString m_channel, m_slot, m_uid;
     daw::PluginIdentity m_identity;
@@ -59,14 +62,16 @@ class RackDeviceCard final : public QFrame {
     std::vector<std::string> m_pins;
     RackParameterBinding* m_binding = nullptr;
     RackBuiltinView* m_builtin = nullptr;
-    QWidget *m_body = nullptr, *m_header = nullptr;
+    QWidget *m_body = nullptr, *m_header = nullptr, *m_footer = nullptr;
+    QHBoxLayout* m_headerLayout = nullptr;
     QVBoxLayout* m_root = nullptr;
     QLabel* m_title = nullptr;
-    ui::IconButton *m_power = nullptr, *m_expand = nullptr, *m_configure = nullptr;
+    ui::IconButton *m_power = nullptr, *m_expand = nullptr, *m_configure = nullptr, *m_fold = nullptr;
     QComboBox *m_mode = nullptr, *m_channelSide = nullptr;
     QDoubleSpinBox* m_mix = nullptr;
     QToolButton* m_sidechain = nullptr;
     std::optional<float> m_mixBefore;
     bool m_expanded = false, m_selected = false, m_pressed = false, m_syncing = false;
+    bool m_collapsed = false;
     QPoint m_press;
 };

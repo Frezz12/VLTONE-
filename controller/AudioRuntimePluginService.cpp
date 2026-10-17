@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <unordered_map>
 
 namespace daw {
 
@@ -32,6 +35,7 @@ bool AudioRuntime::pluginAudioActivity() const {
 }
 
 AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
+    static const bool profile = std::getenv("VLT_PLUGIN_SERVICE_PROFILE") != nullptr;
     AudioPluginServiceResult out;
     if (safetyStopped.load(std::memory_order_acquire)) return out;
     const auto generation = plugins::PluginMainThreadWork::generation();
@@ -39,7 +43,7 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
     const bool pendingCanApply = pendingPitchQualityChanges && !externallyActive && !pluginAudioActivity();
     if (generation == pluginMainThreadGeneration && !compatibilitySweep && !pendingCanApply) return out;
     pluginMainThreadGeneration = generation;
-    pluginCompatibilitySweepTicks = 0;
+    if (compatibilitySweep) pluginCompatibilitySweepTicks = 0;
     out.scanned = true;
     pendingPitchQualityChanges = false;
     const bool canApplyQuality = !externallyActive && !pluginAudioActivity();
@@ -59,6 +63,9 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
         for (unsigned side = 0; side < 2; ++side) {
             const auto& node = side ? slot.rightNode : slot.node;
             if (!node || !node->instance()) continue;
+            if (!compatibilitySweep && !pendingCanApply && !node->needsMainThreadPump()) continue;
+            const auto started = profile ? rt::nowNanos() : 0;
+            const auto noticesBefore = out.notices.size();
             const AudioPluginAddress address{channelId, slot.slotId, side != 0, node->instanceId()};
             const auto notice = [&](AudioPluginNotice::Kind type, const std::string& parameter = {},
                                     double value = 0, bool touch = false) {
@@ -96,27 +103,47 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
                 if (!replacements[side]) out.error = "Could not restore reloaded plugin: " + slot.slotId;
                 continue;
             }
+            // Readbacks can discover a changed latency. Apply that notice in
+            // this turn so the graph does not spend another UI tick with old PDC.
+            node->instance()->pumpMainThread();
             // Both latches must be consumed even if latency already changed.
             const bool latency = node->takeLatencyChanged();
             const bool restart = node->takeRestartRequested();
             if (latency || restart) { node->invalidatePrepare(); reconfigure = true; }
-            node->instance()->pumpMainThread();
             applyQuality(*node);
+            const auto parameters = node->instance()->parameters();
+            std::vector<plugins::PluginEvent> notifications;
+            std::unordered_map<std::uint32_t, std::size_t> lastParameter;
             plugins::PluginEvent event;
             while (node->popNotification(event)) {
                 const bool gesture = event.kind == plugins::PluginEvent::Kind::ParamGestureBegin;
                 if ((!gesture && event.kind != plugins::PluginEvent::Kind::ParamValue) ||
                     (side && gesture)) continue;
-                const auto parameters = node->instance()->parameters();
                 if (event.paramIndex >= parameters.size() || (!gesture && !std::isfinite(event.value))) continue;
+                if (parameters[event.paramIndex].isReadOnly) continue;
+                if (!gesture) lastParameter[event.paramIndex] = notifications.size();
+                notifications.push_back(event);
+            }
+            // Retain the final value at its original position relative to
+            // gestures, so a burst has one document/checkpoint update per ID.
+            for (std::size_t i = 0; i < notifications.size(); ++i) {
+                const auto& event = notifications[i];
+                const bool gesture = event.kind == plugins::PluginEvent::Kind::ParamGestureBegin;
+                if (!gesture && lastParameter[event.paramIndex] != i) continue;
                 if (!gesture) {
                     const std::array<InsertParameter, 1> confirmed{{{parameters[event.paramIndex].id, event.value, true}}};
                     overlayPendingParameters(checkpointParameterEdits[node->instanceId()], confirmed);
                 }
                 notice(gesture ? AudioPluginNotice::Kind::GestureBegin : AudioPluginNotice::Kind::Parameter,
                     parameters[event.paramIndex].id, event.value,
-                    !side && (gesture || node->instance()->isEditorOpen()));
-                out.changed |= !gesture;
+                    !side && (gesture || event.userGesture));
+            }
+            if (profile) {
+                const auto elapsed = rt::nowNanos() - started;
+                if (elapsed >= 250000 || latency || restart)
+                    std::fprintf(stderr, "PLUGIN_SERVICE name=%.*s us=%.1f notices=%zu latency=%d restart=%d\n",
+                        int(node->name().size()), node->name().data(), elapsed / 1000.,
+                        out.notices.size() - noticesBefore, int(latency), int(restart));
             }
         }
         if (replacements[0] || replacements[1]) {

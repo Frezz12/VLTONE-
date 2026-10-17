@@ -86,10 +86,10 @@ EOF
     # Dereferencing the standalone pnpm symlinks keeps the release archive
     # self-contained, but transitive packages still live in the virtual
     # store. Exercise Next's server dependency graph before packaging so a
-    # missing NODE_PATH can never reach deployment.
+    # missing NODE_PATH or a lazily loaded route runtime cannot reach deployment.
     (cd "$app_root" &&
         NODE_PATH="$destination/node_modules/.pnpm/node_modules" \
-            node -e "require('next/dist/server/next')")
+            node "$ROOT/packaging/server/check-next-routes.cjs" "$app_root")
 }
 
 copy_next_app web

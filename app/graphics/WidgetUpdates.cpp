@@ -1,6 +1,7 @@
 #include "WidgetUpdates.hpp"
 #include <QWidget>
 #include <QWindow>
+#include <QVariant>
 #include <QCoreApplication>
 #include <QMoveEvent>
 #include <QtWidgets/private/qwidget_p.h>
@@ -27,6 +28,12 @@ bool belongsToNativeOverlay(const QWidget* widget, const QWidget* source) {
     }
     return false;
 }
+void raiseNativeOverlay(QWidget* widget) {
+    if (auto* chrome = widget->property("vlt.nativeOverlayChrome").value<QWindow*>();
+        chrome && chrome->isVisible()) chrome->raise();
+    widget->raise();
+    if (widget->windowHandle()) widget->windowHandle()->raise();
+}
 bool moveNativeOverlay(QWidget* widget, const QPoint& position) {
     if (!widget || widget->isWindow() || !widget->isVisible() || !widget->windowHandle() ||
         !widget->property("vlt.nativeOverlay").toBool()) return false;
@@ -46,9 +53,9 @@ bool moveNativeOverlay(QWidget* widget, const QPoint& position) {
                 QMoveEvent moved(window->position(), oldPosition);
                 QCoreApplication::sendEvent(window, &moved);
             }
-            // Its raster chrome now occupies a different backing-store region.
-            // Refresh the editor itself; the retained background stays intact.
-            widget->update();
+            // The native surface already retains its pixels. Repainting here
+            // redraws the entire editor subtree for every pointer sample.
+            // Actual control/content changes still use ordinary QWidget damage.
             return true;
         }
         if (parent->isWindow()) break;

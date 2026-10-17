@@ -72,7 +72,7 @@ struct Output {
 
 /// Render `frames` through the instance, optionally with events at frame 0.
 Output render(sampler::SamplerInstance& instance, std::uint32_t frames,
-              const std::vector<PluginEvent>& events = {}) {
+              const std::vector<PluginEvent>& events = {}, bool offline = false) {
     Output out(frames);
     PluginProcessContext context;
     context.outputs = out.pointers;
@@ -80,6 +80,7 @@ Output render(sampler::SamplerInstance& instance, std::uint32_t frames,
     context.frames = frames;
     context.inputEvents = events;
     context.playing = true;
+    context.offline = offline;
     instance.process(context);
     return out;
 }
@@ -153,6 +154,20 @@ int main() {
     // Every standalone test reads the same synthetic buffer, whatever path it
     // is asked for — the file layer is exercised separately at the end.
     sampler::setSampleDecoder([](const std::string&) { return makeDcSample(); });
+
+    {
+        auto instance=makeSampler();
+        check(instance->playbackPositionSeconds()<0,"sampler playhead is hidden while idle");
+        render(*instance,kBlock,{noteOn(60,1.0)});
+        const double first=instance->playbackPositionSeconds();
+        render(*instance,kBlock);
+        check(first>0&&instance->playbackPositionSeconds()>first,"sampler playhead follows the rendered voice");
+        render(*instance,kBlock,{noteOn(60,1.0)});
+        check(std::abs(instance->playbackPositionSeconds()-first)<1e-8,"sampler playhead follows the newest voice");
+        instance->reset();check(instance->playbackPositionSeconds()<0,"sampler reset clears its playhead");
+        render(*instance,kBlock,{noteOn(60,1.0)});instance->stopProcessing();
+        check(instance->playbackPositionSeconds()<0,"sampler stop clears its playhead");
+    }
 
     // ── The parameter table ──
     {
@@ -433,7 +448,8 @@ int main() {
         render(*instance, 128, {on});
         auto off = noteOff(72); off.noteId = 302;
         const auto released = render(*instance, 512, {off});
-        check(peakOf(released.left) < 1e-6f,
+        check(std::all_of(released.left.begin() + 240, released.left.end(),
+                          [](float value) { return value == 0.f; }),
               "a choked preview cannot become a stale legato return target");
     }
 
@@ -459,6 +475,106 @@ int main() {
         const Output out = render(*instance, 4800, {noteOn(60, 1.0), noteOff(60, 1000)});
         check(std::abs(out.left[1200]) > 0.05f, "the release starts from the held level");
         check(std::abs(out.left[2400]) < 1e-4f, "and reaches silence");
+    }
+
+    // Zero-time amplitude stages must not turn a nonzero waveform into a
+    // single-sample step. Exercise Hold -> zero Sustain, early note-off, and
+    // adjacent notes at different velocities/pitches without Cut Itself.
+    for (double rate : {44100.0, 48000.0, 96000.0}) {
+        for (int scenario = 0; scenario < 3; ++scenario) {
+            const auto configure = [rate, scenario] {
+                auto instance = makeSampler(true, rate);
+                set(*instance, Param::AmpEnvOn, 1);
+                set(*instance, Param::AmpDelay, scenario == 0 ? .003 : 0);
+                set(*instance, Param::AmpAttack, 0);
+                set(*instance, Param::AmpHold, scenario == 0 ? .017 : .1);
+                set(*instance, Param::AmpDecay, 0);
+                set(*instance, Param::AmpSustain, 0);
+                set(*instance, Param::AmpRelease, 0);
+                return instance;
+            };
+            const auto at = std::uint32_t(rate * .017) + 11;
+            const auto frames = std::uint32_t(rate * .06);
+            std::vector<PluginEvent> events{noteOn(60, 1)};
+            if (scenario > 0) events.push_back(noteOff(60, at));
+            if (scenario == 2) {
+                events.push_back(noteOn(64, .25, at));
+                events.push_back(noteOff(64, at * 2));
+            }
+            auto instance = configure();
+            const Output out = render(*instance, frames, events);
+            check(std::abs(out.left.front()) < .01f &&
+                      largestStep(out.left) < .01f && largestStep(out.right) < .01f,
+                  "zero-time envelope stages and adjacent notes have no abrupt amplitude steps");
+            check(std::abs(out.left[std::uint32_t(rate * .01)] - .5f) < 1e-6f &&
+                      out.left.back() == 0.f && out.right.back() == 0.f,
+                  "Hold retains its full level and zero release drains to exact silence");
+            if (scenario == 0) {
+                const auto holdEnd = std::uint32_t(rate * .02);
+                check(std::abs(out.left[holdEnd - 3] - .5f) < 1e-6f &&
+                          out.left[holdEnd + 3] < .5f,
+                      "amplitude smoothing does not move the end of Hold");
+            }
+            check(instance->tailSamples() >= std::uint32_t(rate * .002),
+                  "the sampler advertises its short anti-click release tail to the host");
+
+            // Reuse the same events across arbitrary callback boundaries and
+            // offline export; neither must truncate or restart a ramp.
+            auto split = configure();
+            float error = 0;
+            for (std::uint32_t offset = 0; offset < frames;) {
+                const auto count = std::min<std::uint32_t>(127, frames - offset);
+                std::vector<PluginEvent> local;
+                for (PluginEvent event : events) {
+                    if (event.frameOffset < offset || event.frameOffset >= offset + count) continue;
+                    event.frameOffset -= offset;
+                    local.push_back(event);
+                }
+                const Output block = render(*split, count, local, true);
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    error = std::max(error, std::abs(out.left[offset + i] - block.left[i]));
+                    error = std::max(error, std::abs(out.right[offset + i] - block.right[i]));
+                }
+                offset += count;
+            }
+            check(error < 1e-6f, "anti-click envelopes match across callback sizes and offline export");
+        }
+    }
+
+    {
+        auto instance = makeSampler();
+        set(*instance, Param::AmpEnvOn, 1);
+        set(*instance, Param::AmpAttack, 0);
+        set(*instance, Param::AmpHold, .1);
+        set(*instance, Param::AmpRelease, .02);
+        const Output out = render(*instance, 2048, {noteOn(60, 1), noteOff(60, 4)});
+        check(out.left[3] > 0 &&
+                  std::all_of(out.left.begin() + 4, out.left.end(), [&](float v) { return v <= out.left[3]; }) &&
+                  out.left.back() == 0.f,
+              "release during the safety attack starts from the audible level without swelling");
+    }
+
+    // A sample may run out while the envelope still holds full level. Cover
+    // trimmed and natural endpoints, including an exact DSP sub-block end.
+    for (int mode : {0, 1}) {
+        for (std::uint32_t end : {2048u, 2055u, kSampleFrames}) {
+            auto instance = makeSampler();
+            set(*instance, Param::AmpEnvOn, 1);
+            set(*instance, Param::AmpAttack, 0);
+            set(*instance, Param::AmpHold, 1);
+            set(*instance, Param::AmpDecay, 0);
+            set(*instance, Param::AmpSustain, 0);
+            set(*instance, Param::AmpRelease, 0);
+            set(*instance, Param::EndOffset, double(end) / kSampleFrames);
+            set(*instance, Param::StretchMode, mode);
+            const Output out = render(*instance, kSampleFrames + kBlock, {noteOn(60, 1)});
+            check(peakOf(out.left) > .1f && largestStep(out.left) < .02f &&
+                      largestStep(out.right) < .02f,
+                  "a held envelope cannot click at a trimmed or natural source endpoint");
+            check(std::all_of(out.left.begin() + end, out.left.end(), [](float v) { return v == 0.f; }) &&
+                      std::all_of(out.right.begin() + end, out.right.end(), [](float v) { return v == 0.f; }),
+                  "source-end smoothing neither extends playback nor repeats the last frame");
+        }
     }
 
     // ── Tension bends the ramp but keeps its ends ──
@@ -720,8 +836,9 @@ int main() {
                 noteOn(60, 1.0), noteOff(60, at), noteOn(64, 0.25, at)};
             auto instance = configure();
             const Output out = render(*instance, frames, events);
-            check(out.left[0] == 0.5f,
-                  "Cut Itself preserves the first note's original attack");
+            check(release < 0.0 ? out.left[0] == 0.5f
+                               : out.left[0] < .01f && out.left[std::uint32_t(rate * .004)] == .5f,
+                  "Cut Itself preserves one-shot attacks and smooths zero-time amplitude attacks");
             check(largestStep(out.left, at) < 0.01f &&
                       largestStep(out.right, at) < 0.01f,
                   "Cut Itself changes level without an abrupt step at any rate/release");
@@ -1124,19 +1241,29 @@ int main() {
     }
 
 
-    {
+    for (bool envelope : {false, true}) for (float velocity : {.25f, 1.f}) {
         sampler::Voice voice;
         sampler::SampleData sample; sample.audio=makeDcSample(); sample.baseFrames=kSampleFrames;
         sampler::SamplerSettings settings;
+        settings.ampEnvOn = envelope;
         double phases[sampler::kModTargetCount]{};
-        Output before(64), after(512);
+        Output before(512), after(512);
         voice.start(60,0,1.f,0.f,settings,sample,kRate);
-        voice.render(sample,settings,before.pointers,2,64,kRate,120,phases);
-        voice.start(60,0,.25f,0.f,settings,sample,kRate);
+        voice.render(sample,settings,before.pointers,2,512,kRate,120,phases);
+        voice.start(60,0,velocity,0.f,settings,sample,kRate);
         voice.render(sample,settings,after.pointers,2,512,kRate,120,phases);
         check(std::abs(after.left.front()-before.left.back())<1e-6f &&
-              std::abs(after.left.back()-.125f)<1e-6f,
-              "stealing an active sampler voice preserves boundary continuity and reaches new level");
+              std::abs(after.left.back()-.5f*velocity)<1e-6f && peakOf(after.left)<=.500001f,
+              "stealing an active sampler voice preserves continuity without an envelope gain spike");
+        if (envelope) {
+            voice.start(60,0,1.f,0.f,settings,sample,kRate);
+            voice.release(false);
+            Output released(512);
+            voice.render(sample,settings,released.pointers,2,512,kRate,120,phases);
+            check(std::abs(released.left.front()-after.left.back())<1e-6f &&
+                      largestStep(released.left)<.01f && released.left.back()==0.f && !voice.active(),
+                  "an immediate note-off still drains a stolen voice without cutting its correction");
+        }
     }
 
     {

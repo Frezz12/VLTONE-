@@ -5,6 +5,9 @@ for (const [locale, chapter, title] of [
   ["en", "slide-routing", "Slides in plugins: MIDI, MPE and range"],
   ["ru", "chord-generator", "Генератор аккордов"],
   ["en", "warp-audio", "Warp: audio timing with markers"],
+  ["ru", "midi-generator", "MIDI Generator: мелодии и аккорды"],
+  ["en", "rack-modulation", "Rack modulation: LFO and Envelope Follower"],
+  ["ru", "master-panel", "Мастер-панель и измерение громкости"],
 ]) {
   test(`manual opens new chapter ${chapter} in ${locale}`, async ({ page }) => {
     await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);

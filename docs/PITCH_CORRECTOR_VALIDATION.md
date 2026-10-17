@@ -1,5 +1,36 @@
 # VLT Pitch validation — 2026-09-19
 
+## DSP tracking update — 2026-10-13
+
+The current detector extends Auto/High to 4 kHz. Fractional-waveform confidence
+and multi-cycle refinement avoid short-period rejection and octave mistakes.
+At 0 ms, adaptive recent windows and immediate note selection replace the
+confirmation/hysteresis/retune ramp described in the historical entries below.
+The fast path also acquires a first short high note before the bass history is
+full. DC is removed from analysis, and quiet or bright periodic voices retain
+correction. Formant fallback measures the delayed source level, preserving the
+last HD syllable after live input has ended. Defaults and saved parameter IDs
+are unchanged; processing references remain 10/80 ms.
+
+- Five DSP CTest suites pass: accuracy/state/streaming, tracking, envelope,
+  phase and formants. Tracking adds 130 checks, including 100 high-register
+  cases at 12/44.1/48/96/192 kHz and 0/20 ms retune. Both detected and rendered
+  pitches must stay within five cents. Other fixtures cover weak fundamentals,
+  breath, DC, quiet bass/treble, 50 ms octave changes, startup and delayed tails.
+  The same tracking suite also passes with AddressSanitizer enabled.
+- The 24-second local vocal benchmark has no nonfinite or clipped samples in
+  either quality with Natural or Hard. At 44.1 kHz / 64 frames, measured CPU
+  was 5.28–7.37%; block p99 was 173–275 microseconds versus a 1451-microsecond
+  deadline. These are desktop measurements, not a hardware latency guarantee
+  or a subjective listening verdict.
+- The full integration suite remains failing in this shared checkout. A
+  separate executable linked to the original DSP also reproduces the idle
+  quality-rebuild and export/freeze failures. They are not reported as passing.
+
+Commands, before/after results and local vocal renders are in
+`artifacts/pitch-tracking-20261013/`. Older validation below belongs to the
+previous implementation and its earlier workspace state.
+
 ## HTML editor and 0 ms follow-up
 
 The subsequent UI stability pass coalesces drag writes to presentation frames,

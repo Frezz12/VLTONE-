@@ -1,6 +1,7 @@
 #include "LoudnessDisplay.hpp"
 #include "Theme.hpp"
 #include "Icons.hpp"
+#include "UiFrameClock.hpp"
 #include <QFontDatabase>
 #include <QPainter>
 #include <QPainterPath>
@@ -29,11 +30,16 @@ void LoudnessDisplay::setLevels(daw::engine::LoudnessLevels levels) {
         .arg(reading(levels.momentary), reading(levels.shortTerm), reading(levels.integrated));
     if (summary == m_summary) return;
     m_levels = levels; m_summary = summary;
-    setToolTip(summary); setAccessibleName(summary); update();
+    setToolTip(summary); setAccessibleName(summary);
+    ui::FrameClock::instance().request(this, rect());
 }
 
 void LoudnessDisplay::paintEvent(QPaintEvent*) {
-    QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+    QPainter p(this); paintScene(p, QRegion(rect()));
+}
+
+void LoudnessDisplay::paintScene(QPainter& p, const QRegion&) {
+    p.setRenderHint(QPainter::Antialiasing);
     const auto& theme = ThemeManager::instance().theme();
     const QRectF face = QRectF(rect()).adjusted(.5, .5, -.5, -.5);
     constexpr qreal radius = 4;

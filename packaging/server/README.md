@@ -128,6 +128,27 @@ retries or a cleanup backlog. Scrape `/metrics` directly over loopback; the
 handler intentionally rejects non-loopback clients and contains no user or
 project labels.
 
+## Download click statistics
+
+Admin → Releases shows website download-button clicks, grouped by version and
+installer format. The `releases.read` permission controls access. Clicks start
+at deployment of migration 000034; historical traffic is not backfilled.
+Repeated clicks count separately. These totals do not represent unique people
+or completed transfers. Opening or cancelling the DMG warning does not count;
+confirming its download does. File GET/Range requests and desktop updater traffic
+are excluded. Replacing or removing an installer retains its version/format count.
+The database stores aggregate counts and first/last click times, without visitor
+identifiers or IP addresses. Website downloads continue if tracking is unavailable.
+
+## Support link statistics
+
+Admin → Overview shows Boosty link activations, split between the final homepage
+support block and the shared footer. Migration 000036 stores aggregate counts and
+timestamps only. Access requires `dashboard.read`. Counts start when deployed;
+repeated, keyboard and middle-button activations count, while page views do not.
+These are link clicks, not verified subscriptions or unique people. The external
+link opens immediately even when the statistics API is unavailable.
+
 ## Forum and media worker
 
 The bundle now includes `forum/` and `bin/vlt-forum-media`. Set `FORUM_ORIGIN=https://forum.vltstudio.ru`, configure DNS/TLS for the new Apache virtual host, and install both `vlt-account-forum.service` (127.0.0.1:3102) and `vlt-forum-media.service`. The API remains common to all three websites. The worker requires FFprobe/FFmpeg with H.264/AAC, VP9/Opus and JPEG encoders; preflight verifies them. It runs with CPU/memory/task limits. Choose a private **separate forum S3 bucket and credentials**, not the collaboration bucket. Apply `forum-s3-cors.example.json` with your exact forum origin and `forum-s3-lifecycle.example.json` (incomplete multipart/staging only; never expire published `objects/` or `media/`). No bucket public-read policy is needed; authorized downloads stream through Go with Range support.

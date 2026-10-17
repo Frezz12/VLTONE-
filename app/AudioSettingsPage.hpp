@@ -40,6 +40,7 @@ private:
     void resetChannelsForDevice(const audio::DeviceInfo& device);
     void updateChannelButtonText();
     void syncSettledConfiguration();
+    void updateLatencySummary();
 
     daw::EngineController* m_controller = nullptr;
     std::vector<audio::DeviceInfo> m_outputs;
@@ -63,6 +64,7 @@ private:
     QPushButton* m_controlPanel = nullptr;
     QLabel* m_deviceNote = nullptr;
     QCheckBox* m_cpuStatusBar = nullptr;
+    QLabel* m_latencySummary = nullptr;
 
     QString m_channelDeviceUid;
     std::vector<int> m_inputSelectors;

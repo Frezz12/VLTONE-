@@ -1,23 +1,27 @@
 #pragma once
 
-#include <QDialog>
+#include <QWidget>
 #include <QList>
 #include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace daw { class EngineController; struct NoteModel; struct TrackModel; }
 class QVBoxLayout;
 class QMenu;
+class QComboBox;
+class QLabel;
+class QMimeData;
+namespace daw::plugins { struct PluginDescriptor; }
 
-/// Compact editor for a Pattern container.
+/// Rack module for a Pattern container.
 ///
 /// Every row is still a real instrument track — with its own mixer channel,
-/// clips and plugin chain — while this window presents the rows as one musical
-/// object. Audio files dropped anywhere on it become new Sampler rows.
-class PatternWindow final : public QDialog {
+/// clips and plugin chain. Audio files dropped on the module become new sounds.
+class PatternWindow final : public QWidget {
     Q_OBJECT
 public:
     explicit PatternWindow(daw::EngineController* controller,
@@ -25,6 +29,9 @@ public:
 
     void setPattern(const QString& patternId, const QString& clipId = {});
     const QString& patternId() const { return m_patternId; }
+    const QString& patternClipId() const { return m_patternClipId; }
+    bool command(const QString& action);
+    bool addInstrument(const daw::plugins::PluginDescriptor& descriptor);
     const QStringList& selectedSourceTrackIds() const { return m_selectedIds; }
     const QString& selectedSourceTrackId() const { return m_primaryId; }
     /// Replace the selected layer's audio while retaining an existing
@@ -38,6 +45,7 @@ public:
 signals:
     void projectEdited(bool localFileDirty = true);
     void sourceSelectionChanged();
+    void sourceRackRequested(const QString& trackId);
     void openPianoRollRequested(const QString& trackId, const QString& clipId);
     void openPluginEditorRequested(const QString& trackId,
                                    const QString& slotId);
@@ -51,10 +59,11 @@ protected:
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
-    void closeEvent(QCloseEvent* event) override;
 
 private:
     void applyTheme();
+    void syncClipSelector();
+    std::optional<daw::plugins::PluginDescriptor> droppedInstrument(const QMimeData*) const;
     void rebuildRows();
     bool rowStructureMatches(const QStringList& ids) const;
     bool syncRowsFromModel();
@@ -94,7 +103,7 @@ private:
     void updateSelectionVisuals();
     void updateDropIndicator(int insertionIndex);
     int replacementRowAtGlobal(const QPoint& globalPos) const;
-    void updateExternalDropFeedback(const QPoint& globalPos);
+    void updateExternalDropFeedback(const QPoint& globalPos, bool replaceMidi);
     void clearExternalDropFeedback();
     void endRowGestureState();
     QStringList childTrackIds() const;
@@ -108,6 +117,8 @@ private:
     mutable quint64 m_childRevision = ~quint64(0), m_childGeneration = 0;
     mutable quint64 m_childGeometry = 0, m_childStructure = 0;
     QWidget* m_rowsHost = nullptr;
+    QLabel* m_title = nullptr;
+    QComboBox* m_clipSelector = nullptr;
     QVBoxLayout* m_rowsLayout = nullptr;
     QWidget* m_dropIndicator = nullptr;
     QList<QWidget*> m_rowWidgets;

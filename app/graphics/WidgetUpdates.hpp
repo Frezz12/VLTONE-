@@ -4,6 +4,7 @@ class QWidget;
 class QPoint;
 namespace ui::graphics {
 bool belongsToNativeOverlay(const QWidget* widget, const QWidget* source);
+void raiseNativeOverlay(QWidget* widget);
 // Move a native editor over a retained workspace without copying/invalidation
 // of the QWidget backing store beneath it. Returns false for the widget path.
 bool moveNativeOverlay(QWidget* widget, const QPoint& position);

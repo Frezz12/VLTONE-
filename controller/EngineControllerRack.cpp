@@ -1,3 +1,4 @@
+#include "model/ModulationRouting.hpp"
 #include "EngineController.hpp"
 #include "model/RackGroups.hpp"
 #include <algorithm>
@@ -25,10 +26,17 @@ void lift(EngineController::ChannelSnapshot& snapshot, const std::unordered_set<
     std::erase_if(snapshot.inserts, [&](const auto& s) { return ids.contains(s.model.id); });
     for (auto& group : snapshot.rackGroups)
         std::erase_if(group.insertIds, [&](const auto& id) { return ids.contains(id); });
+    std::erase_if(snapshot.modulation.routes, [&](const auto& route) { return ids.contains(route.slotId); });
+    std::unordered_set<std::string> remaining;
+    for (const auto& s : snapshot.modulation.sources) remaining.insert(s.id);
+    for (const auto& r : snapshot.modulation.routes) remaining.insert(r.id);
+    for (auto& lane : snapshot.modulationAutomation)
+        std::erase_if(lane.clips, [&](const auto& c) { return !remaining.contains(c.automation.target.slotId); });
+    std::erase_if(snapshot.modulationAutomation, [](const auto& t) { return t.clips.empty(); });
     normalize(snapshot);
 }
 bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelSnapshot source,
-           std::size_t index, const std::string& groupId, bool copy, std::vector<std::string>& landed) {
+           std::size_t index, const std::string& groupId, bool copy, std::vector<std::string>& landed, const std::string& channel, bool copySources = false) {
     if (source.instrument && !groupId.empty())
         return false;
     auto group = std::find_if(target.rackGroups.begin(), target.rackGroups.end(),
@@ -53,6 +61,7 @@ bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelS
     }
     std::unordered_map<std::string, std::string> mapping;
     if (source.instrument) {
+        const auto instrumentId = source.instrument->model.id;
         if (copy) {
             source.instrument->model.id = newUuid();
             source.instrument->model.windowOpen = false;
@@ -61,6 +70,7 @@ bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelS
                 fx.model.windowOpen = false;
             }
         }
+        mapping[instrumentId] = source.instrument->model.id;
         landed.push_back(source.instrument->model.id);
         target.instrument = source.instrument;
         target.instrumentFx = source.instrumentFx;
@@ -94,6 +104,18 @@ bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelS
                           source.inserts.end());
     const auto groups = copyRackGroups(source.rackGroups, mapping, copy);
     target.rackGroups.insert(target.rackGroups.end(), groups.begin(), groups.end());
+    auto moved = copyModulation(source.modulation, mapping, copy || copySources, &mapping);
+    for (const auto& source : moved.sources)
+        if (std::none_of(target.modulation.sources.begin(), target.modulation.sources.end(), [&](const auto& s) { return s.id == source.id; }))
+            target.modulation.sources.push_back(source);
+    target.modulation.routes.insert(target.modulation.routes.end(), moved.routes.begin(), moved.routes.end());
+    auto automation = copyModulationAutomation(source.modulationAutomation, mapping, channel, copy || copySources);
+    for (auto& lane : automation) {
+        auto found = std::find_if(target.modulationAutomation.begin(), target.modulationAutomation.end(), [&](const auto& t) { return t.id == lane.id; });
+        if (found == target.modulationAutomation.end()) target.modulationAutomation.push_back(std::move(lane));
+        else for (auto& clip : lane.clips)
+            if (std::none_of(found->clips.begin(), found->clips.end(), [&](const auto& c) { return c.id == clip.id; })) found->clips.push_back(std::move(clip));
+    }
     normalize(target);
     return true;
 }
@@ -254,6 +276,9 @@ audio::Result EngineController::captureRackSelection(const std::string& channel,
         }
     if (snapshot.inserts.size() + (snapshot.instrument ? 1 : 0) != selected.size())
         return rackError("A selected plugin is no longer available.");
+    if (snapshot.instrument) mapping[snapshot.instrument->model.id] = snapshot.instrument->model.id;
+    snapshot.modulation = copyModulation(rackModulation(channel), mapping, false);
+    snapshot.modulationAutomation = captureModulationAutomation(m_project, channel, snapshot.modulation);
     snapshot.rackGroups = copyRackGroups(rackGroups(channel), mapping, false);
     snapshot.sourceName = channel == kMasterChannelId ? "Master" : m_project.findTrack(channel)->name;
     out = std::move(snapshot);
@@ -277,7 +302,12 @@ audio::Result EngineController::captureRackChannel(const std::string& channel, b
     }
     state.channelId = channel;
     state.instrumentChanged = instrument;
-    return captureRackSelection(channel, ids, state.snapshot);
+    auto result = captureRackSelection(channel, ids, state.snapshot);
+    if (result) {
+        state.snapshot.modulation = rackModulation(channel);
+        state.snapshot.modulationAutomation = captureModulationAutomation(m_project, channel, state.snapshot.modulation);
+    }
+    return result;
 }
 
 bool EngineController::applyRackEdit(const RackEditState& state) {
@@ -288,6 +318,14 @@ bool EngineController::applyRackEdit(const RackEditState& state) {
         replacements.push_back({channel.channelId, channel.snapshot.inserts,
                                 channel.instrumentChanged ? &channel.snapshot : nullptr});
     }
+    const auto previousProject = m_project;
+    for (const auto& channel : state.channels) {
+        auto* rack = mutableRackModulation(channel.channelId);
+        *rack = channel.snapshot.modulation;
+    }
+    for (const auto& channel : state.channels)
+        replaceModulationAutomation(m_project, channel.channelId, channel.snapshot.modulationAutomation);
+    invalidateAutomationReadoutCache();
     std::vector<RackAutomationAddress> previous;
     for (const auto& address : state.automation)
         if (auto* clip = findClip(address.trackId, address.clipId)) {
@@ -295,6 +333,9 @@ bool EngineController::applyRackEdit(const RackEditState& state) {
             clip->automation.target = address.target;
         }
     if (!applyChains(replacements)) {
+        m_project = previousProject;
+        invalidateAutomationReadoutCache();
+        rebuildGraph();
         for (const auto& address : previous)
             if (auto* clip = findClip(address.trackId, address.clipId))
                 clip->automation.target = address.target;
@@ -404,7 +445,7 @@ audio::Result EngineController::pasteRackSelection(const std::string& channel, c
             address.target.channelId = channel;
     }
     std::vector<std::string> landed;
-    if (!place(after.channels[0].snapshot, source, index, groupId, !cut, landed))
+    if (!place(after.channels[0].snapshot, source, index, groupId, !cut, landed, channel, cut && source.rackCutSource != channel))
         return rackError("Groups cannot be nested.");
     if (!commitRackEdit(before, after, "Paste Rack Devices"))
         return rackError("Could not restore plugin settings. The chain was left unchanged.");
@@ -468,7 +509,7 @@ audio::Result EngineController::transferRackSelection(const std::string& from,
         if (group.id == destination)
             destination.clear();
     std::vector<std::string> newIds;
-    if (!place(after.channels.back().snapshot, source, index, destination, false, newIds))
+    if (!place(after.channels.back().snapshot, source, index, destination, false, newIds, to, from != to))
         return rackError("Groups cannot be nested.");
     for (auto& address : after.automation)
         address.target.channelId = to;

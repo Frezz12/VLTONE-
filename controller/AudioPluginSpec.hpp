@@ -32,6 +32,7 @@ struct AudioPluginSpec {
     double slideBendRange = 2.0, slideReleaseReserve = 2.0;
     float mix = 1.0f;
     bool bypassed = false;
+    bool analysisOnly = false;
     AudioPluginLoadPolicy loadPolicy = AudioPluginLoadPolicy::Required;
     std::string unavailableReason;
 };

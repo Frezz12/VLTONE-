@@ -96,6 +96,9 @@ struct ParameterInfo {
     bool isAutomatable = true;
     bool isStepped = false;
     bool isBypass = false;
+    /// Output telemetry remains readable but must never become a host edit.
+    bool isReadOnly = false;
+    bool isLogarithmic = false; // Positive geometric knob travel, for built-in adapters.
 };
 
 /// One timestamped thing inside a block. Trivially copyable on purpose: it
@@ -129,6 +132,7 @@ struct PluginEvent {
     /// ignore it; internal instruments can render it without inventing a CC.
     double notePan = 0.0;
     engine::PitchRamp pitch;
+    bool userGesture = false; ///< Explicit editor gesture, never an automation readback.
     bool preferMidi = false; ///< Force MIDI dialect for explicit channel/MPE delivery.
 };
 static_assert(std::is_trivially_copyable_v<PluginEvent>,

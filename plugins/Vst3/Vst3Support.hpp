@@ -324,11 +324,6 @@ public:
         m_active.resize(m_queues.size());
         m_used = 0;
     }
-    void reserveParameterPoints(Vst::ParamID id, std::size_t count) {
-        auto found=std::find_if(m_special.begin(),m_special.end(),[&](const auto& q){return q.first==id;});
-        if(found==m_special.end()){auto q=owned(new ParamValueQueue);q->reserve(count);m_special.emplace_back(id,std::move(q));}
-        else found->second->reserve(count);
-    }
     // The host counts this block's input points before filling the queues.
     // A single pool admits dense curves without reserving max-block storage
     // separately for every parameter the plugin exposes.
@@ -383,15 +378,13 @@ private:
         if (m_used >= m_queues.size()) return nullptr;
         index = int32(m_used++);
         m_lookup[slot] = uint32(index) + 1;
-        auto special=std::find_if(m_special.begin(),m_special.end(),[&](const auto& q){return q.first==id;});
-        m_active[index]=special==m_special.end()?m_queues[index].get():special->second.get();
+        m_active[index] = m_queues[index].get();
         m_active[index]->reset(id);
         return m_active[index];
     }
     std::vector<ParamValueQueue::Point> m_pointPool;
     std::vector<IPtr<ParamValueQueue>> m_queues;
     std::vector<ParamValueQueue*> m_active;
-    std::vector<std::pair<Vst::ParamID,IPtr<ParamValueQueue>>> m_special;
     std::vector<uint32> m_lookup;
     std::size_t m_used = 0;
 };

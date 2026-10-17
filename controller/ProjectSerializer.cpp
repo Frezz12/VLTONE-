@@ -1,5 +1,6 @@
 #include "AudioEdit.hpp"
 #include "ProjectSerializer.hpp"
+#include "serialization/ModulationJson.hpp"
 #include "serialization/RackJson.hpp"
 #include "model/ChannelColor.hpp"
 #include "model/MiniModules.hpp"
@@ -851,6 +852,7 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"sends", std::move(sends)},
         {"inserts", insertsToJson(t.inserts)},
         {"rackGroups", serialization::rackGroupsToJson(t.rackGroups)},
+        {"modulation", t.modulation},
         {"clips", std::move(clips)},
     };
     if (t.instrument.audioEdit.initialized) {
@@ -966,6 +968,7 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir,
     }
     t.inserts = insertsFromJson(j, "inserts");
     t.rackGroups = serialization::rackGroupsFromJson(j, "rackGroups", t.inserts);
+    t.modulation = modulation::fromJson(j);
     if (j.contains("clips")) {
         const auto& clips = j.at("clips");
         if (clips.is_array()) t.clips.reserve(clips.size());
@@ -1062,6 +1065,7 @@ json documentToJson(const ProjectModel& project, MediaPaths media) {
     root["masterPan"] = project.masterPan;
     root["masterInserts"] = insertsToJson(project.masterInserts);
     root["masterRackGroups"] = serialization::rackGroupsToJson(project.masterRackGroups);
+    root["masterModulation"] = project.masterModulation;
     root["masterMiniModules"] = insertsToJson(project.masterMiniModules);
     json tracks = reservedArray(project.tracks.size());
     for (const auto& t : project.tracks) tracks.push_back(trackToJson(t, media));
@@ -1199,6 +1203,7 @@ audio::Result documentFromJson(ProjectModel& out, const json& root,
         out.masterPan = root.value("masterPan", 0.0f);
         out.masterInserts = insertsFromJson(root, "masterInserts");
         out.masterRackGroups = serialization::rackGroupsFromJson(root, "masterRackGroups", out.masterInserts);
+        out.masterModulation = modulation::fromJson(root, "masterModulation");
         out.masterMiniModules = insertsFromJson(root, "masterMiniModules");
         if (out.masterMiniModules.size() > plugins::mini::kMaxModules) throw std::runtime_error("too many master mini modules");
         if (root.contains("tracks")) {

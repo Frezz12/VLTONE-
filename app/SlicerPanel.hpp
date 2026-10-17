@@ -96,8 +96,8 @@ private:
     QSet<quint32> m_selected;
     quint32 m_primary = 0, m_rangeStart = 0, m_rangeEnd = 0;
     quint64 m_generation = 0;
-    double m_viewStart = 0, m_viewSpan = 1, m_pressFrame = 0, m_panStart = 0;
-    QPointF m_pressPosition;
+    double m_viewStart = 0, m_viewSpan = 1, m_pressFrame = 0;
+    QPointF m_pressPosition, m_panLastPosition;
     int m_dragBoundary = -1;
     bool m_panning = false, m_overview = false, m_selectingRange = false;
 };

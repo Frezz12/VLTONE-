@@ -139,7 +139,8 @@ public:
         accepted = m_acceptsLayout ? wanted : busLayout();
         return m_acceptsLayout;
     }
-    PluginBusLayout busLayout() const override { return {{2}, {2}}; }
+    PluginBusLayout busLayout() const override { return {{2}, {m_descriptor.mainOutputChannels}}; }
+    void setOutputChannels(std::uint16_t channels) { m_descriptor.mainOutputChannels = channels; }
 
     bool activate(const PluginProcessInfo&) override {
         m_active = true;
@@ -191,6 +192,8 @@ public:
             for (unsigned ch=0;ch<context.outputChannels;++ch)
                 std::fill_n(context.outputs[ch],context.frames, failureMode==2 ? std::numeric_limits<float>::quiet_NaN()
                     : failureMode == 3 ? std::numeric_limits<float>::infinity() : 0.f);
+            if (failureMode == 5 && context.outputChannels && context.frames)
+                context.outputs[context.outputChannels - 1][context.frames - 1] = std::numeric_limits<float>::quiet_NaN();
             return failureMode==1 ? PluginProcessDisposition::Error : PluginProcessDisposition::Continue;
         }
         int heldKey60 = 0;
@@ -250,6 +253,7 @@ public:
     }
     void sleepProcessing() noexcept override { stopProcessing(); }
     bool wakeProcessing() noexcept override {
+        if (failWake) return false;
         startProcessing();
         return m_processing;
     }
@@ -262,8 +266,17 @@ public:
     void setLatency(std::uint32_t latency) noexcept {
         m_latency.store(latency, std::memory_order_relaxed);
     }
+    void changeLatencyDuringNextRead(std::uint32_t latency) noexcept {
+        m_nextLatency.store(latency, std::memory_order_relaxed);
+    }
     std::uint32_t latencySamples() const noexcept override {
-        return m_latency.load(std::memory_order_relaxed);
+        const auto value = m_latency.load(std::memory_order_relaxed);
+        const auto next = m_nextLatency.exchange(UINT32_MAX, std::memory_order_relaxed);
+        if (next != UINT32_MAX) {
+            m_latency.store(next, std::memory_order_relaxed);
+            if (m_listener) m_listener->onLatencyChanged();
+        }
+        return value;
     }
     std::uint32_t tailSamples() const noexcept override { return 0; }
 
@@ -274,6 +287,7 @@ public:
     std::atomic<unsigned> midiEventsSeen{0};
     std::atomic<unsigned> parameterEventsSeen{0};
     int failureMode = 0;
+    bool failWake = false;
     std::atomic<unsigned> noteOnsSeen{0};
     std::atomic<unsigned> noteOffsSeen{0};
     std::atomic<int> heldKey60AfterBlock{0};
@@ -287,7 +301,8 @@ private:
     bool m_transposeMidi = false;
     bool m_active = false;
     bool m_processing = false;
-    std::atomic<std::uint32_t> m_latency{0};
+    mutable std::atomic<std::uint32_t> m_latency{0};
+    mutable std::atomic<std::uint32_t> m_nextLatency{UINT32_MAX};
     std::atomic<bool> processWakeRequested{false};
     PluginListener* m_listener = nullptr;
 };
@@ -410,6 +425,24 @@ int main() {
         reporter->reportRestartRequested();
         check(bool(node->serviceOffline()) && !node->isPreparedFor(offlineInfo),
               "a real configuration change still replaces the pass");
+
+        // Activation can temporarily report its initial latency again. A
+        // repeated notification must still match the *prepared* delay lines.
+        reporter->setLatency(0);
+        node->prepare(offlineInfo);
+        node->markPrepared(offlineInfo);
+        reporter->setLatency(32);
+        reporter->reportRestartRequested();
+        check(bool(node->serviceOffline()) && !node->isPreparedFor(offlineInfo),
+              "repeated latency cannot leave the graph using its activation value");
+
+        reporter->setLatency(0);
+        reporter->changeLatencyDuringNextRead(17);
+        node->prepare(offlineInfo);
+        node->markPrepared(offlineInfo);
+        check(node->latencySamples() == 0 && bool(node->serviceOffline()) &&
+                  !node->isPreparedFor(offlineInfo),
+              "a latency notification racing with preparation is not discarded");
     }
 
     ClapFactory factory;
@@ -783,6 +816,9 @@ int main() {
         parameter.paramIndex = 0;
         int queued = 0;
         while (node->pushEvent(parameter)) ++queued;
+        const auto saturatedState = node->controlState();
+        node->discardPendingEvents();
+        node->restoreControlState(saturatedState);
 
         OutputBuffer input(2, kBlock);
         OutputBuffer output(2, kBlock);
@@ -808,11 +844,28 @@ int main() {
         check(queued == 2047, "the plugin host-event ring reaches its fixed limit");
         check(observer->processCalls == 0 && midiOutput.size() == 2 && midiOutput.events().back().isNoteOff(),
               "a saturated host block skips DSP and preserves dry MIDI releases");
+        node->discardPendingEvents();
         check(!node->faultBypassed() && node->takeOverloadNotice() && !node->processStatus(),
-              "host overload is reported separately from a plugin fault");
+              "discarding queued edits preserves a real processing overload notice");
         midiInput.clear(); midiOutput.clear(); node->process(context);
         check(observer->processCalls == 1 && node->processStatus(),
               "the next healthy host block resumes without recreating the plugin");
+
+        // State restoration supersedes this saturated queue before any audio
+        // block uses it. Its pending overflow must not poison the next block.
+        const auto healthyState = node->controlState();
+        while (node->pushEvent(parameter)) {}
+        node->restoreControlState(healthyState);
+        node->process(context);
+        check(observer->processCalls == 2 && node->processStatus() && !node->takeOverloadNotice(),
+              "rollback to a healthy queue discards overflow from the rejected edit");
+        while (node->pushEvent(parameter)) {}
+        node->discardPendingEvents();
+        node->prepare(makeInfo());
+        check(node->pushEvent(parameter), "restored state accepts a fresh host edit");
+        node->process(context);
+        check(observer->processCalls == 3 && node->processStatus() && !node->takeOverloadNotice(),
+              "discarded queue overflow cannot fail processing after reactivation");
     }
 
     // ── Bypassing a MIDI transformer releases transformed voices ──
@@ -1083,6 +1136,13 @@ int main() {
         check(counter->processCalls.load(std::memory_order_relaxed) ==
                   afterTwoSignalBlocks + 2,
               "a plugin-originated process request wakes sleeping DSP");
+        counter->failWake = true;
+        counter->requestProcessWake();
+        context.timelinePosition = 8 * kBlock;
+        node->process(context);
+        check(node->fault() == PluginNode::Fault::ActivationFailed && !node->processStatus() &&
+                  counter->processCalls.load() == afterTwoSignalBlocks + 2,
+              "failed wake latches and reports the failed block without entering DSP");
     }
 
     // ── Real CLAP SLEEP / CONTINUE_IF_NOT_QUIET / TAIL contract ──
@@ -1442,6 +1502,15 @@ int main() {
         check(observer->parameterEventsSeen.load() == frames &&
               std::abs(observer->seenParameterValue.load() - (frames-1.)/frames) < 1e-9,
               "continuous plugin automation delivers intermediate sample values");
+        PluginEvent late;
+        late.kind = PluginEvent::Kind::ParamValue;
+        late.frameOffset = frames - 1;
+        late.value = -7;
+        node.pushEvent(late);
+        node.process(c);
+        check(observer->parameterEventsSeen.load() == frames * 2 + 1 &&
+              std::abs(observer->seenParameterValue.load() - (frames-1.)/frames) < 1e-9,
+              "late host event and dense automation retain stable sample ordering");
     }
     for (int mode : {1, 2, 3}) for (int kind : {0, 1, 2}) {
         engine::RealtimeEngine engine(2);
@@ -1478,6 +1547,42 @@ int main() {
               "stop, seek, bypass and preparation cannot release the failure latch");
         check(!node->offlineStatus(), "offline processing rejects a latched failure");
 
+    }
+
+    // One bad sample is enough, even in surround scratch beyond the graph's
+    // stereo outputs. Fallback must use the continuously maintained dry delay.
+    for (unsigned channels : {2u, 6u}) {
+        constexpr unsigned frames = 17, latency = 23;
+        auto instance = std::make_unique<SilentOnStoppedInstance>(false);
+        auto* observer = instance.get();
+        observer->setOutputChannels(std::uint16_t(channels));
+        observer->setLatency(latency);
+        PluginNode node("last-sample fault", std::move(instance));
+        node.prepare({48000, frames, 2});
+        OutputBuffer input(2, frames), output(2, frames);
+        std::array<engine::AudioBlock, 1> inputs{input.block()};
+        engine::ProcessContext context;
+        context.inputs = inputs; context.output = output.block();
+        context.frames = frames; context.sampleRate = 48000; context.playing = true;
+        const auto generation = PluginNode::faultGeneration();
+        bool aligned = true;
+        for (unsigned block = 0; block < 5; ++block) {
+            context.timelinePosition = block * frames;
+            for (unsigned ch = 0; ch < 2; ++ch)
+                for (unsigned frame = 0; frame < frames; ++frame)
+                    input.pointers[ch][frame] = float(block * frames + frame + 1);
+            if (block == 2) observer->failureMode = 5;
+            node.process(context);
+            if (block >= 2) {
+                for (unsigned ch = 0; ch < 2; ++ch)
+                    for (unsigned frame = 0; frame < frames; ++frame)
+                        aligned &= output.pointers[ch][frame] == float(block * frames + frame + 1 - latency);
+            }
+        }
+        check(aligned && observer->processCalls == 3 && node.latencySamples() == latency &&
+                  node.fault() == PluginNode::Fault::NonFiniteOutput &&
+                  PluginNode::faultGeneration() == generation + 1,
+              "one nonfinite tail/surround sample triggers one fault and keeps dry latency without further DSP");
     }
 
     std::printf("\n%s\n", failures == 0 ? "ALL PASSED" : "FAILURES PRESENT");

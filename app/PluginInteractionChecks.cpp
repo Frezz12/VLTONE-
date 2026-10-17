@@ -618,6 +618,25 @@ bool ui::checkPluginInteractions() {
         return editor;
     };
     auto editor = open();
+    auto* openingFrame = qobject_cast<InternalEditorFrame*>(editor->parentWidget());
+    auto* title = openingFrame->findChild<QWidget*>(QStringLiteral("InternalEditorTitleBar"));
+    const QPointF grab = title->mapToGlobal(QPoint(80, 14));
+    const auto titleMouse = [&](QEvent::Type type, QPointF global) {
+        QMouseEvent event(type, title->mapFromGlobal(global), global,
+                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(title, &event);
+    };
+    titleMouse(QEvent::MouseButtonPress, grab);
+    settle(150); // longer than the initial editor-loading delay
+    check(openingFrame->isInteracting() && !editor->isEditorInitialized(),
+          "opening defers vendor GUI work while the title is held");
+    const QPoint start = openingFrame->pos();
+    titleMouse(QEvent::MouseMove, grab + QPointF(1, 1));
+    check(openingFrame->pos() == start + QPoint(1, 1),
+          "the first movement tracks the pointer while the plugin is loading");
+    titleMouse(QEvent::MouseButtonRelease, grab + QPointF(1, 1));
     settle(350);
     check(editor && editor->isEmbedded(), "native fixture opens in its final host");
     if (surface) check(gpuFrames > 0 && surface->quickWindow()->isVisible(),

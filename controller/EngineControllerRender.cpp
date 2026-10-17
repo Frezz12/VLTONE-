@@ -70,9 +70,12 @@ audio::Result EngineController::captureRenderSession(
     if (auto valid = validateRenderSpec(spec); !valid) return valid;
     if (m_runtime->audioSafetyStopped())
         return audio::Result::fail(audio::EngineError::AudioThreadError, "Save and reopen the project before rendering.");
-    if (!m_runtime->pluginFaults().empty())
-        return audio::Result::fail(audio::EngineError::PluginLoadFailed,
-            "Restore or remove failed plugins before rendering. No bypassed render was created.");
+    for (const auto& fault : m_runtime->pluginFaults()) {
+        const auto* slot = mutableInsertSlot(fault.address.channelId, fault.address.slotId);
+        if (!slot || !slot->analysisOnly)
+            return audio::Result::fail(audio::EngineError::PluginLoadFailed,
+                "Restore or remove failed plugins before rendering. No bypassed render was created.");
+    }
     try {
         auto data = std::make_shared<RenderSessionSpec::Data>();
         data->spec = spec;
@@ -116,7 +119,7 @@ audio::Result EngineController::captureRenderSession(
                 }
             };
             const auto needsState = [](const InsertModel& slot) {
-                return slot.isLoaded() && !slot.bypassed && slot.mix != 0.f &&
+                return slot.isLoaded() && !slot.bypassed && !slot.analysisOnly && slot.mix != 0.f &&
                     slot.uid != plugins::channel_color::ChannelColorInstance::uid() && slot.uid != plugins::mini::kUid;
             };
             std::vector<AudioPluginStateRequest> requests;
@@ -156,6 +159,9 @@ audio::Result EngineController::captureRenderSession(
                 }
                 auto& values = pendingParameterOverrides[key];
                 values = capturedState.pending;
+                for (const auto& parameter : capturedState.parameters) if (parameter.restoreAfterState &&
+                    std::none_of(values.begin(), values.end(), [&](const auto& p) { return p.id == parameter.id; }))
+                    values.push_back(parameter);
                 if (stateFile.empty()) {
                     for (const auto& pending : values) {
                         const auto found = std::find_if(fallback.begin(), fallback.end(),
@@ -168,7 +174,7 @@ audio::Result EngineController::captureRenderSession(
             };
             const auto collectSlot = [&](const std::string& channelId,
                                          InsertModel& slot) {
-                if (!slot.isLoaded() || slot.bypassed || slot.mix == 0.f) return;
+                if (!slot.isLoaded() || slot.bypassed || slot.analysisOnly || slot.mix == 0.f) return;
                 validateRenderModule(slot);
                 // COLOR's complete configuration is inline: static controls
                 // and the saved component seed. Its live parameter mirror may
@@ -320,7 +326,7 @@ audio::Result EngineController::renderSessionInWorker(
         std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
         for (const auto& state : snapshot.pluginStates) states[state.fileName] = &state.bytes;
         const auto restoreSlot = [&](const std::string& channelId, const InsertModel& slot) {
-            if (!preparing() || slot.bypassed || slot.mix == 0.f) return;
+            if (!preparing() || slot.bypassed || slot.analysisOnly || slot.mix == 0.f) return;
             InsertSlot* live = scratch.liveInsertSlot(channelId, slot.id);
             if (!live) return;
             const auto restoreNode = [&](const std::shared_ptr<plugins::PluginNode>& node,
@@ -390,6 +396,47 @@ audio::Result EngineController::renderSessionInWorker(
 }
 
 void EngineController::applyRenderSelection(const rendering::Spec& spec, ProjectModel& project) {
+    // A selected sound can still depend on audio from an unselected track.
+    // Keep those generators/FX alive, but exclude their ordinary mix outputs.
+    std::unordered_set<std::string> audible, drivers;
+    std::unordered_map<std::string, bool> originalClipMute;
+    const bool isolated = !spec.soloChannelId.empty() || !spec.sourceTrackIds.empty() || !spec.sourceClipIds.empty();
+    if (isolated && spec.independentTrackId.empty()) {
+        audible.insert(spec.sourceTrackIds.begin(), spec.sourceTrackIds.end());
+        if (!spec.soloChannelId.empty()) audible.insert(spec.soloChannelId);
+        for (const auto& track : project.tracks) for (const auto& clip : track.clips) {
+            originalClipMute[clip.id] = clip.muted;
+            if (std::find(spec.sourceClipIds.begin(), spec.sourceClipIds.end(), clip.id) != spec.sourceClipIds.end() ||
+                std::find(spec.sourceClipIds.begin(), spec.sourceClipIds.end(), clip.patternClipId) != spec.sourceClipIds.end()) audible.insert(track.id);
+        }
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (const auto& track : project.tracks) if (audible.contains(track.id)) {
+                changed |= audible.insert(track.outputBusId.empty() ? kMasterChannelId : track.outputBusId).second;
+                if (!spec.bypassSends) for (const auto& send : track.sends) if (send.enabled) changed |= audible.insert(send.destinationTrackId).second;
+            }
+        }
+        changed = true;
+        while (changed) {
+            changed = false;
+            const auto inspect = [&](const modulation::Rack& rack) {
+                if (!rack.enabled) return;
+                for (const auto& source : rack.sources) if (source.enabled && source.kind == modulation::Kind::Follower &&
+                    !source.audioChannelId.empty() && source.audioChannelId != kMasterChannelId &&
+                    std::any_of(rack.routes.begin(), rack.routes.end(), [&](const auto& r) { return r.enabled && r.sourceId == source.id; }) &&
+                    !audible.contains(source.audioChannelId)) changed |= drivers.insert(source.audioChannelId).second;
+            };
+            if (audible.contains(kMasterChannelId)) inspect(project.masterModulation);
+            for (const auto& track : project.tracks) {
+                if (audible.contains(track.id) || drivers.contains(track.id)) inspect(track.modulation);
+                if (audible.contains(track.id) || drivers.contains(track.id)) continue;
+                bool feeds = drivers.contains(track.outputBusId);
+                for (const auto& send : track.sends) feeds |= send.enabled && drivers.contains(send.destinationTrackId);
+                if (feeds) changed |= drivers.insert(track.id).second;
+            }
+        }
+    }
     if (!spec.soloChannelId.empty())
         for (auto& track : project.tracks) track.soloed = track.id == spec.soloChannelId;
     // ── Bypass ──
@@ -505,6 +552,12 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
             track.soloed = sourceChannels.contains(track.id);
             if (track.soloed) track.muted = false;
         }
+    }
+
+    for (auto& track : project.tracks) if (drivers.contains(track.id)) {
+        track.renderControlOnly = true;
+        for (auto& clip : track.clips) if (const auto found = originalClipMute.find(clip.id); found != originalClipMute.end()) clip.muted = found->second;
+        for (auto& send : track.sends) if (!drivers.contains(send.destinationTrackId)) send.enabled = false;
     }
 
     // ── Mute and solo ──
@@ -636,7 +689,7 @@ audio::Result EngineController::renderProjectPass(
     const auto graph = m_runtime.get().engine.compiledGraph();
     std::unordered_set<const engine::Node*> reverseNodes;
     const auto requireSlot = [&](const std::string& channelId, const InsertModel& model, bool frozen = false) {
-        if (frozen || !model.isLoaded() || model.bypassed || model.mix == 0.f) return;
+        if (frozen || !model.isLoaded() || model.bypassed || model.analysisOnly || model.mix == 0.f) return;
         validateRenderModule(model);
         auto* slot = liveInsertSlot(channelId, model.id);
         if (!slot || !slot->node || !slot->node->isReady() ||

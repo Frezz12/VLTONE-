@@ -14,7 +14,8 @@ remains dry, so the performance and its tuning settings remain editable.
   10 ms does not describe the time to identify a newly sung note, the audio
   interface round trip, or the phase displacement of individual shifted periods.
 - **HD** uses a longer pitch-analysis history and 20 ms of lookahead to choose
-  a stable pitch path. It aligns those decisions with the source audio and
+  a stable pitch path at nonzero retune settings. At 0 ms it uses the same
+  immediate note decisions as Real-Time. It aligns decisions with the source audio and
   uses the same pitch-synchronous waveform/source-filter synthesis as Real-Time,
   with a fixed 80 ms processing reference (`ceil(sampleRate × 0.080)`).
   The planned Signalsmith backend was replaced after real-vocal audition
@@ -61,7 +62,7 @@ values and does not rebuild the controls.
 | A4 Hz | Reference pitch, 400–480 Hz in 0.1 Hz steps; default 440 Hz. |
 | Key / Scale | Root and scale; Custom selects allowed absolute pitch classes. |
 | Piano keyboard | Enable or exclude pitch classes. An edit selects Custom and preserves the other allowed notes; the final allowed note cannot be removed. The current correction target is highlighted and depressed. |
-| Voice | Auto 60–1200 Hz, Low 60–350, Mid 100–800, High 180–1200. |
+| Voice | Auto 60–4000 Hz, Low 60–350, Mid 100–800, High 180–4000. |
 | Formants | Preserves the vocal spectral envelope; enabled by default. |
 | Settings | Voice range, correction amount, output level, and save/delete user presets. |
 | Send to all (branching icon beside Settings) | Copy all 12 parameters from this editor to every other VLT Pitch in the project, including master, Clip FX, sampler FX and both dual-mono processors. Bypass, routing and automation remain individual. One Undo restores every destination. |
@@ -71,13 +72,17 @@ values and does not rebuild the controls.
 | Pitch readout | Input note → target note, followed by signed correction in cents: “Shift +35 ct” raises pitch and “Shift −35 ct” lowers it. |
 
 Faster retuning progressively reduces Humanize and Vibrato's influence; at
-0 ms the result is intentionally quantized. Very confident voiced transitions
-use a 4 ms destination confirmation and 2-cent boundary hysteresis, holding a
-plateau during confirmation instead of passing the sung glide. Less confident
-segments retain the longer confirmation and consonant protection. A separate
-1 ms coefficient ramp remains to prevent
-zipper noise. Silence, consonants and uncertain pitch are protected from forced
-note correction.
+0 ms the result is intentionally quantized. Each detected voiced note selects
+the nearest allowed note immediately, without destination confirmation,
+boundary hysteresis or a correction ramp. High notes use a shorter analysis
+window, and periodic bright/breathy tones retain full correction. This mode
+favors capture and abrupt tuning over smooth transitions. Note acquisition
+still requires signal history; 0 ms does not mean zero audio latency.
+
+Nonzero retune settings retain note confirmation, consonant protection and the
+1 ms coefficient ramp. Unpitched noise and silence do not have a musical note
+to correct. Both modes refine short periods over several cycles to reduce
+high-frequency bias and distinguish bright periodic tones from noise.
 
 Retune time is distinct from the processing latency shown at the bottom right.
 The stored `tune` ID and normalized 0–100 automation values remain unchanged:
@@ -109,12 +114,17 @@ focus and activation.
 
 ## Reproducible validation
 
-Build `pitch_corrector_test`, `pitch_corrector_envelope_test`, `pitch_corrector_formant_test`,
+Build `pitch_corrector_test`, `pitch_corrector_tracking_test`,
+`pitch_corrector_envelope_test`, `pitch_corrector_formant_test`,
 `pitch_corrector_phase_test`,
 `pitch_corrector_integration_test` and `pitch_corrector_ui_test`, then run their
 CTest entries. The tests cover sample
 rates, variable block partitions, tuning accuracy, allocation-free processing,
 attack/PDC timing, state, quality deferral, dry capture, export and UI editing.
+The tracking regression checks the detected octave and actual output frequency
+through 3.8 kHz at 12/44.1/48/96/192 kHz, at both 0 and 20 ms retune. It also
+covers weak fundamentals, bright harmonics, breath noise, quiet tones, DC,
+50 ms notes with octave jumps, and the first short note after reset.
 The envelope regression includes short breath consonants and low-to-high note
 attacks after 5, 15 and 30 ms gaps with different source phases. It checks actual
 output timing and level independently of the pitch detector's confidence.
@@ -125,7 +135,7 @@ The phase regression corrects synthetic vocal pulses with vibrato and checks
 their known relative harmonic phases at 44.1, 48 and 96 kHz. It rejects the
 previous spectral backend while allowing arbitrary common phase or delay.
 
-The synthesis phase stays continuous through short uncertain frames. Protection
+The synthesis phase stays continuous through short uncertain frames. At nonzero retune, protection
 returns the pitch ratio toward unity instead of repeatedly mixing opposing wet
 and dry phases. In Real-Time, a separate read-head anchor uses the existing
 10 ms history to preserve consonants and attacks. The LPC filter keeps source

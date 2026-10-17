@@ -24,6 +24,7 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
     bool canFuseTask() const noexcept override { return true; }
+    bool supportsInPlace() const noexcept override { return true; }
     OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void process(const ProcessContext& context) override {
@@ -71,8 +72,15 @@ inline double levelAt(const LevelCurve& curve, double beats,
     if (beats >= points.back().first) return points.back().second;
 
     std::size_t i = std::min(cursor, points.size() - 1);
-    while (i > 0 && points[i].first > beats) --i;
-    while (i + 1 < points.size() && points[i + 1].first <= beats) ++i;
+    if (points[i].first > beats || (i + 1 < points.size() && points[i + 1].first <= beats)) {
+        // Keep the common one-corner advance constant-time. A seek, loop wrap
+        // or replacement snapshot must not walk a whole song's point prefix
+        // in one realtime block. upper_bound also retains last-duplicate wins.
+        if (points[i].first <= beats && i + 2 < points.size() &&
+            points[i + 1].first <= beats && beats < points[i + 2].first) ++i;
+        else i = std::size_t(std::upper_bound(points.begin(), points.end(), beats,
+            [](double at, const auto& point) { return at < point.first; }) - points.begin() - 1);
+    }
     cursor = i;
     if (i + 1 >= points.size()) return points[i].second;
 
@@ -91,6 +99,7 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
     bool canFuseTask() const noexcept override { return true; }
+    bool supportsInPlace() const noexcept override { return true; }
     OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     /// Control thread; the audio thread reads the target atomically.
@@ -315,6 +324,7 @@ public:
     std::string_view name() const noexcept override { return m_name; }
     MidiNodeRole midiRole() const noexcept override { return MidiNodeRole::None; }
     bool canFuseTask() const noexcept override { return true; }
+    bool supportsInPlace() const noexcept override { return true; }
     OfflineNodePolicy offlineNodePolicy() const noexcept override { return OfflineNodePolicy::Ordered; }
 
     void setLevel(float level) noexcept { m_level.store(level, std::memory_order_relaxed); }

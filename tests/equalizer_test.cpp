@@ -121,10 +121,10 @@ struct Listener final : PluginListener {
 int main() {
     {
         const PluginDescriptor& descriptor = EqualizerInstance::staticDescriptor();
-        check(descriptor.uid == "daw.equalizer" && descriptor.name == "VLTONE Equalizer" &&
+        check(descriptor.uid == "daw.equalizer" && descriptor.name == "EQ" &&
                   !descriptor.isInstrument && descriptor.mainInputChannels == 2 &&
                   descriptor.mainOutputChannels == 2,
-              "VLTONE Equalizer has a stable built-in effect descriptor");
+              "EQ retains its stable built-in effect identity");
         check(std::ranges::any_of(builtinPlugins(), [](const PluginDescriptor& item) {
                   return item.uid == "daw.equalizer";
               }), "the internal factory publishes VLT Equalizer");
@@ -262,6 +262,7 @@ int main() {
         set(cuts, 0, BandParam::Enabled, 1.0);
         set(cuts, 0, BandParam::Type, double(FilterType::LowCut));
         set(cuts, 0, BandParam::Frequency, 1000.0);
+        set(cuts, 0, BandParam::Q, std::sqrt(0.5));
         double previous = 0.0;
         bool slopesIncrease = true;
         for (int slope = 0; slope < 8; ++slope) {
@@ -272,6 +273,71 @@ int main() {
         }
         check(slopesIncrease && previous > 80.0,
               "6-96 dB/oct Butterworth cut cascades increase attenuation");
+
+        bool neutralCuts = true;
+        for (auto type : {FilterType::LowCut, FilterType::HighCut}) {
+            EqualizerInstance cut;
+            set(cut, 0, BandParam::Enabled, 1.0);
+            set(cut, 0, BandParam::Type, double(type));
+            set(cut, 0, BandParam::Q, qForNewBand(type));
+            cut.activate({kRate, kBlock, true});
+            for (double cutoff : {75.0, 1000.0, 18000.0}) {
+                set(cut, 0, BandParam::Frequency, cutoff);
+                for (int slope = 0; slope < 8; ++slope) {
+                    set(cut, 0, BandParam::Slope, slope);
+                    double previousDb = cut.responseDb(10.0);
+                    for (int i = 1; i <= 800; ++i) {
+                        const double db = cut.responseDb(10.0 * std::pow(2000.0, i / 800.0));
+                        neutralCuts &= std::isfinite(db) && db <= .01 &&
+                            (type == FilterType::LowCut ? db >= previousDb - .01 : db <= previousDb + .01);
+                        previousDb = db;
+                    }
+                }
+            }
+        }
+        check(neutralCuts, "new low/high cuts stay monotonic without a resonance bump at every slope");
+
+        bool qChangesResponse = true, qMatchesAudio = true, qFinite = true;
+        for (auto type : {FilterType::LowShelf, FilterType::HighShelf,
+                          FilterType::LowCut, FilterType::HighCut}) {
+            EqualizerInstance filter;
+            set(filter, 0, BandParam::Enabled, 1.0);
+            set(filter, 0, BandParam::Type, double(type));
+            set(filter, 0, BandParam::Frequency, 1000.0);
+            set(filter, 0, BandParam::Gain, 9.0);
+            const bool cut = type == FilterType::LowCut || type == FilterType::HighCut;
+            for (int slope = cut ? 1 : 0; slope < 8; ++slope) {
+                set(filter, 0, BandParam::Slope, slope);
+                set(filter, 0, BandParam::Q, 0.5);
+                const double wide = filter.responseDb(1400.0);
+                set(filter, 0, BandParam::Q, 2.0);
+                qChangesResponse &= std::abs(filter.responseDb(1400.0) - wide) > 0.5;
+                for (double q : {0.025, 40.0}) {
+                    set(filter, 0, BandParam::Q, q);
+                    for (double frequency : {10., 100., 1000., 1400., 10000., 23000.})
+                        qFinite &= std::isfinite(filter.responseDb(frequency));
+                }
+            }
+            set(filter, 0, BandParam::Slope, double(Slope::Db12));
+            for (double q : {0.5, 2.0}) {
+                set(filter, 0, BandParam::Q, q);
+                filter.activate({kRate, kBlock, true});
+                const double measured = 10.0 * std::log10(renderTone(filter, 1500.0) /
+                                                         renderTone(neutral, 1500.0));
+                qMatchesAudio &= std::abs(measured - filter.responseDb(1500.0)) < 0.15;
+                filter.deactivate();
+            }
+            if (cut) {
+                set(filter, 0, BandParam::Slope, double(Slope::Db6));
+                set(filter, 0, BandParam::Q, 0.5);
+                const double firstOrder = filter.responseDb(1400.0);
+                set(filter, 0, BandParam::Q, 2.0);
+                qFinite &= std::abs(filter.responseDb(1400.0) - firstOrder) < 1.e-9;
+            }
+        }
+        check(qChangesResponse, "shelf and 12-96 dB cut widths respond to Q at every slope");
+        check(qMatchesAudio, "shelf and cut Q changes agree between rendered audio and the graph");
+        check(qFinite, "extreme Q stays finite; first-order cuts remain independent of Q");
     }
 
     {
@@ -426,7 +492,13 @@ int main() {
         check(gAllocations.load(std::memory_order_relaxed) == 0 && finite,
               "maximum 24-band dynamic/analyzer processing is finite and allocation-free");
         maximum.setAnalyzerConfig({true, true, true, true, true, 1, 3.0});
+        const Telemetry rackReadout = maximum.telemetry();
         const Telemetry before = maximum.consumeTelemetry();
+        const Telemetry afterConsume = maximum.telemetry();
+        check(rackReadout.inputLeft > 0.f && rackReadout.inputLeft == before.inputLeft &&
+                  afterConsume.inputLeft == 0.f && rackReadout.pre == before.pre &&
+                  afterConsume.pre == before.pre,
+              "rack spectrum reads preserve editor peak meters and shared analyzer traces");
         process(maximum, block, true);
         const Telemetry frozen = maximum.consumeTelemetry();
         check(before.pre == frozen.pre && before.post == frozen.post &&

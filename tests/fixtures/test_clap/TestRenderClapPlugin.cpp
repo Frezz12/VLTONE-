@@ -27,6 +27,8 @@ const clap_plugin_descriptor_t descriptors[]{
     {CLAP_VERSION_INIT, "review.redundant-restart", "Repeated stable restart", "Review", "", "", "", "1", "", features},
     {CLAP_VERSION_INIT, "review.nonfinite", "Non-finite output", "Review", "", "", "", "1", "", features},
     {CLAP_VERSION_INIT, "review.block-size", "Offline block probe", "Review", "", "", "", "1", "", features},
+    {CLAP_VERSION_INIT, "review.reset-latency", "Latency discovered on reset", "Review", "", "", "", "1", "", features},
+    {CLAP_VERSION_INIT, "review.recurrent-latency", "Latency settles after repeated activation", "Review", "", "", "", "1", "", features},
 };
 constexpr unsigned descriptorCount = sizeof(descriptors) / sizeof(descriptors[0]);
 unsigned instances[descriptorCount]{};
@@ -38,7 +40,7 @@ struct Instance {
     bool offline{}, callbackDone{}, configured{};
     bool active{};
     bool wrongCallbackThread{};
-    unsigned latency{}, position{}, blocks{}, maxBlock{};
+    unsigned latency{}, position{}, blocks{}, maxBlock{}, offlineActivations{};
     std::vector<float> ring;
     static Instance& get(const clap_plugin_t* plugin) {
         return *static_cast<Instance*>(plugin->plugin_data);
@@ -70,7 +72,9 @@ bool activate(const clap_plugin_t* p, double, uint32_t, uint32_t maxBlock) {
     self.active = true;
     self.maxBlock = maxBlock;
     if (self.kind != 7)
-        self.latency = self.offline && (self.kind == 0 || ((self.kind == 6 || self.kind == 11) && self.configured)) ? 24 : 0;
+        self.latency = self.offline && (self.kind == 0 || ((self.kind == 6 || self.kind == 11 || self.kind == 16) && self.configured)) ? 24 : 0;
+    if (self.kind == 17 && self.offline)
+        self.latency = ++self.offlineActivations >= 5 ? 24 : 0;
     if (self.offline && self.kind == 6 && !self.configured) self.host->request_callback(self.host);
     if (self.offline && self.kind == 10) self.host->request_restart(self.host);
     self.ring.assign(2 * self.latency, 0.f);
@@ -83,6 +87,10 @@ void stop(const clap_plugin_t*) {}
 void reset(const clap_plugin_t* p) {
     auto& self = Instance::get(p);
     if (!self.active) std::abort(); // enforce CLAP's reset lifecycle contract
+    if (self.kind == 16 && self.offline && !self.configured) {
+        self.configured = true;
+        self.host->request_restart(self.host);
+    }
     std::fill(self.ring.begin(), self.ring.end(), 0.f);
     self.position = self.blocks = 0;
     self.callbackDone = false;
@@ -97,6 +105,15 @@ clap_process_status process(const clap_plugin_t* p, const clap_process_t* block)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (self.kind == 2 && self.offline && (number / 64) % 2) return CLAP_PROCESS_ERROR;
     if (self.kind == 3 && number == 0) self.host->request_callback(self.host);
+    if (self.kind == 17 && self.offline && number == 1 && !self.latency) {
+        self.latency = 24;
+        self.ring.assign(2 * self.latency, 0.f);
+        self.position = 0;
+        if (const auto* hostLatency = static_cast<const clap_host_latency_t*>(
+                self.host->get_extension(self.host, CLAP_EXT_LATENCY)))
+            hostLatency->changed(self.host);
+        self.host->request_restart(self.host);
+    }
     if (self.kind == 7 && self.offline && number == 16) {
         ++self.latency;
         self.ring.assign(2 * self.latency, 0.f);

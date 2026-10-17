@@ -1416,7 +1416,7 @@ func validateSharedInsert(raw json.RawMessage,
 		return "", "", "", invalidf("utility plugins require protocol 6")
 	}
 	if format == "internal" && uid != "daw.delay" && uid != "daw.sampler" && uid != "daw.equalizer" &&
-		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" && uid != "daw.cla2a" && uid != "daw.channel-color" &&
+		uid != "daw.gravity" && uid != "daw.graphit" && uid != "daw.compressor" && uid != "daw.cla2a" && uid != "daw.1073" && uid != "daw.channel-color" &&
 		uid != "daw.doubler" && uid != "daw.doubler-pro" && uid != "daw.chorus" &&
 		uid != "daw.flanger" && uid != "daw.phaser" && uid != "daw.modulation" && uid != "daw.pitch-corrector" &&
 		uid != "daw.gain" && uid != "daw.stereo-utility" && uid != "daw.reverse" {

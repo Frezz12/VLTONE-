@@ -187,9 +187,12 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
         render(dual ? 0.1f : 0.2f * editedGain, 0.2f * editedGain);
         // Capturing/cancelling an export must leave those same live events queued.
         rendering::Report cancelled;
-        require(bool(controller.renderProject(spec, [](const auto& progress) {
+        const auto cancelledStatus = controller.renderProject(spec, [](const auto& progress) {
             return progress.stage == rendering::Progress::Stage::Preparing;
-        }, cancelled)) && cancelled.cancelled, "cancel render");
+        }, cancelled);
+        require(bool(cancelledStatus) && cancelled.cancelled,
+                descriptor.name + " / " + scope + ": cancel render: " +
+                cancelledStatus.message() + "; cancelled=" + std::to_string(cancelled.cancelled));
         play();
         require(std::abs(left[kBlock - 1] - (dual ? 0.1f : 0.2f * editedGain)) < 1e-4f &&
                 std::abs(right[kBlock - 1] - 0.2f * editedGain) < 1e-4f,

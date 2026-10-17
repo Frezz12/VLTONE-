@@ -165,6 +165,16 @@ paths:
       responses:
         "200": { description: Installer with Range, ETag and SHA-256 headers, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /v1/releases/{version}/download/{kind}/click:
+    post:
+      operationId: recordReleaseDownloadClick
+      description: Records a website download button click. Requires an allowed website Origin. No visitor identity is stored; file GET and Range requests are not counted.
+      parameters: [{ $ref: "#/components/parameters/ReleaseVersion" }, { $ref: "#/components/parameters/ArtifactKind" }]
+      responses:
+        "204": { description: Click recorded }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
   /v1/releases/{version}/screenshots/{screenshotId}:
     get:
       operationId: getReleaseScreenshot
@@ -1287,6 +1297,45 @@ paths:
       operationId: adminGetMe
       security: [{ adminCookie: [] }]
       responses: { "200": { description: Current administrator and CSRF token, content: { application/json: { schema: { $ref: "#/components/schemas/AdminSessionView" } } } }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/support/boosty/click/{source}:
+    post:
+      operationId: recordSupportClick
+      summary: Count an explicit Boosty link activation without visitor identifiers
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema: { type: string, enum: [home, footer] }
+      responses:
+        "204": { description: Click recorded }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+  /v1/admin/dashboard/support-stats:
+    get:
+      operationId: adminSupportStats
+      security: [{ adminCookie: [] }]
+      responses:
+        "200":
+          description: Aggregate Boosty clicks by placement, including zero counts. Requires dashboard.read.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clicks]
+                properties:
+                  clicks:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, clicks, last_clicked_at]
+                      properties:
+                        source: { type: string, enum: [home, footer] }
+                        clicks: { type: integer, format: int64, minimum: 0 }
+                        last_clicked_at: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
   /v1/admin/dashboard:
     get:
       operationId: adminDashboard
@@ -1464,6 +1513,33 @@ paths:
       security: [{ adminCookie: [], csrf: [] }]
       requestBody: { $ref: "#/components/requestBodies/ReleaseWrite" }
       responses: { "201": { description: Saved draft, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRelease" } } } }, "422": { $ref: "#/components/responses/Error" } }
+  /v1/admin/releases/download-stats:
+    get:
+      operationId: adminReleaseDownloadStats
+      security: [{ adminCookie: [] }]
+      responses:
+        "200":
+          description: Website click counts per published version and installer format, including removed formats with historical clicks. Requires releases.read.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [downloads]
+                properties:
+                  downloads:
+                    type: array
+                    items:
+                      type: object
+                      required: [release_id, version, kind, clicks, last_clicked_at]
+                      properties:
+                        release_id: { type: string, format: uuid }
+                        version: { type: string }
+                        kind: { type: string }
+                        clicks: { type: integer, format: int64, minimum: 0 }
+                        last_clicked_at: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
   /v1/admin/releases/{releaseId}:
     get:
       operationId: adminGetRelease

@@ -1,5 +1,6 @@
 #pragma once
 #include "Host/PitchDelivery.hpp"
+#include "Host/PluginModulation.hpp"
 
 #include "Common/LockFreeQueue.hpp"
 #include "Common/RealtimeSnapshot.hpp"
@@ -83,6 +84,8 @@ public:
     SlideDelivery slideDelivery() const noexcept { return PitchDelivery::resolve(m_slideMode.load(), m_pitchCapabilities); }
     bool slideOverloaded() const noexcept { return m_slideOverloaded.load(); }
     bool slideClipped() const noexcept { return m_slideClipped.load(); }
+    PluginModulation& modulation() noexcept { return m_modulation; }
+    const PluginModulation& modulation() const noexcept { return m_modulation; }
     PluginInstance* instance() noexcept { return m_instance.get(); }
     const PluginInstance* instance() const noexcept { return m_instance.get(); }
     std::uint64_t instanceId() const noexcept { return m_instanceId; }
@@ -141,14 +144,26 @@ public:
     /// than blocking the caller.
     bool pushEvent(const PluginEvent& event) noexcept {
         if (faultBypassed()) return false;
-        if (m_inbound.push(event)) return true;
+        if (event.kind == PluginEvent::Kind::ParamValue && m_instance) {
+            const auto parameters = m_instance->parameters();
+            if (event.paramIndex < parameters.size() && parameters[event.paramIndex].isReadOnly) return false;
+        }
+        if (m_inbound.push(event)) {
+            if (event.kind == PluginEvent::Kind::ParamValue) m_modulation.edit(event.paramIndex, event.value);
+            return true;
+        }
         m_inboundOverload.store(true, std::memory_order_release);
         return false;
     }
 
     /// A restored state supersedes parameter events queued for the previous
     /// state. Control thread only, with graph processing parked by RenderGate.
-    void discardPendingEvents() noexcept { m_inbound.clear(); }
+    void discardPendingEvents() noexcept {
+        m_inbound.clear();
+        // The discarded batch never reaches DSP. Keep notices for overloads
+        // already observed by process(), but retire this batch's pending flag.
+        m_inboundOverload.store(false, std::memory_order_release);
+    }
 
     /// Copy unprocessed host parameter edits without consuming the live queue.
     /// Control thread only, with graph processing parked by RenderGate.
@@ -186,16 +201,22 @@ public:
         double slideRange, slideTail;
         std::shared_ptr<const AutomationCurves> curves;
         std::vector<PluginEvent> pending;
+        bool inboundOverload = false;
+        std::shared_ptr<const PluginModulation::Configuration> modulation;
     };
     ControlState controlState() {
         return {isBypassed(), sidechainConnected(), m_mix.load(std::memory_order_relaxed), preferredChannelCount(),
-            m_slideMode.load(), m_slideRange.load(), m_slideTail.load(), automation(), pendingHostEvents()};
+            m_slideMode.load(), m_slideRange.load(), m_slideTail.load(), automation(), pendingHostEvents(),
+            m_inboundOverload.load(std::memory_order_acquire), m_modulation.snapshot()};
     }
     void restoreControlState(const ControlState& state) {
         setBypassed(state.bypassed); setMix(state.mix); setPreferredChannelCount(state.channels);
         setSidechainConnected(state.sidechain); setSlideDelivery(state.slide, state.slideRange, state.slideTail);
+        m_modulation.restore(state.modulation);
         setAutomation(state.curves); discardPendingEvents();
         for (const auto& event : state.pending) (void)pushEvent(event);
+        // A transaction rollback restores the original queue, not new DSP state.
+        if (state.inboundOverload) m_inboundOverload.store(true, std::memory_order_release);
     }
 
     /// A live recording gesture owns this parameter until the next loop/stop.
@@ -235,9 +256,15 @@ public:
     void beginMainThreadPump() noexcept {
         m_mainThreadWorkPending.store(false, std::memory_order_release);
     }
+    bool needsMainThreadPump() const noexcept {
+        return m_mainThreadWorkPending.load(std::memory_order_acquire) ||
+               m_overloadNotice.load(std::memory_order_acquire) ||
+               (m_instance && m_instance->needsMainThreadPump());
+    }
 
     // ── PluginListener, called from the plugin on any thread ──
     void onParameterChanged(std::uint32_t index, double plainValue) noexcept override;
+    void onParameterEdited(std::uint32_t index, double value) noexcept override;
     void onParameterGesture(std::uint32_t index, bool begin) noexcept override;
     void onLatencyChanged() noexcept override;
     void onRestartRequested() noexcept override;
@@ -286,6 +313,8 @@ private:
         PluginNode& m_owner;
     };
 
+    std::atomic<std::int32_t> m_editorGesture{-1};
+    PluginModulation m_modulation;
     PitchDelivery m_pitchDelivery;
     PitchCapabilities m_pitchCapabilities;
     std::atomic<SlideDelivery> m_slideMode{SlideDelivery::Auto};

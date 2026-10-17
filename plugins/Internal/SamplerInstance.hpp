@@ -121,6 +121,8 @@ public:
     void rebuildProcessedSample();
     void flushPendingPrecompute();
     bool precomputePending() const noexcept;
+    /// Latest sounding voice, in processed-source seconds; negative when silent.
+    double playbackPositionSeconds() const noexcept { return m_playbackPosition.load(std::memory_order_relaxed); }
     /// Prepare every profile needed by mode automation before audio/export starts.
     void prepareStretchModeAutomation();
 
@@ -174,6 +176,7 @@ private:
     std::uint32_t m_maxBlockSize = 512;
     bool m_active = false;
     bool m_processing = false;
+    std::atomic<double> m_playbackPosition{-1.0};
 
     /// Plain values, indexed exactly like `parameterTable()`. Atomic because
     /// the editor reads them while the audio thread applies events; relaxed

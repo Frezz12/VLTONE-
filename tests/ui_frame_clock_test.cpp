@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
     };
     // Model native vsync deterministically, including deliveries a little
     // early. A strict `last delivered + period` test loses alternate frames.
-    for (double displayHz : {59.94, 60.0, 120.0, 144.0}) {
+    for (double displayHz : {59.94, 60.0, 120.0, 144.0, 240.0}) {
         for (int limit : {30, 60, 120, 144, 240}) {
           for (qint64 jitter : {100000, 1250000}) {
             ui::detail::FrameCadence cadence;
@@ -70,6 +70,9 @@ int main(int argc, char** argv) {
             }
             const double seconds = double(last - first) / 1e9;
             const double expected = seconds * std::min(displayHz, double(limit));
+            if (displayHz == 240. && limit == 240 && jitter == 1250000)
+                std::cout << "240 Hz cadence model: " << frames
+                          << " accepted ticks in 10 s with +/-1.25 ms jitter\n";
             check(frames >= int(expected) - 1 && frames <= int(std::ceil(expected)) + 2,
                   "vsync jitter preserves the requested cadence without exceeding its average cap");
           }

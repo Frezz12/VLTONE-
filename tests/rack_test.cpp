@@ -176,7 +176,7 @@ int main() {
     check(reopened.rackGroups(a) == c.rackGroups(a) && reopened.rackGroups(b) == c.rackGroups(b),
           "version 18 persists per-channel groups");
     auto json = nlohmann::json::parse(document(c));
-    check(json["version"] == 18 || json["formatVersion"] == 18, "local format version is 18");
+    check(json["version"] == daw::ProjectSerializer::kFormatVersion, "local document uses current format version");
     json["version"] = 17;
     json.erase("masterRackGroups");
     for (auto& track : json["tracks"]) {

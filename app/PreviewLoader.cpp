@@ -3,7 +3,7 @@
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QPointer>
-#include <QThreadPool>
+#include "PreviewThreadPool.hpp"
 #include <mutex>
 
 struct PreviewLoader::State {
@@ -32,7 +32,7 @@ void PreviewLoader::request(const QString& path) {
     QPointer<PreviewLoader> self(this);
     // Exactly one job per loader. Arrow-key bursts replace the pending path;
     // the current decoder checks its generation between small blocks.
-    QThreadPool::globalInstance()->start([state, self] {
+    ui::previewThreadPool().start([state, self] {
         for (;;) {
             QString path;
             quint64 generation;

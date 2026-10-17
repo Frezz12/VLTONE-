@@ -125,7 +125,7 @@ CreateTracksDialog::CreateTracksDialog(daw::EngineController& controller, QWidge
     addType(tr("Bus"), daw::TrackKind::Bus);
     addType(tr("Send"), daw::TrackKind::Aux);
     addType(tr("Folder"), daw::TrackKind::Folder);
-    addType(tr("Summing folder"), daw::TrackKind::Folder, true);
+    addType(tr("Bus folder"), daw::TrackKind::Folder, true);
     m_count = new QSpinBox(m_form);
     m_count->setObjectName(QStringLiteral("TrackCount"));
     m_count->setRange(1, 64);

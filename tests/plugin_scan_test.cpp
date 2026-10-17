@@ -11,9 +11,12 @@
 #include "plugins/ScanProcess.hpp"
 #include "platform/PathUtils.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -80,6 +83,67 @@ int main(int argc, char** argv) {
     std::error_code ec;
     fs::remove_all(sandbox, ec);
     fs::create_directories(sandbox, ec);
+
+    // An explicit cache path isolates standalone tools from the user's catalog.
+    {
+        constexpr const char* key = "DAW_PLUGIN_CACHE_PATH";
+        const char* previousValue = std::getenv(key);
+        const bool hadPreviousValue = previousValue != nullptr;
+        const std::string previous = previousValue ? previousValue : "";
+        const auto setPath = [&](const char* value) {
+#if defined(_WIN32)
+            ::_putenv_s(key, value ? value : "");
+#else
+            if (value) ::setenv(key, value, 1); else ::unsetenv(key);
+#endif
+        };
+        setPath(nullptr);
+        const auto defaultPath = PluginCache::defaultPath();
+        const auto isolatedPath = platform::pathToUtf8(sandbox /
+            platform::pathFromUtf8("isolated-\xD0\xBA\xD1\x8D\xD1\x88.json"));
+        setPath(isolatedPath.c_str());
+        check(PluginCache::defaultPath() == isolatedPath,
+              "an explicit plugin cache override preserves its UTF-8 path");
+        setPath("");
+        check(PluginCache::defaultPath() == defaultPath,
+              "an empty plugin cache override retains the normal default");
+        setPath(hadPreviousValue ? previous.c_str() : nullptr);
+    }
+
+    // Cached descriptors use the same validation/defaults as scanner text,
+    // without serializing and reparsing the surrounding cache's JSON nodes.
+    {
+        using nlohmann::json;
+        const json minimal{{"format", "clap"}, {"uid", "com.example.parsed"}};
+        plugins::PluginDescriptor parsed, text;
+        check(plugins::scan::descriptorFromJsonValue(minimal, parsed) &&
+              plugins::scan::descriptorFromJson(minimal.dump(), text) &&
+              plugins::scan::descriptorToJson(parsed) == plugins::scan::descriptorToJson(text) &&
+              parsed.mainInputChannels == 2 && parsed.mainOutputChannels == 2,
+              "parsed descriptor decoding preserves scanner defaults");
+        std::vector<plugins::PluginDescriptor> result;
+        const json framed{{"schema", plugins::scan::kSchemaVersion}, {"plugins", json::array({minimal})}};
+        check(plugins::scan::decodeResult(framed.dump(), result) && result.size() == 1 &&
+              !plugins::scan::decodeResult(framed.dump(), result, true) && result.empty(),
+              "strict scanner decoding still requires complete descriptor fields");
+        std::vector<json> invalid{nullptr, 7, json::array(), json::object()};
+        for (const auto& [key, value] : std::vector<std::pair<std::string, json>>{
+                 {"format", "unknown"}, {"uid", ""}, {"uid", 12},
+                 {"inputChannels", -1}, {"outputChannels", 65536},
+                 {"inputChannels", 1.5}, {"parameterSchema", json::object()}}) {
+            auto malformed = minimal;
+            malformed[key] = value;
+            invalid.push_back(std::move(malformed));
+        }
+        bool rejected = true;
+        for (const auto& value : invalid) {
+            parsed.uid = text.uid = "unchanged";
+            rejected &= !plugins::scan::descriptorFromJsonValue(value, parsed) &&
+                        !plugins::scan::descriptorFromJson(value.dump(), text) &&
+                        parsed.uid == "unchanged" && text.uid == "unchanged";
+        }
+        check(rejected, "parsed and text descriptor decoders reject malformed fields without partial output");
+    }
 
     // ── One product, one preferred format ──
     {
@@ -269,6 +333,9 @@ int main(int argc, char** argv) {
         descriptor.path = good.path;
         descriptor.name = "Good";
         descriptor.isInstrument = true;
+        descriptor.stateSchemaVersion = 3;
+        descriptor.parameterSchema = "{\"escaped\":\"\\n\\\\\",\"payload\":\"" +
+                                     std::string(1024 * 1024, 'x') + "\"}";
         good.plugins.push_back(descriptor);
         cache.put(good);
 
@@ -296,6 +363,10 @@ int main(int argc, char** argv) {
         // Incremental logic: unchanged file reuses the entry, changed does not.
         const PluginCacheEntry* readGood =
             reloaded.find(plugins::Format::Clap, "/plugins/Good.clap");
+        check(readGood && readGood->plugins.size() == 1 && readGood->components.size() == 1 &&
+              plugins::scan::descriptorToJson(readGood->plugins.front()) == plugins::scan::descriptorToJson(descriptor) &&
+              plugins::scan::descriptorToJson(readGood->components.front().descriptor) == plugins::scan::descriptorToJson(descriptor),
+              "cache catalog and scan components preserve a large escaped parameter schema");
         check(readGood && readGood->scannerVerified && readBad && !readBad->scannerVerified,
               "the cache preserves whether the scanner protocol was verified");
         check(readGood && PluginCache::isCurrent(*readGood, 1234, 5678),

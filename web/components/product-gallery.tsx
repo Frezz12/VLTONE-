@@ -44,8 +44,17 @@ export function ProductShot({ locale, name, alt, eager = false, onReady, source 
   const ru = locale === "ru";
   const src = source?.src ?? `/images/studio/${name}-${ru ? "ru" : "en"}.webp?v=${screenshotVersion}`;
   return <>
-    <button type="button" className="product-shot" data-shot={name} onClick={() => dialog.current?.showModal()} aria-label={`${ru ? "Увеличить" : "Enlarge"}: ${alt}`}>
-      <picture>{!source && !name.startsWith("showcase-") && <source media="(max-width: 700px)" srcSet={src.replace(".webp", "-small.webp")} />}<Image src={src} width={source?.width ?? 2880} height={source?.height ?? 1800} alt={alt} loading={eager ? "eager" : "lazy"} onLoad={onReady} /></picture>
+    <button type="button" className="product-shot" data-shot={name} onClick={event => {
+      const modal = dialog.current;
+      modal?.showModal();
+      if (event.detail > 0 && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        && event.currentTarget.closest("[data-motion-paused]")?.getAttribute("data-motion-paused") !== "true") {
+        modal?.getAnimations().forEach(animation => animation.cancel());
+        modal?.animate([{ opacity: 0, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }],
+          { duration: 220, easing: "cubic-bezier(.23, 1, .32, 1)" });
+      }
+    }} aria-label={`${ru ? "Увеличить" : "Enlarge"}: ${alt}`}>
+      <picture>{!source && !name.startsWith("showcase-") && name !== "ai" && name !== "plugins" && <source media="(max-width: 700px)" srcSet={src.replace(".webp", "-small.webp")} />}<Image src={src} width={source?.width ?? 2880} height={source?.height ?? 1800} alt={alt} loading={eager ? "eager" : "lazy"} onLoad={onReady} /></picture>
       <span className="shot-zoom" aria-hidden><Maximize2 size={16} /></span>
     </button>
     <dialog ref={dialog} className="product-lightbox" aria-label={alt} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}>

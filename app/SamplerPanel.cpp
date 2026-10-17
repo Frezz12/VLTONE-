@@ -3,6 +3,7 @@
 #include "graphics/SceneRecorder.hpp"
 #include <QHashFunctions>
 #include "SamplerPanel.hpp"
+#include "WarpEditorWidget.hpp"
 #include "AudioEditPanel.hpp"
 #include <QTabWidget>
 #include "AudioImportPreparation.hpp"
@@ -16,6 +17,7 @@
 #include "EngineController.hpp"
 #include "PluginPickerMenu.hpp"
 #include "Theme.hpp"
+#include "UiPerformance.hpp"
 
 #include "Internal/SamplerInstance.hpp"
 #include "Internal/SamplerVoice.hpp"
@@ -30,6 +32,7 @@
 #include <QDropEvent>
 #include <QEnterEvent>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMimeData>
@@ -630,6 +633,8 @@ public:
 
     void setValue(const QString& id, double value) {
         if (m_dragId == id) return;
+        const auto previous = m_values.constFind(id);
+        if (previous != m_values.cend() && previous.value() == value) return;
         m_values[id] = value;
         update();
     }
@@ -935,6 +940,15 @@ void SamplerPanel::showDefaultPage() {
     if (auto* tabs = findChild<QTabWidget*>("SamplerTabs")) tabs->setCurrentIndex(0);
 }
 
+void SamplerPanel::showWarpPage() {
+    if (m_warpEditor) {
+        auto* tabs = findChild<QTabWidget*>("SamplerTabs");
+        tabs->setCurrentWidget(m_warpEditor);
+        if (auto* canvas = m_warpEditor->findChild<QWidget*>("WarpCanvas"))
+            canvas->setFocus(Qt::OtherFocusReason);
+    }
+}
+
 SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
                            QString ownerId, QString objectId, QWidget* parent)
     : QWidget(parent), m_controller(controller), m_channelId(std::move(ownerId)),
@@ -964,6 +978,18 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
     tabs->addTab(m_audioEditor,tr("Editor"));
     connect(m_audioEditor,&AudioEditPanel::projectEdited,this,&SamplerPanel::projectEdited);
     connect(m_audioEditor,&AudioEditPanel::liveEdited,this,&SamplerPanel::liveEdited);
+    if (m_context == Context::Clip) {
+        m_warpEditor = new WarpEditorWidget(m_controller, tabs);
+        tabs->addTab(m_warpEditor, tr("Warp"));
+        connect(m_warpEditor, &WarpEditorWidget::edited, this, &SamplerPanel::projectEdited);
+        connect(m_warpEditor, &WarpEditorWidget::liveEdited, this, &SamplerPanel::liveEdited);
+        // Only explicitly visiting Warp initializes its map. Opening Sampler
+        // or Editor must leave a clip's timing and undo history untouched.
+        connect(tabs, &QTabWidget::currentChanged, this, [this, tabs] {
+            if (tabs->currentWidget() == m_warpEditor)
+                m_warpEditor->setClip(m_channelId, m_slotId);
+        });
+    }
     splitter->addWidget(tabs);
     splitter->setSizes({118, 842});
     splitter->setStretchFactor(0, 0);
@@ -972,8 +998,11 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
 
     m_poll = new QTimer(this);
     m_poll->setInterval(kPollMs);
-    connect(m_poll, &QTimer::timeout, this, &SamplerPanel::refresh);
-    m_poll->start();
+    connect(m_poll, &QTimer::timeout, this, [this] {
+        if (ui::isVisibleInViewport(this)) refresh();
+    });
+    m_meterTimer = new ui::FrameTimer(m_fxMeter, this);
+    connect(m_meterTimer, &ui::FrameTimer::timeout, this, &SamplerPanel::refreshMeter);
 
     m_fileLabel->installEventFilter(this);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
@@ -984,6 +1013,7 @@ SamplerPanel::SamplerPanel(daw::EngineController* controller, Context context,
 
 void SamplerPanel::setSnapProvider(std::function<double()> provider) {
     m_snapProvider = std::move(provider);
+    if (m_warpEditor) m_warpEditor->setSnapProvider(m_snapProvider);
     // The Time knob is the one control whose value has a position on the
     // timeline attached to it, so it is the one that gets a grid detent.
     if (ui::Knob* time = m_knobs.value(QStringLiteral("stretch.time"), nullptr)) {
@@ -1009,6 +1039,7 @@ void SamplerPanel::showEvent(QShowEvent* event) {
 void SamplerPanel::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
     if (m_poll) m_poll->stop();
+    if (m_meterTimer) m_meterTimer->stop();
 }
 
 SamplerPanel::~SamplerPanel() {
@@ -1830,6 +1861,7 @@ QWidget* SamplerPanel::buildSamplerBody() {
                 if (auto data = m_controller->cachedClipSampleData(m_channelId.toStdString(),m_slotId.toStdString()); data && data->audio)
                     m_controller->previewBuffer(data->audio,clip->filePath,false,double(pitch)-root+editedPitch);
             }
+            if (m_meterTimer) m_meterTimer->start();
         };
         m_keyboard->noteOff = [this](int pitch) {
             if (!m_controller) return;
@@ -2333,7 +2365,36 @@ QWidget* SamplerPanel::buildWaveformSection() {
 
 // ── Refresh ──
 
+void SamplerPanel::refreshMeter() {
+    if (!m_controller || !ui::isVisibleInViewport(m_fxMeter)) {
+        if (m_meterTimer) m_meterTimer->stop();
+        return;
+    }
+    ui::perf::Scope cost("sampler.meter.refresh.ms");
+    const auto channel = m_channelId.toStdString();
+    const auto slot = m_slotId.toStdString();
+    auto levels = m_controller->meterSnapshot(channel,
+        m_context == Context::Instrument ? std::string{} : slot,
+        m_context == Context::Instrument);
+    // A clip without its own insert chain uses the track's meter.
+    if (m_context == Context::Clip) {
+        if (const auto* clip = m_controller->audioClip(channel, slot); clip && clip->inserts.empty())
+            levels.left = levels.right = m_controller->trackPeak(channel);
+    }
+    m_fxMeter->setPeaks(levels.left, levels.right);
+    // Keep release/hold animation alive after playback and during audition.
+    // The slow model poll wakes this timer for external MIDI or transport starts;
+    // an idle, silent editor does not request continuous GPU frames.
+    if (m_controller->isPlaying() || m_controller->previewPlaying() || m_fxMeter->hasVisibleLevel())
+        m_meterTimer->start();
+    else
+        m_meterTimer->stop();
+}
+
 void SamplerPanel::refresh() {
+    ui::perf::Scope cost("sampler.model.refresh.ms");
+    if (m_warpEditor && m_warpEditor->isVisible()) m_warpEditor->refresh();
+    refreshMeter();
     if (m_controller) {
         QColor color = th().accent;
         if (const auto* track = m_controller->project().findTrack(m_channelId.toStdString()))
@@ -2456,52 +2517,26 @@ void SamplerPanel::refresh() {
         const std::vector<daw::InsertModel>* inserts = nullptr;
         float volume = 1.0f;
         float pan = 0.0f;
-        float peakLeft = 0.0f;
-        float peakRight = 0.0f;
         if (m_context == Context::Instrument) {
             if (const daw::SamplerFxModel* fx = m_controller->samplerFx(
                     m_channelId.toStdString(), m_slotId.toStdString())) {
                 inserts = &fx->inserts;
                 volume = fx->volume;
                 pan = fx->pan;
-                const auto levels = m_controller->meterSnapshot(m_channelId.toStdString(), {}, true);
-                peakLeft = levels.left;
-                peakRight = levels.right;
             }
         } else if (const daw::ClipModel* clip = m_controller->audioClip(
                        m_channelId.toStdString(), m_slotId.toStdString())) {
             inserts = &clip->inserts;
             volume = clip->gain;
             pan = clip->pan;
-            const auto levels = m_controller->meterSnapshot(m_channelId.toStdString(), m_slotId.toStdString());
-            peakLeft = levels.left;
-            peakRight = levels.right;
-            // Before the first private insert exists the track meter is the
-            // closest truthful reading; once a chain exists its private meter
-            // takes over without changing the strip.
-            if (inserts->empty()) {
-                peakLeft = peakRight = m_controller->trackPeak(
-                    m_channelId.toStdString());
-            }
         }
         if (inserts) {
             if (!m_fxLevelGesture) {
                 if (m_fxPan) m_fxPan->setPan(pan);
                 if (m_fxVolume) m_fxVolume->setGain(volume);
             }
-            if (m_fxPanLabel) {
-                if (std::abs(pan) < 0.01f) {
-                    m_fxPanLabel->setText(QStringLiteral("C"));
-                } else {
-                    m_fxPanLabel->setText(
-                        QStringLiteral("%1%2")
-                            .arg(pan < 0.0f ? QStringLiteral("L")
-                                           : QStringLiteral("R"))
-                            .arg(int(std::round(std::abs(pan) * 100.0f))));
-                }
-            }
+            if (m_fxPanLabel) m_fxPanLabel->setText(ui::formatPan(pan));
             if (m_fxGainLabel) m_fxGainLabel->setText(ui::formatGainDb(volume));
-            if (m_fxMeter) m_fxMeter->setPeaks(peakLeft, peakRight);
             if (m_fxBypass) {
                 const bool bypassed = !inserts->empty() &&
                     std::all_of(inserts->begin(), inserts->end(),
@@ -2638,7 +2673,96 @@ bool SamplerWaveform::checkPeakUpdatesForTest() {
     return true;
 }
 
+bool SamplerPanel::checkMeterForTest() {
+    ThemeManager::instance().apply();
+    ui::FrameClock::instance().setPreference(ui::FrameMode::Fixed, 60);
+    const auto run = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    bool ok = true;
+    const auto check = [&ok](bool condition, const char* message) {
+        if (!condition) std::fprintf(stderr, "sampler meter: %s\n", message);
+        ok &= condition;
+    };
+    struct PaintCounter : QObject {
+        int paints = 0;
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::Paint) ++paints;
+            return false;
+        }
+    };
+    // Quiet changes below the old linear-amplitude threshold must still move
+    // the dB display. Identical values must leave it completely idle.
+    ui::LevelMeter quiet(Qt::Vertical, 2);
+    quiet.resize(14, 260);
+    PaintCounter quietPaints;
+    quiet.installEventFilter(&quietPaints);
+    quiet.show(); quiet.setPeaks(.002f, .002f); run(160);
+    quietPaints.paints = 0;
+    quiet.setPeaks(.0024f, .0024f); run(100);
+    check(quietPaints.paints > 0, "a visible change at -54 dB did not repaint");
+    quietPaints.paints = 0;
+    for (int i = 0; i < 8; ++i) { quiet.setPeaks(.0024f, .0024f); run(20); }
+    check(quietPaints.paints == 0, "steady meter keeps repainting");
+    quiet.hide();
+
+    daw::EngineController controller{};
+    if (!controller.initialize(48000, 512, false)) return false;
+    const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
+    if (!descriptor) return false;
+    const auto track = controller.addTrack(daw::TrackKind::Instrument, "Sampler meter check");
+    controller.setTrackInstrumentPlugin(track, *descriptor);
+    const auto slot = controller.project().findTrack(track)->instrument.id;
+    auto tone = std::make_shared<daw::engine::SampleBuffer>(1, 48000 * 8, 48000);
+    for (daw::engine::FrameCount i = 0; i < tone->frames(); ++i) {
+        const double time = double(i) / 48000;
+        tone->writableChannel(0)[i] = float((.2 + .18 * std::sin(6.283185307179586 * 3 * time)) *
+            std::sin(6.283185307179586 * 440 * time));
+    }
+    auto* sampler = controller.samplerInstance(track, slot);
+    if (!sampler || !sampler->adoptSample("synthetic-meter.wav", tone)) return false;
+    sampler->flushPendingPrecompute();
+    SamplerPanel panel(&controller, QString::fromStdString(track), QString::fromStdString(slot));
+    check(!panel.m_poll->isActive() && !panel.m_meterTimer->isActive(), "unopened panel polls in the background");
+    panel.resize(1040, 770); panel.show();
+    audio::AudioBuffer input(2, 512), output(2, 512);
+    input.clear();
+    QTimer audio;
+    audio.setTimerType(Qt::PreciseTimer);
+    connect(&audio, &QTimer::timeout, &panel, [&] { controller.processDeviceBlockForTest(input, output, 512); });
+    audio.start(10);
+    controller.play(); controller.liveNoteOn(track, 60, 127);
+    run(400);
+    PaintCounter meterPaints, envelopePaints;
+    panel.m_fxMeter->installEventFilter(&meterPaints);
+    panel.m_envelope->installEventFilter(&envelopePaints);
+    QElapsedTimer measured; measured.start();
+    run(1200);
+    std::printf("SAMPLER_METER playback_paints=%d elapsed_ms=%lld envelope_paints=%d\n",
+        meterPaints.paints, static_cast<long long>(measured.elapsed()), envelopePaints.paints);
+    check(meterPaints.paints >= 30, "playback meter is still limited by the 200 ms model poll");
+    check(envelopePaints.paints == 0, "unchanged envelope repaints during meter playback");
+    controller.stop(); controller.liveNoteOn(track, 60, 127); run(200);
+    meterPaints.paints = 0; run(1000);
+    std::printf("SAMPLER_METER audition_paints=%d\n", meterPaints.paints);
+    check(meterPaints.paints >= 25, "live audition loses smooth metering with transport stopped");
+    panel.hide(); run(100); meterPaints.paints = 0; run(260);
+    check(!panel.m_poll->isActive() && !panel.m_meterTimer->isActive() && meterPaints.paints == 0,
+          "hidden sampler continues updating");
+    controller.liveNoteOff(track, 60);
+    // With the default envelope disabled this is a one-shot: note-off alone
+    // deliberately lets it finish. Silence the source before testing release.
+    sampler->reset(); run(600);
+    panel.show(); run(3000);
+    check(!panel.m_meterTimer->isActive(), "silent sampler keeps requesting frames after release");
+    audio.stop();
+    return ok;
+}
+
 bool SamplerPanel::checkLayoutForTest() {
+    if (qEnvironmentVariableIsSet("VLT_SAMPLER_METER_CHECK_ONLY")) return checkMeterForTest();
     if (!AudioEditPanel::checkForTest()) return false;
     if (!SamplerWaveform::checkPeakUpdatesForTest()) return false;
     daw::EngineController controller{};

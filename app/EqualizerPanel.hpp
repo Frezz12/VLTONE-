@@ -24,6 +24,7 @@ class QPushButton;
 class QTimer;
 class QShowEvent;
 class QHideEvent;
+class EqualizerAnalyzerView;
 
 namespace ui { class Knob; }
 namespace daw { class EngineController; }
@@ -106,6 +107,9 @@ private:
     bool m_dynamicDrag = false;
     bool m_linearPhase = false;
     double m_displayRange = 12.0;
+    bool m_gridDirty = true;
+    bool m_curvesDirty = true;
+    size_t m_sceneStyleKey = 0;
 };
 
 class EqualizerPanel final : public QWidget {
@@ -195,6 +199,7 @@ private:
     std::array<daw::plugins::equalizer::BandState,
                daw::plugins::equalizer::kBandCount> m_graphGestureStart{};
     QTimer* m_timer = nullptr;
+    EqualizerAnalyzerView* m_analyzer = nullptr;
     std::vector<UserPreset> m_userPresets;
     QString m_selectedKind{QStringLiteral("factory")};
     QString m_selectedName{QStringLiteral("Flat")};

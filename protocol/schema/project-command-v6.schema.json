@@ -707,7 +707,8 @@
                           "daw.phaser",
                           "daw.pitch-corrector",
                           "daw.modulation",
-                          "daw.cla2a"
+                          "daw.cla2a",
+                          "daw.1073"
                         ]
                       }
                     }
@@ -941,7 +942,8 @@
                           "daw.phaser",
                           "daw.pitch-corrector",
                           "daw.modulation",
-                          "daw.cla2a"
+                          "daw.cla2a",
+                          "daw.1073"
                         ]
                       }
                     }
@@ -2569,6 +2571,7 @@
             "daw.pitch-corrector",
             "daw.modulation",
             "daw.cla2a",
+            "daw.1073",
             "daw.channel-color"
           ]
         },

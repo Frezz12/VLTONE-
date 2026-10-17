@@ -1,9 +1,13 @@
 #include "Internal/InternalFactory.hpp"
 #include "Internal/CompressorInstance.hpp"
 #include "Internal/Cla2aInstance.hpp"
+#include "Internal/Vlt1073Instance.hpp"
 #include "Internal/ChannelColorInstance.hpp"
 #include "Internal/MiniModuleInstance.hpp"
 #include "Internal/DelayInstance.hpp"
+#if DAW_ENABLE_REVERB
+#include "Internal/ReverbInstance.hpp"
+#endif
 #include "Internal/UtilityInstance.hpp"
 
 #include "Internal/GravityInstance.hpp"
@@ -11,6 +15,7 @@
 #include "Internal/ModulationInstance.hpp"
 #include "Internal/ModulationRackInstance.hpp"
 #include "Internal/MorphInstance.hpp"
+#include "Internal/FluxInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
@@ -78,7 +83,11 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
             return std::make_unique<utility::UtilityInstance>(kind);
     if (descriptor.uid == channel_color::ChannelColorInstance::uid()) return std::make_unique<channel_color::ChannelColorInstance>();
     if (descriptor.uid == cla2a::Cla2aInstance::uid()) return std::make_unique<cla2a::Cla2aInstance>();
+    if (descriptor.uid == vlt1073::Vlt1073Instance::uid()) return std::make_unique<vlt1073::Vlt1073Instance>();
     if (descriptor.uid == delay::DelayInstance::uid()) return std::make_unique<delay::DelayInstance>();
+#if DAW_ENABLE_REVERB
+    if (descriptor.uid == reverb::ReverbInstance::uid()) return std::make_unique<reverb::ReverbInstance>();
+#endif
     if (descriptor.uid == compressor::CompressorInstance::uid()) {
         return std::make_unique<compressor::CompressorInstance>();
     }
@@ -97,6 +106,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
     if (descriptor.uid == mini::kUid) return std::make_unique<mini::MiniModuleInstance>();
     if (descriptor.uid == "daw.modulation") return std::make_unique<modulation::ModulationRackInstance>();
     if (descriptor.uid == "daw.morph") return std::make_unique<morph::MorphInstance>();
+    if (descriptor.uid == "daw.flux") return std::make_unique<flux::FluxInstance>();
     if (descriptor.uid == "daw.doubler") return std::make_unique<modulation::DoublerInstance>();
     if (descriptor.uid == "daw.doubler-pro") return std::make_unique<modulation::DoublerProInstance>();
     if (descriptor.uid == "daw.chorus") return std::make_unique<modulation::ChorusInstance>();
@@ -118,8 +128,12 @@ std::vector<PluginDescriptor> builtinPlugins() {
             sampler::SamplerInstance::staticDescriptor(),
             slicer::SlicerInstance::staticDescriptor(),
             delay::DelayInstance::staticDescriptor(),
+#if DAW_ENABLE_REVERB
+            reverb::ReverbInstance::staticDescriptor(),
+#endif
             compressor::CompressorInstance::staticDescriptor(),
             cla2a::Cla2aInstance::staticDescriptor(),
+            vlt1073::Vlt1073Instance::staticDescriptor(),
             channel_color::ChannelColorInstance::staticDescriptor(),
             pitch::PitchCorrectorInstance::staticDescriptor(),
             equalizer::EqualizerInstance::staticDescriptor(),
@@ -131,7 +145,8 @@ std::vector<PluginDescriptor> builtinPlugins() {
             modulation::descriptorFor(modulation::Kind::Flanger),
             modulation::descriptorFor(modulation::Kind::Phaser),
             modulation::ModulationRackInstance::staticDescriptor(),
-            morph::MorphInstance::staticDescriptor()};
+            morph::MorphInstance::staticDescriptor(),
+            flux::FluxInstance::staticDescriptor()};
 }
 
 } // namespace daw::plugins

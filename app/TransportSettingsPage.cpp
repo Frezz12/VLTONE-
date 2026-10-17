@@ -6,6 +6,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -109,10 +110,15 @@ TransportSettingsPage::TransportSettingsPage(daw::EngineController* controller,
                                      panelStyle->currentData());
                 emit panelStyleChanged();
             });
-    layout->addLayout(appearanceForm);
-    layout->addWidget(appearanceHint);
-    layout->addSpacing(16);
-    layout->addLayout(form);
-    layout->addWidget(hint);
+    auto* playback = new QGroupBox(tr("Playback and metronome"), this);
+    auto* playbackColumn = new QVBoxLayout(playback);
+    playbackColumn->addLayout(form);
+    playbackColumn->addWidget(hint);
+    layout->addWidget(playback);
+    auto* appearance = new QGroupBox(tr("Transport appearance"), this);
+    auto* appearanceColumn = new QVBoxLayout(appearance);
+    appearanceColumn->addLayout(appearanceForm);
+    appearanceColumn->addWidget(appearanceHint);
+    layout->addWidget(appearance);
     layout->addStretch(1);
 }

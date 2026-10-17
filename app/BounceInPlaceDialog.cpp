@@ -78,7 +78,7 @@ BounceInPlaceDialog::BounceInPlaceDialog(
     m_clipFx = new QCheckBox(tr("Clip FX"), fxBox);
     m_trackFx = new QCheckBox(tr("Track FX"), fxBox);
     m_sends = new QCheckBox(tr("Sends / Returns"), fxBox);
-    m_summing = new QCheckBox(tr("Summing Folders"), fxBox);
+    m_summing = new QCheckBox(tr("Bus Folders"), fxBox);
     m_masterFx = new QCheckBox(tr("Master FX"), fxBox);
     for (QCheckBox* box : {m_clipFx, m_trackFx, m_sends, m_summing,
                            m_masterFx})
@@ -211,7 +211,7 @@ void BounceInPlaceDialog::updateSummary() {
         {m_clipFx, tr("Clip FX")},
         {m_trackFx, tr("Track FX")},
         {m_sends, tr("Sends / Returns")},
-        {m_summing, tr("Summing Folders")},
+        {m_summing, tr("Bus Folders")},
         {m_masterFx, tr("Master FX")},
     }};
     const bool masterPrinted = m_masterFx->isChecked();

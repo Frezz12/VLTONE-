@@ -53,11 +53,9 @@ json descriptorToJson(const plugins::PluginDescriptor& descriptor) {
 }
 
 plugins::PluginDescriptor descriptorFromJson(const json& value) {
-    std::vector<plugins::PluginDescriptor> parsed;
-    const json wrapper{{"schema", plugins::scan::kSchemaVersion},
-                       {"plugins", json::array({value})}};
-    plugins::scan::decodeResult(wrapper.dump(), parsed);
-    return parsed.empty() ? plugins::PluginDescriptor{} : parsed.front();
+    plugins::PluginDescriptor parsed;
+    plugins::scan::descriptorFromJsonValue(value, parsed);
+    return parsed;
 }
 
 json pathsToJson(const std::vector<std::string>& paths) {
@@ -98,6 +96,8 @@ std::string PluginCache::normalizedPath(const std::string& path) {
 }
 
 std::string PluginCache::defaultPath() {
+    if (const char* overridePath = std::getenv("DAW_PLUGIN_CACHE_PATH"); overridePath && *overridePath)
+        return overridePath;
     fs::path dir = platform::knownFolderPath(platform::KnownFolder::RoamingAppData);
     if (dir.empty()) dir = fs::temp_directory_path();
     return platform::pathToUtf8(dir / "VLT Studio Pro" / "plugins.json");

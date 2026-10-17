@@ -21,6 +21,8 @@
 #include "ChannelStripPresets.hpp"
 #include "ContextPanel.hpp"
 #include "AiChatPanel.hpp"
+#include "MasterPanel.hpp"
+#include "MixerPreferences.hpp"
 #include "AiPrefs.hpp"
 #include "AudioPreferences.hpp"
 #include "AccountService.hpp"
@@ -387,7 +389,7 @@ public:
                               "untouched — each track still goes where it "
                               "went before."),
                            icons::Glyph::Folder);
-        auto* summing = card(tr("Summing Folder"),
+        auto* summing = card(tr("Bus Folder"),
                              tr("The same, plus a channel of its own: every "
                                 "track inside is routed through it, so one "
                                 "fader, one set of plugins and one mute "
@@ -1270,6 +1272,7 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     setWebVisible(ui::webprefs::visible());
     setNotebookVisible(ui::notebookprefs::visible());
     setAiVisible(ui::aiprefs::visible());
+    setMasterVisible(ui::MixerPreferences::instance().masterVisible());
 
     // Reopen where it was left. Applied last, after every child has had its say
     // about the layout, or the restore fights the initial sizing. Skipped when
@@ -5878,6 +5881,89 @@ bool MainWindow::checkAutomationEditorForTest() {
         return false;
     }
 
+    // Retarget the moved half of a volume curve through the actual three fields.
+    // The untouched half must keep both its target and its points.
+    {
+        const auto& eq = daw::plugins::equalizer::EqualizerInstance::staticDescriptor();
+        const auto& gravity = daw::plugins::gravity::GravityInstance::staticDescriptor();
+        const auto eqSlot = m_controller.addInsert(track, eq);
+        const auto gravitySlot = m_controller.addInsert(track, gravity);
+        const auto left = m_controller.addAutomationClip(lane, volume, 0.0, 4.0);
+        m_controller.setAutomationPoints(lane, left, shape);
+        const auto right = m_controller.splitClip(lane, left, 1.0);
+        if (eqSlot.empty() || gravitySlot.empty() || right.empty()) return false;
+        m_controller.setClipStartSeconds(lane, right, 6.0);
+        const auto find = [&](const std::string& id) -> const daw::ClipModel* {
+            const auto* automationLane = m_controller.project().findTrack(lane);
+            if (automationLane) for (const auto& item : automationLane->clips)
+                if (item.id == id) return &item;
+            return nullptr;
+        };
+        const auto leftPoints = find(left)->automation.points;
+        const auto rightPoints = find(right)->automation.points;
+        AutomationEditorWindow retarget(&m_controller, QString::fromStdString(lane),
+                                        QString::fromStdString(right));
+        retarget.setAttribute(Qt::WA_DontShowOnScreen);
+        retarget.show();
+        const auto targetFields = retarget.findChildren<QComboBox*>();
+        auto* channel = targetFields.at(0);
+        auto* control = targetFields.at(1);
+        auto* parameter = targetFields.at(2);
+        const auto parametersMatch = [&](const std::string& channelId, const std::string& slot) {
+            QStringList expected, actual;
+            for (const auto& info : m_controller.insertParameters(channelId, slot))
+                if (info.isAutomatable) expected << QString::fromStdString(info.id);
+            for (int i = 0; i < parameter->count(); ++i)
+                actual << parameter->itemData(i).toString();
+            return !parameter->isHidden() && !expected.isEmpty() && actual == expected;
+        };
+        bool targetsOk = true;
+        const auto checkTarget = [&](bool pass, const char* label) {
+            std::fprintf(stderr, "%s Automation retarget: %s\n", pass ? "PASS" : "FAIL", label);
+            targetsOk &= pass;
+        };
+        const auto beforeRetarget = m_controller.undoDepth();
+        control->setCurrentIndex(control->findText(QString::fromStdString(eq.name)));
+        const auto eqTarget = find(right)->automation.target;
+        checkTarget(parametersMatch(track, eqSlot) && eqTarget.slotId == eqSlot &&
+                    eqTarget.parameterId == parameter->currentData().toString().toStdString() &&
+                    m_controller.undoDepth() == beforeRetarget + 1,
+                    "volume to plugin reveals its parameters and commits one valid target");
+        m_controller.undo(); retarget.refresh();
+        checkTarget(find(right)->automation.target == volume && parameter->isHidden(),
+                    "Undo restores volume and hides the plugin parameter field");
+        m_controller.redo(); retarget.refresh();
+        checkTarget(find(right)->automation.target == eqTarget && parametersMatch(track, eqSlot),
+                    "Redo restores the plugin and its parameter list");
+        parameter->setCurrentIndex(parameter->count() - 1);
+        checkTarget(find(right)->automation.target.parameterId ==
+                        parameter->currentData().toString().toStdString(),
+                    "choosing another plugin parameter updates the target");
+        control->setCurrentIndex(control->findText(QString::fromStdString(gravity.name)));
+        checkTarget(parametersMatch(track, gravitySlot) &&
+                    find(right)->automation.target.slotId == gravitySlot &&
+                    find(right)->automation.target.parameterId ==
+                        parameter->currentData().toString().toStdString(),
+                    "switching plugins replaces the old parameter list before retargeting");
+        const auto master = std::string(daw::EngineController::kMasterChannelId);
+        const auto masterSlot = m_controller.addInsert(master, eq);
+        channel->setCurrentIndex(channel->findData(QString::fromStdString(master)));
+        control->setCurrentIndex(control->findText(QString::fromStdString(eq.name)));
+        checkTarget(!masterSlot.empty() && parametersMatch(master, masterSlot) &&
+                    find(right)->automation.target.channelId == master &&
+                    find(right)->automation.target.slotId == masterSlot,
+                    "changing channel rebuilds its plugins and their parameters");
+        control->setCurrentIndex(control->findData(
+            int(daw::AutomationTargetKind::TrackVolume), Qt::UserRole + 1));
+        checkTarget(parameter->isHidden() &&
+                    find(right)->automation.target.kind == daw::AutomationTargetKind::TrackVolume &&
+                    find(left)->automation.target == volume &&
+                    find(left)->automation.points == leftPoints &&
+                    find(right)->automation.points == rightPoints && find(right)->startSeconds == 6.0,
+                    "returning to volume preserves both split curves and the moved clip position");
+        m_controller.removeInsert(master, masterSlot);
+        if (!targetsOk) return false;
+    }
     m_controller.removeAutomationLane(lane);
     m_controller.removeTrack(track);
     syncViews();
@@ -8568,7 +8654,7 @@ bool MainWindow::checkLiveTempoForTest() {
 bool MainWindow::checkSettingsViewportForTest() {
     if (!m_settingsWindow) return false;
     // Settings pages are constructed on first visit.
-    m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
+    m_settingsWindow->showTab(SettingsWindow::kPerformanceTab);
     auto* smooth=m_settingsWindow->findChild<QCheckBox*>("SmoothScrollingEnabled");
     auto* speed=m_settingsWindow->findChild<QSpinBox*>("ScrollMotionSpeed");
     auto* strength=m_settingsWindow->findChild<QSlider*>("ScrollMotionStrength");
@@ -8586,7 +8672,7 @@ bool MainWindow::checkSettingsViewportForTest() {
     motion.setSpeed(savedSpeed);motion.setStrength(savedStrength);
     if(!motionControls) return false;
     if(const QString shot=qEnvironmentVariable("DAW_MOTION_SCREENSHOT");!shot.isEmpty()) {
-        m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
+        m_settingsWindow->showTab(SettingsWindow::kPerformanceTab);
         if(auto* group=m_settingsWindow->findChild<QWidget*>("NavigationMotionSettings"))
             for(auto* parent=group->parentWidget();parent;parent=parent->parentWidget())
                 if(auto* area=qobject_cast<QScrollArea*>(parent)){area->ensureWidgetVisible(group,0,12);break;}
@@ -8602,6 +8688,7 @@ bool MainWindow::checkSettingsViewportForTest() {
             m_settingsWindow->grab().save(shot);
     }
 
+    m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
     PluginManagerWindow pluginManager(&m_controller, this);
     daw::PluginManager previewCatalog;
     previewCatalog.copyCatalogFrom(m_controller.pluginManager());
@@ -8649,7 +8736,7 @@ bool MainWindow::checkSettingsViewportForTest() {
     if (!filterControl || !pluginFilter->text().isEmpty() ||
         clearFilters->isEnabled()) return false;
     if (!m_timeline->checkGridAppearanceForTest()) return false;
-    m_settingsWindow->showTab(SettingsWindow::kThemesTab);
+    m_settingsWindow->showTab(SettingsWindow::kTimelineTab);
     auto* gridWidth = m_settingsWindow->findChild<QSlider*>(
         QStringLiteral("TimelineGridWidth"));
     auto* gridOpacity = m_settingsWindow->findChild<QSlider*>(
@@ -8665,7 +8752,7 @@ bool MainWindow::checkSettingsViewportForTest() {
     m_settingsWindow->showTab(SettingsWindow::kInterfaceTab);
     ui::setGridLineWidth(1.7);
     ui::setGridOpacity(37);
-    m_settingsWindow->showTab(SettingsWindow::kThemesTab);
+    m_settingsWindow->showTab(SettingsWindow::kTimelineTab);
     const bool themePageRefreshed = gridWidth->value() == 17 && gridOpacity->value() == 37;
     gridWidth->setValue(savedGridWidth);
     gridOpacity->setValue(savedGridOpacity);
@@ -8718,16 +8805,17 @@ bool MainWindow::checkSettingsViewportForTest() {
                                      ->data(0, Qt::UserRole)
                                      .toInt(&valid);
                 groupedNavigation = groupedNavigation && valid && page >= 0 &&
-                                    page <= SettingsWindow::kMixerTab &&
+                                    page < SettingsWindow::kPageCount &&
                                     !navigationPages.contains(page);
                 if (valid) navigationPages.insert(page);
             }
         }
         groupedNavigation = groupedNavigation &&
-                            navigationPages.size() == SettingsWindow::kMixerTab + 1;
+                            navigationPages.size() == SettingsWindow::kPageCount;
     }
-    bool scrollable = pages && pages->count() == SettingsWindow::kMixerTab + 1 &&
+    bool scrollable = pages && pages->count() == SettingsWindow::kPageCount &&
                       groupedNavigation &&
+                      m_settingsWindow->checkOrganizationForTest() &&
                       m_settingsWindow->checkAudioPageForTest() &&
                       SettingsWindow::checkWheelRoutingForTest() &&
                       startupTemplateControl;
@@ -8756,12 +8844,12 @@ bool MainWindow::checkSettingsViewportForTest() {
     // compatibility mode it lands on the child control. Both mouse-wheel and
     // precision trackpad deltas must scroll without changing the slider.
     bool liveWheelRouting = false;
-    if (pages && pages->count() > SettingsWindow::kThemesTab) {
+    if (pages && pages->count() > SettingsWindow::kBackgroundsTab) {
         const int previousPage = pages->currentIndex();
-        m_settingsWindow->showTab(SettingsWindow::kThemesTab);
+        m_settingsWindow->showTab(SettingsWindow::kBackgroundsTab);
         QApplication::processEvents();
         auto* themeScroll = qobject_cast<QScrollArea*>(
-            pages->widget(SettingsWindow::kThemesTab));
+            pages->widget(SettingsWindow::kBackgroundsTab));
         QSlider* target = nullptr;
         if (themeScroll && themeScroll->widget()) {
             const auto sliders = themeScroll->widget()->findChildren<QSlider*>();
@@ -10330,7 +10418,7 @@ MainWindow::~MainWindow() {
     m_pianoRoll = nullptr;
     delete m_pianoRollFrame;
     m_pianoRollFrame = nullptr;
-    delete m_patternWindow;
+    // The Pattern module is owned by the rack.
     m_patternWindow = nullptr;
     delete m_typingKeyboard;
     m_typingKeyboard = nullptr;
@@ -10339,6 +10427,8 @@ MainWindow::~MainWindow() {
     m_notebookWindow = nullptr;
     delete m_webPanel;
     m_webPanel = nullptr;
+    delete m_masterPanel;
+    m_masterPanel = nullptr;
     delete m_aiPanel;
     m_aiPanel = nullptr;
     const QList<PluginEditorWindow*> editors = m_pluginEditors.values();
@@ -10498,6 +10588,41 @@ void MainWindow::buildLayout() {
 
     // The assistant sits outside the workspace row so its surface reaches the
     // same top edge as the transport and becomes their shared right boundary.
+    m_masterPanel = new MasterPanel(&m_controller, central);
+    QSettings masterLayoutSettings;
+    int masterSavedWidth = masterLayoutSettings.value("master/compactPanelWidth",
+        qRound(masterLayoutSettings.value("master/panelWidth", 336).toInt() * .65)).toInt();
+    // Narrow the previous compact layout by another 10%, once. Subsequent
+    // launches preserve the width chosen with the resize handle.
+    if (masterLayoutSettings.value("master/layoutVersion", 1).toInt() < 2) {
+        masterSavedWidth = qRound(masterSavedWidth * .9);
+        masterLayoutSettings.setValue("master/compactPanelWidth", masterSavedWidth);
+        masterLayoutSettings.setValue("master/layoutVersion", 2);
+    }
+    m_masterWidth = std::clamp(masterSavedWidth, 196, 420);
+    m_masterPanel->setFixedWidth(m_masterWidth);
+    connect(m_masterPanel, &MasterPanel::closeRequested, this, [] {
+        ui::MixerPreferences::instance().setMasterVisible(false);
+    });
+    connect(&ui::MixerPreferences::instance(), &ui::MixerPreferences::masterVisibleChanged,
+            this, &MainWindow::setMasterVisible);
+    connect(m_masterPanel, &MasterPanel::editorRequested, this, &MainWindow::openPluginEditor);
+    connect(m_masterPanel, &MasterPanel::edited, this, [this] { markDirty(); });
+    connect(m_masterPanel, &MasterPanel::structureChanged, this, [this] { syncViews(); });
+    connect(m_masterPanel, &MasterPanel::automateRequested, this, [this](bool pan) {
+        daw::AutomationTarget target;
+        target.kind = pan ? daw::AutomationTargetKind::TrackPan : daw::AutomationTargetKind::TrackVolume;
+        target.channelId = daw::EngineController::kMasterChannelId;
+        automateTarget(target);
+    });
+    auto* masterHandle = new ui::ResizeHandle(Qt::Vertical, m_masterPanel);
+    masterHandle->setEdge(Qt::LeftEdge);
+    masterHandle->onDragStart = [this] { m_masterDragStartWidth = m_masterPanel->width(); };
+    masterHandle->onDrag = [this](int delta) {
+        m_masterWidth = std::clamp(m_masterDragStartWidth - delta, 196, 420);
+        applyRightPanelWidths(); m_masterWidth = m_masterPanel->width();
+        QSettings().setValue("master/compactPanelWidth", m_masterWidth);
+    };
     m_aiPanel = new AiChatPanel(&m_controller, central);
     m_aiPanel->setSelectionModel(&m_selection);
     m_aiPanel->setCommandManager(m_shortcuts);
@@ -10706,16 +10831,23 @@ void MainWindow::buildLayout() {
     bottomLayout->setContentsMargins(0, 0, 0, 0);
     bottomLayout->setSpacing(0);
     m_mixer = new MixerWidget(&m_controller, m_bottomPanel);
+    connectPatternRack();
     m_mixer->setMinimumHeight(140);
     bottomLayout->addWidget(m_mixer, 1);
+    QSettings rackSettings;
+    if (!rackSettings.value("ui/rackCompactHeightDefault", false).toBool()) {
+        if (rackSettings.value("ui/rackHeight", 320).toInt() == 320)
+            rackSettings.setValue("ui/rackHeight", 280);
+        rackSettings.setValue("ui/rackCompactHeightDefault", true);
+    }
     m_mixerHeight = QSettings().value(m_mixer->rackMode() ? "ui/rackHeight" : "ui/mixerHeight",
-                                     m_mixer->rackMode() ? 320 : 545).toInt();
+                                     m_mixer->rackMode() ? 280 : 545).toInt();
     m_bottomPanel->setMinimumHeight(m_mixer->rackMode() ? 280 : 180);
     connect(m_mixer, &MixerWidget::rackModeChanged, this, [this](bool rack) {
         QSettings settings;
         settings.setValue(rack ? "ui/mixerHeight" : "ui/rackHeight", m_mixerHeight);
         m_mixerHeight = std::max(rack ? 280 : 180,
-            settings.value(rack ? "ui/rackHeight" : "ui/mixerHeight", rack ? 320 : 545).toInt());
+            settings.value(rack ? "ui/rackHeight" : "ui/mixerHeight", rack ? 280 : 545).toInt());
         m_bottomPanel->setMinimumHeight(rack ? 280 : 180);
         if (m_mixerWindow) {
             m_mixerWindow->setWindowTitle((rack ? tr("Rack — %1") : tr("Mixer — %1"))
@@ -10724,21 +10856,6 @@ void MainWindow::buildLayout() {
         }
         layoutBottomPanels();
     });
-
-    m_warpPanel = new QWidget(m_arrangementHost);
-    m_warpPanel->setObjectName(QStringLiteral("WarpBottomPanel"));
-    m_warpPanel->setMinimumHeight(180);
-    m_warpPanel->setAutoFillBackground(true);
-    auto* warpLayout = new QVBoxLayout(m_warpPanel);
-    warpLayout->setContentsMargins(0, 5, 0, 0);
-    warpLayout->setSpacing(0);
-    m_warpEditor = new WarpEditorWidget(&m_controller, m_warpPanel);
-    m_warpEditor->setSnapProvider([this] { return m_timeline->snapSeconds(); });
-    warpLayout->addWidget(m_warpEditor, 1);
-    m_warpPanel->hide();
-    connect(m_warpEditor, &WarpEditorWidget::edited, this, [this] { m_timeline->update(); markDirty(); });
-    connect(m_warpEditor, &WarpEditorWidget::liveEdited, this, [this] { m_timeline->update(); });
-    connect(m_warpEditor, &WarpEditorWidget::closeRequested, this, [this] { setWarpVisible(false); });
 
     auto* handle = new ui::ResizeHandle(Qt::Horizontal, m_bottomPanel);
     handle->setEdge(Qt::TopEdge);
@@ -10765,24 +10882,6 @@ void MainWindow::buildLayout() {
     };
     m_mixerHandle = handle;
 
-    auto* warpHandle = new ui::ResizeHandle(Qt::Horizontal, m_warpPanel);
-    warpHandle->setObjectName(QStringLiteral("WarpResizeHandle"));
-    warpHandle->setAccessibleName(tr("Resize Warp"));
-    warpHandle->setEdge(Qt::TopEdge);
-    warpHandle->onDragStart = [this] { m_warpDragStartHeight = m_warpHeight; };
-    warpHandle->onDrag = [this](int deltaY) {
-        const int wanted = std::clamp(m_warpDragStartHeight - deltaY, 0,
-            std::max(m_warpPanel->minimumHeight(), m_arrangementHost->height()));
-        if (wanted <= 20) {
-            m_warpHeight = m_warpDragStartHeight;
-            setWarpVisible(false);
-            return;
-        }
-        m_warpHeight = wanted;
-        layoutBottomPanels();
-    };
-    m_warpHandle = warpHandle;
-
     m_timeline->setSelectionModel(&m_selection);
 
     relayoutRow();
@@ -10805,6 +10904,7 @@ void MainWindow::buildLayout() {
     shell->addWidget(workspace, 1);
     shell->addWidget(m_notebookContainer);
     shell->addWidget(m_webContainer);
+    shell->addWidget(m_masterPanel);
     shell->addWidget(m_aiPanel);
 
     setCentralWidget(central);
@@ -10956,8 +11056,7 @@ void MainWindow::buildLayout() {
                 // header while the slider is moving.
                 if (m_trackList) m_trackList->syncRowHeights();
                 if (m_timeline) {
-                    m_timeline->clampVerticalScroll();
-                    m_timeline->update();
+                    m_timeline->refreshTrackHeights();
                 }
             });
     connect(m_toolPanel, &ToolPanel::trackHeightEditFinished, this,
@@ -11095,7 +11194,7 @@ void MainWindow::buildLayout() {
             &MainWindow::onTracksChanged);
     connect(m_trackList, &TrackListWidget::customTrackIconRequested, this,
             [this](const QStringList& targets) {
-                openSettings(SettingsWindow::kThemesTab);
+                openSettings(SettingsWindow::kFontsTab);
                 QTimer::singleShot(0, this, [this, targets] {
                     if (!m_settingsWindow) return;
                     const QString id = m_settingsWindow->importTrackIconFile();
@@ -11221,8 +11320,7 @@ void MainWindow::buildLayout() {
         // Shrinking can also make the current shared scroll offset illegal, so
         // clamp it now; the resulting signal moves the headers to the exact
         // same origin before either column paints this frame.
-        m_timeline->clampVerticalScroll();
-        m_timeline->update();
+        m_timeline->refreshTrackHeights();
         if (m_toolPanel) {
             std::vector<int> heights;
             heights.reserve(m_controller.project().tracks.size());
@@ -11246,7 +11344,7 @@ void MainWindow::buildLayout() {
     connect(m_mixer, &MixerWidget::createTracksRequested, this, createTracks,
             Qt::QueuedConnection);
     const auto showChannelOnTimeline = [this](const QString& channel) {
-        const auto before = m_controller.undoDepth();
+        const auto before = m_controller.projectRevision();
         const std::string id = channel == QLatin1String(daw::EngineController::kMasterChannelId)
             ? m_controller.ensureMasterTrack() : channel.toStdString();
         const auto* track = m_controller.project().findTrack(id);
@@ -11265,7 +11363,7 @@ void MainWindow::buildLayout() {
                 m_timeline->ensureLaneVisible(i);
                 break;
             }
-        if (m_controller.undoDepth() != before) markDirty();
+        if (m_controller.projectRevision() != before) markDirty();
     };
     connect(m_mixer, &MixerWidget::timelineRequested, this, showChannelOnTimeline,
             Qt::QueuedConnection);
@@ -11445,6 +11543,9 @@ void MainWindow::buildLayout() {
     connect(m_contextPanel, &ContextPanel::pluginEditorRequested, this,
             &MainWindow::openPluginEditor);
 
+    connect(m_transport, &TransportBar::masterToggled, this, [](bool on) {
+        ui::MixerPreferences::instance().setMasterVisible(on);
+    });
     connect(m_transport, &TransportBar::mixerToggled, this,
             &MainWindow::setMixerVisible);
     connect(m_transport, &TransportBar::warpRequested, this,
@@ -11679,7 +11780,6 @@ void MainWindow::syncViews() {
             m_selectedTrackId = m_selection.clips().front().trackId;
     }
     if (m_browser) m_browser->refreshClipLibrary();
-    if (m_warpEditor) m_warpEditor->refresh();
     ui::perf::Scope timing("syncViews.MainWindow.ms");
     if (m_transport) m_transport->refresh();
     m_orphanEditorSweepPending = true;
@@ -11860,7 +11960,6 @@ void MainWindow::setMixerVisible(bool visible) {
         if (visible) presentAuxiliaryWindow(m_mixerWindow);
         else m_mixerWindow->hide();
     } else {
-        if (visible) setWarpVisible(false);
         m_bottomPanel->setVisible(visible);
         if (m_mixerHandle) m_mixerHandle->setVisible(visible);
         // Hiding an overlay does not resize its host, so no resize callback will
@@ -11874,27 +11973,6 @@ void MainWindow::setMixerVisible(bool visible) {
         // method re-entered and laid out the complete overlay twice.
         const QSignalBlocker block(m_showMixerAction);
         m_showMixerAction->setChecked(visible);
-    }
-}
-
-void MainWindow::setWarpVisible(bool visible) {
-    if (!m_warpPanel) return;
-    if (visible && !m_mixerWindow) setMixerVisible(false);
-    const bool ownedFocus = m_warpEditor && m_warpEditor->ownsEditingFocus();
-    if (!visible && m_warpEditor) m_warpEditor->finishPendingEdit();
-    m_warpPanel->setVisible(visible);
-    if (m_warpHandle) m_warpHandle->setVisible(visible);
-    layoutBottomPanels();
-    if (m_transport) m_transport->setWarpVisible(visible);
-    if (m_showWarpAction && m_showWarpAction->isChecked() != visible) {
-        const QSignalBlocker block(m_showWarpAction);
-        m_showWarpAction->setChecked(visible);
-    }
-    if (visible) {
-        if (auto* canvas = m_warpEditor->findChild<QWidget*>("WarpCanvas"))
-            canvas->setFocus(Qt::OtherFocusReason);
-    } else if (ownedFocus && m_timeline) {
-        m_timeline->setFocus(Qt::OtherFocusReason);
     }
 }
 
@@ -11962,7 +12040,7 @@ void MainWindow::ensureWebBrowser() {
     connect(m_webPanel, &WebBrowserPanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 4000); });
     connect(m_webPanel, &WebBrowserPanel::settingsRequested, this,
-            [this] { openSettings(SettingsWindow::kBrowserTab); });
+            [this] { openSettings(SettingsWindow::kWebBrowserTab); });
     connect(m_webPanel, &WebBrowserPanel::audioDownloadReady, this,
             [this](const QString& path,
                    const audio::platform::AudioFileInfo& info) {
@@ -12069,6 +12147,7 @@ void MainWindow::setNotebookDetached(bool detached) {
 }
 
 void MainWindow::applyRightPanelWidths() {
+    const bool masterVisible = m_masterPanel && !m_masterPanel->isHidden();
     const bool webVisible = m_webContainer && !m_webContainer->isHidden();
     const bool aiVisible = m_aiPanel && !m_aiPanel->isHidden();
     const bool notebookVisible = m_notebookContainer && !m_notebookContainer->isHidden();
@@ -12107,7 +12186,8 @@ void MainWindow::applyRightPanelWidths() {
                                   : 0;
     int aiEffective = aiVisible ? std::clamp(m_aiWidth, 240, 720) : 0;
     int notebookEffective = notebookVisible ? std::clamp(m_notebookWidth, 320, 800) : 0;
-    int overflow = std::max(0, webEffective + aiEffective + notebookEffective - panelBudget);
+    int masterEffective = masterVisible ? std::clamp(m_masterWidth, 196, 420) : 0;
+    int overflow = std::max(0, webEffective + aiEffective + notebookEffective + masterEffective - panelBudget);
 
     // The broad browsing surface gives space back first; the assistant then
     // follows down to its established minimum. Preferred widths are untouched,
@@ -12128,6 +12208,10 @@ void MainWindow::applyRightPanelWidths() {
         notebookEffective -= take;
         overflow -= take;
     }
+    if (masterVisible && overflow > 0) {
+        const int take = std::min(overflow, masterEffective - 196);
+        masterEffective -= take; overflow -= take;
+    }
     // A window can itself become narrower than both panels' normal minima.
     // Keeping those minima at that point would reintroduce the cropped-track
     // bug. Continue yielding Web first and then AI; their preferred widths stay
@@ -12142,8 +12226,12 @@ void MainWindow::applyRightPanelWidths() {
         aiEffective -= take;
         overflow -= take;
     }
-    if (notebookVisible && overflow > 0)
-        notebookEffective -= std::min(overflow, notebookEffective);
+    if (notebookVisible && overflow > 0) {
+        const int take = std::min(overflow, notebookEffective);
+        notebookEffective -= take; overflow -= take;
+    }
+    if (masterVisible && overflow > 0) masterEffective -= std::min(overflow, masterEffective);
+    if (masterVisible) m_masterPanel->setFixedWidth(masterEffective);
     if (notebookVisible) m_notebookContainer->setFixedWidth(notebookEffective);
     if (webVisible) m_webContainer->setFixedWidth(webEffective);
     if (aiVisible) m_aiPanel->setFixedWidth(aiEffective);
@@ -12164,6 +12252,16 @@ void MainWindow::applyTrackHeaderWidth() {
     if (m_trackList->width() != effective)
         m_trackList->setFixedWidth(effective);
     if (m_toolPanel) m_toolPanel->setTrackZoneWidth(effective);
+}
+
+void MainWindow::setMasterVisible(bool visible) {
+    if (!m_masterPanel) return;
+    if (!visible && m_masterPanel->isAncestorOf(QApplication::focusWidget()))
+        centralWidget()->setFocus(Qt::OtherFocusReason);
+    m_masterPanel->setVisible(visible);
+    if (m_showMasterAction) { const QSignalBlocker block(m_showMasterAction); m_showMasterAction->setChecked(visible); }
+    if (m_transport) m_transport->setMasterVisible(visible);
+    applyRightPanelWidths(); layoutBottomPanels();
 }
 
 void MainWindow::setAiVisible(bool visible, bool persist) {
@@ -12225,7 +12323,6 @@ void MainWindow::onDockMixer() {
     m_bottomPanel->setParent(m_arrangementHost);
     detached->deleteLater();
     m_mixerWindow = nullptr;
-    setWarpVisible(false);
     if (m_mixerHandle) m_mixerHandle->show();
     m_bottomPanel->show();
     // Reparenting hides the widget. Show it before computing whether it covers
@@ -12352,7 +12449,6 @@ void MainWindow::layoutBottomPanels() {
         }
     };
     if (!m_mixerWindow) place(m_bottomPanel, m_mixerHeight);
-    place(m_warpPanel, m_warpHeight);
     if (m_timeline) m_timeline->setBottomInset(covered);
 }
 
@@ -12498,7 +12594,7 @@ void MainWindow::buildSemanticCommands() {
         "tool.secondaryMute", "tool.secondaryDraw",
         "tool.secondaryStretch", "tool.secondaryGlue"};
     const QStringList secondaryTools = {
-        tr("Pointer"), tr("Knife"), tr("Eraser"), tr("Region"),
+        tr("Pointer"), tr("Scissors"), tr("Eraser"), tr("Region"),
         tr("Mute"), tr("Draw"), tr("Stretch"), tr("Glue")};
     for (int i = 0; i < int(kSecondaryToolIds.size()); ++i) {
         bind(kSecondaryToolIds[std::size_t(i)],
@@ -12818,13 +12914,13 @@ void MainWindow::buildMenus() {
         else
             pianoActions->addAction(tr("Open the Piano Roll first"))->setEnabled(false);
     });
-    auto* patternActions = edit->addMenu(tr("Pattern Editor Actions"));
+    auto* patternActions = edit->addMenu(tr("Pattern Actions"));
     patternActions->setObjectName(QStringLiteral("CommandMenu.Pattern"));
     connect(patternActions, &QMenu::aboutToShow, this, [this, patternActions] {
         ui::clearMenu(*patternActions);
         if (!m_patternWindow || !m_patternWindow->isVisible() ||
             !m_patternWindow->populateActionsMenu(*patternActions))
-            patternActions->addAction(tr("Select a source in the Pattern Editor first"))->setEnabled(false);
+            patternActions->addAction(tr("Select a sound in the Pattern rack first"))->setEnabled(false);
     });
 
     auto* automationActions = edit->addMenu(tr("Automation Editor Actions"));
@@ -12896,7 +12992,7 @@ void MainWindow::buildMenus() {
             &QAction::triggered, this,
             [this] { packSelectionIntoFolder(false); });
     connect(addCommand(track, "track.packSumming",
-                       tr("Move Selected into a &Summing Folder"), kTrack),
+                       tr("Move Selected into a &Bus Folder"), kTrack),
             &QAction::triggered, this,
             [this] { packSelectionIntoFolder(true); });
     track->addSeparator();
@@ -13191,11 +13287,7 @@ void MainWindow::buildMenus() {
 
     m_showWarpAction = addCommand(view, "view.toggleWarp", tr("Show &Warp"), kView,
                                   QKeySequence(Qt::Key_W));
-    m_showWarpAction->setCheckable(true);
-    connect(m_showWarpAction, &QAction::toggled, this, [this](bool visible) {
-        if (visible) toggleWarpEditor();
-        else setWarpVisible(false);
-    });
+    connect(m_showWarpAction, &QAction::triggered, this, &MainWindow::toggleWarpEditor);
 
     m_showInspectorAction = addCommand(view, "view.toggleInspector",
                                        tr("Show &Inspector"), kView,
@@ -13233,6 +13325,13 @@ void MainWindow::buildMenus() {
 
     // Alt+A rather than a bare letter: bare letters are parked while the typing
     // keyboard has the keys, and a panel toggle should not come and go with it.
+    m_showMasterAction = addCommand(view, "view.toggleMaster", tr("Show Master Panel"), kView, QKeySequence(tr("Alt+M")));
+    m_showMasterAction->setCheckable(true);
+    m_showMasterAction->setChecked(ui::MixerPreferences::instance().masterVisible());
+    connect(m_showMasterAction, &QAction::toggled, this, [](bool on) {
+        ui::MixerPreferences::instance().setMasterVisible(on);
+    });
+
     m_showAiAction = addCommand(view, "view.toggleAi", tr("Show &AI Assistant"),
                                 kView, QKeySequence(tr("Alt+A")));
     m_showAiAction->setCheckable(true);
@@ -13285,7 +13384,7 @@ void MainWindow::buildMenus() {
     connect(addCommand(tools, "tool.select", tr("Pointer Tool"), kTools,
                        QKeySequence(Qt::Key_1)),
             &QAction::triggered, this, [this] { setEditTool(0); });
-    connect(addCommand(tools, "tool.knife", tr("Knife Tool"), kTools,
+    connect(addCommand(tools, "tool.knife", tr("Scissors Tool"), kTools,
                        QKeySequence(Qt::Key_2)),
             &QAction::triggered, this, [this] { setEditTool(1); });
     connect(addCommand(tools, "tool.eraser", tr("Eraser Tool"), kTools,
@@ -15893,11 +15992,13 @@ void MainWindow::openSettings(int tab) {
         connect(m_settingsWindow, &SettingsWindow::timelineAppearanceChanged,
                 m_timeline, [this] {
                     m_timeline->update();
+                    if (m_pianoRoll)
+                        if (auto* view = m_pianoRoll->findChild<PianoRollView*>())
+                            view->update();
                     for (auto* strip : findChildren<WaveformStrip*>()) strip->update();
-                    if (m_warpEditor) {
-                        if (auto* canvas = m_warpEditor->findChild<QWidget*>("WarpCanvas"))
+                    for (auto* editor : findChildren<WarpEditorWidget*>())
+                        if (auto* canvas = editor->findChild<QWidget*>("WarpCanvas"))
                             canvas->update();
-                    }
                 });
         connect(m_settingsWindow, &SettingsWindow::restartRequested, this,
                 [this] {
@@ -16067,35 +16168,33 @@ void MainWindow::openSelectedEditor() {
 }
 
 void MainWindow::openWarpEditor(const QString& trackId, const QString& clipId) {
-    const auto* clip = m_controller.audioClip(trackId.toStdString(), clipId.toStdString());
-    const bool firstOpen = clip && clip->warp.empty();
-    if (!m_warpEditor->setClip(trackId, clipId)) {
-        setWarpVisible(!m_warpPanel->isHidden());
-        auto reason = m_controller.warpUnavailableReason(trackId.toStdString(), clipId.toStdString());
-        if (reason.empty()) reason = "The source audio is unavailable or too short for Warp.";
-        QMessageBox::information(this, tr("Warp Editor"), QString::fromStdString(reason));
-        return;
+    if (!m_controller.audioClip(trackId.toStdString(), clipId.toStdString())) return;
+    const QString key = trackId + '/' + clipId;
+    if (!m_sampleEditors.contains(key)) openSampleEditor(trackId, clipId);
+    if (auto* editor = m_sampleEditors.value(key, nullptr)) {
+        presentInternalWindow(editor);
+        editor->showWarp();
+        m_warpEditor = editor->findChild<WarpEditorWidget*>();
     }
-    setWarpVisible(true);
-    if (firstOpen) markDirty();
 }
 
 void MainWindow::toggleWarpEditor() {
-    if (!m_warpPanel->isHidden()) {
-        setWarpVisible(false);
-        return;
-    }
     const ui::ClipSel selected = m_selection.singleClip();
     if (!selected.clipId.isEmpty() &&
-        m_controller.audioClip(selected.trackId.toStdString(),
-                               selected.clipId.toStdString())) {
+        m_controller.audioClip(selected.trackId.toStdString(), selected.clipId.toStdString())) {
         openWarpEditor(selected.trackId, selected.clipId);
-    } else if (!m_warpEditor->clipId().isEmpty()) {
-        setWarpVisible(true);
-    } else {
-        statusBar()->showMessage(tr("Select an audio clip to open Warp"), 3000);
-        setWarpVisible(false);
+        return;
     }
+    // W is an editor command, like opening Sampler; repeating it focuses the
+    // same tab. Mixer visibility and the arrangement's height are independent.
+    if (m_warpEditor) for (auto* window : m_sampleEditors) {
+        if (window->isAncestorOf(m_warpEditor)) {
+            presentInternalWindow(window);
+            window->showWarp();
+            return;
+        }
+    }
+    statusBar()->showMessage(tr("Select an audio clip to open Warp"), 3000);
 }
 
 void MainWindow::openPianoRoll(const QString& trackId, const QString& clipId) {
@@ -16201,53 +16300,56 @@ void MainWindow::openPattern(const QString& patternId) {
     openPatternClip(patternId, {});
 }
 
+void MainWindow::connectPatternRack() {
+    m_patternWindow = m_mixer->rack()->patternEditor();
+    connect(m_mixer->rack(), &RackWidget::patternRequested, this, &MainWindow::openPatternClip);
+    connect(m_patternWindow, &PatternWindow::projectEdited, this,
+            [this](bool localFileDirty) {
+        m_orphanEditorSweepPending = true;
+        // The Pattern editor already updates its own rows synchronously.
+        // Mirror the lane order now and let channel-strip reconstruction
+        // follow after the first paint, matching direct track gestures.
+        syncStructureViews();
+        if (localFileDirty) markDirty();
+    });
+    connect(m_patternWindow, &PatternWindow::sourceSelectionChanged,
+            this, [this] {
+        const QString source = m_patternWindow->selectedSourceTrackId();
+        m_browserSampleTargetTrackId = source.isEmpty()
+            ? m_selectedTrackId : source;
+        m_browserSampleTargetPreservesSampler = !source.isEmpty();
+        updateLocalProcessingActions();
+    });
+    connect(m_patternWindow, &PatternWindow::openPianoRollRequested, this,
+            &MainWindow::openPianoRoll);
+    connect(m_patternWindow, &PatternWindow::openPluginEditorRequested, this,
+            &MainWindow::openPluginEditor);
+    connect(m_patternWindow, &PatternWindow::automateControlRequested, this,
+            [this](const QString& trackId, bool pan) {
+                daw::AutomationTarget target;
+                target.kind = pan ? daw::AutomationTargetKind::TrackPan
+                                  : daw::AutomationTargetKind::TrackVolume;
+                target.channelId = trackId.toStdString();
+                automateTarget(target);
+            });
+    connect(m_patternWindow, &PatternWindow::automateMuteRequested, this,
+            [this](const QString& trackId) {
+                daw::AutomationTarget target;
+                target.kind = daw::AutomationTargetKind::TrackMute;
+                target.channelId = trackId.toStdString();
+                automateTarget(target);
+            });
+}
+
 void MainWindow::openPatternClip(const QString& patternId, const QString& clipId) {
-    const auto* pattern =
-        m_controller.project().findTrack(patternId.toStdString());
+    const auto* pattern = m_controller.project().findTrack(patternId.toStdString());
     if (!pattern || pattern->kind != daw::TrackKind::Pattern) return;
-    if (!m_patternWindow) {
-        m_patternWindow = new PatternWindow(&m_controller, this);
-        hostInternalWindow(m_patternWindow,
-                           QStringLiteral("internalEditors/pattern"));
-        connect(m_patternWindow, &PatternWindow::projectEdited, this,
-                [this](bool localFileDirty) {
-            m_orphanEditorSweepPending = true;
-            // The Pattern editor already updates its own rows synchronously.
-            // Mirror the lane order now and let channel-strip reconstruction
-            // follow after the first paint, matching direct track gestures.
-            syncStructureViews();
-            if (localFileDirty) markDirty();
-        });
-        connect(m_patternWindow, &PatternWindow::sourceSelectionChanged,
-                this, [this] {
-            const QString source = m_patternWindow->selectedSourceTrackId();
-            m_browserSampleTargetTrackId = source.isEmpty()
-                ? m_selectedTrackId : source;
-            m_browserSampleTargetPreservesSampler = !source.isEmpty();
-            updateLocalProcessingActions();
-        });
-        connect(m_patternWindow, &PatternWindow::openPianoRollRequested, this,
-                &MainWindow::openPianoRoll);
-        connect(m_patternWindow, &PatternWindow::openPluginEditorRequested, this,
-                &MainWindow::openPluginEditor);
-        connect(m_patternWindow, &PatternWindow::automateControlRequested, this,
-                [this](const QString& trackId, bool pan) {
-                    daw::AutomationTarget target;
-                    target.kind = pan ? daw::AutomationTargetKind::TrackPan
-                                      : daw::AutomationTargetKind::TrackVolume;
-                    target.channelId = trackId.toStdString();
-                    automateTarget(target);
-                });
-        connect(m_patternWindow, &PatternWindow::automateMuteRequested, this,
-                [this](const QString& trackId) {
-                    daw::AutomationTarget target;
-                    target.kind = daw::AutomationTargetKind::TrackMute;
-                    target.channelId = trackId.toStdString();
-                    automateTarget(target);
-                });
-    }
-    m_patternWindow->setPattern(patternId, clipId);
-    presentInternalWindow(m_patternWindow);
+    m_trackList->setSelectedTrack(patternId);
+    onSelectionChanged(patternId);
+    m_mixer->setRackMode(true);
+    m_mixer->rack()->setPattern(patternId, clipId);
+    setMixerVisible(true);
+    m_patternWindow->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::loadBrowserSample(const QString& path) {
@@ -17160,8 +17262,8 @@ bool MainWindow::routeEditChord(EditChord chord) {
             return true;
         }
     }
-    if (m_warpEditor && m_warpEditor->ownsEditingFocus()) {
-        if (chord == EditChord::Delete) m_warpEditor->deleteMarkers();
+    for (auto* editor : findChildren<WarpEditorWidget*>()) if (editor->ownsEditingFocus()) {
+        if (chord == EditChord::Delete) editor->deleteMarkers();
         return true;
     }
 
@@ -18634,7 +18736,7 @@ void MainWindow::packSelectionIntoFolder(bool summing) {
     markDirty();
     selectTrackFromHeader(id);
     statusBar()->showMessage(
-        summing ? tr("Summing folder created — everything inside it now runs "
+        summing ? tr("Bus folder created — everything inside it now runs "
                      "through its channel")
                 : tr("Folder created — drag other tracks onto it to add them"),
         4000);
@@ -18718,7 +18820,7 @@ void MainWindow::setAllAutomationLanesVisible(bool visible) {
         return;
     }
 
-    const std::size_t mark = m_controller.undoDepth();
+    const auto group = m_controller.beginUndoGroup();
     bool changed = false;
     if (visible) {
         // Reveal nested channels, but keep this separate from the automation
@@ -18751,9 +18853,9 @@ void MainWindow::setAllAutomationLanesVisible(bool visible) {
         changed = true;
     }
 
+    m_controller.collapseUndo(group, visible ? "Show All Automation"
+                                            : "Hide All Automation");
     if (changed) {
-        m_controller.collapseUndo(mark, visible ? "Show All Automation"
-                                                : "Hide All Automation");
         syncViews();
         markDirty();
         statusBar()->showMessage(
@@ -18809,7 +18911,14 @@ void MainWindow::onSelectionChanged(const QString& trackId) {
                                               : QStringList{trackId});
     if (m_inspector)
         m_inspector->setSelection(trackId, m_selection.singleClip().clipId);
-    if (m_mixer) m_mixer->setSelectedTrack(trackId);
+    if (m_mixer) {
+        m_mixer->setSelectedTrack(trackId);
+        const auto selected = m_selection.singleClip();
+        const auto* track = m_controller.project().findTrack(trackId.toStdString());
+        if (track && track->kind == daw::TrackKind::Pattern && selected.trackId == trackId &&
+            !selected.clipId.isEmpty())
+            m_mixer->rack()->setPattern(trackId, selected.clipId);
+    }
     syncAutomationVisibilityButton();
 }
 
@@ -19049,7 +19158,7 @@ void MainWindow::analyzeAudioClip(const QString& trackId, const QString& clipId,
     // command. Both still belong to this exact clip instance.
     if (!detectTempo) model.tempo = clip->musicalAnalysis.tempo;
     if (!detectKey) model.key = clip->musicalAnalysis.key;
-    const std::size_t undoStart = m_controller.undoDepth();
+    const auto undoStart = m_controller.beginUndoGroup();
     m_controller.setClipMusicalAnalysis(trackId.toStdString(), clipId.toStdString(),
                                         model, "Analyze Audio Clip");
 
@@ -19147,9 +19256,7 @@ void MainWindow::showNextDownloadedAudioPrompt() {
 
     bool imported = false;
     QString landedTrack;
-    const std::size_t undoStart = m_controller.undoDepth();
-    if (choice != DownloadedAudioDialog::Choice::None && tempoToApply > 0.0)
-        m_controller.setTempo(tempoToApply);
+    const auto undoStart = m_controller.beginUndoGroup();
     if (choice == DownloadedAudioDialog::Choice::NewTrack) {
         const QString name = QFileInfo(pending.path).completeBaseName();
         const std::string trackId = m_controller.importAudioToNewTrack(
@@ -19158,8 +19265,6 @@ void MainWindow::showNextDownloadedAudioPrompt() {
         if (!trackId.empty()) {
             imported = true;
             landedTrack = QString::fromStdString(trackId);
-            syncViews();
-            selectTrackFromHeader(landedTrack);
         }
     } else if (choice == DownloadedAudioDialog::Choice::SelectedTrack &&
                !selectedId.isEmpty()) {
@@ -19173,14 +19278,19 @@ void MainWindow::showNextDownloadedAudioPrompt() {
                                          analysisModel)
                             .empty();
             landedTrack = selectedId;
-            if (imported) syncViews();
         }
     }
 
     if (imported) {
+        // Musical values are part of a successful import. Deferring them also
+        // leaves the existing Undo/Redo branch intact if decoding fails.
+        if (tempoToApply > 0.0) m_controller.setTempo(tempoToApply);
         if (applyPitchKey)
             applyDetectedKeyToPitch(analysisModel.key.root, analysisModel.key.scale);
         m_controller.collapseUndo(undoStart, "Import Downloaded Audio");
+        syncViews();
+        if (choice == DownloadedAudioDialog::Choice::NewTrack)
+            selectTrackFromHeader(landedTrack);
         markDirty();
         const auto* track =
             m_controller.project().findTrack(landedTrack.toStdString());
@@ -19189,18 +19299,18 @@ void MainWindow::showNextDownloadedAudioPrompt() {
                 .arg(QFileInfo(pending.path).fileName(),
                      track ? QString::fromStdString(track->name) : landedTrack),
             4000);
-    } else if (choice != DownloadedAudioDialog::Choice::None) {
-        // If applying the detected tempo succeeded but the import itself did
-        // not, do not leave that unrelated project edit behind.
-        while (m_controller.undoDepth() > undoStart) m_controller.undo();
-        if (forcedChoice != 0)
-            statusBar()->showMessage(tr("Downloaded audio import failed"), 3000);
-        else
-        QMessageBox::warning(
-            this, tr("Import failed"),
-            tr("The downloaded file was kept in Downloads, but could not be "
-               "added to the project.\n\n%1")
-                .arg(pending.path));
+    } else {
+        m_controller.releaseUndoGroup(undoStart);
+        if (choice != DownloadedAudioDialog::Choice::None) {
+            if (forcedChoice != 0)
+                statusBar()->showMessage(tr("Downloaded audio import failed"), 3000);
+            else
+                QMessageBox::warning(
+                    this, tr("Import failed"),
+                    tr("The downloaded file was kept in Downloads, but could not be "
+                       "added to the project.\n\n%1")
+                        .arg(pending.path));
+        }
     }
 
     m_audioImportDialogOpen = false;
@@ -20363,7 +20473,7 @@ bool MainWindow::initializeBlankProject() {
         serviceAudioHealth();
         return false;
     }
-    if (m_warpEditor) m_warpEditor->clearClip();
+    for (auto* editor : findChildren<WarpEditorWidget*>()) editor->clearClip();
     const auto& tracks = m_controller.project().tracks;
     m_selectedTrackId = tracks.empty()
                             ? QString()
@@ -20499,13 +20609,73 @@ bool MainWindow::checkProjectPreviewForTest() {
     resize(1100, 720);
     show();
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    bool ok = true;
+    const auto check = [&](bool passed, const char* message) {
+        std::fprintf(stderr, "%s project preview: %s\n", passed ? "PASS" : "FAIL", message);
+        ok &= passed;
+    };
+    // Mark the workspace corners and the separate Widgets status bar. These
+    // detect black/native-child captures, timeline-only crops and DPR offsets.
+    std::array<std::unique_ptr<QWidget>, 4> markers;
+    for (int i = 0; i < int(markers.size()); ++i) {
+        auto* parent = i == 3 ? static_cast<QWidget*>(statusBar()) : centralWidget();
+        auto& marker = markers[i];
+        marker = std::make_unique<QWidget>(parent);
+        marker->setGeometry(i == 0 || i == 3 ? 12 : parent->width() - 36,
+                            i == 2 ? parent->height() - 36 : 2, 24, 16);
+        marker->setAutoFillBackground(true);
+        auto palette = marker->palette();
+        palette.setColor(QPalette::Window, QColor::fromHsv(i * 80, 220, 230));
+        marker->setPalette(palette);
+        marker->show();
+        marker->raise();
+    }
+    const auto containsWindow = [&](const QImage& image) {
+        if (image.isNull() ||
+            std::abs(image.width() * height() - image.height() * width()) > std::max(width(), height()))
+            return false;
+        for (const auto& marker : markers) {
+            const QPoint position = marker->mapTo(this, marker->rect().center());
+            const QColor actual = image.pixelColor(position.x() * image.width() / width(),
+                                                   position.y() * image.height() / height());
+            const QColor expected = marker->palette().color(QPalette::Window);
+            if (std::abs(actual.red() - expected.red()) > 12 ||
+                std::abs(actual.green() - expected.green()) > 12 ||
+                std::abs(actual.blue() - expected.blue()) > 12 || actual.alpha() != 255)
+                return false;
+        }
+        return true;
+    };
     const QString path = QDir(temporary.path()).filePath(QStringLiteral("Preview Test.vlt"));
     if (!doSave(path)) return false;
     const QImage preview(ui::projectPreviewPath(path));
-    const bool captured = !preview.isNull() && preview.width() <= 960 && preview.height() <= 540 &&
-                          m_controller.project().coverImagePath.empty();
-    const QString screenshot = qEnvironmentVariable("VLT_PROJECT_TIMELINE_SCREENSHOT");
-    if (!screenshot.isEmpty() && !preview.save(screenshot)) return false;
+    check(containsWindow(preview) && preview.width() <= 960 && preview.height() <= 540 &&
+          m_controller.project().coverImagePath.empty(), "save captures the whole window with visible pixels");
+    auto changedPalette = markers.front()->palette();
+    changedPalette.setColor(QPalette::Window, QColor(40, 230, 200));
+    markers.front()->setPalette(changedPalette);
+    // Deliberately save without waiting for another presentation frame.
+    if (!doSave(path)) return false;
+    check(containsWindow(QImage(ui::projectPreviewPath(path))), "saving again captures pending UI changes");
+
+    QTimer::singleShot(0, this, [&] {
+        auto* dialog = findChild<ui::ProjectSaveDialog*>();
+        if (!dialog) return;
+        auto* cover = dialog->findChild<QLabel*>(QStringLiteral("ProjectCover"));
+        check(cover && containsWindow(cover->pixmap().toImage()), "Save As shows the same whole-window preview");
+        dialog->findChild<QLineEdit*>(QStringLiteral("ProjectName"))->setText(QStringLiteral("Preview Copy"));
+        dialog->findChild<QLineEdit*>(QStringLiteral("ProjectLocation"))->setText(temporary.path());
+        dialog->accept();
+    });
+    if (!saveProjectAs()) return false;
+    const QString copyPath = QDir(temporary.path()).filePath(QStringLiteral("Preview Copy.vlt"));
+    check(containsWindow(QImage(ui::projectPreviewPath(copyPath))), "Save As persists the whole window without its dialog");
+
+    for (const auto& marker : markers) marker->hide();
+    const QString screenshot = qEnvironmentVariable("VLT_PROJECT_WINDOW_SCREENSHOT",
+        qEnvironmentVariable("VLT_PROJECT_TIMELINE_SCREENSHOT"));
+    if (!screenshot.isEmpty() && !captureProjectPreview().save(screenshot)) return false;
+    const QImage automaticPreview(ui::projectPreviewPath(path));
     QImage cover(320, 180, QImage::Format_RGB32);
     cover.fill(QColor(180, 60, 80));
     const QString coverPath = QDir(temporary.path()).filePath(QStringLiteral("cover.png"));
@@ -20516,9 +20686,9 @@ bool MainWindow::checkProjectPreviewForTest() {
     const bool customPreserved = daw::ProjectSerializer::load(loaded, path.toStdString()) &&
         !loaded.coverImagePath.empty() &&
         QImage(QString::fromStdString(loaded.coverImagePath)).pixelColor(0, 0) == cover.pixelColor(0, 0);
-    std::fprintf(stderr, "%s project save: real timeline capture and custom cover survive save/reopen\n",
-                 captured && customPreserved ? "PASS" : "FAIL");
-    return captured && customPreserved;
+    check(customPreserved && QImage(ui::projectPreviewPath(path)) == automaticPreview,
+          "custom cover survives save/reopen and leaves automatic artwork untouched");
+    return ok;
 }
 
 bool MainWindow::checkStartupTemplateForTest() {
@@ -20690,7 +20860,7 @@ bool MainWindow::openProjectPath(const QString& path) {
 #ifdef DAW_ENABLE_COLLABORATION
     clearCloudProjectBinding(/*cancelPublication=*/true);
 #endif
-    if (m_warpEditor) m_warpEditor->clearClip();
+    for (auto* editor : findChildren<WarpEditorWidget*>()) editor->clearClip();
     m_projectPath = dir;
     ui::rememberRecentProject(dir);
     m_selectedTrackId.clear();
@@ -20712,6 +20882,24 @@ bool MainWindow::openProjectPath(const QString& path) {
     raise();
     activateWindow();
     return true;
+}
+
+QImage MainWindow::captureProjectPreview() {
+    if (!isVisible() || isMinimized()) return {};
+    QImage image = grab().toImage();
+    if (image.isNull()) return {};
+    auto* central = centralWidget();
+    if (central && central->property("vlt.gpuSurfaceActive").toBool()) {
+        auto* surface = central->findChild<ui::graphics::WorkspaceSurface*>(
+            QString(), Qt::FindDirectChildrenOnly);
+        const QImage workspace = surface ? surface->grabImage() : QImage();
+        // A widget grab omits native Quick children. Never overwrite the last
+        // good preview with an empty workspace if GPU readback is unavailable.
+        if (workspace.isNull()) return {};
+        QPainter painter(&image);
+        painter.drawImage(QRect(central->mapTo(this, QPoint()), central->size()), workspace);
+    }
+    return image;
 }
 
 bool MainWindow::doSave(const QString& packageDir) {
@@ -20762,21 +20950,21 @@ bool MainWindow::doSave(const QString& packageDir) {
         m_controller.setProjectName(
             QFileInfo(dir).completeBaseName().toStdString());
     }
-    // Capture the arrangement before the save progress dialog covers it. A
+    // Capture the whole window before the save progress dialog covers it. A
     // separate optional preview leaves the user's chosen cover untouched.
-    const QImage timelinePreview = m_controller.project().coverImagePath.empty() && m_timeline
-        ? m_timeline->grab().toImage() : QImage();
+    const QImage windowPreview = m_controller.project().coverImagePath.empty()
+        ? captureProjectPreview() : QImage();
     const auto savedUiRevision = m_projectRevision;
     const auto savedControllerRevision = m_controller.projectRevision();
     auto prepared = std::make_shared<daw::recovery::RecoverySnapshot>(m_controller.prepareProjectSave());
     audio::Result r = audio::Result::fail(audio::EngineError::FileWriteError, "Save interrupted");
     try {
         const auto result = ui::prepareInBackground<audio::Result>(this, tr("Saving project…"),
-            [prepared, timelinePreview, path = dir.toStdString()](const auto&) {
+            [prepared, windowPreview, path = dir.toStdString()](const auto&) {
                 const auto saved = daw::EngineController::writePreparedProject(*prepared, path);
-                if (saved && !timelinePreview.isNull() &&
-                    !ui::saveProjectPreview(QString::fromStdString(path), timelinePreview))
-                    qWarning("Project saved, but its timeline preview could not be written");
+                if (saved && !windowPreview.isNull() &&
+                    !ui::saveProjectPreview(QString::fromStdString(path), windowPreview))
+                    qWarning("Project saved, but its window preview could not be written");
                 return saved;
             }, false); // State/media precede one atomic manifest publication.
         if (result) r = *result;
@@ -20905,7 +21093,7 @@ bool MainWindow::saveProjectAs() {
     ui::ProjectSaveDialog dialog(
         displayProjectName(project.name), QString::fromStdString(project.author),
         QString::fromStdString(project.coverImagePath), parentDirectory, this);
-    if (m_timeline) dialog.setTimelinePreview(m_timeline->grab().toImage());
+    dialog.setWindowPreview(captureProjectPreview());
     if (dialog.exec() != QDialog::Accepted) return false;
 
     const ui::ProjectSaveOptions options = dialog.options();
@@ -20959,13 +21147,13 @@ bool MainWindow::maybeSaveChanges() {
 // ── Undo / redo ──
 
 void MainWindow::onUndo() {
-    if (m_warpEditor && m_warpEditor->ownsEditingFocus()) {
+    for (auto* editor : findChildren<WarpEditorWidget*>()) if (editor->ownsEditingFocus()) {
         auto* focus = QApplication::focusWidget();
         auto* field = qobject_cast<QLineEdit*>(focus);
         if (auto* box = qobject_cast<QAbstractSpinBox*>(focus)) field = box->findChild<QLineEdit*>();
         if (field) { field->undo(); return; }
     }
-    if (m_warpEditor) m_warpEditor->finishPendingEdit();
+    for (auto* editor : findChildren<WarpEditorWidget*>()) editor->finishPendingEdit();
     if (m_notebookWindow && m_notebookWindow->handleEditorCommand(QStringLiteral("undo"))) return;
     if (m_webPanel && m_webPanel->handleUndoRedo(false)) return;
     if (m_pianoRoll) m_pianoRoll->finishPendingNoteEdit();
@@ -20988,13 +21176,13 @@ void MainWindow::onUndo() {
     markDirty();
 }
 void MainWindow::onRedo() {
-    if (m_warpEditor && m_warpEditor->ownsEditingFocus()) {
+    for (auto* editor : findChildren<WarpEditorWidget*>()) if (editor->ownsEditingFocus()) {
         auto* focus = QApplication::focusWidget();
         auto* field = qobject_cast<QLineEdit*>(focus);
         if (auto* box = qobject_cast<QAbstractSpinBox*>(focus)) field = box->findChild<QLineEdit*>();
         if (field) { field->redo(); return; }
     }
-    if (m_warpEditor) m_warpEditor->finishPendingEdit();
+    for (auto* editor : findChildren<WarpEditorWidget*>()) editor->finishPendingEdit();
     if (m_notebookWindow && m_notebookWindow->handleEditorCommand(QStringLiteral("redo"))) return;
     if (m_webPanel && m_webPanel->handleUndoRedo(true)) return;
     if (m_pianoRoll) m_pianoRoll->finishPendingNoteEdit();
@@ -21120,6 +21308,7 @@ void MainWindow::refreshUi() {
         if (m_contextPanel) m_contextPanel->followSelection();
         m_transport->refresh();
     }
+    if (m_masterPanel && m_masterPanel->isVisible()) m_masterPanel->sync();
     if (m_mixer && m_mixer->isVisible()) m_mixer->syncMeterTimer();
     if (!m_controller.isPlaying() && !m_controller.isRecording()) {
         if (m_trackList && m_trackList->isVisible()) m_trackList->refreshMeters();
@@ -21161,8 +21350,19 @@ void MainWindow::refreshUi() {
     // recorder is handled.
     {
         ui::perf::Scope phase("refreshUi.pluginEvents.ms");
-        if (m_controller.pumpPluginEvents()) markDirty();
-        const auto automationChange = m_controller.followTouchedAutomation();
+        bool pluginEdited = false;
+        {
+            ui::perf::Scope cost("refreshUi.pluginPump.ms");
+            pluginEdited = m_controller.pumpPluginEvents();
+        }
+        if (pluginEdited) {
+            ui::perf::Scope cost("refreshUi.pluginMarkDirty.ms");
+            markDirty();
+        }
+        const auto automationChange = [&] {
+            ui::perf::Scope cost("refreshUi.followAutomation.ms");
+            return m_controller.followTouchedAutomation();
+        }();
         if (automationChange == daw::EngineController::AutomationFollowChange::Structure) {
             syncViews();
             markDirty();
@@ -21182,7 +21382,10 @@ void MainWindow::refreshUi() {
                     m_controller.queuePluginStateSync(editor->channelId().toStdString(), editor->insertId().toStdString());
             }
         }
-        m_controller.pumpPluginStateSync();
+        {
+            ui::perf::Scope cost("refreshUi.pluginStateSync.ms");
+            m_controller.pumpPluginStateSync();
+        }
         if (!m_deferredSessionMode.isEmpty() && !m_controller.isRecording() && !m_controller.isCountingIn() &&
             (!m_modeRetryClock.isValid() || m_modeRetryClock.elapsed() >= 2000)) {
             const QString mode = std::exchange(m_deferredSessionMode, QString());

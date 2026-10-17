@@ -130,6 +130,71 @@ bool EngineController::copyEqualizerComparison(const std::string& channelId, con
     return m_runtime->copyEqualizerComparison(pluginAddress(channelId, insertId));
 }
 
+#if DAW_ENABLE_REVERB
+std::optional<ReverbSnapshot> EngineController::reverbSnapshot(const std::string& channel, const std::string& slot) const {
+    auto result = m_runtime->reverbSnapshot(pluginAddress(channel, slot));
+    if (result) {
+        for (const auto& p : plugins::reverb::parameterTable())
+            result->state.values[p.index] = insertParameter(channel, slot, p.id);
+        (result->state.comparison == 'A' ? result->state.a : result->state.b) = result->state.values;
+    }
+    return result;
+}
+
+bool EngineController::applyReverbState(const std::string& channel, const std::string& slot,
+                                        const plugins::reverb::State& state, const std::string& label) {
+    if (!sharedEditingAllowed() || !sharedGestureAllowed("plugin:" + slot) ||
+        (state.comparison != 'A' && state.comparison != 'B') || state.presetName.size() > 256 || state.presetKind.size() > 256) return false;
+    const auto before = reverbSnapshot(channel, slot);
+    if (!before) return false;
+    for (const auto* values : {&state.values, &state.a, &state.b})
+        for (const auto& p : plugins::reverb::parameterTable())
+            if (!std::isfinite((*values)[p.index]) || (*values)[p.index] < p.minValue || (*values)[p.index] > p.maxValue ||
+                (p.isStepped && std::round((*values)[p.index]) != (*values)[p.index])) return false;
+    unfreezeTrack(channel, false);
+    const auto identity = insertIdentity(channel, slot);
+    const auto address = pluginAddress(channel, slot, identity.instance);
+    const auto undo = beginUndoGroup();
+    for (const auto& p : plugins::reverb::parameterTable()) {
+        if (before->state.values[p.index] == state.values[p.index]) continue;
+        setInsertParameter(channel, slot, p.id, state.values[p.index]);
+        commitInsertParameterEdit(channel, slot, p.id, before->state.values[p.index], label);
+    }
+    if (insertIdentity(channel, slot) != identity || !m_runtime->setReverbComparisonState(address, state)) {
+        releaseUndoGroup(undo); return false;
+    }
+    // Include the banks, selected side and preset label in the same undo as
+    // the parameter edits. Merely restoring the audible values loses A/B.
+    const auto project = m_projectGeneration;
+    const auto restore = [this, channel, slot, project, right = address.right](const plugins::reverb::State& saved) {
+        if (m_projectGeneration != project) return;
+        auto target = pluginAddress(channel, slot); target.right = right;
+        m_runtime->setReverbComparisonState(target, saved);
+    };
+    m_undo.push(label, [restore, old = before->state] { restore(old); }, [restore, state] { restore(state); });
+    collapseUndo(undo, label);
+    return true;
+}
+
+bool EngineController::switchReverbComparison(const std::string& channel, const std::string& slot, char side) {
+    const auto current = reverbSnapshot(channel, slot);
+    if (!current || (side != 'A' && side != 'B') || current->state.comparison == side) return false;
+    auto state = current->state;
+    state.values = side == 'A' ? state.a : state.b;
+    state.comparison = side; state.presetKind = "custom"; state.presetName = "Custom";
+    return applyReverbState(channel, slot, state, "Switch Reverb A/B");
+}
+
+bool EngineController::copyReverbComparison(const std::string& channel, const std::string& slot) {
+    const auto current = reverbSnapshot(channel, slot);
+    if (!current) return false;
+    auto state = current->state;
+    (state.comparison == 'A' ? state.b : state.a) = state.values;
+    return applyReverbState(channel, slot, state, "Copy Reverb A/B");
+}
+
+#endif
+
 bool EngineController::setGravityFrozen(const std::string& channelId, const std::string& insertId, bool frozen) {
     if (!sharedEditingAllowed() || !sharedGestureAllowed("plugin:" + insertId)) return false;
     return m_runtime->setGravityFrozen(pluginAddress(channelId, insertId), frozen);

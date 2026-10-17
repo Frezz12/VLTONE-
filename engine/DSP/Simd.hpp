@@ -28,6 +28,7 @@ inline void clear(std::span<float> destination) noexcept {
 
 inline void copy(std::span<float> destination,
                  std::span<const float> source) noexcept {
+    if (destination.data() == source.data()) return;
     const std::size_t n = std::min(destination.size(), source.size());
     std::memcpy(destination.data(), source.data(), n * sizeof(float));
 }
@@ -127,6 +128,7 @@ inline void add(std::span<float> destination,
 /// followed by a scaling pass.
 inline void copyScaled(std::span<float> destination,
                        std::span<const float> source, float gain) noexcept {
+    if (gain == 1.0f && destination.data() == source.data()) return;
     const std::size_t n = std::min(destination.size(), source.size());
     if (kAvx2Kernels && n >= 32) {
         kAvx2Kernels->copyScaled(destination.data(), source.data(), n, gain); return;
@@ -170,6 +172,33 @@ inline bool isSilent(std::span<const float> source) noexcept {
 #endif
     for (; i < source.size(); ++i)
         if ((std::bit_cast<std::uint32_t>(source[i]) & 0x7fffffffu) != 0) return false;
+    return true;
+}
+
+/// Inspect IEEE-754 exponent bits so NaN/Inf cannot be optimized away by
+/// floating-point flags. Integer SIMD also handles signaling NaNs without
+/// raising an FP exception; finite subnormals and either sign of zero pass.
+inline bool allFinite(std::span<const float> source) noexcept {
+    std::size_t i = 0;
+#if DAW_SIMD_NEON
+    const auto exponent = vdupq_n_u32(0x7f800000u);
+    auto invalid = vdupq_n_u32(0);
+    for (; i + 4 <= source.size(); i += 4) {
+        const auto bits = vreinterpretq_u32_f32(vld1q_f32(source.data() + i));
+        invalid = vorrq_u32(invalid, vceqq_u32(vandq_u32(bits, exponent), exponent));
+    }
+    if (vmaxvq_u32(invalid)) return false;
+#elif DAW_SIMD_X86
+    const auto exponent = _mm_set1_epi32(0x7f800000);
+    auto invalid = _mm_setzero_si128();
+    for (; i + 4 <= source.size(); i += 4) {
+        const auto bits = _mm_castps_si128(_mm_loadu_ps(source.data() + i));
+        invalid = _mm_or_si128(invalid, _mm_cmpeq_epi32(_mm_and_si128(bits, exponent), exponent));
+    }
+    if (_mm_movemask_epi8(invalid)) return false;
+#endif
+    for (; i < source.size(); ++i)
+        if ((std::bit_cast<std::uint32_t>(source[i]) & 0x7f800000u) == 0x7f800000u) return false;
     return true;
 }
 

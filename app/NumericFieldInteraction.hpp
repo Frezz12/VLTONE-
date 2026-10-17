@@ -109,7 +109,7 @@ protected:
             m_dragging = false;
             m_drag.begin(mouse->globalPosition());
             m_box->grabMouse();
-            cursor(Qt::ClosedHandCursor);
+            cursor(Qt::SizeVerCursor);
             event->accept();
             return true;
         }

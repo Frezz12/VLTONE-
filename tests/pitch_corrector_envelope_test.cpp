@@ -61,11 +61,11 @@ int main() {
                     passed ? "PASS" : "FAIL", quality ? "HD" : "Real-Time", firstChange[0], firstChange[1], error[0], error[1]);
         failed += !passed;
     }
-    // A brief uncertain excursion must not become an extra chromatic note;
-    // a subsequent intentional sustained change still has to be accepted.
+    // Nonzero retune retains confirmation for a brief uncertain excursion;
+    // zero deliberately tracks short notes immediately (tracking_test).
     {
         PitchCorrectorDSP processor; processor.prepare(rate, 64, 1, 0);
-        Settings settings; settings.tune = 100; settings.humanize = settings.vibrato = 0;
+        Settings settings; settings.tune = tuneFromMilliseconds(.5); settings.humanize = settings.vibrato = 0;
         double oscillator = 0, firstNewNote = 10;
         std::uint32_t excursionNoise = 419;
         bool falseNote = false;

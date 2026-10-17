@@ -4,11 +4,11 @@
 # daw_audio_runtime, which has no dependency on the controller or a UI framework.
 file(GLOB_RECURSE DAW_CONTROLLER_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-list(FILTER DAW_CONTROLLER_SOURCES EXCLUDE REGEX "/AudioRuntime(Graph|Content|Plugins|PluginUi|PluginLifecycle|PluginService|MiniModules|Audition|Control|State|Recording|Session)?\\.cpp$")
+list(FILTER DAW_CONTROLLER_SOURCES EXCLUDE REGEX "/AudioRuntime(Graph|Content|Modulation|Plugins|PluginUi|PluginLifecycle|PluginService|MiniModules|Audition|Control|State|Recording|Session)?\\.cpp$")
 list(FILTER DAW_CONTROLLER_SOURCES EXCLUDE REGEX "/AudioContentValidation\\.cpp$")
 list(FILTER DAW_CONTROLLER_SOURCES EXCLUDE REGEX "/SampleLoader\\.cpp$")
 
-add_library(daw_audio_runtime STATIC AudioRuntime.cpp AudioRuntimeGraph.cpp AudioRuntimeContent.cpp
+add_library(daw_audio_runtime STATIC AudioRuntimeModulation.cpp AudioRuntime.cpp AudioRuntimeGraph.cpp AudioRuntimeContent.cpp
     AudioRuntimePlugins.cpp AudioRuntimePluginUi.cpp AudioRuntimeControl.cpp AudioRuntimeState.cpp
     AudioRuntimeRecording.cpp AudioRuntimePluginLifecycle.cpp AudioRuntimePluginService.cpp AudioRuntimeMiniModules.cpp
     AudioRuntimeAudition.cpp AudioContentValidation.cpp AudioRuntimeSession.cpp SampleLoader.cpp)

@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics/ScenePaintSource.hpp"
+#include "UiFrameClock.hpp"
 #include <QElapsedTimer>
 
 #include "Icons.hpp"
@@ -18,6 +19,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 
@@ -85,6 +87,8 @@ double gainFromFaderPosition(double position);
 double faderPositionFromGain(double gain);
 /// "−12.3 dB" / "−∞ dB"
 QString formatGainDb(double gain);
+/// "C", "L25" or "R25", shared by track, mixer and sampler readouts.
+QString formatPan(double pan);
 
 /// Explicit automation-creation mode, toggled by the toolbar or its command.
 /// Modifier keys alone never enable it; the context menu works in either mode.
@@ -354,6 +358,7 @@ public:
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
     bool isEditing() const noexcept { return m_dragging; }
+    void finishEditing();
 
 signals:
     void gainChanged(double gain);
@@ -370,6 +375,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseDoubleClickEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
+    void keyPressEvent(QKeyEvent*) override;
     void contextMenuEvent(QContextMenuEvent*) override;
     void enterEvent(QEnterEvent*) override;
     void leaveEvent(QEvent*) override;
@@ -575,6 +581,13 @@ public:
     /// for positive, ratio-based parameters such as frequency: one pixel then
     /// represents the same musical interval at 30 Hz and at 3 kHz.
     void setLogarithmic(bool logarithmic);
+    void setValueMapping(std::function<double(double)> toNormalized, std::function<double(double)> fromNormalized) {
+        m_toNormalized = std::move(toNormalized); m_fromNormalized = std::move(fromNormalized); update();
+    }
+    void setModulation(bool active, double low, double high, double effective) {
+        m_modulated = active; m_modLow = std::clamp(low, 0., 1.); m_modHigh = std::clamp(high, 0., 1.);
+        m_modEffective = std::clamp(effective, 0., 1.); update();
+    }
     /// Snap to whole numbers, for a stepped parameter.
     void setStepped(bool stepped) { m_stepped = stepped; }
     void setFormatter(std::function<QString(double)> formatter);
@@ -651,6 +664,11 @@ private:
     double valueForFraction(double fraction) const;
     QString text() const;
 
+protected:
+    void paintModulation(QPainter&, const QRectF& ring, bool vertical = false) const;
+
+private:
+
     QString m_caption;
     double m_value = 0.0;
     double m_min = 0.0;
@@ -659,6 +677,9 @@ private:
     QColor m_arcColor;
     bool m_bipolar = false;
     bool m_logarithmic = false;
+    std::function<double(double)> m_toNormalized, m_fromNormalized;
+    bool m_modulated = false;
+    double m_modLow = 0, m_modHigh = 0, m_modEffective = 0;
     bool m_stepped = false;
     bool m_compact = false;
     std::function<double(double)> m_detent;
@@ -733,7 +754,7 @@ private:
 };
 
 /// dB-scaled level meter with peak hold. One or two bars.
-class LevelMeter : public QWidget, public ui::graphics::ScenePaintSource {
+class LevelMeter : public FrameWidget, public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
     explicit LevelMeter(Qt::Orientation orientation = Qt::Vertical,
@@ -743,6 +764,8 @@ public:
     void setPeak(float peak);
     void setPeaks(float left, float right);
     void clearClip();
+    void clearLevels(); // Rebind a virtual channel without carrying its envelope.
+    bool hasVisibleLevel() const;
 
     /// How the meter is drawn.
     ///   Panel — a standalone rounded instrument with a clip lamp above it.
@@ -754,7 +777,10 @@ public:
     ///           has no room beside it for a separate lamp.
     enum class Style { Panel, Rail, Console };
     void setMeterStyle(Style style);
-    void setScaleInsets(const QMarginsF& insets) { m_scaleInsets = insets; update(); }
+    void setScaleInsets(const QMarginsF& insets) {
+        if (m_scaleInsets == insets) return;
+        m_scaleInsets = insets; update();
+    }
     /// Console clip latch follows the audio-side maximum, even if a transient
     /// happened between UI frames or while this view was hidden.
     void setPeakHold(float peak);
@@ -769,6 +795,8 @@ protected:
 
 private:
     void drawBar(QPainter& p, const QRectF& r, float level, float hold) const;
+    std::array<int, 5> displayState() const;
+    void updateIfChanged();
 
     Qt::Orientation m_orientation;
     int m_channels;
@@ -778,6 +806,7 @@ private:
     QElapsedTimer m_decayClock;
     bool m_clipped = false;
     QMarginsF m_scaleInsets;
+    std::array<int, 5> m_displayed{-1, -1, -1, -1, -1};
 };
 
 /// A track-name field that stays inert until explicitly edited. Clicking a track

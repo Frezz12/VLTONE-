@@ -225,6 +225,28 @@ int main(int argc, char **argv) {
     bench();
     return 0;
   }
+  {
+    modulation::dsp::Delay delay;
+    delay.prepare(1000, .05);
+    const auto polynomial = [](double x) {
+      return .1 + x * (.02 + x * (-.0003 + x * .000001));
+    };
+    bool interpolation = true;
+    for (unsigned n = 0; n < 240; ++n) {
+      delay.write(polynomial(n));
+      if (n >= 60)
+        for (double tap : {3., 3.25, 5.5, 20.75, 45.9}) {
+          const double at = n - tap, first = std::floor(at), t = at - first;
+          interpolation &= std::abs(delay.read(tap) - polynomial(at)) < 1e-12;
+          interpolation &= std::abs(delay.readLinear(tap) -
+              ((1 - t) * polynomial(first) + t * polynomial(first + 1))) < 1e-12;
+        }
+      delay.advance();
+    }
+    delay.reset();
+    check(interpolation && delay.read(3.5) == 0,
+          "fractional delays reproduce a cubic across ring wrap and reset");
+  }
   check(factoryPresets().size() == 30, "exactly 30 factory presets");
   bool fullyWet = defaults()[Mix] == 1 && factoryState(30).values[Mix] == 1;
   for (unsigned i = 0; i < 30; ++i)

@@ -174,7 +174,8 @@ void setSelectionTint(SelectionTint tint);
 /// disagree about what "selected" looks like.
 QColor selectionWash(const QColor& trackColor);
 
-/// Arrangement grid appearance, independent of its division and snapping.
+/// Grid appearance, independent of division and snapping. Line thickness is
+/// shared by the arrangement and piano roll; opacity applies to the arrangement.
 inline constexpr const char* kGridLineWidthSetting = "ui/gridLineWidth";
 inline constexpr double kGridLineWidthMin = 0.5;
 inline constexpr double kGridLineWidthMax = 3.0;

@@ -1,3 +1,4 @@
+#include "model/ModulationRouting.hpp"
 #include <nlohmann/json.hpp>
 #include "EngineController.hpp"
 #include "model/RackGroups.hpp"
@@ -35,6 +36,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <fstream>
@@ -442,7 +444,7 @@ bool supportedSharedBuiltin(const InsertModel& insert) {
     return insert.format == PluginFormat::Internal &&
            (insert.uid == "daw.gain" || insert.uid == "daw.stereo-utility" || insert.uid == "daw.reverse" ||
             insert.uid == "daw.delay" || insert.uid == "daw.sampler" || insert.uid == "daw.equalizer" ||
-            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.channel-color" ||
+            insert.uid == "daw.gravity" || insert.uid == "daw.graphit" || insert.uid == "daw.compressor" || insert.uid == "daw.cla2a" || insert.uid == "daw.1073" || insert.uid == "daw.channel-color" ||
             insert.uid == "daw.doubler" || insert.uid == "daw.doubler-pro" || insert.uid == "daw.chorus" ||
             insert.uid == "daw.flanger" || insert.uid == "daw.phaser" || insert.uid == "daw.modulation" ||
             insert.uid == "daw.pitch-corrector");
@@ -780,6 +782,7 @@ TrackModel mintTrackCopy(const TrackModel& source, bool withInserts) {
         found != slotIds.end()) {
         copy.samplerFx.ownerInstrumentId = found->second;
     }
+    copy.modulation = copyModulation(source.modulation, slotIds, true, &slotIds, true);
     copy.rackGroups = withInserts ? copyRackGroups(source.rackGroups, slotIds) : std::vector<RackGroupModel>{};
     for (ClipModel& clip : copy.clips)
         mintClipIdentities(clip, slotIds, withInserts);
@@ -823,6 +826,14 @@ std::vector<TrackModel> mintConnectedTrackCopies(
         rememberSlots(source->samplerFx.inserts, copy.samplerFx.inserts);
         rememberSlots(source->inserts, copy.inserts);
         rememberSlots(source->miniModules,copy.miniModules);
+        for (std::size_t i = 0; i < source->modulation.sources.size() && i < copy.modulation.sources.size(); ++i)
+            remember(slotIds, source->modulation.sources[i].id, copy.modulation.sources[i].id);
+        for (const auto& route : source->modulation.routes) {
+            const auto slot = slotIds.find(route.slotId), mod = slotIds.find(route.sourceId);
+            if (slot == slotIds.end() || mod == slotIds.end()) continue;
+            for (const auto& copied : copy.modulation.routes) if (copied.slotId == slot->second && copied.sourceId == mod->second && copied.parameterId == route.parameterId)
+                remember(slotIds, route.id, copied.id);
+        }
         for (std::size_t i = 0;
              i < source->sends.size() && i < copy.sends.size(); ++i) {
             remember(sendIds, source->sends[i].id, copy.sends[i].id);
@@ -996,6 +1007,7 @@ std::string previousIdAt(const std::vector<InsertModel>& values,
 
 bool sameInsertTopology(const InsertModel& left, const InsertModel& right) {
     return left.id == right.id && left.format == right.format &&
+           left.analysisOnly == right.analysisOnly &&
            left.uid == right.uid && left.miniModule == right.miniModule &&
            left.miniModuleMode == right.miniModuleMode && left.miniModulePostFx == right.miniModulePostFx &&
            left.profileSeed == right.profileSeed && left.channelMode == right.channelMode &&
@@ -1106,6 +1118,20 @@ PatternOwnerRef findPatternOwner(ProjectModel& project,
         }
     }
     return {};
+}
+
+double patternDurationBeforeNext(const TrackModel& track, const ClipModel& owner,
+                                 double requestedDuration) {
+    // The MIDI placement stays intact; the owner gates the part outside its
+    // window. Only free space before the next Pattern can extend that window.
+    for (const auto& next : track.clips) {
+        if (next.kind == ClipKind::Pattern && next.id != owner.id &&
+            next.startSeconds > owner.startSeconds + 1e-9) {
+            requestedDuration = std::min(requestedDuration,
+                                         next.startSeconds - owner.startSeconds);
+        }
+    }
+    return requestedDuration;
 }
 
 double patternDurationForMembers(
@@ -1737,6 +1763,9 @@ void EngineController::uploadPluginStatePart(
 
 void EngineController::pumpPluginStateSync(std::size_t maxCaptures) {
     if (!cloudProjectBound() || !sharedEditingAllowed() || !m_sharedAssetMutationSink) return;
+    // Vendor getState runs on the control thread under RenderGate. Keep dirty
+    // requests queued until playback, monitored input and tails have finished.
+    if (liveAudioActivity() || m_runtime->previewSnapshot().playing || m_runtime->auditionRuntime) return;
     std::vector<std::string> keys;
     for (const auto& [key, state] : m_pluginStateSync)
         if (state.dirty && !state.pending && keys.size() < maxCaptures) keys.push_back(key);
@@ -2001,7 +2030,7 @@ EngineController::processedClipSample(
                 it->waveform = waveform;
             }
             m_clipSampleCache[clip.id] = {path, settings, shared, waveform, editRevision};
-            ++m_clipWaveformRevision;
+            noteClipWaveformChange(clip.id);
             return shared;
         }
         ++it;
@@ -2017,8 +2046,29 @@ EngineController::processedClipSample(
     prepared.editRevision = editRevision;
     m_clipSampleCache[clip.id] = prepared;
     m_sharedClipSampleCache.push_back({path, settings, prepared.data, prepared.waveform, editRevision});
-    ++m_clipWaveformRevision;
+    noteClipWaveformChange(clip.id);
     return prepared.data;
+}
+
+void EngineController::noteClipWaveformChange(const std::string& clipId) {
+    m_clipWaveformChanges.emplace_back(++m_clipWaveformRevision, clipId);
+    if (m_clipWaveformChanges.size() > 512) m_clipWaveformChanges.pop_front();
+}
+
+bool EngineController::clipWaveformChangesSince(
+    std::uint64_t revision, std::vector<std::string>& clipIds) const {
+    clipIds.clear();
+    if (revision == m_clipWaveformRevision) return true;
+    if (revision > m_clipWaveformRevision || m_clipWaveformChanges.empty() ||
+        revision < m_clipWaveformChanges.front().first - 1) return false;
+    for (const auto& [changed, id] : m_clipWaveformChanges) {
+        if (changed <= revision) continue;
+        if (id.empty()) { clipIds.clear(); return false; }
+        clipIds.push_back(id);
+    }
+    std::sort(clipIds.begin(), clipIds.end());
+    clipIds.erase(std::unique(clipIds.begin(), clipIds.end()), clipIds.end());
+    return true;
 }
 
 EngineController::ClipWaveformView EngineController::clipWaveform(
@@ -2786,7 +2836,24 @@ AudioContentSpec::Midi EngineController::prepareTrackNotes(const TrackModel& tra
                    !capture.semantics.midiOverdubMerge;
         });
 
-    const auto playbackClips = midiPlaybackClips(track, m_project.tempo);
+    // Project a private copy through the normal take/trim/Pattern path. Shared
+    // clip instances hear the same preview, just as they will after Apply.
+    TrackModel previewTrack;
+    const TrackModel* playbackTrack = &track;
+    if (m_clipNotePreview && clipNotePreviewActive(m_clipNotePreview->owner) &&
+        std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) {
+            return clip.contentStorage() == m_clipNotePreview->source;
+        })) {
+        previewTrack.clips = track.clips;
+        for (std::size_t i = 0; i < track.clips.size(); ++i) {
+            if (track.clips[i].contentStorage() != m_clipNotePreview->source) continue;
+            auto& clip = previewTrack.clips[i];
+            slides::followNotes(slides::editable(clip), midiNotes(clip), m_clipNotePreview->notes);
+            midiNotes(clip) = m_clipNotePreview->notes;
+        }
+        playbackTrack = &previewTrack;
+    }
+    const auto playbackClips = midiPlaybackClips(*playbackTrack, m_project.tempo);
     auto controls = std::make_shared<engine::MidiClipPlayerNode::ControlCurves>();
     auto notes = std::make_shared<engine::MidiClipPlayerNode::NoteList>();
     const double beatsPerSecond = m_project.tempo / 60.0;
@@ -2924,17 +2991,16 @@ AudioContentSpec::Midi EngineController::prepareTrackNotes(const TrackModel& tra
     return content;
 }
 
-void EngineController::writeAutomationPoint(const std::string& channelId,
+bool EngineController::writeAutomationPoint(const std::string& channelId,
                                             const std::string& slotId,
                                             const std::string& parameterId,
                                             double value) {
     if (std::any_of(m_captures.begin(),m_captures.end(),[&](const auto& c){return c.midi && c.trackId==channelId;})) {
-        captureMidiParameter(channelId, slotId, parameterId, value, midiInputStamp(), false);
-        return;
+        return captureMidiParameter(channelId, slotId, parameterId, value, midiInputStamp(), false);
     }
-    if (!m_automationWrite || !isPlaying()) return;
+    if (!m_automationWrite || !isPlaying()) return false;
     TrackModel* track = m_project.findTrack(channelId);
-    if (!track) return;
+    if (!track) return false;
 
     const double beatsPerSecond = m_project.tempo / 60.0;
     const double playheadBeats = positionSeconds() * beatsPerSecond;
@@ -2996,6 +3062,7 @@ void EngineController::writeAutomationPoint(const std::string& channelId,
         }
     }
     if (touched) syncTrackAutomation(*track);
+    return touched;
 }
 
 EngineController::AutomationIndexScope::AutomationIndexScope(EngineController& controller)
@@ -3081,14 +3148,18 @@ AudioContentSpec::PluginCurves EngineController::prepareTrackAutomation(const Tr
             if (clip.kind != ClipKind::Automation || clip.muted ||
                 !clip.automation.active) continue;
             const AutomationTarget& target = clip.automation.target;
-            if (target.kind != AutomationTargetKind::PluginParameter) continue;
+            if (target.kind != AutomationTargetKind::PluginParameter && target.kind != AutomationTargetKind::ModulatorRate && target.kind != AutomationTargetKind::ModulationDepth) continue;
             if (target.channelId != track.id) continue;
 
             auto& curve = curves.emplace_back();
             curve.slotId = target.slotId;
             curve.parameterId = target.parameterId;
-            curve.defaultValue = normalized(clip.automation.defaultValue);
-            appendCurvePoints(curve.points, clip, beatsPerSecond, normalized);
+            curve.kind = target.kind;
+            const auto convert = [&](double value) {
+                return target.kind == AutomationTargetKind::PluginParameter ? normalized(value) : automationToPlain(target, value);
+            };
+            curve.defaultValue = convert(clip.automation.defaultValue);
+            appendCurvePoints(curve.points, clip, beatsPerSecond, convert);
     }
 
     return curves;
@@ -3129,7 +3200,9 @@ AudioContentSpec::Levels EngineController::prepareTrackLevelAutomation(const Tra
                     }
                     break;
                 }
-                case AutomationTargetKind::PluginParameter: break;
+                case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth:
+        case AutomationTargetKind::PluginParameter: break;
             }
             if (!curve) continue;
 
@@ -3221,7 +3294,8 @@ void EngineController::syncAutomationTarget(const AutomationTarget& target) {
         invalidateAutomationReadoutCache();
         return;
     }
-    if (target.kind == AutomationTargetKind::PluginParameter) {
+    if (target.kind == AutomationTargetKind::PluginParameter ||
+        target.kind == AutomationTargetKind::ModulatorRate || target.kind == AutomationTargetKind::ModulationDepth) {
         syncTrackAutomation(*track);
     } else {
         syncTrackLevelAutomation(*track);
@@ -3430,7 +3504,7 @@ void EngineController::pumpDeferredClipSync() {
             m_clipSampleCache[baked->clipId] = result;
             std::erase_if(m_sharedClipSampleCache, [](const auto& entry) { return entry.data.expired(); });
             m_sharedClipSampleCache.push_back({result.path, result.settings, result.data, result.waveform, result.editRevision});
-            ++m_clipWaveformRevision;
+            noteClipWaveformChange(baked->clipId);
             std::erase(m_clipSampleViewRequests, request);
         } else if (current) {
             // Memory/processing failure: keep the previous audio, as the
@@ -3547,7 +3621,7 @@ void EngineController::syncTrackGain(const TrackModel& track,
     // anything left every instrument and MIDI track playing — solo looked
     // broken because, for most of a project, it was.
     const bool silent =
-        track.muted || (solo.any && !solo.open.contains(track.id));
+        track.muted || (!track.renderControlOnly && solo.any && !solo.open.contains(track.id));
     m_runtime->setFader(track.id, AudioFaderTarget::Channel,
         {.gain = track.volume, .pan = track.pan, .silent = silent, .mono = track.mono});
 }
@@ -3623,7 +3697,9 @@ AudioPluginChainSpec EngineController::preparePluginChain(const std::string& cha
     const auto* owner = m_project.findTrack(channelId);
     const bool shared = cloudProjectBound();
     for (const auto& slot : slots) {
-        if (!slot.isLoaded()) continue;
+        // Offline renders have no observer UI. Omit analysis processors
+        // entirely: even their activation/state must not be required to export.
+        if (!slot.isLoaded() || (m_isRenderClone && slot.analysisOnly)) continue;
         auto& spec = chain.slots.emplace_back();
         spec.id = slot.id; spec.uid = slot.uid; spec.name = slot.name;
         spec.loadPolicy = loadPolicy;
@@ -3683,6 +3759,7 @@ AudioPluginChainSpec EngineController::preparePluginChain(const std::string& cha
         spec.slideDelivery = slot.slideDelivery;
         spec.slideBendRange = slot.slideBendRange; spec.slideReleaseReserve = slot.slideReleaseReserve;
         spec.bypassed = slot.bypassed; spec.mix = slot.mix;
+        spec.analysisOnly = slot.analysisOnly;
     }
     return chain;
 }
@@ -3807,6 +3884,7 @@ audio::Result EngineController::newProject(bool createDefaultAudioTrack) {
     stopPluginAudition();
     ++m_projectGeneration;
     m_lastTouchedAutomation.clear();
+    m_parameterTouchByChannel.clear();
     m_pendingAutomationTouches.clear();
     m_warpPreview.reset();
     m_warpEdit.reset();
@@ -5685,7 +5763,7 @@ audio::Result EngineController::activateProject(
     ++m_projectGeneration;
     stopPluginAudition();
     m_warpEdit.reset(); m_warpPreview.reset(); m_audioEditGesture.reset();
-    m_lastTouchedAutomation.clear(); m_pendingAutomationTouches.clear();
+    m_lastTouchedAutomation.clear(); m_parameterTouchByChannel.clear(); m_pendingAutomationTouches.clear();
     m_recoveryTrackParts.clear(); m_recoveryOfflineStateParts.clear();
     m_liveMidiKeys.clear(); m_lastLiveMidiNs = 0;
     // These owned readouts are part of the acknowledgment, captured on the
@@ -6542,7 +6620,8 @@ std::string EngineController::addPatternInstrument(
                                                                  : std::string{};
     }
 
-    const std::size_t undoStart = m_undo.depth();
+    const UndoStack previousUndo = m_undo;
+    const auto undoStart = beginUndoGroup();
     const std::size_t insertAt =
         m_project.indexOf(patternId) + 1 + subtreeOf(m_project, patternId).size();
     const std::string trackId = addTrack(
@@ -6552,11 +6631,12 @@ std::string EngineController::addPatternInstrument(
     // owns the pristine root-level model captured at creation time; an
     // undoable move is what restores the Pattern parent after that redo.
     moveTrack(trackId, insertAt, patternId);
-    if (!setTrackInstrumentPlugin(trackId, descriptor)) {
-        removeTrack(trackId);
+    if (!setTrackInstrumentPlugin(trackId, descriptor) ||
+        addMidiClip(trackId, std::max(0.0, startSeconds), 0.0, ownerClipId).empty()) {
+        { UndoStack::Suspend quiet(m_undo); removeTrack(trackId); }
+        m_undo = previousUndo;
         return {};
     }
-    addMidiClip(trackId, std::max(0.0, startSeconds),0.0,ownerClipId);
     collapseUndo(undoStart, "Add Pattern Instrument");
     return trackId;
 }
@@ -6672,7 +6752,8 @@ std::string EngineController::addPatternSample(const std::string& patternId,
                    : std::string{};
     }
 
-    const std::size_t undoStart = m_undo.depth();
+    const UndoStack previousUndo = m_undo;
+    const auto undoStart = beginUndoGroup();
     const std::size_t insertAt =
         m_project.indexOf(patternId) + 1 + subtreeOf(m_project, patternId).size();
     std::string name =
@@ -6680,11 +6761,12 @@ std::string EngineController::addPatternSample(const std::string& patternId,
     if (name.empty()) name = "Sample";
     const std::string trackId = addTrack(TrackKind::Instrument, name);
     moveTrack(trackId, insertAt, patternId);
-    if (!loadInstrumentSampler(trackId, filePath)) {
-        removeTrack(trackId);
+    if (!loadInstrumentSampler(trackId, filePath) ||
+        addMidiClip(trackId, std::max(0.0, startSeconds), 0.0, ownerClipId).empty()) {
+        { UndoStack::Suspend quiet(m_undo); removeTrack(trackId); }
+        m_undo = previousUndo;
         return {};
     }
-    addMidiClip(trackId, std::max(0.0, startSeconds),0.0,ownerClipId);
     collapseUndo(undoStart, "Add Pattern Sample");
     return trackId;
 }
@@ -6865,10 +6947,16 @@ std::string EngineController::appendTrack(TrackModel model) {
 void EngineController::removeTrack(const std::string& trackId) {
     const TrackModel* requested = m_project.findTrack(trackId);
     if (!requested) return;
+    const bool removeTree = isFolder(*requested);
+    const char* undoLabel = requested->kind == TrackKind::Pattern
+                                ? "Remove Pattern"
+                                : (removeTree ? "Remove Folder" : "Remove Track");
     if (cloudProjectBound()) {
         std::vector<std::string> deleting;
-        if (requested->kind == TrackKind::Pattern)
+        if (removeTree) {
             deleting = subtreeOf(m_project, trackId);
+            std::reverse(deleting.begin(), deleting.end());
+        }
         deleting.push_back(trackId);
         const std::unordered_set<std::string> deletingSet(
             deleting.begin(), deleting.end());
@@ -6898,23 +6986,23 @@ void EngineController::removeTrack(const std::string& trackId) {
             batch->commands.push_back(std::move(child));
         }
         (void)submitSharedMutation(collab::CommandBody{std::move(batch)},
-                                   requested->kind == TrackKind::Pattern
-                                       ? "Remove Pattern"
-                                       : "Remove Track");
+                                   undoLabel);
         return;
     }
-    const bool removePatternTree = requested->kind == TrackKind::Pattern;
-    const std::size_t compoundUndoStart = m_undo.depth();
-    if (removePatternTree) {
-        // A Pattern is one musical object. Its source lanes are implementation
-        // detail, so deleting the container must not detach and reveal them.
+    const auto compoundUndoStart = removeTree ? beginUndoGroup() : UndoGroup{};
+    if (removeTree) {
+        // Delete containers with all descendants, from the bottom up, so one
+        // undo restores the parent before its children and their routing.
         std::vector<std::string> children = subtreeOf(m_project, trackId);
         for (auto it = children.rbegin(); it != children.rend(); ++it)
             removeTrack(*it);
     }
 
     const size_t index = m_project.indexOf(trackId);
-    if (index == std::string::npos) return;
+    if (index == std::string::npos) {
+        releaseUndoGroup(compoundUndoStart);
+        return;
+    }
 
     struct RemovedSend {
         std::size_t index = 0;
@@ -7046,13 +7134,11 @@ void EngineController::removeTrack(const std::string& trackId) {
         rebuildGraph();
         pruneDecodedSampleCache();
     };
-    // Removing a folder/Pattern also rewrites its children's parent and bus,
-    // and removing any track clears incoming sends. Restoring only the erased
-    // TrackModel left those related tracks permanently detached after undo.
+    // Restore incoming routing and sends along with the removed track.
     m_undo.push("Remove Track", [apply] { apply(false); },
                 [apply] { apply(true); });
-    if (removePatternTree)
-        collapseUndo(compoundUndoStart, "Remove Pattern");
+    if (removeTree)
+        collapseUndo(compoundUndoStart, undoLabel);
 }
 
 collab::SharedMutationResult EngineController::renameTrack(
@@ -7514,7 +7600,7 @@ void EngineController::setTrackHeight(const std::string& trackId, double height)
         else if (next > 24.0)
             t->expandedHeight = next;
         t->height = next;
-        ++m_clipGeometryRevision;
+        ++m_trackHeightRevision;
     }
 }
 
@@ -7791,6 +7877,7 @@ std::string EngineController::duplicateTrack(const std::string& trackId,
         copy.samplerFx.inserts.clear();
         for (ClipModel& clip : copy.clips) clip.inserts.clear();
     }
+    copy.modulation = copyModulation(copy.modulation, duplicatedSlotIds, true, &duplicatedSlotIds, true);
     copy.rackGroups = withInserts ? copyRackGroups(copy.rackGroups, duplicatedSlotIds)
                                   : std::vector<RackGroupModel>{};
     // Plugin automation is channel-local. A copied lane has to address the
@@ -8536,7 +8623,7 @@ void EngineController::ensureMasterInsertSlots(size_t count) {
 
 std::string EngineController::addInsert(const std::string& channelId,
                                         const plugins::PluginDescriptor& descriptor,
-                                        size_t index) {
+                                        size_t index, bool analysisOnly) {
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return {};
@@ -8544,6 +8631,8 @@ std::string EngineController::addInsert(const std::string& channelId,
     InsertModel slot;
     slot.id = newUuid();
     applyDescriptor(slot, descriptor);
+
+    slot.analysisOnly = analysisOnly;
 
     const size_t at = std::min(index, slots->size());
     if (cloudProjectBound()) {
@@ -9670,6 +9759,8 @@ EngineController::ChannelSnapshot EngineController::copyChannelStrip(
     if (!master && !track) return snapshot;
     snapshot.sourceName = master ? "Master" : track->name;
     snapshot.rackGroups = rackGroups(channelId);
+    snapshot.modulation = rackModulation(channelId);
+    snapshot.modulationAutomation = captureModulationAutomation(m_project, channelId, snapshot.modulation);
 
     for (const InsertModel& slot : *slots) {
         ChainSlotSnapshot copied;
@@ -9798,6 +9889,7 @@ std::vector<EngineController::ChainSlotSnapshot> mintChain(
 
 bool EngineController::pasteChannelInserts(const std::string& channelId,
                                            const ChannelSnapshot& what) {
+    if (cloudProjectBound() && (!what.modulation.sources.empty() || !what.modulation.routes.empty())) return false;
     const std::vector<InsertModel>* current = channelInserts(channelId);
     if (!current) return false;
     const ChannelSnapshot before = copyChannelStrip(channelId, /*withSettings=*/false);
@@ -9819,11 +9911,14 @@ bool EngineController::pasteChannelInserts(const std::string& channelId,
     for (std::size_t i = 0; i < next.size(); ++i) mapping[what.inserts[i].model.id] = next[i].model.id;
     ChannelSnapshot after = what; after.inserts = next;
     after.rackGroups = copyRackGroups(what.rackGroups, mapping);
+    after.modulation = copyModulation(what.modulation, mapping, true, &mapping, true);
+    after.modulationAutomation = copyModulationAutomation(what.modulationAutomation, mapping, channelId, true);
     return commitRackEdit({{{channelId, before}}, {}}, {{{channelId, after}}, {}}, "Paste Plugins");
 }
 
 bool EngineController::pasteChannelStrip(const std::string& channelId,
                                          const ChannelSnapshot& what) {
+    if (cloudProjectBound() && (!what.modulation.sources.empty() || !what.modulation.routes.empty())) return false;
     if (!what.hasSettings) return pasteChannelInserts(channelId, what);
     const std::vector<InsertModel>* current = channelInserts(channelId);
     if (!current) return false;
@@ -9894,6 +9989,9 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
     std::unordered_map<std::string, std::string> rackIds;
     for (std::size_t i = 0; i < applied.inserts.size(); ++i) rackIds[what.inserts[i].model.id] = applied.inserts[i].model.id;
     applied.rackGroups = copyRackGroups(what.rackGroups, rackIds);
+    for (std::size_t i = 0; i < applied.miniModules.size(); ++i) rackIds[what.miniModules[i].model.id] = applied.miniModules[i].model.id;
+    applied.modulation = copyModulation(what.modulation, rackIds, true, &rackIds, true);
+    applied.modulationAutomation = copyModulationAutomation(what.modulationAutomation, rackIds, channelId, true);
     for (SendModel& send : applied.sends) send.id = newUuid();
 
     auto put = [this, channelId](const ChannelSnapshot& state) {
@@ -9909,6 +10007,7 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
 
 bool EngineController::pasteChannelStripPreset(const std::string& channelId,
                                                const ChannelSnapshot& what) {
+    if (cloudProjectBound() && (!what.modulation.sources.empty() || !what.modulation.routes.empty())) return false;
     const std::vector<InsertModel>* current = channelInserts(channelId);
     if (!what.hasSettings || !current) return false;
 
@@ -9951,6 +10050,9 @@ bool EngineController::pasteChannelStripPreset(const std::string& channelId,
     std::unordered_map<std::string, std::string> rackIds;
     for (std::size_t i = 0; i < applied.inserts.size(); ++i) rackIds[what.inserts[i].model.id] = applied.inserts[i].model.id;
     applied.rackGroups = copyRackGroups(what.rackGroups, rackIds);
+    for (std::size_t i = 0; i < applied.miniModules.size(); ++i) rackIds[what.miniModules[i].model.id] = applied.miniModules[i].model.id;
+    applied.modulation = copyModulation(what.modulation, rackIds, true, &rackIds, true);
+    applied.modulationAutomation = copyModulationAutomation(what.modulationAutomation, rackIds, channelId, true);
 
     auto put = [this, channelId](const ChannelSnapshot& state) {
         return applyChannelSnapshot(channelId, state, false);
@@ -10565,8 +10667,12 @@ bool EngineController::pumpPreviewPluginEvents() {
 }
 
 bool EngineController::pumpPluginEvents() {
+    static const bool profile = std::getenv("VLT_PLUGIN_SERVICE_PROFILE") != nullptr;
+    const auto started = profile ? rt::nowNanos() : 0;
     pumpDeferredClipSync();
+    const auto deferred = profile ? rt::nowNanos() : 0;
     auto serviced = m_runtime->servicePlugins();
+    const auto servicedAt = profile ? rt::nowNanos() : 0;
     if (!serviced.error.empty()) reportAudioOperationFailure("Plugin maintenance",
         audio::Result::fail(audio::EngineError::PluginLoadFailed, serviced.error));
     m_pluginEventScanCount += serviced.scanned;
@@ -10588,6 +10694,7 @@ bool EngineController::pumpPluginEvents() {
                                         const std::string& parameterId,
                                         double before, double after,
                                         bool right) {
+        if (!cloudProjectBound() || before == after) return;
         if(isRecording()) {const auto* track=m_project.findTrack(channelId);
             if(track && track->instrument.id==insertId && std::any_of(m_captures.begin(),m_captures.end(),[&](const auto& c){return c.midi && c.trackId==channelId;}))return;
         }
@@ -10625,7 +10732,12 @@ bool EngineController::pumpPluginEvents() {
             queuePluginStateSync(address.channelId, address.slotId);
             continue;
         }
-        if (notice.touch) touchInsertParameter(address.channelId, address.slotId, notice.parameterId);
+        if (notice.touch) {
+            touchInsertParameter(address.channelId, address.slotId, notice.parameterId);
+            if (notice.kind == AudioPluginNotice::Kind::Parameter)
+                if (const auto target = lastTouchedAutomation(address.channelId))
+                    m_parameterTouchByChannel[address.channelId] = {++m_parameterTouchRevision, *target};
+        }
         if (notice.kind != AudioPluginNotice::Kind::Parameter) continue;
         collab::PluginLocation location;
         switch (notice.chain) {
@@ -10645,6 +10757,16 @@ bool EngineController::pumpPluginEvents() {
             auto& values = address.right ? model->rightParameters : model->parameters;
             auto found = std::find_if(values.begin(), values.end(),
                 [&](const auto& parameter) { return parameter.id == notice.parameterId; });
+            if (found != values.end() && found->value == notice.value) {
+                // Repeating the value at a later time can still be a recording
+                // gesture; only the document parameter mirror is unchanged.
+                if (!address.right &&
+                    writeAutomationPoint(address.channelId, address.slotId, notice.parameterId, notice.value)) {
+                    editedChannels.insert(address.channelId);
+                    changed = true;
+                }
+                continue;
+            }
             const double before = found == values.end() ? notice.value : found->value;
             if (found == values.end()) values.push_back({notice.parameterId, notice.value});
             else found->value = notice.value;
@@ -10687,6 +10809,13 @@ bool EngineController::pumpPluginEvents() {
     for (const auto& channelId : editedChannels)
         if (const auto* track = m_project.findTrack(channelId))
             (void)invalidateTrackFreeze(*track);
+    if (profile) {
+        const auto finished = rt::nowNanos();
+        if (finished - started >= 250000)
+            std::fprintf(stderr, "PLUGIN_PUMP deferred_us=%.1f service_us=%.1f edits_us=%.1f notices=%zu scanned=%d\n",
+                (deferred - started) / 1000., (servicedAt - deferred) / 1000.,
+                (finished - servicedAt) / 1000., serviced.notices.size(), int(serviced.scanned));
+    }
     return changed;
 }
 
@@ -10732,12 +10861,16 @@ std::string EngineController::importSampleToMidiTrack(
 
     const auto samples = loadSamples(filePath);
     if (!samples || samples->sampleRate() <= 0 || samples->frames() == 0) return {};
-    const auto undoStart = m_undo.depth();
+    const UndoStack previousUndo = m_undo;
+    const auto undoStart = beginUndoGroup();
     const std::string id = addTrack(TrackKind::Instrument, name);
-    if (id.empty()) return {};
+    if (id.empty()) {
+        m_undo = previousUndo;
+        return {};
+    }
     const auto rollback = [&] {
         { UndoStack::Suspend quiet(m_undo); removeTrack(id); }
-        m_undo.discardSince(undoStart);
+        m_undo = previousUndo;
         return std::string{};
     };
     if (!loadInstrumentSampler(id, filePath)) return rollback();
@@ -10789,15 +10922,19 @@ std::string EngineController::importAudioToNewTrack(
                                                 std::move(track), afterId);
     }
 
-    const std::size_t undoStart = m_undo.depth();
     std::string name = trackName;
     if (name.empty()) {
         name = platform::pathToUtf8(platform::pathFromUtf8(filePath).stem());
     }
     if (name.empty()) name = "Audio";
 
+    const UndoStack previousUndo = m_undo;
+    const auto undoStart = beginUndoGroup();
     const std::string trackId = addTrack(TrackKind::Audio, name);
-    if (trackId.empty()) return {};
+    if (trackId.empty()) {
+        m_undo = previousUndo;
+        return {};
+    }
     if (importAudio(filePath, trackId, startSeconds, analysis).empty()) {
         // Roll back the half-finished operation without adding a compensating
         // Remove Track entry. The caller should see exactly what it saw before
@@ -10806,7 +10943,7 @@ std::string EngineController::importAudioToNewTrack(
             UndoStack::Suspend quiet(m_undo);
             removeTrack(trackId);
         }
-        m_undo.discardSince(undoStart);
+        m_undo = previousUndo;
         return {};
     }
 
@@ -11343,9 +11480,9 @@ void EngineController::setClipStartsSeconds(
         for (const std::string& ownerId : patternOwners) {
             const PatternOwnerRef owner = findPatternOwner(m_project, ownerId);
             if (!owner.track || !owner.clip) continue;
-            const double duration = patternDurationForMembers(
-                m_project, *owner.clip, owner.clip->durationSeconds,
-                &requestedStarts);
+            const double duration = patternDurationBeforeNext(
+                *owner.track, *owner.clip, patternDurationForMembers(
+                    m_project, *owner.clip, owner.clip->durationSeconds, &requestedStarts));
             if (duration <= owner.clip->durationSeconds + 1e-12) continue;
             appendCommand(batch, collab::SetClipProperty{
                 owner.track->id, owner.clip->id,
@@ -11497,6 +11634,7 @@ void EngineController::setClipStartsSeconds(
                 duration = std::max(duration, member.clip->startSeconds +
                     member.clip->durationSeconds - owner.clip->startSeconds);
         }
+        duration = patternDurationBeforeNext(*owner.track, *owner.clip, duration);
         if (std::abs(duration - owner.clip->durationSeconds) < 1e-12)
             continue;
         owner.clip->durationSeconds = duration;
@@ -13586,7 +13724,7 @@ audio::Result EngineController::glueClips(
                 }
                 m_project.resolveClipContents();
                 syncTrackClips(*owner);
-                ++m_clipWaveformRevision;
+                noteClipWaveformChange();
                 updateTimelineDuration();
             };
             apply(true);
@@ -14210,10 +14348,9 @@ std::string EngineController::duplicateClipAt(const std::string& trackId,
                 const PatternOwnerRef owner =
                     findPatternOwner(m_project, parentCopy.patternClipId);
                 if (owner.track && owner.clip) {
-                    const double duration = std::max(
-                        owner.clip->durationSeconds,
-                        parentCopy.startSeconds + parentCopy.durationSeconds -
-                            owner.clip->startSeconds);
+                    const double duration = patternDurationBeforeNext(
+                        *owner.track, *owner.clip, std::max(owner.clip->durationSeconds,
+                            parentCopy.startSeconds + parentCopy.durationSeconds - owner.clip->startSeconds));
                     if (duration > owner.clip->durationSeconds + 1e-12) {
                         appendCommand(batch, collab::SetClipProperty{
                             owner.track->id, owner.clip->id,
@@ -14326,10 +14463,9 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
             const PatternOwnerRef owner =
                 findPatternOwner(m_project, copy.patternClipId);
             if (owner.track && owner.clip) {
-                const double duration = std::max(
-                    owner.clip->durationSeconds,
-                    copy.startSeconds + copy.durationSeconds -
-                        owner.clip->startSeconds);
+                const double duration = patternDurationBeforeNext(
+                    *owner.track, *owner.clip, std::max(owner.clip->durationSeconds,
+                        copy.startSeconds + copy.durationSeconds - owner.clip->startSeconds));
                 if (duration > owner.clip->durationSeconds + 1e-12) {
                     appendCommand(batch, collab::SetClipProperty{
                         owner.track->id, owner.clip->id,
@@ -14371,10 +14507,9 @@ std::string EngineController::insertClipCopy(const std::string& trackId,
         const PatternOwnerRef owner =
             findPatternOwner(m_project, copy.patternClipId);
         if (owner.track && owner.clip) {
-            const double duration = std::max(
-                owner.clip->durationSeconds,
-                copy.startSeconds + copy.durationSeconds -
-                    owner.clip->startSeconds);
+            const double duration = patternDurationBeforeNext(
+                *owner.track, *owner.clip, std::max(owner.clip->durationSeconds,
+                    copy.startSeconds + copy.durationSeconds - owner.clip->startSeconds));
             if (duration > owner.clip->durationSeconds + 1e-12) {
                 patternResize = PatternResize{
                     owner.track->id, owner.clip->id,
@@ -14693,7 +14828,6 @@ std::string EngineController::addMidiClip(const std::string& trackId,
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return {};
 
-    const std::size_t undoStart = m_undo.depth();
     const double resolvedStart = std::max(0.0, startSeconds);
     double resolvedLength =
         lengthSeconds > 0.0
@@ -14727,12 +14861,13 @@ std::string EngineController::addMidiClip(const std::string& trackId,
                     if (lengthSeconds <= 0.0)
                         resolvedLength = std::max(kMinClipSeconds,
                                                   end - resolvedStart);
-                    const double memberEnd = resolvedStart + resolvedLength;
-                    if (memberEnd > end) {
+                    const double duration = patternDurationBeforeNext(*pattern, candidate,
+                        std::max(candidate.durationSeconds, resolvedStart + resolvedLength - candidate.startSeconds));
+                    if (duration > candidate.durationSeconds + 1e-12) {
                         appendCommand(batch, collab::SetClipProperty{
                             patternTrackId, patternClipId,
                             collab::ClipProperty::DurationSeconds,
-                            memberEnd - candidate.startSeconds});
+                            duration});
                     }
                     break;
                 }
@@ -14769,6 +14904,7 @@ std::string EngineController::addMidiClip(const std::string& trackId,
                                                                  : std::string{};
     }
 
+    const auto undoStart = beginUndoGroup();
     // A MIDI source nested in a Pattern belongs to the Pattern clip covering
     // the drop point. The explicit link is what lets later arrangement edits
     // move/cut/copy the source without guessing from overlapping rectangles.
@@ -14803,10 +14939,10 @@ std::string EngineController::addMidiClip(const std::string& trackId,
                     resolvedLength = std::max(
                         kMinClipSeconds, end - resolvedStart);
                 }
-                const double memberEnd = resolvedStart + resolvedLength;
-                if (memberEnd > end) {
+                const double after = patternDurationBeforeNext(*pattern, candidate,
+                    std::max(candidate.durationSeconds, resolvedStart + resolvedLength - candidate.startSeconds));
+                if (after > candidate.durationSeconds + 1e-12) {
                     const double before = candidate.durationSeconds;
-                    const double after = memberEnd - candidate.startSeconds;
                     const std::string ownerId = candidate.id;
                     auto setDuration = [this, patternTrackId,
                                         ownerId](double value) {
@@ -14847,7 +14983,10 @@ std::string EngineController::addMidiClip(const std::string& trackId,
             }
         }
         if (patternClipId.empty()) {
-            if(!ownerClipId.empty())return {};
+            if (!ownerClipId.empty()) {
+                releaseUndoGroup(undoStart);
+                return {};
+            }
             patternClipId = addPatternClip(patternTrackId, resolvedStart,
                                            resolvedLength);
         }
@@ -14905,6 +15044,17 @@ bool sameNotePlayback(const NoteModel& a, const NoteModel& b) {
            a.lengthBeats == b.lengthBeats && a.velocity == b.velocity &&
            a.muted == b.muted && a.pan == b.pan && a.channel==b.channel &&
            a.releaseVelocity==b.releaseVelocity && a.startOrder==b.startOrder && a.endOrder==b.endOrder;
+}
+
+void normalizeClipNotes(std::vector<NoteModel>& notes) {
+    for (auto& note : notes) {
+        if (note.id.empty()) note.id = newUuid();
+        note.pitch = std::clamp(note.pitch, kMinPitch, kMaxPitch);
+        note.startBeats = std::max(0.0, note.startBeats);
+        note.lengthBeats = std::max(kMinNoteBeats, note.lengthBeats);
+        note.velocity = std::clamp(note.velocity, 1, 127);
+        note.pan = std::clamp(note.pan, -1.0f, 1.0f);
+    }
 }
 
 bool sameNoteGeometry(const NoteModel& a, const NoteModel& b) {
@@ -16231,6 +16381,10 @@ void ensureUniqueAutomationPointIds(std::vector<AutomationPoint>& points) {
 
 std::string EngineController::automationTargetName(
     const AutomationTarget& target) const {
+    if (target.kind == AutomationTargetKind::ModulatorRate || target.kind == AutomationTargetKind::ModulationDepth) {
+        const auto info = automationParameterInfo(target);
+        return info ? info->name : "Modulation";
+    }
     // A lane made before anything was pointed at it — the free-standing kind.
     if (target.channelId.empty()) return "Automation";
     const TrackModel* channel = m_project.findTrack(target.channelId);
@@ -16255,6 +16409,8 @@ std::string EngineController::automationTargetName(
             }
             return owner + " Send";
         }
+        case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth:
         case AutomationTargetKind::PluginParameter: break;
     }
 
@@ -16288,6 +16444,20 @@ std::string EngineController::automationTargetName(
 
 std::optional<plugins::ParameterInfo> EngineController::automationParameterInfo(
     const AutomationTarget& target) const {
+    if (target.kind == AutomationTargetKind::ModulatorRate || target.kind == AutomationTargetKind::ModulationDepth) {
+        plugins::ParameterInfo info; info.id = target.parameterId; info.isAutomatable = true;
+        if (target.kind == AutomationTargetKind::ModulationDepth) {
+            for (const auto& route : rackModulation(target.channelId).routes) if (route.id == target.slotId) {
+                info.name = "Depth"; info.minValue = -1; info.maxValue = 1; info.defaultValue = .2; return info;
+            }
+        } else for (const auto& source : rackModulation(target.channelId).sources)
+            if (source.id == target.slotId && source.kind == modulation::Kind::Lfo) {
+                info.name = source.name + " Rate"; info.unit = source.sync ? "cycles/beat" : "Hz";
+                info.minValue = source.sync ? 1.0 / 128.0 : .01; info.maxValue = source.sync ? 32 : 20;
+                info.defaultValue = source.sync ? 1 : 2; return info;
+            }
+        return std::nullopt;
+    }
     if (target.kind != AutomationTargetKind::PluginParameter) return std::nullopt;
     const TrackModel* channel = m_project.findTrack(target.channelId);
     if (!channel && target.channelId != kMasterChannelId) return std::nullopt;
@@ -16312,6 +16482,8 @@ double EngineController::automationToPlain(const AutomationTarget& target,
             return t >= 0.5 ? 1.0 : 0.0;
         case AutomationTargetKind::SendLevel:
             return t * double(kMaxSendLevel);
+        case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth:
         case AutomationTargetKind::PluginParameter: break;
     }
     if (const auto info = automationParameterInfo(target))
@@ -16417,6 +16589,8 @@ std::string EngineController::automationValueText(const AutomationTarget& target
         }
         case AutomationTargetKind::TrackMute:
             return plain >= 0.5 ? "Muted" : "Open";
+        case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth:
         case AutomationTargetKind::PluginParameter: break;
     }
 
@@ -16449,6 +16623,8 @@ double EngineController::plainToAutomation(const AutomationTarget& target,
             return plain >= 0.5 ? 1.0 : 0.0;
         case AutomationTargetKind::SendLevel:
             return std::clamp(plain / double(kMaxSendLevel), 0.0, 1.0);
+        case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth:
         case AutomationTargetKind::PluginParameter: break;
     }
     if (const auto info = automationParameterInfo(target)) {
@@ -16461,6 +16637,14 @@ double EngineController::plainToAutomation(const AutomationTarget& target,
 
 double EngineController::defaultAutomationValue(
     const AutomationTarget& target) const {
+    const auto& modulation = rackModulation(target.channelId);
+    if (target.kind == AutomationTargetKind::ModulatorRate) {
+        for (const auto& source : modulation.sources) if (source.id == target.slotId)
+            return plainToAutomation(target, source.sync ? 1.0 / source.beats : source.rate);
+    }
+    if (target.kind == AutomationTargetKind::ModulationDepth) {
+        for (const auto& route : modulation.routes) if (route.id == target.slotId) return plainToAutomation(target, route.depth);
+    }
     const TrackModel* channel = m_project.findTrack(target.channelId);
     switch (target.kind) {
         case AutomationTargetKind::TrackVolume:
@@ -16479,6 +16663,8 @@ double EngineController::defaultAutomationValue(
             }
             return 0.5;
         }
+        case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth:
         case AutomationTargetKind::PluginParameter: break;
     }
     const std::string slotId =
@@ -17237,6 +17423,128 @@ bool EngineController::replaceMidiClipFromFile(const std::string& trackId,
     return true;
 }
 
+bool EngineController::applyGeneratedMidi(const std::string& trackId,
+                                          const std::string& clipId,
+                                          std::vector<NoteModel> notes,
+                                          double endBeats) {
+    const auto* clip = findMidiClip(m_project, trackId, clipId);
+    if (!clip || !std::isfinite(endBeats) || endBeats <= 0 ||
+        !sharedGestureAllowed("clip:" + clipId) || isRecording()) return false;
+    std::unordered_set<std::string> ids;
+    for (auto& note : notes) {
+        if (!std::isfinite(note.startBeats) || !std::isfinite(note.lengthBeats) ||
+            note.startBeats < 0 || note.lengthBeats < 1.0 / 960.0 || note.pitch < 0 ||
+            note.pitch > 127 || note.velocity < 1 || note.velocity > 127 ||
+            !std::isfinite(note.pan) || note.pan < -1 || note.pan > 1) return false;
+        if (note.id.empty()) note.id = newUuid();
+        if (!ids.insert(note.id).second) return false;
+    }
+    const double duration = std::max(clip->durationSeconds, beatsToSeconds(endBeats, tempo()) - clip->offsetSeconds);
+    if (!std::isfinite(duration)) return false;
+    const double start = clip->startSeconds, offset = clip->offsetSeconds;
+    auto gestures = slides::editable(*clip);
+    const auto oldGestures = gestures;
+    slides::followNotes(gestures, midiNotes(*clip), notes);
+    for (auto& gesture : gestures) {
+        slides::normalize(gesture);
+        if (!slides::valid(gesture)) return false;
+    }
+    std::string takeId;
+    for (const auto& take : clip->takes)
+        if (&midiNotes(*clip) == &take.notes) takeId = take.id;
+    std::string ownerTrackId, ownerId;
+    double ownerStart = 0, ownerOffset = 0, ownerDuration = 0;
+    for (const auto& track : m_project.tracks) for (const auto& owner : track.clips) {
+        if (clip->patternClipId.empty() || owner.id != clip->patternClipId ||
+            owner.kind != ClipKind::Pattern) continue;
+        ownerTrackId = track.id; ownerId = owner.id;
+        ownerStart = owner.startSeconds; ownerOffset = owner.offsetSeconds;
+        ownerDuration = std::max(owner.durationSeconds, start + duration - ownerStart);
+    }
+    const std::string label = "Generate MIDI";
+    if (!ownerId.empty() && !sharedGestureAllowed("clip:" + ownerId)) return false;
+    if (cloudProjectBound()) {
+        if ((!oldGestures.empty() || !gestures.empty()) && !canEditSlideNotes()) return false;
+        auto batch = std::make_shared<collab::BatchCommand>();
+        for (const auto& note : midiNotes(*clip))
+            if (!ids.contains(note.id)) appendCommand(batch, collab::DeleteMidiNote{trackId, clipId, note.id});
+        std::string previous;
+        for (const auto& note : notes) {
+            appendCommand(batch, collab::UpsertMidiNote{trackId, clipId, note, previous});
+            previous = note.id;
+        }
+        for (const auto& gesture : oldGestures)
+            if (std::none_of(gestures.begin(), gestures.end(), [&](const auto& g) { return g.id == gesture.id; }))
+                appendCommand(batch, collab::SetSlideNote{trackId, clipId, takeId, gesture.id, {}});
+        for (const auto& gesture : gestures)
+            appendCommand(batch, collab::SetSlideNote{trackId, clipId, takeId, gesture.id, gesture});
+        if (duration != clip->durationSeconds)
+            appendCommand(batch, collab::SetClipProperty{trackId, clipId,
+                collab::ClipProperty::DurationSeconds, duration});
+        if (!ownerId.empty()) appendCommand(batch, collab::SetClipProperty{ownerTrackId,
+            ownerId, collab::ClipProperty::DurationSeconds, ownerDuration});
+        if (!sharedBatchApplies(m_project, batch)) return false;
+        return submitSharedMutation(collab::CommandBody{std::move(batch)}, label) ==
+            collab::SharedMutationResult::Submitted;
+    }
+    const auto group = beginUndoGroup();
+    setClipMidiObjects(trackId, clipId, std::move(notes), std::move(gestures), label);
+    std::vector<std::pair<std::string, std::string>> trims{{trackId, clipId}};
+    if (!ownerId.empty()) trims.emplace_back(ownerTrackId, ownerId);
+    beginClipTrimEdit(trims);
+    setClipTrim(trackId, clipId, start, offset, duration);
+    if (!ownerId.empty()) setClipTrim(ownerTrackId, ownerId, ownerStart, ownerOffset, ownerDuration);
+    endClipTrimEdit(label);
+    collapseUndo(group, label);
+    return true;
+}
+
+bool EngineController::clipNotePreviewActive(const void* owner) const {
+    if (!m_clipNotePreview || m_clipNotePreview->owner != owner) return false;
+    const auto* track = m_project.findTrack(m_clipNotePreview->trackId);
+    if (!track) return false;
+    for (const auto& clip : track->clips) {
+        if (clip.id == m_clipNotePreview->clipId)
+            return clip.contentStorage() == m_clipNotePreview->source &&
+                   midiNotes(clip) == m_clipNotePreview->before;
+    }
+    return false;
+}
+
+void EngineController::publishClipNotePreview(
+    const std::shared_ptr<const ClipContent>& source) {
+    for (const auto& track : m_project.tracks) {
+        if (!trackAccepts(track.kind, ClipKind::Midi) || !m_runtime->trackNodes(track.id)) continue;
+        if (!std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) {
+            return clip.contentStorage() == source;
+        })) continue;
+        AudioContentSpec content;
+        content.midi = prepareTrackNotes(track, false);
+        m_runtime->applyContent(track.id, std::move(content));
+    }
+}
+
+void EngineController::previewClipNotes(const void* owner,
+    const std::string& trackId, const std::string& clipId, std::vector<NoteModel> notes) {
+    if (!owner) return;
+    const auto* clip = findMidiClip(m_project, trackId, clipId);
+    if (!clip) { clearClipNotePreview(owner); return; }
+    if (m_clipNotePreview && (m_clipNotePreview->owner != owner ||
+        m_clipNotePreview->trackId != trackId || m_clipNotePreview->clipId != clipId))
+        clearClipNotePreview(m_clipNotePreview->owner);
+    normalizeClipNotes(notes);
+    m_clipNotePreview = ClipNotePreview{owner, trackId, clipId,
+        clip->contentStorage(), midiNotes(*clip), std::move(notes)};
+    publishClipNotePreview(m_clipNotePreview->source);
+}
+
+void EngineController::clearClipNotePreview(const void* owner) {
+    if (!m_clipNotePreview || m_clipNotePreview->owner != owner) return;
+    const auto source = m_clipNotePreview->source;
+    m_clipNotePreview.reset();
+    publishClipNotePreview(source);
+}
+
 void EngineController::setClipNotes(const std::string& trackId,
                                     const std::string& clipId,
                                     std::vector<NoteModel> notes,
@@ -17246,14 +17554,7 @@ void EngineController::setClipNotes(const std::string& trackId,
 
     // Clamp here rather than in every caller: the tools are pure functions over
     // note vectors and have no business knowing the document's legal ranges.
-    for (auto& note : notes) {
-        if (note.id.empty()) note.id = newUuid();
-        note.pitch = std::clamp(note.pitch, kMinPitch, kMaxPitch);
-        note.startBeats = std::max(0.0, note.startBeats);
-        note.lengthBeats = std::max(kMinNoteBeats, note.lengthBeats);
-        note.velocity = std::clamp(note.velocity, 1, 127);
-        note.pan = std::clamp(note.pan, -1.0f, 1.0f);
-    }
+    normalizeClipNotes(notes);
 
     if (midiNotes(*clip) == notes) return;
     const bool playbackChanged = !sameNotePlayback(midiNotes(*clip), notes);

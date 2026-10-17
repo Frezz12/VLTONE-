@@ -50,20 +50,21 @@ test("release history exposes only available files and warns before DMG", async 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-for (const locale of ["ru", "en"]) test(`${locale} macOS PKG download uses the package installer instructions`, async ({ page }) => {
+for (const locale of ["ru", "en"]) test(`${locale} macOS PKG downloads directly and only DMG shows quarantine instructions`, async ({ page }) => {
   await page.context().addCookies([{ name: "vlt-locale", value: locale, url: "http://127.0.0.1:3100" }]);
   await page.route("**/api/v1/releases/0.1.2/download/macos-pkg", route => route.fulfill({
     body: "pkg-installer",
     headers: { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="VLT.pkg"' },
   }));
   await page.goto("/releases/0.1.2");
-  await page.getByRole("button", { name: /macOS PKG/ }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText(locale === "ru" ? /Откройте PKG/ : /Open the PKG/)).toBeVisible();
-  await expect(dialog.getByRole("link", { name: /DMG/ })).toHaveCount(0);
   const downloadPromise = page.waitForEvent("download");
-  await dialog.getByRole("link", { name: locale === "ru" ? "Скачать PKG" : "Download PKG" }).click();
+  await page.getByRole("link", { name: /macOS PKG/ }).click();
   expect((await downloadPromise).suggestedFilename()).toBe("VLT.pkg");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole("button", { name: /macOS DMG/ }).click();
+  await expect(dialog.getByText(/sudo xattr -rd/)).toBeVisible();
+  await expect(dialog.getByRole("link", { name: locale === "ru" ? "Скачать DMG" : "Download DMG" })).toBeVisible();
 });
 
 for (const locale of ["ru", "en"]) {
