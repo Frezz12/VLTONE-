@@ -320,6 +320,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     static bool checkTrackPresentationForTest();
     static bool checkClipEdgesForTest();
     static bool checkTimelineRenderingForTest();
+    static bool checkNavigationRailsForTest();
     /// Geometry probes for the real-mouse region drag check.
     double regionStartSecondsForTest() const { return m_regionStart; }
     int regionFirstLaneForTest() const { return m_regionLaneA; }

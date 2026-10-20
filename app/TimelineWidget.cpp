@@ -64,6 +64,7 @@
 #include <QPainterPath>
 #include <QRegion>
 #include <QScrollBar>
+#include "TimelineNavigation.hpp"
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QShowEvent>
@@ -426,11 +427,9 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
         m_navigationFrame->stop();
         syncNavigationControls();
     });
-    m_horizontalScrollBar = new QScrollBar(Qt::Horizontal, this);
+    m_horizontalScrollBar = new TimelineNavigationRail(Qt::Horizontal, this);
     m_horizontalScrollBar->setObjectName(QStringLiteral("TimelineHorizontalScroll"));
-    m_horizontalScrollBar->setFocusPolicy(Qt::NoFocus);
     m_horizontalScrollBar->setAccessibleName(tr("Timeline horizontal scroll"));
-    m_horizontalScrollBar->setToolTip(tr("Move left or right through the project"));
     connect(m_horizontalScrollBar, &QScrollBar::valueChanged, this,
             [this](int value) {
                 ui::ScrollMotion::cancel(this);
@@ -440,20 +439,31 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
                     double(value) / kTimelineScrollUnitsPerSecond);
             });
 
-    m_verticalScrollBar = new QScrollBar(Qt::Vertical, this);
+    m_verticalScrollBar = new TimelineNavigationRail(Qt::Vertical, this);
     m_verticalScrollBar->setObjectName(QStringLiteral("TimelineVerticalScroll"));
-    m_verticalScrollBar->setFocusPolicy(Qt::NoFocus);
     m_verticalScrollBar->setAccessibleName(tr("Timeline vertical scroll"));
-    m_verticalScrollBar->setToolTip(tr("Move up or down through the tracks"));
     connect(m_verticalScrollBar, &QScrollBar::valueChanged, this,
             &TimelineWidget::setVerticalScroll);
 
-    m_navigationCorner = new QWidget(this);
+    m_navigationCorner = new TimelineNavigationCorner(this);
     m_navigationCorner->setObjectName(QStringLiteral("TimelineNavigationCorner"));
-    m_navigationCorner->setAttribute(Qt::WA_StyledBackground);
     m_navigationCorner->setAttribute(Qt::WA_NoMousePropagation);
     // The square joining the two rails is chrome, never an editing target.
     m_navigationCorner->setEnabled(false);
+    const auto beginNavigation = [this](Qt::Orientation axis) {
+        for (auto* bar : {m_horizontalScrollBar, m_verticalScrollBar})
+            static_cast<TimelineNavigationRail*>(bar)->cancelInteraction();
+        ui::ScrollMotion::cancel(this);
+        ui::ScrollMotion::cancelZoom(this);
+        if (axis == Qt::Horizontal) noteManualNavigation();
+    };
+    for (auto* bar : {m_horizontalScrollBar, m_verticalScrollBar})
+        connect(static_cast<TimelineNavigationRail*>(bar), &TimelineNavigationRail::interactionStarted,
+                this, [beginNavigation, bar] { beginNavigation(bar->orientation()); });
+    connect(this, &TimelineWidget::playheadMoved, this, [this] {
+        static_cast<TimelineNavigationRail*>(m_horizontalScrollBar)->setPlayheadPosition(
+            (m_controller->presentationPositionSeconds() - m_scrollSeconds) * m_pixelsPerSecond);
+    });
     applyNavigationTheme();
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             [this] {
@@ -2036,14 +2046,9 @@ int TimelineWidget::minimumNavigationHeight() const {
 }
 
 void TimelineWidget::applyNavigationTheme() {
-    const Theme& theme = th();
-    const QColor rail = mixColors(theme.panelBottom(), theme.well(), 0.65);
-    const QString style = ui::navigationScrollBarStyle();
-    m_horizontalScrollBar->setStyleSheet(style);
-    m_verticalScrollBar->setStyleSheet(style);
-    m_navigationCorner->setStyleSheet(
-        QStringLiteral("#TimelineNavigationCorner { background: %1; border: 1px solid %2; border-bottom: none; border-radius: 5px; }")
-            .arg(rail.name(), theme.separator().name()));
+    for (auto* bar : {m_horizontalScrollBar, m_verticalScrollBar})
+        ui::FrameClock::instance().request(bar, bar->rect());
+    ui::FrameClock::instance().request(m_navigationCorner, m_navigationCorner->rect());
 }
 
 void TimelineWidget::layoutNavigationControls() {
@@ -2121,6 +2126,8 @@ void TimelineWidget::syncNavigationControls() {
         m_verticalScrollBar->setSingleStep(std::max(1, ui::kLaneHeight / 2));
         m_verticalScrollBar->setValue(m_scrollY);
     }
+    static_cast<TimelineNavigationRail*>(m_horizontalScrollBar)->setPlayheadPosition(
+        (m_controller->presentationPositionSeconds() - m_scrollSeconds) * m_pixelsPerSecond);
 }
 
 void TimelineWidget::setBottomInset(int px) {
@@ -2901,6 +2908,7 @@ void TimelineWidget::refreshPlaybackFrame() {
     ensurePlayheadVisible();
     const double seconds = m_controller->presentationPositionSeconds();
     const double currentX = (seconds - m_scrollSeconds) * m_pixelsPerSecond;
+    static_cast<TimelineNavigationRail*>(m_horizontalScrollBar)->setPlayheadPosition(currentX);
     const double trail = playheadTrailPixels();
     const QRect timedText = timedNotebookTextRect();
     const QRect timedTextDirty = timedText.isEmpty() ? QRect()

@@ -2239,6 +2239,8 @@ bool checkNavigationMotion() {
 }
 
 bool checkUiScaling() {
+    if (qEnvironmentVariableIsSet("VLT_NAVIGATION_RAILS_CHECK_ONLY"))
+        return TimelineWidget::checkNavigationRailsForTest();
     if (qEnvironmentVariableIsSet("VLT_MARQUEE_CHECK_ONLY"))
         return TimelineWidget::checkMarqueeSelectionForTest();
     if (qEnvironmentVariableIsSet("VLT_TIMELINE_RENDER_CHECK_ONLY"))
