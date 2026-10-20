@@ -526,7 +526,8 @@ void WorkspaceSurface::resizeSurface() {
     requestCapture();
 }
 void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& snapshot, QSet<quintptr>& wanted,
-                             QPoint parentOrigin, QRect parentClip, const QRegion& parentMask, bool descendants) {
+                             QPoint parentOrigin, QRect parentClip, const QRegion& parentMask, bool descendants,
+                             const ScrollContext& inheritedScroll) {
     ++m_visitedWidgets;
     if (m_stopping || !widget || widget == m_container || !widget->isVisible() ||
         (widget != m_source && widget->isWindow())) return;
@@ -548,6 +549,12 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
     const QPoint origin = widget == m_source ? QPoint() : parentOrigin + widget->pos();
     const QRect visible = QRect(origin, widget->size()).intersected(parentClip);
     if (visible.isEmpty()) return;
+    ScrollContext scroll = inheritedScroll;
+    if (!scroll.group && parentMask.isEmpty() && widget->mask().isEmpty() &&
+        widget->property("vlt.scrollLayerGroup").toBool() && scrollForViewport(widget->parentWidget())) {
+        scroll.group = std::make_shared<SceneScrollGroup>(SceneScrollGroup{id, origin, parentClip});
+        scroll.parentClip = QRect(origin, widget->size());
+    }
     auto found = m_layers.find(id);
     if (found == m_layers.end()) {
         const auto parked = m_offscreenLayers.find(id);
@@ -561,22 +568,33 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
             discardOffscreenLayer(id);
         }
     }
-    const QRectF clip = visible.translated(-origin);
-    QRegion mask(visible);
-    if (!parentMask.isEmpty()) mask &= parentMask;
+    // The shared viewport clip owns scrolling damage. Keep descendant clips
+    // in page coordinates so a scroll does not dirty every QSG clip node.
+    const QRect paintVisible = scroll.group
+        ? QRect(origin, widget->size()).intersected(scroll.parentClip) : visible;
+    const QRectF clip = paintVisible.translated(-origin);
+    QRegion mask(paintVisible);
+    const QRegion& paintParentMask = scroll.group ? scroll.parentMask : parentMask;
+    if (!paintParentMask.isEmpty()) mask &= paintParentMask;
     if (!widget->mask().isEmpty()) mask &= widget->mask().translated(origin);
-    if (mask.isEmpty()) return;
+    if (mask.intersected(visible).isEmpty()) return;
     wanted.insert(id);
-    const QRegion childMask = mask == QRegion(visible) ? QRegion{} : mask;
+    const QRegion childMask = mask == QRegion(paintVisible) ? QRegion{} : mask;
     // Ordinary rectangular widgets keep the cheap scissor/batching path.
-    if (mask == QRegion(visible)) mask = {};
+    if (mask == QRegion(paintVisible)) mask = {};
     else mask.translate(-origin);
-    const auto* scroll = scrollForViewport(widget);
-    const QPoint viewportOffset = scroll ? QPoint(scroll->horizontalScrollBar()->value(),
-                                                  scroll->verticalScrollBar()->value()) : QPoint();
+    const auto* scroller = scrollForViewport(widget);
+    const QPoint viewportOffset = scroller ? QPoint(scroller->horizontalScrollBar()->value(),
+                                                    scroller->verticalScrollBar()->value()) : QPoint();
     const bool rebuild = found == m_layers.end() || !found->second.widget || m_dirty.contains(widget) ||
-                         found->second.viewportOffset != viewportOffset;
+                         (found->second.viewportOffset != viewportOffset &&
+                          !widget->property("vlt.staticScrollViewport").toBool());
     if (rebuild) {
+        static const bool profileControls = qEnvironmentVariableIntValue("VLT_SCENE_PROFILE_CONTROLS");
+        const QByteArray layerProfile = profileControls
+            ? (QStringLiteral("gpu.scene.control.") + widget->metaObject()->className() + QLatin1Char('.') +
+               widget->objectName() + QStringLiteral(".ms")).toUtf8() : QByteArray();
+        ui::perf::Scope controlCost(layerProfile.isEmpty() ? nullptr : layerProfile.constData());
         ui::perf::Scope layerCost(nativeControlAsset(widget) && !dynamic_cast<ScenePaintSource*>(widget)
             ? "gpu.scene.native.control.ms" : "gpu.scene.vector.layer.ms");
         auto recording = found != m_layers.end() && found->second.widget ? found->second.recording :
@@ -591,8 +609,9 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         auto layer = std::make_shared<SceneLayer>();
         layer->id = id; layer->revision = ++m_revision;
         layer->origin = origin;
-        layer->clip = visible.translated(-origin);
+        layer->clip = clip;
         layer->mask = mask;
+        layer->scrollGroup = scroll.group;
         if (nativeControlAsset(widget) && !dynamic_cast<ScenePaintSource*>(widget)) {
             const auto dpr = m_window->devicePixelRatio();
             const QSize pixels(int(std::ceil(widget->width() * dpr)),
@@ -626,7 +645,7 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
             }
             layer->meshes = recorder.takeMeshes();
         }
-        cacheLayerBounds(*layer);
+        cacheLayerBounds(*layer, m_window->devicePixelRatio());
         layer->clipRequired = requiresLayerClip(*layer);
         for (const auto& mesh : layer->meshes) {
             layer->geometryBytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
@@ -634,11 +653,12 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
             if (mesh.clip) layer->geometryBytes += qint64(mesh.clip->triangles.size()) * sizeof(SceneVertex);
         }
         m_layers[id] = {widget, layer, std::move(recording), viewportOffset,
-                        parentOrigin, parentClip, parentMask};
+                        parentOrigin, parentClip, parentMask, scroll};
     } else if (found->second.layer->origin != origin || found->second.layer->clip != clip ||
-               found->second.layer->mask != mask) {
+               found->second.layer->mask != mask || found->second.layer->scrollGroup != scroll.group) {
         auto moved = std::make_shared<SceneLayer>(*found->second.layer);
         moved->origin = origin;
+        moved->scrollGroup = scroll.group;
         // Recording always covers the widget's full local rect. Scrolling
         // changes visibility, not its pixels or geometry.
         if (moved->clip != clip || moved->mask != mask) {
@@ -649,14 +669,20 @@ void WorkspaceSurface::visit(QWidget* widget, std::shared_ptr<SceneSnapshot>& sn
         found->second.layer = std::move(moved);
     }
     auto& cached = m_layers[id];
+    cached.viewportOffset = viewportOffset;
     cached.parentOrigin = parentOrigin;
     cached.parentClip = parentClip;
     cached.parentMask = parentMask;
+    cached.scroll = scroll;
     snapshot->layers.push_back(cached.layer);
     if (!descendants) return;
+    if (scroll.group) {
+        scroll.parentClip = paintVisible;
+        scroll.parentMask = childMask;
+    }
     const auto children = widget->children();
     for (auto* child : children) if (auto* childWidget = qobject_cast<QWidget*>(child))
-        visit(childWidget, snapshot, wanted, origin, visible, childMask);
+        visit(childWidget, snapshot, wanted, origin, visible, childMask, true, scroll);
 }
 void WorkspaceSurface::capture() {
     if (!m_source || !m_source->isVisible() || m_stopping) return;
@@ -686,9 +712,11 @@ void WorkspaceSurface::capture() {
             if (found == m_layers.end() || !widget->isVisible()) { reuseTraversal = false; break; }
             const auto& cached = found->second;
             const QPoint origin = widget == m_source ? QPoint() : cached.parentOrigin + widget->pos();
-            const QRect visible = QRect(origin, widget->size()).intersected(cached.parentClip);
+            const QRect visible = QRect(origin, widget->size()).intersected(
+                cached.scroll.group ? cached.scroll.parentClip : cached.parentClip);
             QRegion mask(visible);
-            if (!cached.parentMask.isEmpty()) mask &= cached.parentMask;
+            const auto& parentMask = cached.scroll.group ? cached.scroll.parentMask : cached.parentMask;
+            if (!parentMask.isEmpty()) mask &= parentMask;
             if (!widget->mask().isEmpty()) mask &= widget->mask().translated(origin);
             if (mask == QRegion(visible)) mask = {};
             else mask.translate(-origin);
@@ -706,7 +734,8 @@ void WorkspaceSurface::capture() {
                 // visit replaces the cache entry; keep its inherited geometry
                 // alive without copying every unchanged widget's metadata.
                 const auto geometry = cached;
-                visit(geometry.widget, snapshot, wanted, geometry.parentOrigin, geometry.parentClip, geometry.parentMask, false);
+                visit(geometry.widget, snapshot, wanted, geometry.parentOrigin, geometry.parentClip,
+                      geometry.parentMask, false, geometry.scroll);
             } else snapshot->layers.push_back(cached.layer);
             if (m_stopping) break;
         }
@@ -820,6 +849,7 @@ void WorkspaceSurface::present(std::shared_ptr<const SceneSnapshot> snapshot) {
                 if (!visual.item) { fail(tr("A GPU media component could not be created.")); return; }
             }
             QRectF clip = layer->clip.intersected(mesh.visualRect);
+            if (layer->scrollGroup) clip &= layer->scrollGroup->clip.translated(-layer->origin);
             if (mesh.clip) clip &= mesh.clip->bounds;
             visual.clip->setPosition(layer->origin + clip.topLeft());
             visual.clip->setSize(clip.size());

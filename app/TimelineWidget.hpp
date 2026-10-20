@@ -182,6 +182,9 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// Open the same actions as a right-click on the primary selected clip.
     bool showSelectedClipActionsMenu();
     bool populateSelectedClipActionsMenu(QMenu& menu);
+    QStringList clipMoveTargets() const;
+    bool showClipTrackPicker();
+    bool moveSelectedClipsToTrack(const QString& trackId);
     bool createClipAt(const QString& trackId, daw::ClipKind kind, double seconds);
 
     /// Select these clips from outside — the same state a click would leave,
@@ -276,6 +279,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     bool checkClipIndexForTest() const;
     bool checkLocalDamageForTest();
     static bool checkClipTrimPreviewForTest();
+    static bool checkClipTrackMoveForTest();
     static bool checkFileDropPreviewForTest();
     bool checkAdaptiveGridForTest();
     bool checkGridAppearanceForTest();
@@ -316,6 +320,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     /// can click on a lane it has just created.
     int laneCentreForTest(int lane) const;
     static bool checkInterruptedPointerGestureForTest();
+    static bool checkDragAutoScrollForTest();
     static bool checkMarqueeSelectionForTest();
     static bool checkTrackPresentationForTest();
     static bool checkClipEdgesForTest();
@@ -538,7 +543,8 @@ private:
     void captureClipDragOrigins();
     bool duplicateClipDrag();
     void moveClipDragToLane(int grabbedLane);
-    void autoScrollMarquee(const QPoint& pointer);
+    void updateDragAutoScroll();
+    void stepDragAutoScroll(double seconds);
     void updateMarqueeSelection();
     bool eraseClipsAlong(const QPoint& from, const QPoint& to);
 
@@ -979,6 +985,10 @@ private:
     // a clip underneath it.
     bool m_panning = false;
     QPointF m_lastPointerPosition;
+    Qt::KeyboardModifiers m_lastPointerModifiers = Qt::NoModifier;
+    ui::FrameTimer* m_dragScrollFrame = nullptr;
+    double m_dragScrollVelocity = 0.0;
+    double m_dragScrollRemainder = 0.0;
     QPointF m_panLastPosition;
     bool m_dragging = false;
     bool m_scrubbing = false;
@@ -1069,7 +1079,6 @@ private:
 
     // Marquee (rubber-band) selection.
     bool m_marqueeActive = false;
-    bool m_marqueeScrollScheduled = false;
     QPoint m_marqueeOrigin;
     QPoint m_marqueeCurrent;
     QHash<QString, QRect> m_marqueeHits;
@@ -1084,6 +1093,7 @@ private:
     int m_regionLaneB = -1;
     QPoint m_regionOrigin;
     QPoint m_regionCurrent;
+    int m_regionAnchorLane = -1;
     // Moving the committed region: the contents are split out on the first
     // move and the pieces travel with it.
     bool m_regionMovePending = false;

@@ -44,6 +44,7 @@ public:
     SelectionKind kind() const;
     const QStringList& tracks() const { return m_tracks; }
     const QVector<ClipSel>& clips() const { return m_clips; }
+    const QVector<ClipSel>& clipsInSelectionOrder() const { return m_clipOrder; }
     bool isEmpty() const { return m_tracks.isEmpty() && m_clips.isEmpty(); }
 
     /// The clip a single-clip context should show. Empty when the selection
@@ -54,6 +55,7 @@ public:
 
     void setTracks(const QStringList& trackIds);
     void setClips(const QVector<ClipSel>& clips);
+    void setClips(const QVector<ClipSel>& clips, const QVector<ClipSel>& chronological);
     void clear();
 
     /// Re-emit changed() without a content change, so observers re-read the
@@ -68,6 +70,7 @@ private:
     quint64 m_revision = 0;
     QStringList m_tracks;
     QVector<ClipSel> m_clips;
+    QVector<ClipSel> m_clipOrder;
 };
 
 }  // namespace ui

@@ -7,6 +7,7 @@ import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { CookieNotice } from "@/components/cookie-notice";
 import { MotionEffects } from "@/components/motion-effects";
+import { SiteVisitTracker } from "@/components/site-visit-tracker";
 import localFont from "next/font/local";
 import { siteUrl } from "@/lib/seo";
 import "../globals.css";
@@ -32,6 +33,7 @@ export default async function LocaleLayout({ children, params }: Readonly<{ chil
       <body className={inter.variable}>
         <NextIntlClientProvider messages={messages}>
           <MotionEffects />
+          <SiteVisitTracker />
           <div className="vlt-shell"><Header locale={locale} />{children}<Footer locale={locale} /><CookieNotice locale={locale} /></div>
         </NextIntlClientProvider>
       </body>

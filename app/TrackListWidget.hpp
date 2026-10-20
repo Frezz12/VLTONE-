@@ -111,6 +111,7 @@ public:
     bool populateSelectedTrackActionsMenu(QMenu& menu);
     void showTrackIconPicker(const QString& trackId);
     void applyTrackIcon(const QStringList& trackIds, const QString& iconId);
+    void randomizeSelectedTrackColors();
     void setSelectedTrack(const QString& id);
     void setSelectedTracks(const QStringList& ids, const QString& primary = {});
 

@@ -9,6 +9,7 @@ namespace daw {
 void AudioRuntime::transportCommand(const AudioTransportCommand& command) {
     auto& transport = engine.transport();
     using Action = AudioTransportCommand::Action;
+    if (command.action == Action::Record && auditionFollowsTransport) stopAudition();
     if (safetyStopped.load(std::memory_order_acquire) &&
         (command.action == Action::Play || command.action == Action::StartPlayback || command.action == Action::Record)) return;
     switch (command.action) {
@@ -46,6 +47,8 @@ void AudioRuntime::transportCommand(const AudioTransportCommand& command) {
     case Action::LoopEnabled: transport.setLoopEnabled(command.enabled); break;
     case Action::Duration: transport.setDuration(command.position); break;
     }
+    if (auditionFollowsTransport && auditionRuntime)
+        auditionRuntime->transportCommand(command);
 }
 
 AudioTransportSnapshot AudioRuntime::transportSnapshot() const {
@@ -65,6 +68,8 @@ void AudioRuntime::bindInputClock(engine::InputClock* sink, engine::AudioPresent
 
 AudioMeterSnapshot AudioRuntime::meterSnapshot(const std::string& channelId,
     const std::string& clipId, bool sampler) const {
+    if (auditionFollowsTransport && auditionRuntime)
+        return auditionRuntime->meterSnapshot(channelId, clipId, sampler);
     if (channelId == AudioGraphSpec::masterChannelId && clipId.empty() && !sampler)
         return {engine.masterPeakLeft(), engine.masterPeakRight(), engine.masterPeakHold()};
     const auto found = channels.find(channelId);

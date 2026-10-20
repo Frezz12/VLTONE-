@@ -42,7 +42,7 @@ bool EngineController::setRackModulation(const std::string& channel, const modul
         if (auto* track = m_project.findTrack(channel)) track->freeze = previousFreeze;
         rebuildGraph(); return false;
     }
-    for (const auto& source : rack.sources) if (source.kind == modulation::Kind::Lfo) {
+    for (const auto& source : rack.sources) if (modulation::hasRate(source.kind)) {
         AutomationTarget target{AutomationTargetKind::ModulatorRate, channel, source.id, "rate", {}};
         followPassiveAutomation(target, plainToAutomation(target, source.sync ? 1.0 / source.beats : source.rate));
     }
@@ -59,7 +59,13 @@ bool EngineController::setRackModulation(const std::string& channel, const modul
 }
 std::string EngineController::addRackModulator(const std::string& channel, modulation::Kind kind) {
     auto rack = rackModulation(channel); modulation::Source source;
-    source.id = newUuid(); source.kind = kind; source.name = kind == modulation::Kind::Lfo ? "LFO" : "Envelope Follower";
+    source.id = newUuid(); source.kind = kind; source.name = modulation::kindName(kind);
+    if (kind == modulation::Kind::Steps) source.beats = .25;
+    if (kind == modulation::Kind::Random) {
+        // Persist the seed once; duplication intentionally preserves the same pattern.
+        source.seed = 2166136261U;
+        for (const auto ch : source.id) source.seed = (source.seed ^ std::uint8_t(ch)) * 16777619U;
+    }
     rack.sources.push_back(source);
     return setRackModulation(channel, rack, "Add " + source.name) ? source.id : std::string{};
 }
@@ -75,7 +81,7 @@ std::string EngineController::assignRackModulation(const std::string& channel, c
         !std::isfinite(info->minValue) || !std::isfinite(info->maxValue) || info->minValue >= info->maxValue) return {};
     modulation::Route route; route.id = newUuid(); route.sourceId = sourceId; route.slotId = slotId;
     route.pluginUid = slot->uid; route.pluginFormat = plugins::toString(instance->descriptor().format); route.parameterId = parameterId;
-    route.bipolar = source->kind == modulation::Kind::Lfo;
+    route.bipolar = source->kind == modulation::Kind::Lfo || source->kind == modulation::Kind::Steps || source->kind == modulation::Kind::Random;
     rack.routes.push_back(route);
     return setRackModulation(channel, rack, "Assign Modulation") ? route.id : std::string{};
 }
@@ -102,6 +108,9 @@ std::string EngineController::duplicateRackModulator(const std::string& channel,
 }
 float EngineController::rackModulationValue(const std::string& channel, const std::string& source) const {
     return m_runtime->modulationValue(channel, source);
+}
+float EngineController::rackModulationPosition(const std::string& channel, const std::string& source) const {
+    return m_runtime->modulationPosition(channel, source);
 }
 std::string EngineController::rackModulationStatus(const std::string& channel, const std::string& route) const {
     return m_runtime->modulationStatus(channel, route);

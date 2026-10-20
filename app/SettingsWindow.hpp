@@ -21,6 +21,7 @@ class QListWidget;
 class QStackedWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
+class QTabBar;
 class QKeySequenceEdit;
 class QPushButton;
 class QLineEdit;
@@ -33,7 +34,6 @@ class QRadioButton;
 class QFileSystemWatcher;
 class QWidget;
 class QTimer;
-class QHBoxLayout;
 
 /// The unified, non-modal settings window: one place for Audio, Themes and
 /// Keyboard Shortcuts, titled with the application name. Replaces the standalone
@@ -148,8 +148,9 @@ private:
     void applySelectedSavedTheme();
     void refreshShortcutEditors();
     void refreshNavigationAppearance();
+    void refreshAccount();
+    void refreshSubtabs(int page);
     void preparePage(QWidget* page);
-    void refreshSectionLinks();
     void buildSearchIndex();
     void updateSearch();
     void activateSearchResult(QTreeWidgetItem* item);
@@ -162,18 +163,19 @@ private:
     daw::EngineController* m_controller = nullptr;
     ShortcutManager* m_shortcuts = nullptr;
     QTreeWidget* m_navigation = nullptr;
+    QTabBar* m_subtabs = nullptr;
+    QPushButton* m_accountButton = nullptr;
+    QLabel* m_accountAvatar = nullptr;
+    QLabel* m_accountName = nullptr;
+    QLabel* m_accountCaption = nullptr;
     QStackedWidget* m_pages = nullptr;
     QStackedWidget* m_content = nullptr;
     QLineEdit* m_search = nullptr;
     QTreeWidget* m_searchResults = nullptr;
     QLabel* m_searchStatus = nullptr;
-    QLabel* m_pageCategory = nullptr;
     QLabel* m_pageHint = nullptr;
-    QComboBox* m_sectionLinks = nullptr;
     QTimer* m_searchTimer = nullptr;
-    QHBoxLayout* m_footerRow = nullptr;
     QPushButton* m_audioApply = nullptr;
-    QVector<QPointer<QWidget>> m_sections;
     struct SearchEntry {
         int page;
         QString title;
@@ -183,7 +185,8 @@ private:
     };
     QVector<SearchEntry> m_searchIndex;
     QHash<int, QTreeWidgetItem*> m_navigationItems;
-    QLabel* m_pageIcon = nullptr;
+    QHash<int, QString> m_pageLabels;
+    QVector<QVector<int>> m_categoryPages;
     QLabel* m_pageTitle = nullptr;
     QLabel* m_pageDescription = nullptr;
     RecordingSettingsPage* m_recordingPage = nullptr;

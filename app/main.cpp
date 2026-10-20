@@ -15,6 +15,8 @@
 #include "MidiGeneratorDialog.hpp"
 #include "PluginEditorWindow.hpp"
 #include "TrackIcons.hpp"
+#include "TrackOverviewPanel.hpp"
+#include "KnobAppearance.hpp"
 #include "TransportBar.hpp"
 #include "ChannelStrip.hpp"
 #include "CreatorWindow.hpp"
@@ -714,6 +716,12 @@ int main(int argc, char** argv) {
     if (themeId)
         ThemeManager::instance().setThemeId(QString::fromUtf8(themeId),
                                             /*persist=*/false);
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_KNOB_APPEARANCE_ONLY")) {
+        return ui::checkKnobAppearanceForTest(qEnvironmentVariable("DAW_KNOB_APPEARANCE_SHOTS")) ? 0 : 77;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_OVERVIEW_ONLY")) {
+        return TrackOverviewPanel::checkForTest(qEnvironmentVariable("DAW_TRACK_OVERVIEW_SHOTS")) ? 0 : 76;
+    }
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_AUTOMATION_EDITOR_ONLY")) {
         MainWindow window(/*openDevice=*/false);
         window.populateDemo();

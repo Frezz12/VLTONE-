@@ -95,6 +95,7 @@ bool hasGroupInput(const daw::TrackModel& track) {
 // Big enough to hit without aiming: these are the controls the chain is worked
 // with, and a 14-pixel target inside a 17-pixel row was a dot.
 constexpr int kActionSide = 17;
+constexpr int kSectionActionSide = 20;
 constexpr int kActionGap = 2;
 constexpr int kActionMargin = 2;
 /// A pre/post tap button carries three letters, so it is wider than the square
@@ -939,9 +940,13 @@ private:
 
 ChannelStrip::ChannelStrip(daw::EngineController* controller,
                            const QString& trackId, bool master,
-                           QWidget* parent, bool insertsOnly, int insertSlots)
+                           QWidget* parent, bool insertsOnly, int insertSlots, Presentation presentation)
     : QWidget(parent), m_controller(controller), m_trackId(trackId),
-      m_master(master), m_insertsOnly(insertsOnly), m_insertSlotCount(insertSlots) {
+      m_master(master), m_presentation(presentation), m_insertsOnly(insertsOnly), m_insertSlotCount(insertSlots) {
+    if (m_presentation != Presentation::Classic) {
+        buildPresentation();
+        return;
+    }
     if (m_insertsOnly) {
         setMinimumWidth(kStripWidth);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -1003,19 +1008,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     m_panLabel->setAlignment(Qt::AlignCenter);
     m_panLabel->setFixedWidth(23);
     if (!m_master) {
-        // Mono (one ring) / stereo (two rings) fold for the whole channel.
-        m_monoButton = new ui::IconButton(icons::Glyph::StereoRings,
-                                          tr("Stereo"), panSection);
-        m_monoButton->setCheckable(true);
-        m_monoButton->setButtonSize(24, 24);
-        connect(m_monoButton, &QAbstractButton::clicked, this, [this] {
-            const bool mono = m_monoButton->isChecked();
-            m_controller->setTrackMono(m_trackId.toStdString(), mono);
-            m_monoButton->setGlyph(mono ? icons::Glyph::MonoRing
-                                        : icons::Glyph::StereoRings);
-            m_monoButton->setToolTip(mono ? tr("Mono") : tr("Stereo"));
-            emit edited();
-        });
+        buildMonoButton(panSection);
     }
     levelColumn->addWidget(panSection);
     // The fader row carries the stretch: extra height goes to the fader and
@@ -1055,6 +1048,16 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
     for (QWidget* child : findChildren<QWidget*>())
         child->installEventFilter(this);
 
+    bindPan();
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+            &ChannelStrip::applyTheme);
+    applyTheme();
+    syncFromModel();
+    refreshMeter();
+    measureRack();
+}
+
+void ChannelStrip::bindPan() {
     connect(m_pan, &ui::PanKnob::panChanged, this, [this](double v) {
         if (m_master) {
             if (!m_panGestureStart)
@@ -1068,7 +1071,7 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
             }
             m_controller->setTrackPanGestureSample(id, float(v));
         }
-        m_panLabel->setText(ui::formatPan(v));
+        updateReadouts();
     });
     connect(m_pan, &ui::PanKnob::editFinished, this, [this] {
         if (m_panGestureStart) {
@@ -1083,16 +1086,10 @@ ChannelStrip::ChannelStrip(daw::EngineController* controller,
         emit edited();
     });
 
-    connect(&ThemeManager::instance(), &ThemeManager::changed, this,
-            &ChannelStrip::applyTheme);
-    applyTheme();
-    syncFromModel();
-    refreshMeter();
-
-    measureRack();
 }
 
 void ChannelStrip::buildRack() {
+    m_fxPower = m_sendsPower = nullptr;
     m_rack = new QWidget(this);
     m_rack->setObjectName(QStringLiteral("ChannelRack"));
     auto* rack = new QVBoxLayout(m_rack);
@@ -1156,7 +1153,17 @@ bool ChannelStrip::rebindChannel(const QString& trackId, int insertSlots) {
         (QApplication::focusWidget() && (hasFocus() || isAncestorOf(QApplication::focusWidget())))) return false;
     const auto* from = m_controller->project().findTrack(m_trackId.toStdString());
     const auto* to = m_controller->project().findTrack(trackId.toStdString());
-    if (!from || !to || from->kind != to->kind || to->kind == daw::TrackKind::Pattern) return false;
+    if (!from || !to) return false;
+    if (m_presentation == Presentation::Compact) {
+        m_trackId = trackId;
+        m_displayedPeak = -1.f; m_displayedGain = -1.; m_displayedPan = -2.;
+        m_readoutClock.invalidate();
+        m_meter->clearLevels();
+        syncFromModel();
+        return true;
+    }
+    if (m_presentation != Presentation::Classic || from->kind != to->kind ||
+        to->kind == daw::TrackKind::Pattern) return false;
     if (auto* rack = qobject_cast<ui::MiniModuleRack*>(m_colorWell)) rack->finishEdits();
     delete m_rack;
     m_rack = nullptr; m_rackSections.fill(nullptr);
@@ -1214,6 +1221,7 @@ bool ChannelStrip::checkRebindForTest() {
 }
 
 QWidget* ChannelStrip::buildHeader() {
+    if (m_presentation == Presentation::Compact) return buildCompactHeader();
     auto* box = new QWidget(this);
     box->setObjectName(QStringLiteral("ChannelHeader"));
     auto* row = new QHBoxLayout(box);
@@ -1238,6 +1246,12 @@ QWidget* ChannelStrip::buildHeader() {
     label->setToolTip(name);
 
     row->addWidget(m_headerSwatch, 0, Qt::AlignVCenter);
+    if (m_presentation == Presentation::Details) {
+        box->setFixedHeight(30);
+        m_headerIcon = new QLabel(box);
+        m_headerIcon->setFixedSize(20, 20);
+        row->addWidget(m_headerIcon);
+    }
     row->addWidget(label, 1);
     return box;
 }
@@ -1274,6 +1288,8 @@ QWidget* ChannelStrip::buildSlotRow(QToolButton* slot, const QString& channel,
     auto action = [row](icons::Glyph glyph, const QString& tip) {
         auto* b = new ui::IconButton(glyph, tip, row);
         b->setButtonSize(kActionSide, kActionSide);
+        b->setGlyphSize(13);
+        b->setProperty("circular", glyph == icons::Glyph::Power || glyph == icons::Glyph::Gear);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
@@ -1472,7 +1488,7 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
                                      const std::vector<QWidget*>& rows,
                                      std::function<bool(const QString&)> accepts,
                                      std::function<void(const QString&)> onDrop,
-                                     WellDrag drag) {
+                                     WellDrag drag, QWidget* leadingButton) {
     auto* box = new QWidget(this);
     auto* col = new QVBoxLayout(box);
     col->setContentsMargins(0, 0, 0, 0);
@@ -1480,6 +1496,8 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
 
     auto* head = new QHBoxLayout;
     head->setContentsMargins(0, 0, 0, 0);
+    head->setSpacing(0);
+    if (leadingButton) head->addWidget(leadingButton);
     const QString captionText = title == tr("Audio FX") ? QStringLiteral("FX") : title.toUpper();
     QLabel* caption = nullptr;
     if (drag.dragMime) {
@@ -1507,7 +1525,7 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
     }
     // Headers share a baseline with or without action buttons.
     caption->setObjectName(QStringLiteral("ChannelSectionCaption"));
-    caption->setMinimumHeight(kActionSide);
+    caption->setMinimumHeight(kSectionActionSide);
     caption->setToolTip(drag.titleTip.isEmpty() ? title : drag.titleTip);
     head->addWidget(caption, 1);
     if (addButton) head->addWidget(addButton);
@@ -1716,7 +1734,7 @@ QWidget* ChannelStrip::buildInserts() {
     add->setProperty("insertSlotSpan", m_insertSlotCount - visualRows);
     add->setFixedHeight((m_insertSlotCount - visualRows) * (kSlotHeight + 1) - 1);
     add->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    add->setIconSize(QSize(14, 14));
+    add->setIconSize(QSize(16, 16));
     add->setFocusPolicy(Qt::StrongFocus);
     add->setToolTip(tr("Add Plugin"));
     add->setAccessibleName(tr("Add Plugin"));
@@ -1735,11 +1753,6 @@ QWidget* ChannelStrip::buildInserts() {
         }));
     rows.push_back(add);
 
-    auto* head = new QWidget(this);
-    auto* headRow = new QHBoxLayout(head);
-    headRow->setContentsMargins(0, 0, 0, 0);
-    headRow->setSpacing(2);
-
     // One switch for the whole chain, next to the slots it acts on: the A/B
     // every engineer does by hand otherwise, slot by slot. It reads the chain
     // rather than remembering — "all bypassed" is the only state that lights.
@@ -1748,34 +1761,23 @@ QWidget* ChannelStrip::buildInserts() {
                                   [](const daw::InsertModel& in) { return in.bypassed; });
     auto* bypassAll =
         new ui::IconButton(icons::Glyph::Power, tr("Bypass every plugin on this channel"), this);
-    bypassAll->setButtonSize(16, 14);
+    m_fxPower = bypassAll;
+    bypassAll->setObjectName(QStringLiteral("ChannelFxPower"));
+    bypassAll->setAccessibleName(tr("Bypass every plugin on this channel"));
+    bypassAll->setButtonSize(kSectionActionSide, kSectionActionSide);
+    bypassAll->setGlyphSize(14);
+    bypassAll->setProperty("circular", true);
+    bypassAll->setFocusPolicy(Qt::StrongFocus);
     bypassAll->setCheckable(true);
     bypassAll->setChecked(allBypassed);
     bypassAll->setActiveColor(Theme::mute());
     bypassAll->setEnabled(loaded > 0);
     connect(bypassAll, &QAbstractButton::clicked, this, [this, channel](bool on) {
         m_controller->setAllInsertsBypassed(channel.toStdString(), on);
+        syncFromModel();
         emit edited();
         emit structureChanged();
     });
-    headRow->addWidget(bypassAll);
-
-    // Where the bare "+" used to be. Adding a plugin is still the first item,
-    // but the chain as a whole is a thing you work with — copy it, paste it,
-    // clear it — and a plus sign could only ever say "add".
-    if (!m_insertsOnly) {
-        auto* more = new ui::IconButton(
-            icons::Glyph::Gear,
-            tr("Plugins and channel strip: add, copy, paste"), this);
-        more->setObjectName(QStringLiteral("ChannelStripMenu"));
-        more->setButtonSize(16, 14);
-        connect(more, &QAbstractButton::clicked, this, [this, more] {
-            QMenu* menu = buildChainMenu(more);
-            menu->setAttribute(Qt::WA_DeleteOnClose);
-            menu->popup(more->mapToGlobal(QPoint(0, more->height())));
-        });
-        headRow->addWidget(more);
-    }
 
     WellDrag drag;
     if (!m_insertsOnly) {
@@ -1791,7 +1793,7 @@ QWidget* ChannelStrip::buildInserts() {
                                            Qt::KeyboardModifiers mods) {
         dropInsertAt(channel, payload, end, mods);
     };
-    return buildSlotWell(tr("Audio FX"), head, rows, {}, {}, std::move(drag));
+    return buildSlotWell(tr("Audio FX"), nullptr, rows, {}, {}, std::move(drag), bypassAll);
 }
 
 void ChannelStrip::dropInsertAt(const QString& channel, const QString& payload,
@@ -2201,6 +2203,8 @@ QWidget* ChannelStrip::buildSends() {
                                                       : tr("Switch this send on"),
                                          row);
         power->setButtonSize(kActionSide, kActionSide);
+        power->setGlyphSize(13);
+        power->setProperty("circular", true);
         power->setCursor(Qt::PointingHandCursor);
         power->setCheckable(true);
         power->setChecked(!send.enabled);
@@ -2241,6 +2245,7 @@ QWidget* ChannelStrip::buildSends() {
         auto* remove = new ui::IconButton(icons::Glyph::Close,
                                           tr("Remove this send"), row);
         remove->setButtonSize(kActionSide, kActionSide);
+        remove->setGlyphSize(13);
         remove->setCursor(Qt::PointingHandCursor);
         connect(remove, &QAbstractButton::clicked, this, [this, sendId] {
             m_controller->removeSend(m_trackId.toStdString(),
@@ -2312,7 +2317,7 @@ QWidget* ChannelStrip::buildSends() {
     add->setProperty("sendAddNaturalHeight", addHeight);
     add->setFixedHeight(addHeight);
     add->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    add->setIconSize(QSize(16, 16));
+    add->setIconSize(QSize(18, 18));
     add->setFocusPolicy(Qt::StrongFocus);
     add->setToolTip(tr("Add send"));
     add->setAccessibleName(tr("Add send"));
@@ -2326,7 +2331,34 @@ QWidget* ChannelStrip::buildSends() {
     drag.dragPayload = m_trackId;
     drag.titleTip = tr("Drag onto another channel to move these sends there. "
                        "Hold Alt to copy them instead.");
-    return buildSlotWell(tr("Sends"), nullptr, rows, {}, {}, std::move(drag));
+    auto* power = new ui::IconButton(icons::Glyph::Power,
+                                    tr("Switch all sends on or off"), this);
+    m_sendsPower = power;
+    power->setObjectName(QStringLiteral("ChannelSendsPower"));
+    power->setAccessibleName(tr("Switch all sends on or off"));
+    power->setButtonSize(kSectionActionSide, kSectionActionSide);
+    power->setGlyphSize(14);
+    power->setProperty("circular", true);
+    power->setFocusPolicy(Qt::StrongFocus);
+    power->setCheckable(true);
+    power->setChecked(sendCount > 0 && std::none_of(track->sends.begin(), track->sends.end(),
+                                                   [](const auto& send) { return send.enabled; }));
+    power->setActiveColor(Theme::mute());
+    power->setEnabled(sendCount > 0);
+    connect(power, &QAbstractButton::clicked, this, [this](bool off) {
+        const auto channel = m_trackId.toStdString();
+        const auto* current = m_controller->project().findTrack(channel);
+        if (!current) return;
+        std::vector<std::string> ids;
+        for (const auto& send : current->sends) ids.push_back(send.id);
+        const auto group = m_controller->beginUndoGroup();
+        for (const auto& id : ids) m_controller->setSendEnabled(channel, id, !off);
+        m_controller->collapseUndo(group, off ? "Disable All Sends" : "Enable All Sends");
+        syncFromModel();
+        emit edited();
+        emit structureChanged();
+    });
+    return buildSlotWell(tr("Sends"), nullptr, rows, {}, {}, std::move(drag), power);
 }
 
 void ChannelStrip::populateInputMenu(QMenu* menu) {
@@ -2505,7 +2537,16 @@ QWidget* ChannelStrip::buildFaderRow() {
     m_fader = new ui::FaderWidget(box);
     // The dB scale is printed down the fader's left, with the meter on its
     // right — the reading order of every console: numbers, cap, level.
-    ui::configureConsoleLevel(m_fader, m_meter);
+    if (m_presentation == Presentation::Compact) {
+        m_fader->setSlim(true);
+        m_fader->setFocusPolicy(Qt::TabFocus);
+        m_fader->setAccessibleName(tr("Volume"));
+        m_meter->setMeterStyle(ui::LevelMeter::Style::Console);
+        m_meter->setMinimumHeight(64);
+        m_meter->setScaleInsets(QMarginsF(0, 7, 0, 2));
+    } else {
+        ui::configureConsoleLevel(m_fader, m_meter);
+    }
 
     connect(m_fader, &ui::FaderWidget::gainChanged, this, [this](double g) {
         if (m_master) {
@@ -2538,20 +2579,28 @@ QWidget* ChannelStrip::buildFaderRow() {
     connect(m_fader, &ui::FaderWidget::automateRequested, this,
             [this] { emit automateControlRequested(channelId(), false); });
 
-    row->addStretch(1);
-    row->addWidget(m_fader);
-    row->addWidget(m_meter);
-    row->addStretch(1);
+    if (m_presentation == Presentation::Compact) {
+        row->addWidget(m_fader);
+    } else {
+        row->addStretch(1);
+        row->addWidget(m_fader);
+        row->addWidget(m_meter);
+        row->addStretch(1);
+    }
     return box;
 }
 
 QWidget* ChannelStrip::buildButtons() {
     auto* box = new QWidget(this);
     auto* row = new QHBoxLayout(box);
+    m_buttonsLayout = row;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(4);
 
+    if (m_presentation != Presentation::Details) {
     m_mute = new ui::MsrButton("M", Theme::mute(), tr("Mute"), box);
+    m_mute->setObjectName(QStringLiteral("ChannelMute"));
+    m_mute->setAccessibleName(tr("Mute"));
     if (!m_master) {
         m_mute->setAutomatable(true);
         connect(m_mute, &ui::MsrButton::automateRequested, this,
@@ -2565,6 +2614,8 @@ QWidget* ChannelStrip::buildButtons() {
         emit edited(daw::collab::marksLocalFileDirty(result));
     });
     m_solo = new ui::MsrButton("S", Theme::solo(), tr("Solo"), box);
+    m_solo->setObjectName(QStringLiteral("ChannelSolo"));
+    m_solo->setAccessibleName(tr("Solo"));
     connect(m_solo, &QAbstractButton::toggled, this, [this](bool on) {
         if (m_master) return;
         m_controller->setTrackSoloed(m_trackId.toStdString(), on);
@@ -2572,6 +2623,9 @@ QWidget* ChannelStrip::buildButtons() {
     });
     row->addWidget(m_mute);
     row->addWidget(m_solo);
+    }
+
+    if (m_presentation == Presentation::Compact) return box;
 
     const auto* track = m_master
                             ? nullptr
@@ -2581,6 +2635,7 @@ QWidget* ChannelStrip::buildButtons() {
     if (pattern) {
         auto* open = new ui::MsrButton("P", colorFromRgb(track->color),
                                        tr("Open Pattern in Rack"), box);
+        open->setObjectName(QStringLiteral("ChannelPattern"));
         open->setAccessibleName(tr("Open Pattern in Rack"));
         connect(open, &QAbstractButton::clicked, this,
                 [this] { emit patternRequested(m_trackId); });
@@ -2588,11 +2643,18 @@ QWidget* ChannelStrip::buildButtons() {
     } else if (!m_master && track && daw::acceptsRecording(*track)) {
         m_monitor = new ui::MsrButton("I", th().accent,
                                       tr("Input monitoring"), box);
+        m_monitor->setObjectName(QStringLiteral("ChannelMonitor"));
+        m_monitor->setAccessibleName(tr("Input monitoring"));
         connect(m_monitor, &QAbstractButton::toggled, this, [this](bool on) {
             m_controller->setTrackMonitor(m_trackId.toStdString(), on);
             emit edited();
         });
         row->addWidget(m_monitor);
+    }
+    if (m_presentation == Presentation::Details && !m_master) {
+        buildMonoButton(box);
+        row->addWidget(m_monoButton);
+        row->addStretch();
     }
     if (m_master) {
         m_mute->setEnabled(false);
@@ -2605,6 +2667,9 @@ void ChannelStrip::updateHeader(const QString& name, std::uint32_t color) {
     if (!m_headerName || !m_headerSwatch) return;
     if (m_headerName->text() != name) m_headerName->setText(name);
     if (m_headerName->toolTip() != name) m_headerName->setToolTip(name);
+    setAccessibleName(name);
+    setToolTip(name);
+    updatePresentationHeader();
     const QString styleKey = colorFromRgb(color).name();
     if (m_headerSwatchStyleKey == styleKey) return;
     m_headerSwatchStyleKey = styleKey;
@@ -2622,7 +2687,7 @@ void ChannelStrip::setStretchable(bool stretchable) {
 }
 
 void ChannelStrip::setRackHeights(const RackHeights& heights) {
-    if (!m_rack || m_inspectorCompact) return;
+    if (!m_rack || m_inspectorCompact || m_presentation != Presentation::Classic) return;
     bool changed = false;
     for (std::size_t i = 0; i < m_rackSections.size(); ++i) {
         auto* row = m_rackSections[i];
@@ -2661,6 +2726,13 @@ void ChannelStrip::setInspectorCompact(bool compact) {
 }
 
 void ChannelStrip::setStripWidth(int width) {
+    if (m_presentation == Presentation::Compact) {
+        m_stripWidth = ui::MixerPreferences::normalizedCompactWidth(width);
+        setFixedWidth(m_stripWidth);
+        updateResponsiveLayout();
+        return;
+    }
+    if (m_presentation == Presentation::Details) return;
     m_stripWidth = std::clamp(width, ui::MixerPreferences::kMinimumWidth,
                              ui::MixerPreferences::kMaximumWidth);
     if (!m_inspectorCompact) setFixedWidth(m_stripWidth);
@@ -2673,6 +2745,37 @@ void ChannelStrip::resizeEvent(QResizeEvent* event) {
 }
 
 void ChannelStrip::updateResponsiveLayout() {
+    if (m_presentation == Presentation::Compact) {
+        if (!m_buttonsLayout || m_layoutWidth == width()) return;
+        m_layoutWidth = width();
+        const bool horizontal = width() >= 48;
+        m_buttonsLayout->setDirection(horizontal ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
+        m_buttonsLayout->setSpacing(2);
+        const int buttonWidth = horizontal ? (width() - 6) / 2 : width() - 4;
+        m_mute->setFixedSize(buttonWidth, 18);
+        m_solo->setFixedSize(buttonWidth, 18);
+        m_pan->setCompactSize(std::min(26, width() - 4));
+        m_mainLayout->invalidate();
+        // Fixed M/S tier keeps meters, pan and faders on shared baselines.
+        m_mute->parentWidget()->setFixedHeight(38);
+        m_naturalHeight = m_mainLayout->minimumSize().height();
+        setMinimumHeight(m_naturalHeight);
+        updateGeometry();
+        return;
+    }
+    if (m_presentation == Presentation::Details) {
+        if (!m_mainLayout || m_layoutWidth == width()) return;
+        m_layoutWidth = width();
+        if (auto* rack = qobject_cast<ui::MiniModuleRack*>(m_colorWell)) {
+            rack->setStripWidth(width() - 12);
+            refreshColorRackRow();
+        }
+        m_mainLayout->invalidate();
+        m_naturalHeight = m_mainLayout->minimumSize().height();
+        setMinimumHeight(m_naturalHeight);
+        updateGeometry();
+        return;
+    }
     if (!m_readoutLayout || !m_panLayout || !m_rackNaturalHeight || m_layoutWidth == width()) return;
     const bool dense = width() < 100;
     const bool rearrangePan = m_layoutWidth == 0 || m_denseLayout != dense;
@@ -2913,6 +3016,20 @@ void ChannelStrip::refreshPluginHealth() {
 void ChannelStrip::syncFromModel() {
     refreshPluginHealth();
     syncColor(false);
+    if (m_fxPower) {
+        const auto* inserts = m_controller->channelInserts(channelId().toStdString());
+        const bool loaded = inserts && !inserts->empty();
+        m_fxPower->setEnabled(loaded);
+        m_fxPower->setChecked(loaded && std::all_of(inserts->begin(), inserts->end(),
+            [](const auto& insert) { return insert.bypassed; }));
+    }
+    if (m_sendsPower) {
+        const auto* track = m_controller->project().findTrack(m_trackId.toStdString());
+        const bool loaded = track && !track->sends.empty();
+        m_sendsPower->setEnabled(loaded);
+        m_sendsPower->setChecked(loaded && std::none_of(track->sends.begin(), track->sends.end(),
+            [](const auto& send) { return send.enabled; }));
+    }
     // These controls report user edits through their value signals. A value
     // arriving from another view must not echo back into the controller (and
     // recursively rebuild/synchronise the UI again).
@@ -2928,16 +3045,16 @@ void ChannelStrip::syncFromModel() {
             ? std::optional<QSignalBlocker>{std::in_place, m_monoButton}
             : std::nullopt;
     if (m_master) {
-        if (!m_fader->isEditing()) m_fader->setGain(m_controller->masterVolume());
-        if (!m_pan->isEditing()) m_pan->setPan(m_controller->project().masterPan);
+        if (m_fader && !m_fader->isEditing()) m_fader->setGain(m_controller->masterVolume());
+        if (m_pan && !m_pan->isEditing()) m_pan->setPan(m_controller->project().masterPan);
         updateHeader(tr("Master"), kMasterColor);
     } else if (const auto* t =
                    m_controller->project().findTrack(m_trackId.toStdString())) {
         updateHeader(QString::fromStdString(t->name), t->color);
-        if (!m_fader->isEditing()) m_fader->setGain(t->volume);
-        if (!m_pan->isEditing()) m_pan->setPan(t->pan);
-        m_mute->setChecked(t->muted);
-        m_solo->setChecked(t->soloed);
+        if (m_fader && !m_fader->isEditing()) m_fader->setGain(t->volume);
+        if (m_pan && !m_pan->isEditing()) m_pan->setPan(t->pan);
+        if (m_mute) m_mute->setChecked(t->muted);
+        if (m_solo) m_solo->setChecked(t->soloed);
         if (m_monitor) m_monitor->setChecked(t->monitor);
         if (m_monoButton) {
             m_monoButton->setChecked(t->mono);
@@ -2988,7 +3105,7 @@ void ChannelStrip::refreshAutomationValues() {
 }
 
 void ChannelStrip::refreshLevelAutomationValues(bool readouts) {
-    if (!m_controller) return;
+    if (!m_controller || !m_fader || !m_pan) return;
     const auto* track =
         m_controller->project().findTrack(m_trackId.toStdString());
     if (!track && !m_master) return;
@@ -3021,18 +3138,25 @@ void ChannelStrip::refreshLevelAutomationValues(bool readouts) {
 }
 
 void ChannelStrip::updateReadouts() {
+    if (!m_fader || !m_pan) return;
     if (m_displayedGain != m_fader->gain()) {
         m_displayedGain = m_fader->gain();
         const auto fullText = ui::formatGainDb(m_displayedGain);
         // Compact numeric readouts; units remain available in the tooltip.
         const auto text = fullText.section(QLatin1Char(' '), 0, 0);
-        if (m_gainLabel->text() != text) m_gainLabel->setText(text);
-        m_gainLabel->setToolTip(tr("Volume") + QStringLiteral(": ") + fullText);
+        if (m_gainLabel) {
+            if (m_gainLabel->text() != text) m_gainLabel->setText(text);
+            m_gainLabel->setToolTip(tr("Volume") + QStringLiteral(": ") + fullText);
+        }
+        m_fader->setToolTip(tr("Volume") + QStringLiteral(": ") + fullText +
+                          tr("\nShift for fine adjustment · Double-click to reset"));
     }
     if (m_displayedPan != m_pan->pan()) {
         m_displayedPan = m_pan->pan();
         const auto text = ui::formatPan(m_displayedPan);
-        if (m_panLabel->text() != text) m_panLabel->setText(text);
+        if (m_panLabel && m_panLabel->text() != text) m_panLabel->setText(text);
+        m_pan->setToolTip(tr("Pan") + QStringLiteral(": ") + text +
+                         tr("\nShift for fine adjustment · Double-click to reset"));
     }
 }
 
@@ -3068,6 +3192,11 @@ void ChannelStrip::refreshMeter() {
         m_meter->setPeakHold(levels.hold);
     }
     const float peak = levels.hold;
+    if (!m_peakLabel && readouts && m_displayedPeak != peak) {
+        m_displayedPeak = peak;
+        m_meter->setToolTip(tr("Maximum peak: %1 dBFS\nClick to reset").arg(
+            peak > 0 ? QString::number(20.0 * std::log10(peak), 'f', 1) : QStringLiteral("−∞")));
+    }
     if (peakVisible && m_displayedPeak != peak &&
         (readouts || (peak >= 1.0f) != (m_displayedPeak >= 1.0f))) {
         m_displayedPeak = peak;
@@ -3112,6 +3241,10 @@ void ChannelStrip::mousePressEvent(QMouseEvent* ev) {
 }
 
 void ChannelStrip::contextMenuEvent(QContextMenuEvent* ev) {
+    if (m_presentation == Presentation::Details && !acceptDrops()) {
+        ev->accept();
+        return;
+    }
     auto* menu = buildContextMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     menu->popup(ev->globalPos());
@@ -3464,7 +3597,8 @@ void ChannelStrip::paintEvent(QPaintEvent*) {
     rim.setColorAt(0, t.edgeLight(fill));
     rim.setColorAt(0.12, t.sectionDivider());
     rim.setColorAt(1, t.edgeDark(fill));
-    p.setPen(QPen(m_dropHighlight ? QBrush(t.accent) : QBrush(rim), border));
+    p.setPen(QPen(m_dropHighlight ? QBrush(t.accent) :
+        m_selected && m_presentation == Presentation::Compact ? QBrush(selectionColor) : QBrush(rim), border));
     p.drawRoundedRect(face, Theme::cornerRadius, Theme::cornerRadius);
 }
 
@@ -3597,6 +3731,9 @@ void ChannelStrip::acceptBrowserDrop(const QMimeData* mime) {
 }
 
 bool ChannelStrip::eventFilter(QObject* watched, QEvent* event) {
+    if (m_presentation == Presentation::Compact && event->type() == QEvent::MouseButtonPress &&
+        static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton)
+        emit selectRequested(m_trackId);
     auto* paintButton = qobject_cast<QAbstractButton*>(watched);
     if (paintButton && paintButton->property("insertBypassPaint").toBool()) {
         auto* mouse = dynamic_cast<QMouseEvent*>(event);
@@ -3968,9 +4105,9 @@ QLabel { color: %TEXT2%; font-size: 9px; }
         .replace("%ACCENT%", t.accent.name()));
 
     for (auto* add : findChildren<QToolButton*>(QStringLiteral("InsertAddArea")))
-        add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 14));
+        add->setIcon(icons::icon(icons::Glyph::Plus, t.textSecondary, 16));
     for (auto* add : findChildren<QToolButton*>(QStringLiteral("SendAddArea")))
-        add->setIcon(icons::icon(icons::Glyph::Send, t.textSecondary, 16));
+        add->setIcon(icons::icon(icons::Glyph::Send, t.textSecondary, 18));
     for (auto* slot : findChildren<QToolButton*>(QStringLiteral("SlotButton"))) {
         if (slot->property("instrumentRow").toBool())
             slot->setIcon(icons::icon(icons::Glyph::MidiKeys,

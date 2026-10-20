@@ -137,6 +137,7 @@ std::shared_ptr<const engine::SampleBuffer> EngineController::cachedAudioEditSam
 }
 bool EngineController::applyAudioEdit(const AudioEditTarget& target,const AudioEditDocument& doc,
                                      std::shared_ptr<const engine::SampleBuffer> audio) {
+    if (!m_undo.isApplying() && (!target.instrument && isClipContentEditLocked(target.trackId, target.objectId))) return false;
     if(!audio || !doc.initialized || !audioedit::valid(doc) ||
        audio->frames() != std::uint64_t(doc.frames) || audio->sampleRate() != doc.sampleRate ||
        audio->channels() != unsigned(doc.channels)) return false;
@@ -177,6 +178,7 @@ bool EngineController::applyAudioEdit(const AudioEditTarget& target,const AudioE
     return true;
 }
 bool EngineController::beginAudioEdit(const AudioEditTarget& target) {
+    if (!m_undo.isApplying() && (!target.instrument && isClipContentEditLocked(target.trackId, target.objectId))) return false;
     if(cloudProjectBound() || !sharedEditingAllowed() || isRecording()) return false;
     if (m_audioEditGesture) return false;
     auto doc=audioEditDocument(target);

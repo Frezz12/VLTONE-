@@ -39,7 +39,14 @@ QVector<SceneVertex> triangulate(const QPainterPath& path, qreal dpr) {
     }
     return result;
 }
-void groupSharedClips(std::vector<SceneMesh>& meshes) {
+void groupSharedClips(std::vector<SceneMesh>& meshes, qreal dpr) {
+    // Small retained faces often inherit a rectangular painter clip which
+    // cannot touch their geometry. Drop it before freezing the section too.
+    for (auto& mesh : meshes) if (mesh.clip && mesh.clip->rectangular) {
+        int budget = 4096;
+        const auto bounds = sceneMeshBounds(mesh, budget, dpr, false);
+        if (bounds && mesh.clip->bounds.contains(*bounds)) mesh.clip.reset();
+    }
     // A separate QSGClipNode for every coloured sequencer cell forces repeated
     // stencil/scissor changes. Consecutive primitives with the same mask can
     // share one parent clip without reordering or combining their opacity.
@@ -104,7 +111,7 @@ public:
             auto group = std::make_shared<SceneMeshGroup>();
             group->meshes.assign(std::make_move_iterator(meshes.begin() + sectionStart),
                                  std::make_move_iterator(meshes.end()));
-            groupSharedClips(group->meshes);
+            groupSharedClips(group->meshes, dpr);
             for (const auto& mesh : group->meshes) {
                 group->bytes += qint64(mesh.vertices.size()) * sizeof(SceneVertex);
                 if (mesh.group) group->bytes += mesh.group->bytes;
@@ -303,10 +310,12 @@ public:
         SceneMesh mesh;
         mesh.vertices = makeTriangles(transformed);
         if (clip && (!clip->rectangular || !clip->bounds.contains(bounds))) mesh.clip = clip;
+        fillMesh(std::move(mesh), brush, path.boundingRect());
+    }
+    void fillMesh(SceneMesh mesh, const QBrush& brush, const QRectF& bounds) {
         mesh.color = brush.color();
         mesh.opacity = float(painter()->opacity());
         if (brush.style() != Qt::SolidPattern) {
-            const auto bounds = path.boundingRect();
             if (bounds.isEmpty()) return;
             QByteArray key;
             QDataStream stream(&key, QIODevice::WriteOnly);
@@ -335,7 +344,8 @@ public:
                     stream << quint8(4) << QBrush(rampGradient);
                     if (auto* cached = assets.object(key)) mesh.texture = *cached;
                     else {
-                        QImage ramp(1, 1024, QImage::Format_ARGB32_Premultiplied);
+                        QImage ramp(1, 1024, brush.isOpaque() ? QImage::Format_RGB32
+                                                             : QImage::Format_ARGB32_Premultiplied);
                         ramp.fill(Qt::transparent);
                         QPainter rampPainter(&ramp);
                         rampPainter.fillRect(ramp.rect(), rampGradient); rampPainter.end();
@@ -364,7 +374,10 @@ public:
             }
             if (auto* cached = assets.object(key)) mesh.texture = *cached;
             else {
-                QImage ramp(128, 128, QImage::Format_ARGB32_Premultiplied);
+                // Opaque brush textures belong in Qt's opaque pass, where
+                // overlapping controls can batch without alpha ordering.
+                QImage ramp(128, 128, brush.isOpaque() ? QImage::Format_RGB32
+                                                      : QImage::Format_ARGB32_Premultiplied);
                 ramp.fill(Qt::transparent);
                 QPainter p(&ramp);
                 p.scale(128. / bounds.width(), 128. / bounds.height());
@@ -400,7 +413,9 @@ public:
     void drawRects(const QRectF* rects, int count) override {
         const auto transform = painter()->worldTransform();
         const auto clip = currentClip();
-        if (painter()->pen().style() != Qt::NoPen || painter()->brush().style() != Qt::SolidPattern ||
+        const auto brush = painter()->brush();
+        const bool gradient = brush.gradient() && brush.gradient()->type() == QGradient::LinearGradient;
+        if (painter()->pen().style() != Qt::NoPen || (brush.style() != Qt::SolidPattern && !gradient) ||
             transform.type() > QTransform::TxScale) {
             QPaintEngine::drawRects(rects, count);
             return;
@@ -408,6 +423,20 @@ public:
         if (count <= 0) return;
         if (qint64(count) * 6 * sizeof(SceneVertex) > 64 * 1024 * 1024 - geometryBytes) {
             allSupported = false; return;
+        }
+        if (gradient) {
+            // Audio meters change these rectangles on every frame. Their
+            // immutable colour ramp needs only a quad with new bounds/UVs,
+            // never a QPainterPath, path-cache key or curve triangulation.
+            for (int i = 0; i < count; ++i) {
+                auto visible = transform.mapRect(rects[i]);
+                if (clip) visible &= clip->bounds;
+                if (visible.isEmpty()) continue;
+                SceneMesh mesh; mesh.vertices = rectangleTriangles(visible);
+                if (clip && !clip->rectangular) mesh.clip = clip;
+                fillMesh(std::move(mesh), brush, rects[i].normalized());
+            }
+            return;
         }
         SceneMesh mesh;
         mesh.color = painter()->brush().color();
@@ -581,7 +610,7 @@ SceneRecorder::SceneRecorder(QSize size, qreal dpr, std::shared_ptr<SceneRecordi
 SceneRecorder::~SceneRecorder() = default;
 QPaintEngine* SceneRecorder::paintEngine() const { return m_engine.get(); }
 std::vector<SceneMesh> SceneRecorder::takeMeshes() {
-    groupSharedClips(m_engine->meshes);
+    groupSharedClips(m_engine->meshes, m_dpr);
     return std::move(m_engine->meshes);
 }
 bool SceneRecorder::supported() const { return m_engine->allSupported; }

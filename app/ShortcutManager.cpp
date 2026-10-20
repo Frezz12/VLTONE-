@@ -237,6 +237,7 @@ ShortcutManager::RemoteScope ShortcutManager::remoteScopeForId(
         lower == QLatin1String("edit.cutclips") ||
         lower == QLatin1String("edit.pasteclips") ||
         lower == QLatin1String("edit.selectionactions") ||
+        lower == QLatin1String("edit.moveclipstotrack") ||
         lower == QLatin1String("track.actions")) {
         return RemoteScope::ForbiddenRemote;
     }

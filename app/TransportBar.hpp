@@ -91,11 +91,11 @@ public:
     void setMixerVisible(bool visible);
     void setInspectorVisible(bool visible);
     void setBrowserVisible(bool visible);
+    void setTrackOverviewVisible(bool visible);
     void setWebVisible(bool visible);
     void setNotebookVisible(bool visible);
     void setAiVisible(bool visible);
     void setMasterVisible(bool visible);
-    void setMixerDetached(bool detached);
 
     /// Smallest header width that still keeps the position/BPM readout and the
     /// trailing edit group intact. Only secondary buttons in the transport
@@ -134,15 +134,13 @@ signals:
     void importRequested();
     void exportRequested();
     void mixerToggled(bool on);
-    void warpRequested();
     void inspectorToggled(bool on);
     void browserToggled(bool on);
+    void trackOverviewToggled(bool on);
     void webToggled(bool on);
     void notebookToggled(bool on);
     void aiToggled(bool on);
     void masterToggled(bool on);
-    void detachMixerRequested();
-    void addTrackRequested();
     void settingsRequested();
     void readoutGeometryChanged();
 
@@ -210,10 +208,9 @@ private:
     ui::IconButton* m_snapButton = nullptr;
     ui::IconButton* m_typingKeysButton = nullptr;
     ui::IconButton* m_mixerPanelButton = nullptr;
-    ui::IconButton* m_warpButton = nullptr;
     ui::IconButton* m_inspectorPanelButton = nullptr;
     ui::IconButton* m_browserPanelButton = nullptr;
-    ui::IconButton* m_detachMixerButton = nullptr;
+    ui::IconButton* m_trackOverviewPanelButton = nullptr;
     ui::IconButton* m_webPanelButton = nullptr;
     ui::IconButton* m_notebookPanelButton = nullptr;
     ui::IconButton* m_aiPanelButton = nullptr;

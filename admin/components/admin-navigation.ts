@@ -11,6 +11,7 @@ export const adminNavigation: Array<{ label: string; links: Array<{ href: string
     { href: "/crashes", label: "Краши", icon: Activity, keywords: "сбои логи диагностика" },
   ] },
   { label: "Приложение и сайт", links: [
+    { href: "/analytics", label: "Посещения", icon: Activity, keywords: "сайт статистика посетители просмотры сегодня аналитика" },
     { href: "/forum", label: "Форум", icon: MessageSquareText, keywords: "жалобы публикации разделы модерация" },
     { href: "/releases", label: "Релизы", icon: PackageOpen, keywords: "версия обновления публикация загрузка" },
     { href: "/browser-backgrounds", label: "Фоны браузера", icon: Image, keywords: "изображение коллекция оформление" },

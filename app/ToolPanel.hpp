@@ -39,6 +39,7 @@ public:
     void setBrowserZoneWidth(int width);
     /// Keep the empty track alignment zone synced with the resizable header.
     void setTrackZoneWidth(int width);
+    void setTrackOverviewZoneWidth(int width);
     void setBrowserVisible(bool visible);
     /// Move the browser's zone to whichever end the panel is on, so the strip
     /// keeps reading as a set of labels over the columns beneath it.
@@ -106,6 +107,7 @@ private:
     QWidget* m_trackActions = nullptr;
     ui::IconButton* m_createTrack = nullptr;
     QWidget* m_inspectorZone = nullptr;
+    QWidget* m_trackOverviewZone = nullptr;
     QWidget* m_browserZone = nullptr;
     QWidget* m_browserSeparator = nullptr;
     QWidget* m_aiZone = nullptr;

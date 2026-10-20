@@ -71,7 +71,7 @@ protected:
         face.setColorAt(0, isDown() ? th().edgeDark(base) : th().edgeLight(base));
         face.setColorAt(1, base);
         p.setBrush(face);
-        p.setPen(QPen(hasFocus() ? ink : isChecked() ? mixColors(base, ink, .5) : th().separator(), 1));
+        p.setPen(QPen(th().separator(), 1));
         p.drawRoundedRect(r, 5, 5);
         if (!isEnabled()) p.setOpacity(.40);
         QRectF textRect = r.adjusted(6, 0, -6, 0);
@@ -163,7 +163,7 @@ protected:
         grip.setColorAt(.50, th().controlBottom());
         grip.setColorAt(.85, th().controlTop());
         grip.setColorAt(1, th().edgeDark(th().controlBottom()));
-        p.setPen(QPen(hasFocus() ? ink : th().edgeDark(th().well()), 1));
+        p.setPen(QPen(th().edgeDark(th().well()), 1));
         p.setBrush(grip);
         p.drawRoundedRect(cap, 3, 3);
         // Ribbed rectangular grip, like the mixer channel strips.
@@ -594,7 +594,6 @@ UtilityPanel::UtilityPanel(RackParameterBinding* binding, QString uid, QWidget* 
             "UtilityPanel QDoubleSpinBox { color: %2; background: %3; border: 1px solid %4; border-radius: 5px; padding: 1px 5px; selection-background-color: %5; }"
             "UtilityPanel QDoubleSpinBox[utilityReadout=\"gain\"] { font-size: 25px; font-weight: 600; }"
             "UtilityPanel QDoubleSpinBox[utilityReadout=\"normal\"] { font-size: 16px; font-weight: 600; }"
-            "UtilityPanel QDoubleSpinBox:focus { border-color: %2; }"
             "UtilityPanel QDoubleSpinBox:disabled { color: %6; }")
             .arg(th().textPrimary.name(), ink, th().well().name(), th().separator().name(), th().selection.name(), th().textSecondary.name()));
         for (auto* child : findChildren<QWidget*>()) child->update();

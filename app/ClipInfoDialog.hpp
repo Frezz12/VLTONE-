@@ -24,9 +24,7 @@ public:
         setStyleSheet(QStringLiteral(
             "QDialog#ClipInformationDialog QLineEdit { background: transparent;"
             " border: none; border-bottom: 1px solid transparent; border-radius: 0;"
-            " padding: 1px 0; }"
-            "QDialog#ClipInformationDialog QLineEdit:focus {"
-            " border-bottom-color: palette(highlight); }"));
+            " padding: 1px 0; }"));
         auto* layout = new QVBoxLayout(this);
         layout->setContentsMargins(20, 16, 20, 16);
         layout->setSpacing(14);

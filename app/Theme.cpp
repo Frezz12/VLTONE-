@@ -678,6 +678,7 @@ QString ThemeManager::styleSheet() const {
     // Lighting stays inside the existing one-pixel borders and control bounds.
     return QString(R"(
 QWidget { color: %TEXT%; font-size: 12px; }
+QAbstractButton, QComboBox, QAbstractSpinBox, QLineEdit, QAbstractSlider, QTabBar { outline: none; }
 QMainWindow, QDialog { background: %BG%; }
 QMenuBar { background: %TOOLBAR%; border: none; }
 QMenuBar::item { padding: 4px 10px; background: transparent; border-radius: %RADIUS%px; }
@@ -768,10 +769,10 @@ QPushButton:pressed {
 QPushButton:checked {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %BUTTON_ON_TOP%, stop:1 %BUTTON_ON_BOTTOM%);
-    color: %TEXT%; border-color: %BUTTON_ON_EDGE%; border-bottom-color: %ACCENT%;
+    color: %TEXT%; border-color: %BUTTON_EDGE%;
 }
 QPushButton:checked:hover { background: %BUTTON_ON_TOP%; }
-QPushButton:checked:pressed { background: %BUTTON_ON_BOTTOM%; border-color: %BUTTON_ON_EDGE%; }
+QPushButton:checked:pressed { background: %BUTTON_ON_BOTTOM%; border-color: %BUTTON_EDGE%; }
 QPushButton:default, QPushButton[accentAction="true"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %BUTTON_ACCENT_TOP%, stop:1 %ACCENT%);
@@ -815,46 +816,78 @@ QTreeWidget#SettingsNavigation {
     background: transparent; border: none; padding: 0; outline: none;
 }
 QTreeWidget#SettingsNavigation::item {
-    padding: 0 6px; border: 1px solid transparent;
-    border-left: 2px solid transparent; border-radius: %RADIUS%px;
+    padding: 0 8px; border: 1px solid transparent;
+    border-radius: 6px;
 }
 QTreeWidget#SettingsNavigation::item:hover { background: %HOVER%; }
 QTreeWidget#SettingsNavigation::item:selected {
-    background: %ACCENT_SOFT%; color: %TEXT%; border-left-color: %ACCENT%;
+    background: %ACCENT_SOFT%; color: %TEXT%;
 }
 QTreeWidget#SettingsNavigation::branch { background: transparent; }
 QWidget#SettingsPageHeader {
-    background: transparent;
-    border-bottom: 1px solid %SEP%; }
-QLabel#SettingsPageIcon { background: %ACCENT_SOFT%; border-radius: %RADIUS%px; }
+    background: transparent; border: none; }
+QLabel#SettingsPageTitle { font-size: 20px; font-weight: 600; }
+QLabel#SettingsBrand { font-size: 16px; font-weight: 600; }
 QWidget#SettingsSidebar { background: %WELL%; border-right: 1px solid %SEP%; }
+QWidget#SettingsTopBar { border-bottom: 1px solid %SEP%; }
 QWidget#SettingsFooter { border-top: 1px solid %SEP%; }
-QLineEdit#SettingsSearch { background: %SURFACE%; border-radius: 8px; }
-QTreeWidget#SettingsNavigation::item:focus,
-QTreeWidget#SettingsSearchResults::item:focus { border: 1px solid %ACCENT%; }
+QLineEdit#SettingsSearch { background: %WELL%; border-radius: 6px; padding: 0 10px; }
+QTabBar#SettingsSubtabs { background: transparent; border-bottom: 1px solid %SEP%; }
+QTabBar#SettingsSubtabs::tab {
+    background: transparent; color: %TEXT2%; border: none;
+    border-bottom: 2px solid transparent; padding: 10px 12px;
+    min-height: 18px; margin: 0;
+}
+QTabBar#SettingsSubtabs::tab:hover { background: %HOVER%; color: %TEXT%; }
+QTabBar#SettingsSubtabs::tab:selected {
+    background: %ACCENT_SOFT%; color: %TEXT%; border-bottom-color: %ACCENT%;
+}
+QPushButton#SettingsAccount {
+    background: transparent; border: 1px solid %SEP%; border-radius: 7px;
+    padding: 0; text-align: left; min-height: 58px; max-height: 58px;
+}
+QPushButton#SettingsAccount:hover { background: %HOVER%; }
+QPushButton#SettingsAccount:checked { background: %ACCENT_SOFT%; }
+QLabel#SettingsAccountAvatar {
+    background: %ACCENT_SOFT%; color: %TEXT%; border: 1px solid %SEP%;
+    border-radius: 7px; font-size: 14px; font-weight: 600;
+}
+QLabel#SettingsAccountName { font-weight: 600; }
+QLabel#SettingsAccountCaption { font-size: 11px; }
 QTreeWidget#SettingsSearchResults { background: transparent; }
 QTreeWidget#SettingsSearchResults::item { padding: 8px; border-bottom: 1px solid %SEP%; }
 QTreeWidget#SettingsSearchResults::item:hover { background: %HOVER%; }
 QTreeWidget#SettingsSearchResults::item:selected { background: %ACCENT_SOFT%; color: %TEXT%; }
 SettingsWindow QGroupBox {
     background: %SURFACE%; border: 1px solid %SEP%;
-    border-radius: 10px; margin-top: 12px; padding-top: 12px;
+    border-radius: 8px; margin-top: 0; padding-top: 28px;
+    font-size: 13px; font-weight: 600;
 }
-SettingsWindow QGroupBox::title { color: %TEXT%; padding: 0 4px; }
+SettingsWindow QGroupBox::title {
+    subcontrol-origin: padding; subcontrol-position: top left;
+    color: %TEXT%; left: 16px; top: 12px; padding: 0;
+}
 SettingsWindow QGroupBox[searchMatch="true"] { border-color: %ACCENT%; }
 SettingsWindow QComboBox, SettingsWindow QSpinBox, SettingsWindow QDoubleSpinBox,
 SettingsWindow QLineEdit { min-height: 26px; }
-SettingsWindow QPushButton { min-height: 26px; }
+SettingsWindow QPushButton { min-height: 26px; background: %SURFACE%; border-color: %SEP%; }
+SettingsWindow QPushButton:hover { background: %HOVER%; }
+SettingsWindow QPushButton:pressed { background: %WELL%; }
+SettingsWindow QPushButton[accentAction="true"] { background: %ACCENT%; border-color: %ACCENT%; }
+SettingsWindow QPushButton[accentAction="true"]:hover { background: %ACCENT_HL%; }
 SettingsWindow QCheckBox, SettingsWindow QRadioButton { min-height: 26px; spacing: 8px; }
 QListWidget#ThemePaletteGallery { background: transparent; border: none; }
 QListWidget#ThemePaletteGallery::item { padding: 5px; border: 1px solid %SEP%; border-radius: 8px; }
-QListWidget#ThemePaletteGallery::item:selected { border: 2px solid %ACCENT%; background: %ACCENT_SOFT%; color: %TEXT%; }
+QListWidget#ThemePaletteGallery::item:selected { background: %ACCENT_SOFT%; color: %TEXT%; }
 QLabel#AudioLatencySummary { background: %WELL%; padding: 12px; border-radius: 8px; font-size: 16px; font-weight: 600; }
 
 /* Fallback for third-party/plain QSliders. Application-owned sliders use
    ui::GlassSlider and the same proportions: a quiet 4px rail under an 18px
-   translucent handle. Negative margins let the pane float over the rail. */
+   translucent handle. Padding reserves room for the handle in the size hint;
+   negative margins expand it across the rail only, never past its ends. */
 QSlider { outline: none; }
+QSlider:horizontal { padding: 5px 1px; }
+QSlider:vertical { padding: 1px 5px; }
 QSlider::groove:horizontal {
     height: 4px; background: %WELL%; border: none; border-radius: 2px;
 }
@@ -867,7 +900,7 @@ QSlider::add-page:horizontal { background: %WELL%; border-radius: 2px; }
 QSlider::handle:horizontal {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_HI%, stop:1 %GLASS_LO%);
-    width: 18px; margin: -7px; border-radius: 9px;
+    width: 16px; margin: -7px 0; border-radius: 9px;
     border: 1px solid %GLASS_LIT%;
 }
 QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {
@@ -886,7 +919,7 @@ QSlider::sub-page:vertical { background: %WELL%; border-radius: 2px; }
 QSlider::handle:vertical {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 %GLASS_HI%, stop:1 %GLASS_LO%);
-    height: 18px; margin: -7px; border-radius: 9px;
+    height: 16px; margin: 0 -7px; border-radius: 9px;
     border: 1px solid %GLASS_LIT%;
 }
 QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
@@ -907,7 +940,6 @@ QSlider::handle:vertical:hover, QSlider::handle:vertical:pressed {
         .replace("%BUTTON_HOVER%", c(mixColors(buttonTop, t.dark ? Qt::white : Qt::black, 0.03)))
         .replace("%BUTTON_ON_TOP%", c(mixColors(buttonTop, t.accent, 0.08)))
         .replace("%BUTTON_ON_BOTTOM%", c(mixColors(t.well(), t.accent, 0.18)))
-        .replace("%BUTTON_ON_EDGE%", c(mixColors(buttonEdge, t.accent, 0.60)))
         .replace("%BUTTON_ACCENT_TOP%", c(mixColors(t.accent, accentLift, 0.08)))
         .replace("%BUTTON_ACCENT_EDGE%", c(mixColors(t.accent, accentLift, 0.16)))
         .replace("%ELEV%", c(t.surfaceElevated))

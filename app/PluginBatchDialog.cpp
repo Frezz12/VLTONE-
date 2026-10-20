@@ -9,6 +9,7 @@
 #include "Recording/RecordingEngine.hpp"
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFrame>
@@ -23,12 +24,17 @@
 #include <QTemporaryDir>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 namespace {
 class SourceComboBox final : public QComboBox {
 public:
     using QComboBox::QComboBox;
 protected:
+    void wheelEvent(QWheelEvent* event) override {
+        if (view()->isVisible()) QComboBox::wheelEvent(event);
+        else event->ignore();
+    }
     void paintEvent(QPaintEvent* event) override {
         QComboBox::paintEvent(event);
         QPainter painter(this);
@@ -46,33 +52,25 @@ std::vector<PluginBatchDialog::Target> PluginBatchDialog::selectedTargets(const 
 }
 
 PluginBatchDialog::PluginBatchDialog(daw::EngineController& controller, std::vector<Target> targets, QWidget* parent)
-    : QDialog(parent), m_controller(controller), m_targets(std::move(targets)) {
+    : QDialog(parent), m_controller(controller), m_targets(std::move(targets)),
+      m_projectGeneration(controller.projectGeneration()), m_projectRevision(controller.projectRevision()) {
     setObjectName("PluginBatchDialog");
     setWindowTitle(tr("Shared Plugins"));
-    setWindowModality(Qt::WindowModal);
-    resize(480, 380);
-    setMinimumSize(440, 340);
+    setWindowModality(Qt::NonModal);
+    resize(440, 300);
+    setMinimumSize(360, 240);
     const bool clips = !m_targets.empty() && !m_targets.front().clipId.empty();
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 18, 20, 16);
+    root->setContentsMargins(14, 14, 14, 12);
     root->setSpacing(10);
-    auto* heading = new QLabel(clips ? tr("Clip FX · %1 clips").arg(m_targets.size())
-                                    : tr("Inserts · %1 tracks").arg(m_targets.size()), this);
-    heading->setObjectName("BatchHeading");
-    root->addWidget(heading);
-    auto* hint = new QLabel(tr("Listen to one source and configure the new effects. Apply independent copies to the entire selection."), this);
-    hint->setWordWrap(true); hint->setProperty("role", "secondary");
-    root->addWidget(hint);
-    auto* sourceLabel = new QLabel(tr("Source for listening"), this);
-    root->addWidget(sourceLabel);
     auto* sourceRow = new QHBoxLayout;
     m_source = new SourceComboBox(this);
     m_source->setObjectName("BatchSource");
-    m_source->setMinimumHeight(32);
+    m_source->setMinimumHeight(36);
     m_source->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_source->setMinimumContentsLength(16);
-    sourceLabel->setBuddy(m_source);
-    m_source->setAccessibleName(sourceLabel->text());
+    m_source->setAccessibleName(tr("Choose preview track"));
+    m_source->setToolTip(tr("Choose a track. Playback follows the timeline."));
     for (const auto& target : m_targets) {
         const auto* track = controller.project().findTrack(target.trackId);
         QString name = track ? QString::fromStdString(track->name) : tr("Unavailable");
@@ -82,49 +80,55 @@ PluginBatchDialog::PluginBatchDialog(daw::EngineController& controller, std::vec
                 break;
             }
         }
-        m_source->addItem(name);
+        m_source->addItem(icons::icon(icons::Glyph::BatchSource,
+            track ? colorFromRgb(track->color) : th().textSecondary, 18), name);
         m_source->setItemData(m_source->count() - 1, name, Qt::ToolTipRole);
     }
-    m_listen = new QPushButton(tr("Listen"), this);
-    m_listen->setObjectName("BatchListen");
-    m_listen->setAutoDefault(false);
-    m_listen->setMinimumHeight(32);
-    m_listen->setIcon(icons::icon(icons::Glyph::Play, th().textPrimary, 14));
-    sourceRow->addWidget(m_source, 1); sourceRow->addWidget(m_listen);
-    root->addLayout(sourceRow);
-    auto* rackHeader = new QHBoxLayout;
-    rackHeader->addWidget(new QLabel(tr("New effects"), this));
-    rackHeader->addStretch();
-    m_add = new QPushButton(tr("Add plugin…"), this);
+    m_add = new QPushButton(this);
     m_add->setObjectName("BatchAddPlugin");
-    m_add->setAutoDefault(false); m_add->setFlat(true);
-    m_add->setIcon(icons::icon(icons::Glyph::Plus, th().textSecondary, 14));
-    rackHeader->addWidget(m_add);
-    root->addLayout(rackHeader);
+    m_add->setProperty("batchAction", true);
+    m_add->setAutoDefault(false); m_add->setFixedSize(36, 36);
+    m_add->setToolTip(tr("Add plugin…")); m_add->setAccessibleName(m_add->toolTip());
+    m_add->setIconSize(QSize(20, 20));
+    sourceRow->addWidget(m_source, 1); sourceRow->addWidget(m_add);
+    root->addLayout(sourceRow);
     auto* scroll = new QScrollArea(this);
     scroll->setObjectName("BatchScroll");
     scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* rackHost = new QWidget(scroll);
     m_rack = new QVBoxLayout(rackHost);
-    m_rack->setContentsMargins(0, 0, 0, 0); m_rack->setSpacing(2);
+    m_rack->setContentsMargins(0, 0, 0, 0); m_rack->setSpacing(4);
     scroll->setWidget(rackHost);
     root->addWidget(scroll, 1);
-    m_status = new QLabel(tr("Existing effects are kept. Cancel leaves the project unchanged."), this);
-    m_status->setWordWrap(true); m_status->setProperty("role", "secondary");
-    root->addWidget(m_status);
     m_error = new QLabel(this);
     m_error->setObjectName("BatchError"); m_error->setWordWrap(true); m_error->hide();
     root->addWidget(m_error);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
-    m_apply = buttons->addButton(tr("Apply to all (%1)").arg(m_targets.size()), QDialogButtonBox::AcceptRole);
-    m_apply->setObjectName("BatchApply"); m_apply->setDefault(true); m_apply->setMinimumHeight(32);
-    root->addWidget(buttons);
+    auto* footer = new QHBoxLayout;
+    m_status = new QLabel(clips ? tr("%1 clips").arg(m_targets.size()) : tr("%1 tracks").arg(m_targets.size()), this);
+    m_status->setProperty("role", "secondary");
+    m_status->setToolTip(tr("New effects are copied to this selection. Existing effects are kept."));
+    footer->addWidget(m_status);
+    footer->addStretch();
+    auto* buttons = new QDialogButtonBox(this);
+    m_cancel = buttons->addButton(QString(), QDialogButtonBox::RejectRole);
+    m_cancel->setObjectName("BatchCancel"); m_cancel->setAutoDefault(false);
+    m_cancel->setProperty("batchAction", true);
+    m_cancel->setToolTip(tr("Discard changes")); m_cancel->setAccessibleName(m_cancel->toolTip());
+    m_cancel->setFixedSize(36, 32); m_cancel->setIconSize(QSize(18, 18));
+    m_apply = buttons->addButton(tr("Apply"), QDialogButtonBox::AcceptRole);
+    m_apply->setToolTip(tr("Apply to all (%1)").arg(m_targets.size()));
+    m_apply->setAccessibleName(m_apply->toolTip());
+    m_apply->setObjectName("BatchApply"); m_apply->setDefault(true);
+    m_apply->setProperty("batchAction", true);
+    m_apply->setMinimumWidth(104); m_apply->setFixedHeight(32);
+    footer->addWidget(buttons);
+    root->addLayout(footer);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(m_apply, &QPushButton::clicked, this, &PluginBatchDialog::apply);
-    connect(m_listen, &QPushButton::clicked, this, &PluginBatchDialog::toggleAudition);
     connect(m_source, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (!switchSource(index)) { const QSignalBlocker blocker(m_source); m_source->setCurrentIndex(m_sourceIndex); }
+        updatePreview();
     });
     connect(m_add, &QPushButton::clicked, this, [this] {
         if (!m_draft) return;
@@ -134,25 +138,56 @@ PluginBatchDialog::PluginBatchDialog(daw::EngineController& controller, std::vec
         menu->deleteLater();
     });
     m_pump = new QTimer(this);
-    connect(m_pump, &QTimer::timeout, this, [this] { if (m_draft) (void)m_draft->pumpPreviewPluginEvents(); });
+    connect(m_pump, &QTimer::timeout, this, [this] {
+        if (m_projectGeneration != m_controller.projectGeneration()) { reject(); return; }
+        if (m_controller.isRecording() || m_controller.isCountingIn()) stopAudition();
+        else if (m_projectRevision != m_controller.projectRevision() || (m_draft &&
+                 (m_draft->sampleRate() != m_controller.sampleRate() ||
+                  m_draft->bufferSizeFrames() != m_controller.bufferSizeFrames()))) {
+            if (m_controller.validatePluginBatch(m_targets)) {
+                if (!switchSource(m_sourceIndex, true)) updatePreview();
+            }
+            else { stopAudition(); showError(tr("The selected tracks or clips are no longer available.")); }
+            m_projectRevision = m_controller.projectRevision();
+        }
+        if (m_draft) (void)m_draft->pumpPreviewPluginEvents();
+        refreshAvailability();
+    });
     m_pump->start(33);
-    const auto& t = th();
-    setStyleSheet(QStringLiteral(R"(
-QDialog#PluginBatchDialog { background: %1; color: %2; }
-#BatchHeading { font-size: 18px; font-weight: 600; }
-QLabel[role="secondary"] { color: %3; font-size: 12px; }
-#BatchScroll, #BatchScroll > QWidget > QWidget { background: transparent; }
-#BatchSlot { background: %4; border-radius: 4px; }
-#BatchSlotName { text-align: left; background: transparent; border: none; padding: 2px 4px; }
-#BatchSlotName:hover { background: %5; }
-#BatchError { color: %2; border: 1px solid %6; border-radius: 5px; padding: 6px; }
-#BatchApply { padding: 6px 14px; }
-)" ).arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(), t.well().name(),
-           t.separator().name(), t.accent.name()));
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, &PluginBatchDialog::applyTheme);
+    applyTheme();
     const auto valid = m_controller.validatePluginBatch(m_targets);
     if (m_targets.size() < 2 || !valid) showError(tr("Select at least two compatible tracks or audio clips."));
     else if (!controller.sharedEditingAllowed()) showError(tr("This session is read-only."));
     else switchSource(0);
+    rebuildRack();
+}
+
+void PluginBatchDialog::applyTheme() {
+    const auto& t = th();
+    setStyleSheet(QStringLiteral(R"(
+QDialog#PluginBatchDialog { background: %1; color: %2; }
+QLabel[role="secondary"] { color: %3; font-size: 11px; }
+#BatchSource { background: %4; color: %2; border: 1px solid %5; border-radius: 7px; padding: 6px 10px; }
+#BatchSource::drop-down { border: none; width: 26px; }
+#BatchSource::down-arrow { image: none; width: 0; }
+#BatchScroll, #BatchScroll > QWidget > QWidget { background: transparent; }
+#BatchSlot { background: %4; border-radius: 7px; }
+#BatchSlotName { text-align: left; background: transparent; color: %2; border: 1px solid transparent; border-radius: 5px; padding: 2px 6px; }
+#BatchSlotName:hover { background: %5; }
+QPushButton[batchAction="true"], QToolButton[batchAction="true"] { background: %4; border: 1px solid transparent; border-radius: 6px; padding: 0; }
+QPushButton[batchAction="true"]:hover, QToolButton[batchAction="true"]:hover { background: %5; }
+QPushButton[batchAction="true"]:pressed, QToolButton[batchAction="true"]:pressed { background: %7; }
+QToolButton[batchAction="true"]:checked { background: %7; border-color: %5; }
+#BatchApply { background: %6; color: %9; padding: 0 14px; }
+#BatchApply:hover { background: %8; }
+#BatchApply:disabled { background: %4; }
+#BatchError { color: %2; border: 1px solid %6; border-radius: 6px; padding: 7px; }
+)" ).arg(t.background.name(), t.textPrimary.name(), t.textSecondary.name(), t.surface.name(),
+           t.separator().name(), t.accent.name(), t.well().name(), t.accentHighlight.name(), t.accentText().name()));
+    m_add->setIcon(icons::icon(icons::Glyph::BatchAdd, t.textPrimary, 20));
+    m_cancel->setIcon(icons::icon(icons::Glyph::BatchCancel, t.textSecondary, 18));
+    m_apply->setIcon(QIcon());
     rebuildRack();
 }
 
@@ -162,16 +197,22 @@ PluginBatchDialog::~PluginBatchDialog() {
 }
 
 void PluginBatchDialog::done(int result) {
+    m_finished = true;
     m_pump->stop(); stopAudition(); closeEditors();
     QDialog::done(result);
 }
 
 void PluginBatchDialog::showError(const QString& text) { m_error->setText(text); m_error->show(); }
 
-bool PluginBatchDialog::switchSource(int index) {
+bool PluginBatchDialog::switchSource(int index, bool refresh) {
     if (index < 0 || index >= int(m_targets.size())) return false;
-    if (index == m_sourceIndex) return true;
-    const bool resume = m_listening;
+    if (index == m_sourceIndex && !refresh) return true;
+    if (m_finished || m_projectGeneration != m_controller.projectGeneration() || m_controller.isRecording() ||
+        m_controller.isCountingIn()) return false;
+    std::vector<std::size_t> reopen;
+    for (std::size_t slot = 0; slot < m_slots.size(); ++slot)
+        if (auto window = m_editors.value(QString::fromStdString(m_slots[slot])); window && window->isVisible())
+            reopen.push_back(slot);
     stopAudition();
     daw::EngineController::ChannelSnapshot chain;
     if (m_draft) {
@@ -180,9 +221,13 @@ bool PluginBatchDialog::switchSource(int index) {
             showError(QString::fromStdString(result.message())); return false;
         }
     }
-    std::shared_ptr<daw::EngineController> next;
-    if (const auto result = m_controller.createPluginBatchDraft(m_targets[index], next); !result) {
-        showError(tr("Could not prepare this source: %1").arg(QString::fromStdString(result.message()))); return false;
+    // Moving the new chain within the same mix keeps all other instruments
+    // running with their current state instead of cloning the project again.
+    std::shared_ptr<daw::EngineController> next = refresh ? nullptr : m_draft;
+    if (!next) {
+        if (const auto result = m_controller.createPluginBatchDraft(m_targets[index], next, true); !result) {
+            showError(tr("Could not prepare this source: %1").arg(QString::fromStdString(result.message()))); return false;
+        }
     }
     std::vector<std::vector<std::string>> ids;
     if (!chain.inserts.empty()) {
@@ -192,6 +237,13 @@ bool PluginBatchDialog::switchSource(int index) {
     }
     closeEditors();
     if (m_draft) m_draft->setPluginRetiringCallback({});
+    if (next == m_draft) {
+        const auto& previous = m_targets[m_sourceIndex];
+        for (const auto& slot : m_slots) {
+            if (previous.clipId.empty()) next->removeInsert(previous.trackId, slot);
+            else next->removeClipFxInsert(previous.trackId, previous.clipId, slot);
+        }
+    }
     m_draft = std::move(next);
     m_draft->setPluginRetiringCallback([this](const std::string&, const std::string& slotId) {
         if (auto window = m_editors.value(QString::fromStdString(slotId))) {
@@ -200,17 +252,24 @@ bool PluginBatchDialog::switchSource(int index) {
         }
     });
     m_sourceIndex = index;
+    m_projectRevision = m_controller.projectRevision();
+    m_source->setToolTip(m_source->itemText(index) + QLatin1Char('\n') +
+                         tr("Playback follows the timeline"));
     m_slots = ids.empty() ? std::vector<std::string>{} : std::move(ids.front());
     m_error->hide();
     rebuildRack();
-    if (resume) toggleAudition();
+    updatePreview();
+    for (const auto slot : reopen) if (slot < m_slots.size()) openEditor(QString::fromStdString(m_slots[slot]));
     return true;
 }
 
 void PluginBatchDialog::refreshAvailability() {
-    m_listen->setEnabled(bool(m_draft));
-    m_add->setEnabled(m_draft && m_controller.sharedEditingAllowed() && m_controller.validatePluginBatch(m_targets, m_slots.size() + 1).isOk());
-    m_apply->setEnabled(m_draft && m_controller.sharedEditingAllowed() && !m_slots.empty() && m_controller.validatePluginBatch(m_targets, m_slots.size()).isOk());
+    const bool available = !m_finished && m_projectGeneration == m_controller.projectGeneration() &&
+        m_draft && !m_controller.isRecording() && !m_controller.isCountingIn() && m_controller.sharedEditingAllowed() &&
+        m_controller.validatePluginBatch(m_targets).isOk();
+    m_source->setEnabled(available);
+    m_add->setEnabled(available && m_controller.validatePluginBatch(m_targets, m_slots.size() + 1).isOk());
+    m_apply->setEnabled(available && !m_slots.empty() && m_controller.validatePluginBatch(m_targets, m_slots.size()).isOk());
 }
 
 void PluginBatchDialog::rebuildRack() {
@@ -228,11 +287,13 @@ void PluginBatchDialog::rebuildRack() {
         const auto& target = m_targets[m_sourceIndex];
         const auto* model = m_draft->insertModel(target.trackId, id);
         if (!model) continue;
-        auto* row = new QWidget(this); row->setObjectName("BatchSlot"); row->setFixedHeight(28);
-        auto* layout = new QHBoxLayout(row); layout->setContentsMargins(4, 0, 4, 0); layout->setSpacing(2);
+        auto* row = new QWidget(this); row->setObjectName("BatchSlot"); row->setFixedHeight(40);
+        auto* layout = new QHBoxLayout(row); layout->setContentsMargins(4, 3, 4, 3); layout->setSpacing(4);
         auto* power = new QToolButton(row);
-        power->setIcon(icons::icon(icons::Glyph::Power, model->bypassed ? th().textSecondary : th().accent, 13));
-        power->setFixedSize(24, 24); power->setCheckable(true); power->setChecked(!model->bypassed);
+        power->setObjectName("BatchSlotEnabled"); power->setProperty("batchAction", true);
+        power->setIcon(icons::icon(icons::Glyph::BatchBypass, model->bypassed ? th().textSecondary : th().accent, 18));
+        power->setIconSize(QSize(18, 18)); power->setFocusPolicy(Qt::StrongFocus);
+        power->setFixedSize(32, 32); power->setCheckable(true); power->setChecked(!model->bypassed);
         power->setToolTip(tr("Enable effect")); power->setAccessibleName(power->toolTip());
         connect(power, &QToolButton::toggled, this, [this, id](bool enabled) {
             m_draft->setInsertBypassed(m_targets[m_sourceIndex].trackId, id, !enabled); rebuildRack();
@@ -240,11 +301,15 @@ void PluginBatchDialog::rebuildRack() {
         layout->addWidget(power);
         auto* name = new QPushButton(QString::fromStdString(model->name), row);
         name->setAutoDefault(false); name->setObjectName("BatchSlotName");
-        name->setToolTip(tr("Open plugin settings"));
+        name->setIcon(icons::icon(icons::Glyph::BatchEdit, th().textSecondary, 18));
+        name->setIconSize(QSize(18, 18)); name->setMinimumHeight(32);
+        name->setToolTip(tr("Open plugin settings")); name->setAccessibleName(name->text() + ": " + name->toolTip());
         connect(name, &QPushButton::clicked, this, [this, id] { openEditor(QString::fromStdString(id)); });
         layout->addWidget(name, 1);
-        auto* remove = new QToolButton(row); remove->setFixedSize(24, 24);
-        remove->setIcon(icons::icon(icons::Glyph::Close, th().textSecondary, 12));
+        auto* remove = new QToolButton(row); remove->setFixedSize(32, 32);
+        remove->setObjectName("BatchSlotRemove"); remove->setProperty("batchAction", true);
+        remove->setFocusPolicy(Qt::StrongFocus); remove->setIconSize(QSize(18, 18));
+        remove->setIcon(icons::icon(icons::Glyph::BatchRemove, th().textSecondary, 18));
         remove->setToolTip(tr("Remove effect")); remove->setAccessibleName(remove->toolTip());
         connect(remove, &QToolButton::clicked, this, [this, id] {
             closeEditors();
@@ -257,10 +322,12 @@ void PluginBatchDialog::rebuildRack() {
     }
     m_rack->addStretch();
     refreshAvailability();
+    updatePreview();
 }
 
 void PluginBatchDialog::addPlugin(const daw::plugins::PluginDescriptor& plugin, bool open) {
-    if (!m_draft || !m_controller.sharedPluginAllowed(plugin) || !m_controller.sharedEditingAllowed() ||
+    if (m_finished || m_projectGeneration != m_controller.projectGeneration() || m_controller.isRecording() ||
+        m_controller.isCountingIn() || !m_draft || !m_controller.sharedPluginAllowed(plugin) || !m_controller.sharedEditingAllowed() ||
         !m_controller.validatePluginBatch(m_targets, m_slots.size() + 1)) return;
     const auto& source = m_targets[m_sourceIndex];
     const auto id = source.clipId.empty() ? m_draft->addInsert(source.trackId, plugin)
@@ -315,23 +382,24 @@ void PluginBatchDialog::closeEditors() {
 }
 
 void PluginBatchDialog::stopAudition() {
-    if (m_listening) m_controller.stopPluginAudition();
-    m_listening = false;
-    m_listen->setText(tr("Listen"));
-    m_listen->setIcon(icons::icon(icons::Glyph::Play, th().textPrimary, 14));
+    if (m_previewActive) m_controller.stopPluginAudition();
+    m_previewActive = false;
 }
 
-void PluginBatchDialog::toggleAudition() {
-    if (m_listening) { stopAudition(); return; }
-    if (const auto result = m_controller.startPluginAudition(m_draft); !result) {
+void PluginBatchDialog::updatePreview() {
+    if (m_finished || !m_draft || m_slots.empty() || m_projectGeneration != m_controller.projectGeneration() ||
+        m_controller.isRecording() || m_controller.isCountingIn() || !m_controller.validatePluginBatch(m_targets)) {
+        stopAudition(); return;
+    }
+    if (m_previewActive) return;
+    if (const auto result = m_controller.startPluginAudition(m_draft, true); !result) {
         showError(QString::fromStdString(result.message())); return;
     }
-    m_listening = true; m_error->hide();
-    m_listen->setText(tr("Stop")); m_listen->setIcon(icons::icon(icons::Glyph::Stop, th().textPrimary, 14));
+    m_previewActive = true;
 }
 
 void PluginBatchDialog::apply() {
-    if (!m_draft || m_slots.empty()) return;
+    if (m_finished || !m_draft || m_slots.empty() || m_projectGeneration != m_controller.projectGeneration()) return;
     stopAudition(); closeEditors();
     (void)m_draft->pumpPreviewPluginEvents();
     daw::EngineController::ChannelSnapshot chain;
@@ -346,6 +414,7 @@ void PluginBatchDialog::apply() {
 }
 
 bool PluginBatchDialog::checkForTest(const QString& screenshotPath) {
+    if (!icons::checkGlyphCoverageForTest()) return false;
     daw::EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return false;
     const auto lead = controller.addTrack(daw::TrackKind::Audio, "Lead");
@@ -357,24 +426,81 @@ bool PluginBatchDialog::checkForTest(const QString& screenshotPath) {
     {
         PluginBatchDialog cancelled(controller, targets);
         cancelled.addPlugin(eq, false);
+        controller.play();
         cancelled.reject();
+        if (!controller.isPlaying() || cancelled.m_previewActive) return false;
+        controller.stop();
     }
     if (controller.undoDepth() != undo || !controller.project().findTrack(lead)->inserts.empty()) return false;
     PluginBatchDialog dialog(controller, targets);
-    if (!dialog.m_draft || dialog.m_apply->isEnabled() || !dialog.m_slots.empty()) return false;
+    if (!dialog.m_draft || dialog.m_apply->isEnabled() || !dialog.m_slots.empty() ||
+        dialog.isModal() || dialog.findChild<QPushButton*>("BatchListen")) return false;
     dialog.addPlugin(eq, false);
-    if (dialog.m_slots.size() != 1 || !dialog.m_apply->isEnabled()) return false;
+    if (dialog.m_slots.size() != 1 || !dialog.m_apply->isEnabled() || !dialog.m_previewActive ||
+        controller.isPlaying() || dialog.m_draft->isPlaying()) return false;
+    controller.play();
+    if (!controller.isPlaying() || !dialog.m_draft->isPlaying()) return false;
+    controller.pause(); controller.seekSeconds(.25);
+    if (dialog.m_draft->isPlaying() || std::abs(dialog.m_draft->positionSeconds() - .25) > 1e-6) return false;
+    controller.play();
     dialog.m_draft->setInsertParameter(lead, dialog.m_slots.front(), "output.gain", -6.0);
+    const auto previousDraft = dialog.m_draft;
+    const auto previousSlot = dialog.m_slots.front();
     dialog.m_source->setCurrentIndex(1);
-    if (dialog.m_sourceIndex != 1 || dialog.m_slots.size() != 1) return false;
+    if (dialog.m_sourceIndex != 1 || dialog.m_slots.size() != 1 || !dialog.m_previewActive ||
+        !controller.isPlaying() || !dialog.m_draft->isPlaying() || dialog.m_draft != previousDraft ||
+        dialog.m_draft->hasInsert(lead, previousSlot)) return false;
     const auto* model = dialog.m_draft->insertModel(doubleTrack, dialog.m_slots.front());
     const auto gain = std::find_if(model->parameters.begin(), model->parameters.end(), [](const auto& parameter) { return parameter.id == "output.gain"; });
     if (gain == model->parameters.end() || std::abs(gain->value + 6.0) > 0.01) return false;
     dialog.show(); QApplication::processEvents();
-    if (!screenshotPath.isEmpty() && !dialog.grab().save(screenshotPath)) return false;
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (QApplication::activeModalWidget() == &dialog) return false;
+    for (auto* button : dialog.findChildren<QAbstractButton*>()) {
+        if (button->property("batchAction").toBool() &&
+            (button->accessibleName().isEmpty() || (button != dialog.m_apply && button->icon().isNull()) ||
+             button->focusPolicy() == Qt::NoFocus)) return false;
+    }
+    if (dialog.m_apply->text() != tr("Apply") || !dialog.m_apply->icon().isNull()) return false;
+    auto* power = dialog.findChild<QToolButton*>("BatchSlotEnabled");
+    if (!power) return false;
+    power->click();
+    if (!dialog.m_draft->insertModel(doubleTrack, dialog.m_slots.front())->bypassed ||
+        !controller.project().findTrack(doubleTrack)->inserts.empty()) return false;
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    dialog.findChild<QToolButton*>("BatchSlotEnabled")->click();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    for (const auto size : {QSize(360, 240), QSize(440, 300)}) {
+        dialog.resize(size); QApplication::processEvents();
+        for (auto* button : dialog.findChildren<QAbstractButton*>()) {
+            if (button->isVisible() && button->property("batchAction").toBool() &&
+                !dialog.rect().contains(QRect(button->mapTo(&dialog, QPoint()), button->size()))) return false;
+        }
+        if (dialog.m_source->width() < 100) return false;
+    }
+    dialog.openEditor(QString::fromStdString(dialog.m_slots.front()));
+    auto editor = dialog.m_editors.value(QString::fromStdString(dialog.m_slots.front()));
+    if (!editor || !editor->isVisible() || editor->isModal()) return false;
+    controller.pause();
+    if (dialog.m_draft->isPlaying()) return false;
+    controller.play();
+    dialog.m_source->setCurrentIndex(0);
+    if (editor || dialog.m_editors.size() != 1 || !controller.isPlaying() || !dialog.m_draft->isPlaying()) return false;
+    dialog.closeEditors();
+    dialog.m_source->setCurrentIndex(1);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QApplication::processEvents();
+    if (!dialog.m_rack->itemAt(0)->widget() || !dialog.m_rack->itemAt(0)->widget()->isVisible()) return false;
+    if (!screenshotPath.isEmpty()) {
+        if (!dialog.grab().save(screenshotPath)) return false;
+        dialog.m_source->showPopup(); QApplication::processEvents();
+        if (!dialog.m_source->view()->window()->grab().save(screenshotPath + ".tracks.png")) return false;
+        dialog.m_source->hidePopup();
+    }
     if (dialog.m_apply->geometry().bottom() >= dialog.height() || dialog.m_source->width() < 100) return false;
     dialog.apply();
-    if (dialog.result() != QDialog::Accepted || controller.undoDepth() != undo + 1) return false;
+    if (dialog.result() != QDialog::Accepted || controller.undoDepth() != undo + 1 || !controller.isPlaying()) return false;
+    controller.stop();
     for (const auto& target : targets) if (controller.project().findTrack(target.trackId)->inserts.size() != 1) return false;
     ui::SelectionModel selection;
     selection.setTracks({QString::fromStdString(lead), QString::fromStdString(right)});
@@ -413,6 +539,6 @@ bool PluginBatchDialog::checkForTest(const QString& screenshotPath) {
     QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     button = panel.findChild<QAbstractButton*>("ContextPanelSharedPlugins");
     if (!button || !button->isEnabled()) return false;
-    std::puts("PASS Shared Plugins: cancel, source settings, track/clip apply, context buttons and incompatible selection");
+    std::puts("PASS Shared Plugins: modeless timeline playback, source switching, icon controls, cancel, track/clip apply and context actions");
     return true;
 }

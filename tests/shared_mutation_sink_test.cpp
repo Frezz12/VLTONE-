@@ -374,6 +374,12 @@ void verifyGenericMutationRoutes(daw::collab::SharedMutationResult result) {
               controller.project().tracks.size() == before.tracks.size() &&
               controller.undoDepth() == undoDepth,
           "submitted/blocked generic mutations do not use local document or undo");
+    check(controller.setTrackColors({{track, 0x654321u}}) == result &&
+              sink.genericCalls == 3 &&
+              std::holds_alternative<std::shared_ptr<daw::collab::BatchCommand>>(sink.genericBodies.back()) &&
+              controller.project().findTrack(track)->color == before.findTrack(track)->color &&
+              controller.undoDepth() == undoDepth,
+          "batch track colours submit once and never fall back after a submitted or blocked mutation");
     check(controller.detachSharedMutationSink(sink),
           "generic command sink detaches");
 }

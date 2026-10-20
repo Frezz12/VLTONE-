@@ -329,6 +329,10 @@ private:
 class FaderWidget : public QWidget, public graphics::ScenePaintSource {
     Q_OBJECT
 public:
+    enum class TrackHeaderDesign { Classic, Recessed };
+    static TrackHeaderDesign trackHeaderDesign();
+    static void setTrackHeaderDesign(TrackHeaderDesign design);
+
     explicit FaderWidget(QWidget* parent = nullptr)
         : FaderWidget(Qt::Vertical, parent) {}
     FaderWidget(Qt::Orientation orientation, QWidget* parent = nullptr);
@@ -349,6 +353,10 @@ public:
     /// preserving the same gain, signals and automation gesture.
     void setCompactKnob(bool compact);
     bool isCompactKnob() const noexcept { return m_compactKnob; }
+    /// Follow the timeline fader preference; other faders keep their own style.
+    void setTrackHeaderStyle(bool enabled);
+    /// Narrow vertical console cap; the full widget remains the drag target.
+    void setSlim(bool slim);
 
     /// Hand double-click to automation while creation mode is enabled.
     /// Otherwise double-click resets to unity.
@@ -396,6 +404,7 @@ private:
     void showBubble();
     void paintScale(QPainter& p) const;
     void paintCap(QPainter& p, const QRectF& cap) const;
+    bool usesRecessedTrackStyle() const;
 
     std::unique_ptr<graphics::RetainedScene> m_capScene;
     QSizeF m_cachedCapSize;
@@ -411,6 +420,8 @@ private:
     bool m_hovered = false;
     bool m_automatable = false;
     bool m_compactKnob = false;
+    bool m_trackHeaderStyle = false;
+    bool m_slim = false;
     int m_regularMinimumWidth = -1;
     int m_regularMaximumWidth = QWIDGETSIZE_MAX;
 };
@@ -523,6 +534,8 @@ public:
     void setAutomatable(bool automatable) { m_automatable = automatable; }
     bool isAutomatable() const noexcept { return m_automatable; }
     bool isEditing() const noexcept { return m_dragging; }
+    void finishEditing();
+    void setCompactSize(int side);
     static bool checkInteractionForTest();
 
 signals:

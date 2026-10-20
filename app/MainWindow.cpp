@@ -74,6 +74,7 @@
 #include "MixerWidget.hpp"
 #include "RackWidget.hpp"
 #include "WarpEditorWidget.hpp"
+#include "VocalAlignmentWindow.hpp"
 #include <QToolButton>
 #include "MidiInputManager.hpp"
 #include "NoteContextPanel.hpp"
@@ -112,6 +113,7 @@
 #include "TimelineWidget.hpp"
 #include "ToolPanel.hpp"
 #include "TrackListWidget.hpp"
+#include "TrackOverviewPanel.hpp"
 #include "FileTypes.hpp"
 #include "plugins/PluginConvert.hpp"
 #include "Internal/GravityInstance.hpp"
@@ -1269,6 +1271,8 @@ MainWindow::MainWindow(bool openDevice, QWidget* parent,
     // The browser starts where it was left; the View action was created with
     // the same value, so this only has to apply it.
     setBrowserVisible(ui::browserprefs::visible());
+    setMixerVisible(QSettings().value("ui/mixerVisible", false).toBool());
+    setTrackOverviewVisible(QSettings().value("ui/trackOverviewVisible", false).toBool());
     setWebVisible(ui::webprefs::visible());
     setNotebookVisible(ui::notebookprefs::visible());
     setAiVisible(ui::aiprefs::visible());
@@ -8792,26 +8796,13 @@ bool MainWindow::checkSettingsViewportForTest() {
         startupTemplate && startupTemplate->count() >= 1 &&
         startupTemplate->itemData(0).toString().isEmpty() &&
         !startupTemplate->accessibleName().isEmpty();
-    QSet<int> navigationPages;
     bool groupedNavigation = navigation && navigation->topLevelItemCount() == 5;
     if (navigation) {
         for (int group = 0; group < navigation->topLevelItemCount(); ++group) {
             QTreeWidgetItem* category = navigation->topLevelItem(group);
             groupedNavigation = groupedNavigation && category &&
-                                category->childCount() >= 2;
-            for (int row = 0; category && row < category->childCount(); ++row) {
-                bool valid = false;
-                const int page = category->child(row)
-                                     ->data(0, Qt::UserRole)
-                                     .toInt(&valid);
-                groupedNavigation = groupedNavigation && valid && page >= 0 &&
-                                    page < SettingsWindow::kPageCount &&
-                                    !navigationPages.contains(page);
-                if (valid) navigationPages.insert(page);
-            }
+                                category->childCount() == 0;
         }
-        groupedNavigation = groupedNavigation &&
-                            navigationPages.size() == SettingsWindow::kPageCount;
     }
     bool scrollable = pages && pages->count() == SettingsWindow::kPageCount &&
                       groupedNavigation &&
@@ -8953,6 +8944,52 @@ bool MainWindow::checkSettingsViewportForTest() {
             (gpuRestart->isHidden() == (original == runningGpuMode));
     }
     scrollable = scrollable && gpuRestartSynced;
+
+    // Reopening the same settings window and applying a buffer change must
+    // reuse both the audio page and its action in the shared footer.
+    const int pageBeforeReopen = pages ? pages->currentIndex() : -1;
+    openSettings(SettingsWindow::kAudioTab);
+    QPointer<QWidget> audioPage = pages ? pages->currentWidget() : nullptr;
+    QPointer<QPushButton> audioApply = m_settingsWindow->findChild<QPushButton*>(
+        QStringLiteral("ApplyAudioSettings"));
+    auto* buffer = m_settingsWindow->findChild<QComboBox*>(QStringLiteral("AudioBufferSize"));
+    const int originalBuffer = buffer ? buffer->currentData().toInt() : 0;
+    bool audioReused = audioPage && audioApply && buffer;
+    for (int repeat = 0; audioReused && repeat < 5; ++repeat) {
+        // Render-only selftests never open the physical device. A runner with
+        // no endpoints still checks reuse without invoking the device warning.
+        if (originalBuffer > 0) {
+            if (buffer->count() > 1) buffer->setCurrentIndex((buffer->currentIndex() + 1) % buffer->count());
+            const int wantedBuffer = buffer->currentData().toInt();
+            audioApply->click();
+            audioReused = m_controller.bufferSizeFrames() == wantedBuffer;
+        }
+        m_settingsWindow->close();
+        hideInternalWindow(m_settingsWindow);
+        openSettings(SettingsWindow::kAudioTab);
+        QApplication::processEvents();
+        audioReused = audioReused && audioPage && audioApply &&
+            pages->currentWidget() == audioPage &&
+            m_settingsWindow->findChildren<QPushButton*>(QStringLiteral("ApplyAudioSettings")).size() == 1 &&
+            m_settingsWindow->findChild<QPushButton*>(QStringLiteral("ApplyAudioSettings")) == audioApply &&
+            audioApply->isVisible();
+    }
+    if (audioReused && originalBuffer > 0) {
+        buffer->setCurrentIndex(buffer->findData(originalBuffer));
+        audioApply->click();
+        audioReused = m_controller.bufferSizeFrames() == originalBuffer;
+    }
+    if (!audioReused) std::fprintf(stderr, "settings audio action duplicated or buffer apply failed on reopen\n");
+    else std::printf("PASS settings reopen: one audio page and Apply button after five reopens (buffer applies=%d)\n",
+                     originalBuffer > 0 ? 5 : 0);
+    const QString reopenShot = qEnvironmentVariable("DAW_SETTINGS_SCREENSHOT");
+    if (!reopenShot.isEmpty()) {
+        if (auto* surface = findChild<ui::graphics::WorkspaceSurface*>())
+            surface->grabImage().save(reopenShot + QStringLiteral("-reopened.png"));
+        else m_settingsWindow->grab().save(reopenShot + QStringLiteral("-reopened.png"));
+    }
+    scrollable = scrollable && audioReused;
+    if (pageBeforeReopen >= 0) m_settingsWindow->showTab(pageBeforeReopen);
 
     InternalEditorFrame* frame =
         m_internalEditorFrames.value(m_settingsWindow, nullptr);
@@ -10499,7 +10536,7 @@ void MainWindow::buildLayout() {
     connect(m_transport, &TransportBar::readoutGeometryChanged, this,
             &MainWindow::layoutContextPanel);
 
-    // ── Main row: browser | inspector | (arrangement over mixer) ──
+    // ── Main row: browser | track overview | inspector | arrangement ──
     auto* row = new QWidget(workspace);
     m_editorHost = workspace;
     m_editorBody = row;
@@ -10762,6 +10799,41 @@ void MainWindow::buildLayout() {
     m_notebookContainer->hide();
     notebookHandle->hide();
 
+    m_trackOverview = new TrackOverviewPanel(&m_controller, row);
+    m_trackOverviewWidth = std::clamp(QSettings().value("ui/trackOverviewWidth", 180).toInt(), 180, 420);
+    m_trackOverview->setFixedWidth(m_trackOverviewWidth);
+    auto* overviewHandle = new ui::ResizeHandle(Qt::Vertical, m_trackOverview);
+    overviewHandle->setEdge(Qt::RightEdge);
+    overviewHandle->setToolTip(tr("Resize track overview"));
+    overviewHandle->setAccessibleName(tr("Resize track overview"));
+    auto overviewStartWidth = std::make_shared<int>(m_trackOverviewWidth);
+    overviewHandle->onDragStart = [this, overviewStartWidth] { *overviewStartWidth = m_trackOverviewWidth; };
+    overviewHandle->onDrag = [this, overviewStartWidth](int delta) {
+        m_trackOverviewWidth = std::clamp(*overviewStartWidth + delta, 180, 420);
+        m_trackOverview->setFixedWidth(m_trackOverviewWidth);
+        m_toolPanel->setTrackOverviewZoneWidth(m_trackOverviewWidth);
+        QSettings().setValue("ui/trackOverviewWidth", m_trackOverviewWidth);
+        applyRightPanelWidths();
+    };
+    connect(m_trackOverview, &TrackOverviewPanel::hideRequested, this, [this] { setTrackOverviewVisible(false); });
+    connect(m_trackOverview, &TrackOverviewPanel::selectionChanged, this,
+        [this](const QStringList& ids, const QString& primary) {
+            m_trackList->setSelectedTracks(ids, primary);
+            selectTrackFromHeader(primary);
+        });
+    connect(m_trackOverview, &TrackOverviewPanel::edited, this, [this](bool structure, bool dirty) {
+        if (structure) syncStructureViews(); else syncViews();
+        if (dirty) markDirty();
+    });
+    connect(m_trackOverview, &TrackOverviewPanel::moreActionsRequested, this, [this](const QPoint& pos) {
+        QMenu menu(this);
+        if (m_trackList->populateSelectedTrackActionsMenu(menu)) menu.exec(pos);
+    });
+    connect(&m_selection, &ui::SelectionModel::changed, m_trackOverview, [this] {
+        QStringList tracks = m_selection.tracks();
+        for (const auto& clip : m_selection.clips()) if (!tracks.contains(clip.trackId)) tracks.push_back(clip.trackId);
+        m_trackOverview->setSelectedTracks(tracks, tracks.contains(m_selectedTrackId) ? m_selectedTrackId : tracks.value(0));
+    });
     m_inspector = new InspectorWidget(&m_controller, row);
 
     // Arrangement (track headers + timeline) fills the column; the mixer floats
@@ -11091,6 +11163,9 @@ void MainWindow::buildLayout() {
         markDirty();
     };
     connect(m_toolPanel, &ToolPanel::createTracksRequested, this, createTracks);
+    connect(m_contextPanel, &ContextPanel::createTracksRequested, this, createTracks);
+    connect(m_contextPanel, &ContextPanel::importAudioRequested, this, &MainWindow::onImportAudio);
+    connect(m_contextPanel, &ContextPanel::vocalAlignmentRequested, this, &MainWindow::openVocalAlignment);
     const auto alignRulerHeaders = [this](int height) {
         m_trackList->setRulerHeight(height);
         m_inspector->setHeaderHeight(height);
@@ -11369,6 +11444,11 @@ void MainWindow::buildLayout() {
             Qt::QueuedConnection);
     connect(m_inspector, &InspectorWidget::timelineRequested, this, showChannelOnTimeline,
             Qt::QueuedConnection);
+    connect(m_trackOverview, &TrackOverviewPanel::revealRequested, this,
+        [this, showChannelOnTimeline](const QString& id) {
+            m_trackList->setSelectedTrack(id);
+            showChannelOnTimeline(id);
+        });
     connect(m_inspector, &InspectorWidget::createTracksRequested, this, createTracks,
             Qt::QueuedConnection);
     connect(m_mixer, &MixerWidget::channelEdited, this,
@@ -11548,22 +11628,17 @@ void MainWindow::buildLayout() {
     });
     connect(m_transport, &TransportBar::mixerToggled, this,
             &MainWindow::setMixerVisible);
-    connect(m_transport, &TransportBar::warpRequested, this,
-            &MainWindow::toggleWarpEditor);
     connect(m_transport, &TransportBar::inspectorToggled, this,
             &MainWindow::setInspectorVisible);
     connect(m_transport, &TransportBar::browserToggled, this,
             &MainWindow::setBrowserVisible);
+    connect(m_transport, &TransportBar::trackOverviewToggled, this, &MainWindow::setTrackOverviewVisible);
     connect(m_transport, &TransportBar::webToggled, this,
             [this](bool on) { setWebVisible(on); });
     connect(m_transport, &TransportBar::notebookToggled, this,
             [this](bool on) { setNotebookVisible(on); });
     connect(m_transport, &TransportBar::aiToggled, this,
             [this](bool on) { setAiVisible(on); });
-    connect(m_transport, &TransportBar::detachMixerRequested, this,
-            &MainWindow::onDetachMixer);
-    connect(m_transport, &TransportBar::addTrackRequested, this,
-            &MainWindow::onAddAudioTrack);
     connect(m_transport, &TransportBar::settingsRequested, this,
             [this] { openSettings(SettingsWindow::kAudioTab); });
 }
@@ -11780,6 +11855,7 @@ void MainWindow::syncViews() {
             m_selectedTrackId = m_selection.clips().front().trackId;
     }
     if (m_browser) m_browser->refreshClipLibrary();
+    if (m_trackOverview) m_trackOverview->refresh();
     ui::perf::Scope timing("syncViews.MainWindow.ms");
     if (m_transport) m_transport->refresh();
     m_orphanEditorSweepPending = true;
@@ -11891,6 +11967,7 @@ void MainWindow::refreshAfterCollaborationProjection(
 }
 
 void MainWindow::syncStructureViews() {
+    if (m_trackOverview) m_trackOverview->refresh();
     m_orphanEditorSweepPending = true;
     if (m_mixer) {
         m_mixer->rebuild();
@@ -11956,6 +12033,7 @@ void MainWindow::markDirty(const QStringList& tracks) {
 }
 
 void MainWindow::setMixerVisible(bool visible) {
+    QSettings().setValue("ui/mixerVisible", visible);
     if (m_mixerWindow) {           // detached: bring the window forward instead
         if (visible) presentAuxiliaryWindow(m_mixerWindow);
         else m_mixerWindow->hide();
@@ -11982,16 +12060,19 @@ void MainWindow::relayoutRow() {
     // Taken out and put back rather than reparented: a QHBoxLayout has no
     // "move this widget" and the four columns are the whole row.
     for (QWidget* w : {static_cast<QWidget*>(m_browser),
+                       static_cast<QWidget*>(m_trackOverview),
                        static_cast<QWidget*>(m_inspector), m_arrangementHost}) {
         if (w) m_rowLayout->removeWidget(w);
     }
     if (onLeft) {
         m_rowLayout->addWidget(m_browser);
+        m_rowLayout->addWidget(m_trackOverview);
         m_rowLayout->addWidget(m_inspector);
         m_rowLayout->addWidget(m_arrangementHost, 1);
     } else {
         // The inspector stays next to the arrangement in both arrangements: it
         // is the selected track's channel strip and belongs beside its lanes.
+        m_rowLayout->addWidget(m_trackOverview);
         m_rowLayout->addWidget(m_inspector);
         m_rowLayout->addWidget(m_arrangementHost, 1);
         m_rowLayout->addWidget(m_browser);
@@ -12030,6 +12111,19 @@ void MainWindow::setBrowserVisible(bool visible) {
     if (m_transport) m_transport->setBrowserVisible(visible);
     applyRightPanelWidths();
     layoutBottomPanels();
+}
+
+void MainWindow::setTrackOverviewVisible(bool visible) {
+    if (!m_trackOverview) return;
+    m_trackOverview->setVisible(visible);
+    QSettings().setValue("ui/trackOverviewVisible", visible);
+    if (m_showTrackOverviewAction) {
+        const QSignalBlocker blocker(m_showTrackOverviewAction);
+        m_showTrackOverviewAction->setChecked(visible);
+    }
+    if (m_toolPanel) m_toolPanel->setTrackOverviewZoneWidth(visible ? m_trackOverviewWidth : 0);
+    if (m_transport) m_transport->setTrackOverviewVisible(visible);
+    applyRightPanelWidths(); layoutBottomPanels();
 }
 
 void MainWindow::ensureWebBrowser() {
@@ -12164,6 +12258,8 @@ void MainWindow::applyRightPanelWidths() {
         workspaceReserve += m_inspector->width();
     if (m_browser && !m_browser->isHidden())
         workspaceReserve += m_browser->width();
+    if (m_trackOverview && !m_trackOverview->isHidden())
+        workspaceReserve += m_trackOverview->width();
     // The fixed arrangement columns and the persistent header readouts are two
     // independent constraints on the same workspace. Protect the larger one;
     // this is the value QHBoxLayout was previously guessing from stale child
@@ -12306,7 +12402,7 @@ void MainWindow::onDetachMixer() {
     if (m_mixerHandle) m_mixerHandle->hide();
     // Warp may still occupy the bottom while the mixer is detached.
     layoutBottomPanels();
-    m_transport->setMixerDetached(true);
+    QSettings().setValue("ui/mixerVisible", true);
     m_transport->setMixerVisible(true);
     if (m_showMixerAction && !m_showMixerAction->isChecked()) {
         const QSignalBlocker block(m_showMixerAction);
@@ -12328,7 +12424,7 @@ void MainWindow::onDockMixer() {
     // Reparenting hides the widget. Show it before computing whether it covers
     // the timeline, then restore its geometry and viewport inset together.
     layoutBottomPanels();
-    m_transport->setMixerDetached(false);
+    QSettings().setValue("ui/mixerVisible", true);
     m_transport->setMixerVisible(true);
     if (m_showMixerAction && !m_showMixerAction->isChecked()) {
         const QSignalBlocker block(m_showMixerAction);
@@ -12828,6 +12924,15 @@ void MainWindow::buildMenus() {
                 if (routeEditChord(EditChord::Paste)) return;
                 if (m_timeline->pasteClipboard()) markDirty();
             });
+    auto* moveClips = addCommand(edit, "edit.moveClipsToTrack", tr("Move to another track…"), kEdit,
+                                 QKeySequence(QStringLiteral("Ctrl+Shift+C")));
+    connect(moveClips, &QAction::triggered, this, [this] { m_timeline->showClipTrackPicker(); });
+    const auto refreshClipMove = [this, moveClips] {
+        moveClips->setEnabled(!m_timeline->clipMoveTargets().isEmpty());
+    };
+    connect(&m_selection, &ui::SelectionModel::changed, this, refreshClipMove);
+    connect(edit, &QMenu::aboutToShow, this, refreshClipMove);
+    refreshClipMove();
     connect(addCommand(edit, "edit.repeatClips", tr("&Repeat Clips / Region"),
                        kEdit, QKeySequence(tr("Ctrl+B"))),
             &QAction::triggered, this, [this] {
@@ -12958,6 +13063,9 @@ void MainWindow::buildMenus() {
     connect(addCommand(track, "track.duplicate", tr("&Duplicate"), kTrack,
                        QKeySequence(tr("Ctrl+D"))),
             &QAction::triggered, this, &MainWindow::onDuplicateSelectedTrack);
+    auto* randomColor = addCommand(track, "track.randomColor", tr("Random Color"), kTrack,
+                                   QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    connect(randomColor, &QAction::triggered, m_trackList, &TrackListWidget::randomizeSelectedTrackColors);
     connect(addCommand(track, "track.actions", tr("More Track Actions…"), kTrack),
             &QAction::triggered, this, [this] {
                 QTimer::singleShot(0, this, [this] {
@@ -13270,7 +13378,7 @@ void MainWindow::buildMenus() {
     m_showMixerAction = addCommand(view, "view.toggleMixer", tr("Show &Mixer"), kView,
                                    QKeySequence(Qt::Key_X));
     m_showMixerAction->setCheckable(true);
-    m_showMixerAction->setChecked(true);
+    m_showMixerAction->setChecked(QSettings().value("ui/mixerVisible", false).toBool());
     connect(m_showMixerAction, &QAction::toggled, this, &MainWindow::setMixerVisible);
 
     auto* toggleMixerRack = addCommand(view, "view.toggleMixerRack",
@@ -13315,6 +13423,12 @@ void MainWindow::buildMenus() {
     m_showBrowserAction->setChecked(ui::browserprefs::visible());
     connect(m_showBrowserAction, &QAction::toggled, this,
             &MainWindow::setBrowserVisible);
+
+    m_showTrackOverviewAction = addCommand(view, "view.toggleTrackOverview", tr("Show Track Overview"), kView,
+                                           QKeySequence(tr("Alt+T")));
+    m_showTrackOverviewAction->setCheckable(true);
+    m_showTrackOverviewAction->setChecked(QSettings().value("ui/trackOverviewVisible", false).toBool());
+    connect(m_showTrackOverviewAction, &QAction::toggled, this, &MainWindow::setTrackOverviewVisible);
 
     m_showWebAction = addCommand(view, "view.toggleWeb", tr("Show &Web Browser"),
                                  kView, QKeySequence(tr("Alt+W")));
@@ -16167,6 +16281,17 @@ void MainWindow::openSelectedEditor() {
         3000);
 }
 
+void MainWindow::openVocalAlignment() {
+    if (!m_vocalAlignment) {
+        m_vocalAlignment = new VocalAlignmentWindow(&m_controller, &m_selection, this);
+        connect(m_vocalAlignment, &VocalAlignmentWindow::warpEditorRequested, this, &MainWindow::openWarpEditor);
+        connect(m_vocalAlignment, &VocalAlignmentWindow::alignmentApplied, this, [this] {
+            markDirty(); syncViews(); m_selection.refresh();
+        });
+    }
+    m_vocalAlignment->show(); m_vocalAlignment->raise(); m_vocalAlignment->activateWindow();
+}
+
 void MainWindow::openWarpEditor(const QString& trackId, const QString& clipId) {
     if (!m_controller.audioClip(trackId.toStdString(), clipId.toStdString())) return;
     const QString key = trackId + '/' + clipId;
@@ -18909,6 +19034,11 @@ void MainWindow::onSelectionChanged(const QString& trackId) {
     // The lanes show the whole selection, not just the row the panels follow.
     m_timeline->setSelectedTracks(m_trackList ? m_trackList->selectedTrackIds()
                                               : QStringList{trackId});
+    if (m_trackOverview) {
+        QStringList tracks = m_selection.tracks();
+        for (const auto& clip : m_selection.clips()) if (!tracks.contains(clip.trackId)) tracks.push_back(clip.trackId);
+        m_trackOverview->setSelectedTracks(tracks, trackId);
+    }
     if (m_inspector)
         m_inspector->setSelection(trackId, m_selection.singleClip().clipId);
     if (m_mixer) {
@@ -18991,6 +19121,7 @@ void MainWindow::queueUiChange(const ui::UiChangeSet& change) {
             if (changes.structure) { syncViews(); return; }
             const QStringList ids = changes.tracks.values();
             if (!ids.isEmpty()) {
+                if (m_trackOverview) m_trackOverview->refresh();
                 if (m_trackList) m_trackList->syncTrackValues(ids);
                 if (m_mixer) m_mixer->syncFromModel(ids);
                 if (changes.tracks.contains(m_selectedTrackId)) {
@@ -19018,6 +19149,7 @@ void MainWindow::queueUiChange(const ui::UiChangeSet& change) {
 }
 
 void MainWindow::onTracksChanged(bool localFileDirty) {
+    if (m_trackOverview) m_trackOverview->refresh();
     // Reconcile channel structure as well as values: renaming a destination
     // also changes send labels, and these callers can replace plugins. Rebuild
     // retains unchanged strips; continuous controls use trackValuesChanged.
@@ -20243,14 +20375,20 @@ void MainWindow::updateLocalProcessingActions() {
 }
 
 void MainWindow::onSharedPlugins() {
+    for (auto* dialog : findChildren<PluginBatchDialog*>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (dialog->isVisible()) { presentAuxiliaryWindow(dialog); return; }
+    }
     auto targets = PluginBatchDialog::selectedTargets(m_selection);
     if (targets.size() < 2 || !m_controller.validatePluginBatch(targets, 1) || m_controller.isRecording()) return;
-    PluginBatchDialog dialog(m_controller, std::move(targets), this);
-    if (dialog.exec() != QDialog::Accepted) return;
-    syncViews();
-    m_selection.refresh();
-    markDirty();
-    statusBar()->showMessage(tr("Plugins applied to the selection"), 3000);
+    auto* dialog = new PluginBatchDialog(m_controller, std::move(targets), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::accepted, this, [this] {
+        syncViews();
+        m_selection.refresh();
+        markDirty();
+        statusBar()->showMessage(tr("Plugins applied to the selection"), 3000);
+    });
+    presentAuxiliaryWindow(dialog);
 }
 
 void MainWindow::onBounceInPlace() {

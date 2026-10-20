@@ -849,24 +849,23 @@ EqualizerPanel::EqualizerPanel(daw::EngineController* controller,
     background: %1; color: %3; border: 1px solid transparent;
     border-radius: 5px; padding: 0 10px; min-height: 28px;
 }
-#EqualizerPanel QPushButton:hover { background: %6; }
-#EqualizerPanel QPushButton:checked { background: %6; border-color: %4; }
-#EqualizerPanel QPushButton:focus { border-color: %4; }
+#EqualizerPanel QPushButton:hover { background: %5; }
+#EqualizerPanel QPushButton:checked { background: %5; }
 #EqualizerPanel QPushButton:pressed { background: %2; }
 #EqWordmark { color: %3; font-size: 26px; font-weight: 600; }
-#EqControlCaption { color: %5; font-size: 10px; }
+#EqControlCaption { color: %4; font-size: 10px; }
 #EqualizerDynamicsPanel {
     background: transparent; border-top: 1px solid %2;
 }
 #EqualizerPanel QPushButton#EqualizerBandClose {
     border: none; border-radius: 4px; background: transparent;
-    color: %5; font-size: 15px; font-weight: 700;
+    color: %4; font-size: 15px; font-weight: 700;
     padding: 0 0 2px 0; min-width: 0; min-height: 0;
 }
 #EqualizerPanel QPushButton#EqualizerBandClose:hover {
-    background: %6; color: %3;
+    background: %5; color: %3;
 }
-)").arg(eqUi::field().name(), t.separator().name(), t.textPrimary.name(), t.accent.name(),
+)").arg(eqUi::field().name(), t.separator().name(), t.textPrimary.name(),
         t.textSecondary.name(), mixColors(eqUi::canvas(), t.accent, .16).name()));
     };
     restyle();

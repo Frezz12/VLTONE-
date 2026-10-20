@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Theme.hpp"
+#include "KnobAppearance.hpp"
 #include <QPainter>
 #include <QPalette>
 #include <QWidget>
@@ -71,7 +72,7 @@ inline void surface(QPainter &p, QRectF r, bool recessed = false,
   p.restore();
 }
 inline void knob(QPainter &p, QRectF bounds, double fraction, bool pressed,
-                 bool enabled, bool focus) {
+                 bool enabled, bool bipolar = false) {
   p.save();
   p.setRenderHint(QPainter::Antialiasing);
   p.setOpacity(enabled ? 1.0 : .45);
@@ -83,6 +84,18 @@ inline void knob(QPainter &p, QRectF bounds, double fraction, bool pressed,
   // to the inlay, never to the position or depth of the control.
   p.translate(bounds.center());
   p.scale(scale, scale);
+  if (ui::knobDesign() == ui::KnobDesign::BrushedMetal) {
+    const double f = std::clamp(fraction, 0., 1.);
+    const QRectF ring(-30, -30, 60, 60);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(mixColors(t.separator(), t.textSecondary, .25), 2, Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(ring, 225 * 16, -270 * 16);
+    p.setPen(QPen(accent(), 2.2, Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(ring, (bipolar ? 90 : 225) * 16, int(-(bipolar ? f - .5 : f) * 270 * 16));
+    ui::paintMetalKnob(p, QRectF(-24, -24, 48, 48), 225 - 270 * f);
+    p.restore();
+    return;
+  }
   p.setPen(Qt::NoPen);
   // A broad, feathered foot joins the dome to the panel, without a metal rim
   // or a hard drop shadow. Both light lobes fade out before the widget edge.
@@ -127,11 +140,6 @@ inline void knob(QPainter &p, QRectF bounds, double fraction, bool pressed,
   p.setPen(QPen(pressed ? accent() : t.textPrimary, 2.5,
                 Qt::SolidLine, Qt::RoundCap));
   p.drawLine(direction * 10.5, direction * 18);
-  if (focus) {
-    p.setPen(QPen(accent(), 1.5));
-    p.setBrush(Qt::NoBrush);
-    p.drawEllipse(QRectF(-32, -32, 64, 64));
-  }
   p.restore();
 }
 } // namespace pluginStyle

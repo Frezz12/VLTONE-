@@ -157,6 +157,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/v1/releases/{version}/download/{kind}", s.downloadReleaseArtifact)
 	r.Post("/v1/releases/{version}/download/{kind}/click", s.recordReleaseDownloadClick)
 	r.Post("/v1/support/boosty/click/{source}", s.recordSupportClick)
+	r.With(s.requireOrigin(false), s.webAuthOptional).Post("/v1/site-visits", s.recordSiteVisit)
 	r.Get("/v1/releases/{version}/screenshots/{screenshotID}", s.releaseScreenshot)
 
 	r.Route("/v1/web/auth", func(r chi.Router) {
@@ -336,6 +337,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/admin/tasks/{taskID}/attachments/{attachmentID}", s.adminTaskDownload)
 		r.With(s.adminCSRF).Delete("/v1/admin/tasks/{taskID}/attachments/{attachmentID}", s.adminTaskDeleteAttachment)
 		r.Get("/v1/admin/dashboard", s.adminDashboard)
+		r.Get("/v1/admin/analytics", s.adminSiteVisits)
 		r.Get("/v1/admin/users", s.adminUsers)
 		r.Get("/v1/admin/users/{userID}", s.adminUser)
 		r.Get("/v1/admin/browser-backgrounds", s.adminBrowserBackgrounds)

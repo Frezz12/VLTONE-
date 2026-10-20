@@ -10,6 +10,7 @@
 #include <optional>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 namespace ui::graphics {
 struct SceneMeshGroup;
@@ -39,6 +40,13 @@ struct SceneMeshGroup {
     std::vector<SceneMesh> meshes;
     qint64 bytes = 0;
 };
+// A scrolling page moves as one scene-graph subtree. Its viewport clip stays
+// stationary; the controls inside keep their local transforms and GPU batches.
+struct SceneScrollGroup {
+    quint64 id = 0;
+    QPointF origin;
+    QRectF clip;
+};
 struct SceneLayer {
     quint64 id = 0, revision = 0;
     QPointF origin;
@@ -49,27 +57,59 @@ struct SceneLayer {
     std::vector<SceneMesh> meshes;
     // Recorded once with the geometry; viewport scrolling only changes clip.
     std::optional<QRectF> contentBounds;
+    std::shared_ptr<const SceneScrollGroup> scrollGroup;
 };
 
-inline void cacheLayerBounds(SceneLayer& layer) {
+inline QTransform pixelAlignedTranslation(const QTransform& transform, qreal dpr) {
+    if (transform.type() > QTransform::TxTranslate) return transform;
+    // Use the same physical-pixel alignment for drawing and containment.
+    return QTransform::fromTranslate(std::round(transform.dx() * dpr) / dpr,
+                                     std::round(transform.dy() * dpr) / dpr);
+}
+inline std::optional<QRectF> sceneMeshBounds(const SceneMesh& mesh, int& budget, qreal dpr, bool includeClip = true) {
+    if (--budget < 0) return {};
+    const auto transform = mesh.snapTranslation ? pixelAlignedTranslation(mesh.transform, dpr) : mesh.transform;
+    QRectF content;
+    if (mesh.group) {
+        // Never traverse large timeline/waveform tiles to optimize a clip.
+        if (mesh.group->bytes > qint64(budget) * sizeof(SceneVertex)) return {};
+        for (const auto& child : mesh.group->meshes) {
+            const auto bounds = sceneMeshBounds(child, budget, dpr);
+            if (!bounds) return {};
+            content |= *bounds;
+        }
+        content = transform.mapRect(content);
+    } else if (mesh.visualId) {
+        content = mesh.visualRect;
+    } else if (!mesh.vertices.isEmpty()) {
+        budget -= int(mesh.vertices.size());
+        if (budget < 0) return {};
+        const auto first = transform.map(QPointF(mesh.vertices.front().x, mesh.vertices.front().y));
+        content = QRectF(first, QSizeF());
+        for (const auto& vertex : mesh.vertices) {
+            const auto point = transform.map(QPointF(vertex.x, vertex.y));
+            content.setLeft(std::min(content.left(), point.x()));
+            content.setRight(std::max(content.right(), point.x()));
+            content.setTop(std::min(content.top(), point.y()));
+            content.setBottom(std::max(content.bottom(), point.y()));
+        }
+    }
+    if (includeClip && mesh.clip) content &= mesh.clip->bounds;
+    return content;
+}
+inline void cacheLayerBounds(SceneLayer& layer, qreal dpr = 1) {
     layer.contentBounds.reset();
-    // Retained canvases already have their own clipping. Do not walk large
-    // timeline tile groups on every recording of a moving playhead.
-    for (const auto& mesh : layer.meshes) if (mesh.group) return;
+    int budget = 4096;
     QRectF content;
     for (const auto& mesh : layer.meshes) {
-        if (mesh.vertices.isEmpty()) continue;
-        const auto first = mesh.transform.map(QPointF(mesh.vertices.front().x, mesh.vertices.front().y));
-        QRectF bounds(first, QSizeF());
-        for (const auto& vertex : mesh.vertices) {
-            const auto point = mesh.transform.map(QPointF(vertex.x, vertex.y));
-            bounds.setLeft(std::min(bounds.left(), point.x()));
-            bounds.setRight(std::max(bounds.right(), point.x()));
-            bounds.setTop(std::min(bounds.top(), point.y()));
-            bounds.setBottom(std::max(bounds.bottom(), point.y()));
-        }
-        if (mesh.clip) bounds &= mesh.clip->bounds;
-        content |= bounds;
+        // Flat geometry was always measured once. Keep those bounds even for
+        // large paths, so later scrolling never scans their vertices again.
+        // Only recursive retained groups share the bounded traversal budget.
+        int remaining = mesh.group ? budget : std::max(budget, int(mesh.vertices.size()) + 1);
+        const auto bounds = sceneMeshBounds(mesh, remaining, dpr);
+        if (!bounds) return;
+        if (mesh.group) budget = remaining;
+        content |= *bounds;
     }
     layer.contentBounds = content;
 }

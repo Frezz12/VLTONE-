@@ -251,7 +251,6 @@ void ReverbCanvas::paintScene(QPainter& p,const QRegion&) {
         p.setPen(reverbUi::muted());p.drawText(QRectF(20,height()-29,width()-40,16),Qt::AlignLeft,m_earlyView?tr("EARLY ENERGY"):tr("TAIL ENERGY"));
         p.setPen(m_earlyView?cyan():violet());p.drawText(QRectF(20,height()-29,width()-40,16),Qt::AlignRight,energy<1.e-5f?QString::fromUtf8("−∞ dB"):QString::number(reading,'f',1)+" dB");
     }
-    if(hasFocus()){p.setBrush(Qt::NoBrush);p.setPen(QPen(alpha(violet(),150),1));p.drawRoundedRect(bounds.adjusted(2,2,-2,-2),7,7);}
 }
 
 ReverbPanel::ReverbPanel(daw::EngineController* controller,QString channel,QString slot,QWidget* parent)
@@ -410,9 +409,8 @@ void ReverbPanel::applyTheme() {
         "#ReverbPanel {color:%1;} #ReverbPanel QLabel {color:%2;font-size:11px;} #ReverbSection {font-size:9px;font-weight:600;letter-spacing:1.8px;padding-left:12px;}"
         "#ReverbPanel QToolButton,#ReverbPanel QPushButton {color:%1;background:%3;border:1px solid %4;border-radius:6px;padding:3px 10px;}"
         "#ReverbPanel QToolButton:hover,#ReverbPanel QPushButton:hover {background:%5;}"
-        "#ReverbPanel QToolButton:checked,#ReverbPanel QPushButton:checked {background:%6;border-color:%7;color:%1;}"
-        "#ReverbPanel QAbstractButton:focus {border-color:%7;}"
-        "#ReverbFreeze:checked {color:%7;border-color:%7;background:%6;}"
+        "#ReverbPanel QToolButton:checked,#ReverbPanel QPushButton:checked {background:%6;color:%1;}"
+        "#ReverbFreeze:checked {color:%7;background:%6;}"
         "#ReverbPanel QDoubleSpinBox[reverbValue=\"true\"],#ReverbPanel QDoubleSpinBox QLineEdit {color:%1;background:transparent;border:none;padding:0;selection-background-color:%7;selection-color:%3;}"
     ).arg(reverbUi::ink().name(),reverbUi::muted().name(),surface.name(),mixColors(canvas(),reverbUi::muted(),.22).name(),
           mixColors(surface,violet(),.12).name(),mixColors(surface,violet(),.17).name(),violet().name()));

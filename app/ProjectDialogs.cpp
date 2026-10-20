@@ -47,6 +47,7 @@
 #include <QTemporaryDir>
 #include <QVideoWidget>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <cstdio>
 
 namespace ui {
@@ -54,8 +55,10 @@ namespace {
 
 constexpr auto kRecentProjectsSetting = "projects/recent";
 constexpr QSize kCoverSize(288, 162);
-constexpr QSize kProjectCardSize(224, 184);
+constexpr int kProjectCardWidth = 224;
+constexpr int kProjectCardPreviewHeight = 122;
 constexpr int kProjectImageRole = Qt::UserRole + 1;
+constexpr int kProjectAuthorRole = Qt::UserRole + 2;
 constexpr QSize kTemplatePreviewSize(420, 244);
 
 QString normalizedName(QString name) {
@@ -349,8 +352,11 @@ class ProjectCardDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
-        return kProjectCardSize;
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        const int lineHeight = option.fontMetrics.height();
+        const int authorHeight = index.data(kProjectAuthorRole).toString().isEmpty()
+            ? 0 : lineHeight + 3;
+        return {kProjectCardWidth, kProjectCardPreviewHeight + 22 + lineHeight + authorHeight};
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -362,17 +368,18 @@ public:
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
         QLinearGradient material(card.topLeft(), card.bottomLeft());
-        material.setColorAt(0, hovered ? t.controlTop() : t.panelTop());
-        material.setColorAt(1, t.panelBottom());
+        material.setColorAt(0, selected ? mixColors(t.panelTop(), t.accent, 0.10)
+                                      : hovered ? t.controlTop() : t.panelTop());
+        material.setColorAt(1, selected ? mixColors(t.panelBottom(), t.accent, 0.06)
+                                      : t.panelBottom());
+        QPainterPath shape;
+        shape.addRoundedRect(card, Theme::cornerRadius, Theme::cornerRadius);
+        painter->setClipPath(shape);
         painter->setBrush(material);
-        painter->setPen(QPen(selected ? t.accent : t.separator(), selected ? 2 : 1));
-        painter->drawRoundedRect(card, Theme::cornerRadius, Theme::cornerRadius);
+        painter->setPen(Qt::NoPen);
+        painter->drawPath(shape);
 
-        const QRectF imageRect = card.adjusted(9, 9, -9, 0);
-        const QRectF preview(imageRect.topLeft(), QSizeF(imageRect.width(), 112));
-        QPainterPath clip;
-        clip.addRoundedRect(preview, 4, 4);
-        painter->setClipPath(clip);
+        const QRectF preview(card.topLeft(), QSizeF(card.width(), kProjectCardPreviewHeight));
         painter->fillRect(preview, t.well());
         const QPixmap artwork = index.data(kProjectImageRole).value<QPixmap>();
         if (!artwork.isNull()) {
@@ -386,28 +393,34 @@ public:
                          QRectF(preview.center() - QPointF(20, 20), QSizeF(40, 40)),
                          t.textSecondary);
         }
-        painter->setClipping(false);
-        painter->setPen(t.edgeLight(t.panelTop()));
-        painter->drawLine(card.topLeft() + QPointF(9, 1), card.topRight() + QPointF(-9, 1));
+        painter->setPen(t.separator());
+        painter->drawLine(preview.bottomLeft(), preview.bottomRight());
 
         QFont nameFont = option.font;
         nameFont.setWeight(QFont::DemiBold);
         painter->setFont(nameFont);
         painter->setPen(t.textPrimary);
-        const QRectF nameRect(card.left() + 12, preview.bottom() + 11,
-                              card.width() - (selected ? 42 : 24), 28);
+        const QRectF nameRect(card.left() + 12, preview.bottom() + 8,
+                              card.width() - 42, option.fontMetrics.height());
         painter->drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft,
             QFontMetrics(nameFont).elidedText(index.data().toString(), Qt::ElideRight, int(nameRect.width())));
+        const QString author = index.data(kProjectAuthorRole).toString();
+        if (!author.isEmpty()) {
+            painter->setFont(option.font);
+            painter->setPen(t.textSecondary);
+            const QRectF authorRect(card.left() + 12, nameRect.bottom() + 3,
+                                    card.width() - 24, option.fontMetrics.height());
+            painter->drawText(authorRect, Qt::AlignVCenter | Qt::AlignLeft,
+                option.fontMetrics.elidedText(author, Qt::ElideRight, int(authorRect.width())));
+        }
         if (selected) {
             icons::paint(*painter, icons::Glyph::Check,
                          QRectF(card.right() - 28, nameRect.center().y() - 8, 16, 16), t.accent);
         }
-        if (option.state & QStyle::State_HasFocus) {
-            QPen focus(t.textPrimary, 1, Qt::DotLine);
-            painter->setPen(focus);
-            painter->setBrush(Qt::NoBrush);
-            painter->drawRoundedRect(card.adjusted(4, 4, -4, -4), 5, 5);
-        }
+        painter->setClipping(false);
+        painter->setBrush(Qt::NoBrush);
+        painter->setPen(QPen(hovered ? t.textSecondary : t.separator(), 1));
+        painter->drawPath(shape);
         painter->restore();
     }
 };
@@ -417,17 +430,18 @@ QString projectDialogStyle() {
     return QString(R"(
 #ProjectSaveDialog, #ProjectOpenDialog { background: %BG%; color: %TEXT%; }
 #ProjectDialogTitle { color: %TEXT%; font-size: 20px; font-weight: 600; }
-#ProjectDialogSecondary, #ProjectSelection { color: %SECONDARY%; }
-#ProjectCover, #ProjectLibrary {
+#ProjectDialogSecondary { color: %SECONDARY%; }
+#ProjectCover {
     background: %WELL%; border: 1px solid %EDGE%; border-radius: %RADIUS%px;
 }
 #ProjectCover { padding: 0; }
+#ProjectOpenDialog { border: 1px solid %EDGE%; border-radius: %RADIUS%px; }
+#ProjectLibrary { background: transparent; border: none; }
 #ProjectSaveDialog QLineEdit {
     min-height: 32px; color: %TEXT%;
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %WELLTOP%,stop:1 %WELL%);
     border: 1px solid %EDGE%; border-radius: %RADIUS%px; padding: 0 9px;
 }
-#ProjectSaveDialog QLineEdit:focus { border-color: %ACCENT%; }
 #ProjectDestination { color: %SECONDARY%; padding: 4px 0; }
 #ProjectError { color: %ERROR%; }
 #ProjectSaveDialog QPushButton, #ProjectOpenDialog QPushButton {
@@ -437,7 +451,6 @@ QString projectDialogStyle() {
 }
 #ProjectSaveDialog QPushButton:hover, #ProjectOpenDialog QPushButton:hover { border-color: %SECONDARY%; }
 #ProjectSaveDialog QPushButton:pressed, #ProjectOpenDialog QPushButton:pressed { background: %WELL%; }
-#ProjectSaveDialog QPushButton:focus, #ProjectOpenDialog QPushButton:focus { border-color: %ACCENT%; }
 #ProjectSaveDialog QPushButton:disabled, #ProjectOpenDialog QPushButton:disabled { color: %SECONDARY%; background: %WELL%; border-color: %EDGE%; }
 #ProjectPrimaryButton:enabled { background: %ACCENT%; color: %ACCENTTEXT%; border-color: %ACCENT%; }
 #ProjectEmptyState { color: %SECONDARY%; padding: 24px; }
@@ -476,7 +489,7 @@ ProjectSummary readSummary(const QString& path) {
 
     const QJsonObject root = document.object();
     summary.name = root.value(QStringLiteral("name")).toString(summary.name);
-    summary.author = root.value(QStringLiteral("author")).toString();
+    summary.author = root.value(QStringLiteral("author")).toString().trimmed();
     summary.tracks = root.value(QStringLiteral("tracks")).toArray().size();
     summary.tempo = root.value(QStringLiteral("tempo")).toDouble();
     const QString cover = root.value(QStringLiteral("cover")).toString();
@@ -736,15 +749,12 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     setObjectName(QStringLiteral("ProjectOpenDialog"));
     setWindowTitle(tr("Open Project"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+    setWindowFlag(Qt::FramelessWindowHint);
+    setAccessibleName(tr("Open Project"));
+    setSizeGripEnabled(true);
     setModal(true);
-    resize(800, 580);
-    setMinimumSize(760, 440);
-
-    auto* title = new QLabel(tr("Your projects"), this);
-    title->setObjectName(QStringLiteral("ProjectDialogTitle"));
-    auto* subtitle = new QLabel(tr("Select a project, or double-click to open it."), this);
-    subtitle->setObjectName(QStringLiteral("ProjectDialogSecondary"));
-    subtitle->setWordWrap(true);
+    resize(800, 480);
+    setMinimumSize(760, 400);
 
     m_projectList = new QListWidget(this);
     m_projectList->setObjectName(QStringLiteral("ProjectLibrary"));
@@ -754,7 +764,8 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     m_projectList->setResizeMode(QListView::Adjust);
     m_projectList->setWrapping(true);
     m_projectList->setSpacing(8);
-    m_projectList->setUniformItemSizes(true);
+    m_projectList->setUniformItemSizes(false);
+    m_projectList->setItemAlignment(Qt::AlignLeft | Qt::AlignTop);
     m_projectList->setSelectionMode(QAbstractItemView::SingleSelection);
     m_projectList->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_projectList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -771,6 +782,7 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
         const auto summary = readSummary(path);
         auto* item = new QListWidgetItem(summary.name, m_projectList);
         item->setData(Qt::UserRole, summary.path);
+        item->setData(kProjectAuthorRole, summary.author);
         // Decode once at card size, never while hovering or painting.
         QImageReader reader(summary.coverPath);
         reader.setAutoTransform(true);
@@ -802,11 +814,6 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
         emptyLayout->addWidget(empty);
     }
 
-    m_selection = new QLabel(tr("No project selected"), this);
-    m_selection->setObjectName(QStringLiteral("ProjectSelection"));
-    m_selection->setTextFormat(Qt::PlainText);
-    m_selection->setMinimumWidth(0);
-    m_selection->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_browse = new QPushButton(tr("Browse on Disk…"), this);
     m_browse->setObjectName(QStringLiteral("ProjectBrowseButton"));
     m_browse->setAccessibleName(tr("Browse for another project"));
@@ -840,13 +847,9 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     buttons->addWidget(cancel);
     buttons->addWidget(m_open);
     auto* column = new QVBoxLayout(this);
-    column->setContentsMargins(24, 22, 24, 20);
-    column->setSpacing(10);
-    column->addWidget(title);
-    column->addWidget(subtitle);
-    column->addSpacing(6);
+    column->setContentsMargins(16, 16, 16, 16);
+    column->setSpacing(12);
     column->addWidget(m_projectList, 1);
-    column->addWidget(m_selection);
     column->addLayout(buttons);
 
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, &ProjectOpenDialog::applyTheme);
@@ -855,13 +858,21 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     m_projectList->setFocus(Qt::OtherFocusReason);
 }
 
+void ProjectOpenDialog::mousePressEvent(QMouseEvent* event) {
+    // The margins and the space between footer actions replace the title bar.
+    if (event->button() == Qt::LeftButton && windowHandle() &&
+        windowHandle()->startSystemMove()) {
+        event->accept();
+        return;
+    }
+    QDialog::mousePressEvent(event);
+}
+
 void ProjectOpenDialog::updateSelection() {
     const auto selected = m_projectList->selectedItems();
     const auto* item = selected.isEmpty() ? nullptr : selected.front();
     m_open->setEnabled(item != nullptr);
     m_location->setEnabled(item != nullptr);
-    m_selection->setText(item ? item->text() : tr("No project selected"));
-    m_selection->setToolTip(item ? item->toolTip() : QString());
 }
 
 void ProjectOpenDialog::openSelected() {
@@ -904,7 +915,7 @@ void ProjectOpenDialog::applyTheme() {
 }
 
 bool ProjectOpenDialog::checkForTest() const {
-    return m_browse && m_projectList && m_open && m_location && m_selection &&
+    return m_browse && m_projectList && m_open && m_location &&
            !m_browse->accessibleName().isEmpty() &&
            m_projectList->viewMode() == QListView::IconMode &&
            m_projectList->selectionMode() == QAbstractItemView::SingleSelection;
@@ -1482,11 +1493,15 @@ bool checkProjectDialogsForTest(QWidget* parent) {
     const QStringList names{QStringLiteral("Evening Session"), QStringLiteral("Northern Lights"),
         QStringLiteral("Ритм города"), QStringLiteral("Piano Sketch"),
         QStringLiteral("A very long project name that should be elided on the card"), QStringLiteral("Live Take")};
+    const QStringList authors{QStringLiteral("Studio"), {}, QStringLiteral("  \t  "),
+        QStringLiteral("Northern Keys"),
+        QStringLiteral("An author with a very long name that should also be elided"), {}};
     for (int i = 0; i < names.size(); ++i) {
         const QString folder = QDir(temporary.path()).filePath(names[i]);
         QDir().mkpath(folder);
-        QJsonObject manifest{{"name", names[i]}, {"author", "Studio"}, {"tempo", 120 + i * 4},
+        QJsonObject manifest{{"name", names[i]}, {"tempo", 120 + i * 4},
                              {"tracks", QJsonArray{QJsonObject{}, QJsonObject{}, QJsonObject{}}}};
+        if (i != 1) manifest.insert(QStringLiteral("author"), authors[i]);
         QFile output(QString::fromStdString(daw::ProjectSerializer::manifestPath(folder.toStdString())));
         check(output.open(QIODevice::WriteOnly) && output.write(QJsonDocument(manifest).toJson()) > 0,
               "project fixture written");
@@ -1512,6 +1527,16 @@ bool checkProjectDialogsForTest(QWidget* parent) {
     auto* locationButton = cards.findChild<QPushButton*>(QStringLiteral("ProjectLocationButton"));
     check(grid && grid->count() == names.size() && !openButton->isEnabled() && !locationButton->isEnabled(),
           "card grid starts with actions disabled until selection");
+    check(cards.windowFlags().testFlag(Qt::FramelessWindowHint) &&
+          cards.layout()->itemAt(0)->widget() == grid &&
+          !cards.findChild<QLabel*>(QStringLiteral("ProjectDialogTitle")),
+          "frameless project picker starts directly with cards");
+    check(grid->item(0)->data(kProjectAuthorRole).toString() == authors[0] &&
+          grid->item(1)->data(kProjectAuthorRole).toString().isEmpty() &&
+          grid->item(2)->data(kProjectAuthorRole).toString().isEmpty() &&
+          grid->item(5)->data(kProjectAuthorRole).toString().isEmpty() &&
+          grid->visualItemRect(grid->item(1)).height() < grid->visualItemRect(grid->item(0)).height(),
+          "author is displayed only when present and authorless cards are shorter");
     const auto click = [&](QEvent::Type type, const QPoint& point) {
         QMouseEvent event(type, QPointF(point), QPointF(grid->viewport()->mapToGlobal(point)),
                           Qt::LeftButton, type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,

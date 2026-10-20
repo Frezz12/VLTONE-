@@ -841,6 +841,7 @@ json trackToJson(const TrackModel& t, MediaPaths media) {
         {"expanded", t.expanded},
         {"automationExpanded", t.automationExpanded},
         {"summing", t.summing},
+        {"editLocked", t.editLocked},
         {"parentId", t.parentId},
         {"inputChannel", t.inputChannel},
         {"inputChannelCount", t.inputChannelCount},
@@ -912,6 +913,7 @@ TrackModel trackFromJson(const json& j, const std::string& mediaDir,
     // Absent in every project written before summing folders existed, and a
     // plain folder is exactly what those were.
     t.summing = j.value("summing", false);
+    t.editLocked = j.value("editLocked", false);
     t.parentId = j.value("parentId", "");
     t.inputChannel = j.value("inputChannel", 0u);
     // Absent in projects written before the capture width was a choice. Those

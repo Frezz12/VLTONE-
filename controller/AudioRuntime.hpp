@@ -84,6 +84,7 @@ public:
     void buildGraph(const AudioGraphSpec& spec);
     bool updateModulation(const std::string& channelId, const modulation::Rack& rack);
     float modulationValue(const std::string& channelId, const std::string& sourceId) const;
+    float modulationPosition(const std::string& channelId, const std::string& sourceId) const;
     std::string modulationStatus(const std::string& channelId, const std::string& routeId) const;
     /// Returns true when reconciliation applied stored plugin parameters.
     bool buildSession(AudioSessionSpec session);
@@ -105,7 +106,7 @@ public:
     bool applyContent(const std::string& channelId, AudioContentSpec content);
     bool sendLiveMidi(const std::string& channelId, const engine::MidiEvent& event);
     /// Internal runtime ownership: the process protocol exposes numeric IDs.
-    audio::Result startAudition(std::shared_ptr<AudioRuntime> secondary);
+    audio::Result startAudition(std::shared_ptr<AudioRuntime> secondary, bool followTransport = false);
     void stopAudition();
     audio::Result commitGraph(bool reconfigurePlugins = false);
     /// After publication, retire the DSP stream of omitted recording Clip FX.
@@ -399,6 +400,7 @@ private:
     void inheritAudioWorkers(AudioRuntime& secondary) const;
     audio::Result takeDeviceFrom(AudioRuntime& previous);
     std::shared_ptr<AudioRuntime> auditionRuntime;
+    bool auditionFollowsTransport = false;
     bool auditionDriven = false;
     mutable std::shared_ptr<MiniModuleCompiler> miniCompiler;
     std::uint64_t pluginMainThreadGeneration = plugins::PluginMainThreadWork::generation();

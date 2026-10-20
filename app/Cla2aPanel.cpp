@@ -1,4 +1,5 @@
 #include "Cla2aPanel.hpp"
+#include "KnobAppearance.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
 #include <QAbstractButton>
@@ -109,13 +110,14 @@ protected:
         const double r = std::min(width(), height()) * .31;
         const QRectF body(center.x() - r, center.y() - r, r * 2, r * 2);
         const double angle = 225 - value() * 2.7;
+        if (!ui::paintMetalKnob(p, body, angle)) {
         p.save(); p.translate(center); p.rotate(-angle);
         QRectF grip(-r * .62, -r * .17, r * 1.4, r * .34);
         p.setPen(Qt::NoPen); p.setBrush(QColor(0, 0, 0, 125)); p.drawRoundedRect(grip.translated(-1, 3), 4, 4);
         QLinearGradient metal(grip.topLeft(), grip.bottomLeft()); metal.setColorAt(0, QColor("#d0d2cf")); metal.setColorAt(.22, QColor("#92968f")); metal.setColorAt(.68, QColor("#686d65")); metal.setColorAt(1, QColor("#3b403a"));
         p.setPen(QPen(QColor("#d4d6d1"), .8)); p.setBrush(metal); p.drawRoundedRect(grip, 3, 3);
         p.setPen(QPen(QColor("#f3f2e9"), 2, Qt::SolidLine, Qt::RoundCap)); p.drawLine(QPointF(r * .45, 0), QPointF(r * .82, 0)); p.restore();
-        if (hasFocus()) { p.setPen(QPen(kRed, 2)); p.setBrush(Qt::NoBrush); p.drawEllipse(body.adjusted(-4, -4, 4, 4)); }
+        }
     }
     void enterEvent(QEnterEvent*) override {}
     void leaveEvent(QEvent*) override {}
@@ -210,7 +212,6 @@ protected:
         p.setBrush(cap); p.setPen(QPen(QColor("#353c36"), 1.2)); p.drawEllipse(toggle);
         p.setPen(kInk); p.setFont(faceFont(this, 10, isChecked())); p.drawText(QRect(39, 4, width() - 39, 22), Qt::AlignVCenter, "LIMIT");
         p.setFont(faceFont(this, 10, !isChecked())); p.drawText(QRect(39, 25, width() - 39, 22), Qt::AlignVCenter, "COMPRESS");
-        if (hasFocus()) { p.setBrush(Qt::NoBrush); p.setPen(QPen(kRed, 1.5)); p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 4, 4); }
     }
     void contextMenuEvent(QContextMenuEvent* e) override {
         QMenu menu(this); auto* action = menu.addAction(tr("Create automation"));
@@ -236,7 +237,7 @@ Cla2aPanel::Cla2aPanel(daw::EngineController* controller, QString channel, QStri
         auto* value = new QPushButton(this); value->setObjectName(i == 0 ? "Cla2aGainValue" : "Cla2aPeakReductionValue");
         value->setAccessibleName(tr("Enter %1 value").arg(QString::fromStdString(info.name)));
         value->setCursor(Qt::PointingHandCursor); value->setFlat(true);
-        value->setStyleSheet("QPushButton { color: #333b34; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0; } QPushButton:hover { background: rgba(255,255,255,55); border-color: #8b9388; } QPushButton:focus { border: 2px solid #9c2431; }");
+        value->setStyleSheet("QPushButton { color: #333b34; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0; } QPushButton:hover { background: rgba(255,255,255,55); border-color: #8b9388; }");
         value->setFont(faceFont(this, 10)); connect(value, &QPushButton::clicked, knob, &Cla2aKnob::enterValue); m_values[i] = value;
     }
     auto* mode = new ModeButton(this); mode->setObjectName("Cla2aMode"); m_mode = mode;

@@ -4,8 +4,10 @@
 #include <unordered_set>
 
 namespace daw::modulation {
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ShapePoint, x, y, bend, shape)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Source, id, name, kind, enabled, wave, sync, rate, beats,
-    phase, smoothMs, audioChannelId, tap, gainDb, attackMs, releaseMs, filter, lowHz, highHz)
+    phase, smoothMs, audioChannelId, tap, gainDb, attackMs, releaseMs, filter, lowHz, highHz,
+    points, steps, direction, seed, randomLoop, randomSmooth)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Route, id, sourceId, slotId, pluginUid, pluginFormat,
     parameterId, depth, bipolar, enabled)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Rack, enabled, sources, routes)

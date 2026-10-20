@@ -19,6 +19,7 @@ import (
 var errAdminMemberInvalid = errors.New("member unavailable or protected")
 
 var adminPermissionCatalog = []string{
+	"analytics.read",
 	"dashboard.read", "users.read", "users.write", "bugs.read", "bugs.write", "crashes.read",
 	"releases.read", "releases.write", "backgrounds.read", "backgrounds.write",
 	"models.read", "models.write", "prompts.read", "prompts.write", "audit.read",

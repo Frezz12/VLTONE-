@@ -195,9 +195,15 @@ int main() {
         context.offline = true;
         player.process(context);
     }
+    // ClipPlayer now uses the same bounded boundary de-click during playback
+    // and export. The 5 ms release is part of that shared audible result.
+    double exportDifference = 0;
+    for (std::size_t i = 0; i < exported.l.size(); ++i)
+        exportDifference = std::max(exportDifference, double(std::abs(exported.l[i] - arranged.l[i])));
     check(std::all_of(exported.l.begin(), exported.l.begin() + 100, [](float s) { return s == 0; }) &&
-          std::all_of(exported.l.begin() + 48100, exported.l.end(), [](float s) { return s == 0; }),
-          "exported stretched clips obey their exact timeline start and end");
+          std::all_of(exported.l.begin() + 48100 + int(rate * .005), exported.l.end(), [](float s) { return s == 0; }) &&
+          exportDifference < 1e-6,
+          "exported stretched clips match playback including the bounded de-click release");
 
     // Transients must land on the new beat, including the first and last hit.
     auto hits = std::make_shared<SampleBuffer>(2, 96000, rate);

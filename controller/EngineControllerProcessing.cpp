@@ -171,6 +171,10 @@ audio::Result EngineController::bounceInPlace(
                                    "nothing selected to bounce");
     }
 
+    if (request.destination == BounceDestination::Replace)
+        for (const auto& job : jobs) for (const auto& address : job.affected)
+            if (isTrackTreeEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
+
     // Pattern owners render through their linked member tracks. Include those
     // channels in source isolation and in the Track-FX bypass decision.
     for (BounceJob& job : jobs) {
@@ -383,6 +387,9 @@ audio::Result EngineController::bounceInPlace(
 }
 
 audio::Result EngineController::commitBounceOutputs(const BounceRequest& request, std::vector<BounceJob>& jobs, BounceReport& out, bool keepFilesOnFailure) {
+    if (request.destination == BounceDestination::Replace)
+        for (const auto& job : jobs) for (const auto& address : job.affected)
+            if (isTrackTreeEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     const bool printSends = layerEnabled(request.fxLayers, BounceFxLayer::Sends);
     const bool printTrack = layerEnabled(request.fxLayers, BounceFxLayer::Track);
     std::vector<std::string> stagedFiles;
@@ -567,6 +574,7 @@ audio::Result EngineController::renderClipsOffline(
     bool includeTail,
     const std::function<bool(const rendering::Progress&)>& onProgress,
     OfflineRenderReport& out) {
+    for (const auto& address : addresses) if (isTrackEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     out = {};
     if (m_exportInProgress || (cloudProjectBound() && (!sharedEditingAllowed() || !m_sharedAssetMutationSink ||
         m_sharedMutationSink->commandSchemaVersion() < 6))) {
@@ -816,6 +824,7 @@ audio::Result EngineController::renderClipsOffline(
 
 audio::Result EngineController::selectOfflineRenderVersion(
     const ClipAddress& address, const std::string& versionId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument, "offline history is unavailable");
     const std::string selectedVersion = versionId;
@@ -883,6 +892,7 @@ audio::Result EngineController::selectOfflineRenderVersion(
 }
 
 audio::Result EngineController::restoreOfflineRenderOriginal(const ClipAddress& address) {
+    if (!m_undo.isApplying() && isTrackEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument, "offline history is unavailable");
     auto* clip = findClip(address.trackId, address.clipId);

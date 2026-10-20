@@ -7,6 +7,10 @@ namespace ui {
 namespace {
 
 [[maybe_unused]] const char* const kUndoCommandNames[] = {
+    QT_TRANSLATE_NOOP("UndoCommands", "Random Track Colors"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Unlock Tracks"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Lock Tracks"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Align Vocals"),
     QT_TRANSLATE_NOOP("UndoCommands", "Change Rack Modulation"),
     QT_TRANSLATE_NOOP("UndoCommands", "Add LFO"),
     QT_TRANSLATE_NOOP("UndoCommands", "Add Envelope Follower"),
@@ -27,6 +31,10 @@ namespace {
     QT_TRANSLATE_NOOP("UndoCommands", "Change Plugin Mix"),
     QT_TRANSLATE_NOOP("UndoCommands", "Edit Slicer Boundaries"),
     QT_TRANSLATE_NOOP("UndoCommands", "Set Send Destination"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Disable All Sends"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Enable All Sends"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Bypass Mini Modules"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Enable Mini Modules"),
 
     QT_TRANSLATE_NOOP("UndoCommands", "Create Linked Copies"),
     QT_TRANSLATE_NOOP("UndoCommands", "Link Clip Content"),
@@ -74,6 +82,7 @@ namespace {
     QT_TRANSLATE_NOOP("UndoCommands", "Relink Pattern Clip"),
     QT_TRANSLATE_NOOP("UndoCommands", "Duplicate Pattern"),
     QT_TRANSLATE_NOOP("UndoCommands", "Move Track"),
+    QT_TRANSLATE_NOOP("UndoCommands", "Move Clips to Track"),
     QT_TRANSLATE_NOOP("UndoCommands", "Folder Summing"),
     QT_TRANSLATE_NOOP("UndoCommands", "Pack into Folder"),
     QT_TRANSLATE_NOOP("UndoCommands", "Reorder Sampler FX"),

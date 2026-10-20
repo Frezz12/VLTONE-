@@ -141,7 +141,7 @@ RackWidget::RackWidget(daw::EngineController* c, QWidget* parent) : QWidget(pare
     outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(2);
     m_modulation = new RackModulationPanel(m_controller, this);
     m_modulation->hide();
-    connect(m_modulation, &RackModulationPanel::edited, this, [this] { changed(); });
+    connect(m_modulation, &RackModulationPanel::edited, this, [this](bool structural) { changed(structural); });
     auto* root = new QHBoxLayout;
     outer->addLayout(root, 1);
     root->setContentsMargins(8, 6, 8, 6);
@@ -881,8 +881,9 @@ void RackWidget::addDevice(const QPoint& at) {
         });
     if (!m_controller->hasCloudProjectBinding()) {
         auto* before = menu->actions().isEmpty() ? nullptr : menu->actions().front();
-        for (const auto kind : {daw::modulation::Kind::Lfo, daw::modulation::Kind::Follower}) {
-            auto* action = new QAction(kind == daw::modulation::Kind::Lfo ? "LFO" : "Envelope Follower", menu);
+        for (const auto kind : {daw::modulation::Kind::Lfo, daw::modulation::Kind::Follower,
+                               daw::modulation::Kind::Shaper, daw::modulation::Kind::Steps, daw::modulation::Kind::Random}) {
+            auto* action = new QAction(QString::fromLatin1(daw::modulation::kindName(kind)), menu);
             menu->insertAction(before, action);
             connect(action, &QAction::triggered, this, [this, channel, kind] {
                 if (m_channel != channel) return;

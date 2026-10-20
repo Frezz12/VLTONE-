@@ -16,6 +16,7 @@ class QStackedWidget;
 class QHBoxLayout;
 class QLabel;
 class QScrollArea;
+class QSplitter;
 class QToolButton;
 namespace ui { class FrameTimer; }
 
@@ -59,6 +60,7 @@ public:
     /// Heterogeneous racks stay aligned through resize, scrolling and rebuild.
     static bool checkLayoutForTest();
     static bool checkMasterDockForTest();
+    static bool checkCompactForTest();
     /// Where a track's strip sits right now, for that regression.
     QRect stripRectForTrackForTest(const QString& trackId) const;
 
@@ -88,6 +90,10 @@ private:
     void syncVisibleStrips();
     void positionStrips();
     void applyChannelWidth(int width);
+    void applyView(ui::MixerPreferences::View view);
+    void applyDetailsWidth(int width);
+    void syncDetails();
+    void finishChannelEdits();
     void setMasterVisible(bool visible);
     void updateMasterToggle();
     void wireStrip(ChannelStrip* strip);
@@ -121,6 +127,13 @@ private:
     QWidget* m_headerAccent = nullptr;
     QWidget* m_header = nullptr;
     QScrollArea* m_scroll = nullptr;
+    QSplitter* m_splitter = nullptr;
+    QScrollArea* m_detailsScroll = nullptr;
+    ChannelStrip* m_details = nullptr;
+    ui::MixerPreferences::View m_view = ui::MixerPreferences::View::Classic;
+    bool m_syncingDetails = false;
+    bool m_settingDetailsWidth = false;
+    std::array<int, 2> m_verticalPositions{};
     QToolButton* m_masterToggle = nullptr;
     bool m_masterVisible = true;
     int m_channelWidth = ChannelStrip::kWidth;

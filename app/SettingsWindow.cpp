@@ -7,6 +7,7 @@
 #include "MixerPreferences.hpp"
 #include "AiSettingsPage.hpp"
 #include "AccountSettingsPage.hpp"
+#include "AccountService.hpp"
 #include "BrowserSettingsPage.hpp"
 #include "RecoverySettingsPage.hpp"
 #include "AudioSettingsPage.hpp"
@@ -18,6 +19,7 @@
 #include "Theme.hpp"
 #include "ThemePackage.hpp"
 #include "Controls.hpp"
+#include "KnobAppearance.hpp"
 #include "Icons.hpp"
 #include "TimelineBackgroundPrefs.hpp"
 #include "ProjectTemplates.hpp"
@@ -77,6 +79,7 @@
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
+#include <QTabBar>
 #include <QTimer>
 #include <QThreadPool>
 #include <QTreeWidget>
@@ -90,6 +93,7 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -582,7 +586,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     : QDialog(parent, Qt::Widget), m_controller(controller), m_shortcuts(shortcuts) {
     setWindowTitle(tr("Settings — %1").arg(QApplication::applicationDisplayName()));
     setObjectName(QStringLiteral("SettingsWindow"));
-    resize(1020, 680);
+    resize(1040, 700);
     setSizeGripEnabled(false);
 
     m_pages = new QStackedWidget(this);
@@ -655,22 +659,23 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
 
     auto* sidebar = new QWidget(this);
     sidebar->setObjectName(QStringLiteral("SettingsSidebar"));
-    sidebar->setFixedWidth(246);
+    sidebar->setFixedWidth(200);
     auto* sidebarColumn = new QVBoxLayout(sidebar);
-    sidebarColumn->setContentsMargins(14, 18, 14, 12);
-    sidebarColumn->setSpacing(12);
-    auto* title = new QLabel(tr("Settings"), sidebar);
-    title->setProperty("role", "pageTitle");
+    sidebarColumn->setContentsMargins(12, 18, 12, 12);
+    sidebarColumn->setSpacing(18);
+    auto* title = new QLabel(QApplication::applicationDisplayName(), sidebar);
+    title->setObjectName(QStringLiteral("SettingsBrand"));
+    title->setContentsMargins(8, 0, 0, 0);
     sidebarColumn->addWidget(title);
-    m_search = new QLineEdit(sidebar);
+    m_search = new QLineEdit(this);
     m_search->setObjectName(QStringLiteral("SettingsSearch"));
     m_search->setAccessibleName(tr("Search all settings"));
     m_search->setPlaceholderText(tr("Search settings…"));
     m_search->setClearButtonEnabled(true);
-    m_search->setMinimumHeight(34);
+    m_search->setMinimumHeight(30);
+    m_search->setMaximumWidth(250);
     m_search->setToolTip(tr("Search all settings (%1)").arg(QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText)));
     m_search->installEventFilter(this);
-    sidebarColumn->addWidget(m_search);
     auto* find = new QShortcut(QKeySequence::Find, this);
     find->setContext(Qt::WidgetWithChildrenShortcut);
     connect(find, &QShortcut::activated, this, [this] { m_search->setFocus(); m_search->selectAll(); });
@@ -680,9 +685,9 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     m_navigation->setAccessibleName(tr("Settings sections"));
     m_navigation->setHeaderHidden(true);
     m_navigation->setRootIsDecorated(false);
-    m_navigation->setItemsExpandable(true);
+    m_navigation->setItemsExpandable(false);
     m_navigation->setExpandsOnDoubleClick(false);
-    m_navigation->setUniformRowHeights(false);
+    m_navigation->setUniformRowHeights(true);
     m_navigation->setIndentation(0);
     m_navigation->setIconSize(QSize(18, 18));
     m_navigation->setMouseTracking(true);
@@ -693,74 +698,118 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
                               const QString& title,
                               std::initializer_list<std::pair<QString, Tab>> pages) {
         auto* group = new QTreeWidgetItem(m_navigation, QStringList{title});
-        group->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        QFont font = group->font(0);
-        font.setBold(true);
-        group->setFont(0, font);
-        group->setSizeHint(0, QSize(0, 34));
+        group->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemNeverHasChildren);
+        group->setData(0, Qt::UserRole, int(m_categoryPages.size()));
+        group->setSizeHint(0, QSize(0, 40));
+        QVector<int> category;
         for (const auto& [label, page] : pages) {
-            auto* item = new QTreeWidgetItem(group, QStringList{label});
-            item->setData(0, Qt::UserRole, int(page));
-            item->setSizeHint(0, QSize(0, 34));
-            item->setToolTip(0, tr(kPageAppearance[int(page)].description));
-            item->setData(0, Qt::AccessibleDescriptionRole, item->toolTip(0));
-            m_navigationItems.insert(int(page), item);
+            category.push_back(int(page));
+            m_pageLabels.insert(int(page), label);
+            m_navigationItems.insert(int(page), group);
         }
+        group->setToolTip(0, tr(kPageAppearance[category.front()].description));
+        group->setData(0, Qt::AccessibleDescriptionRole, group->toolTip(0));
+        m_categoryPages.push_back(category);
     };
-    addGroup(tr("Application"),
+    addGroup(tr("General"),
              {{tr("General"), kInterfaceTab},
               {tr("Language"), kLanguageTab},
-              {tr("Keyboard Shortcuts"), kShortcutsTab},
-              {tr("Performance & Motion"), kPerformanceTab},
+              {tr("Shortcuts"), kShortcutsTab},
+              {tr("Performance"), kPerformanceTab},
               {tr("Recovery"), kRecoveryTab}});
-    addGroup(tr("Audio & Recording"),
-             {{tr("Audio"), kAudioTab},
+    addGroup(tr("Audio"),
+             {{tr("Devices"), kAudioTab},
               {tr("Recording"), kRecordingTab},
               {tr("Transport"), kTransportTab}});
     addGroup(tr("Workspace"),
-             {{tr("Files & Preview"), kBrowserTab},
-              {tr("Quick Import"), kQuickImportTab},
+             {{tr("Files"), kBrowserTab},
+              {tr("Import"), kQuickImportTab},
               {tr("Plugins"), kPluginsTab},
-              {tr("Context Panel"), kContextPanelTab},
+              {tr("Inspector"), kContextPanelTab},
               {tr("Mixer"), kMixerTab},
               {tr("Notebook"), kNotebookTab},
-              {tr("Web Browser"), kWebBrowserTab}});
+              {tr("Web"), kWebBrowserTab}});
     addGroup(tr("Appearance"),
              {{tr("Themes"), kThemesTab},
               {tr("Timeline"), kTimelineTab},
               {tr("Backgrounds"), kBackgroundsTab},
               {tr("Fonts & Icons"), kFontsTab},
-              {tr("Theme Editor"), kThemeEditorTab}});
-    addGroup(tr("Account & AI"),
-             {{tr("Account"), kAccountTab},
-              {tr("AI"), kAiTab}});
-    connect(m_navigation, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* expanded) {
-        for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
-            auto* group = m_navigation->topLevelItem(i);
-            if (group != expanded) group->setExpanded(false);
-        }
-        refreshNavigationAppearance();
+              {tr("Palette"), kThemeEditorTab}});
+    addGroup(tr("AI"), {{tr("Assistant"), kAiTab}});
+    m_pageLabels.insert(kAccountTab, tr("Account"));
+    connect(m_navigation, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
+        if (!item) return;
+        const int category = item->data(0, Qt::UserRole).toInt();
+        showTab(m_categoryPages[category].front());
     });
-    connect(m_navigation, &QTreeWidget::itemCollapsed, this, &SettingsWindow::refreshNavigationAppearance);
-    connect(m_navigation, &QTreeWidget::itemClicked, this, [](QTreeWidgetItem* item) {
-        if (item && !item->parent()) item->setExpanded(!item->isExpanded());
+
+    m_accountButton = new QPushButton(sidebar);
+    m_accountButton->setObjectName(QStringLiteral("SettingsAccount"));
+    m_accountButton->setAutoDefault(false);
+    m_accountButton->setCheckable(true);
+    m_accountButton->setCursor(Qt::PointingHandCursor);
+    m_accountButton->setMinimumHeight(58);
+    auto* accountRow = new QHBoxLayout(m_accountButton);
+    accountRow->setContentsMargins(8, 8, 8, 8);
+    accountRow->setSpacing(10);
+    m_accountAvatar = new QLabel(m_accountButton);
+    m_accountAvatar->setObjectName(QStringLiteral("SettingsAccountAvatar"));
+    m_accountAvatar->setFixedSize(30, 30);
+    m_accountAvatar->setAlignment(Qt::AlignCenter);
+    accountRow->addWidget(m_accountAvatar);
+    auto* identity = new QVBoxLayout;
+    identity->setSpacing(2);
+    m_accountName = new QLabel(m_accountButton);
+    m_accountName->setTextFormat(Qt::PlainText);
+    m_accountName->setObjectName(QStringLiteral("SettingsAccountName"));
+    m_accountName->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_accountCaption = new QLabel(tr("Account settings"), m_accountButton);
+    m_accountCaption->setObjectName(QStringLiteral("SettingsAccountCaption"));
+    m_accountCaption->setProperty("role", "secondary");
+    identity->addWidget(m_accountName);
+    identity->addWidget(m_accountCaption);
+    accountRow->addLayout(identity, 1);
+    for (auto* label : m_accountButton->findChildren<QLabel*>())
+        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    sidebarColumn->addWidget(m_accountButton);
+    connect(m_accountButton, &QPushButton::clicked, this, [this] { showTab(kAccountTab); });
+    if (auto* service = account::Service::instance()) {
+        connect(service, &account::Service::snapshotChanged, this, &SettingsWindow::refreshAccount);
+        connect(service, &account::Service::authenticatedChanged, this, &SettingsWindow::refreshAccount);
+    }
+    refreshAccount();
+
+    auto* topBar = new QWidget(this);
+    topBar->setObjectName(QStringLiteral("SettingsTopBar"));
+    auto* topRow = new QHBoxLayout(topBar);
+    topRow->setContentsMargins(24, 10, 24, 10);
+    topRow->setSpacing(10);
+    auto* settingsIcon = new QLabel(topBar);
+    settingsIcon->setObjectName(QStringLiteral("SettingsHeaderIcon"));
+    settingsIcon->setFixedSize(18, 18);
+    topRow->addWidget(settingsIcon);
+    auto* settingsTitle = new QLabel(tr("Settings"), topBar);
+    topRow->addWidget(settingsTitle);
+    topRow->addStretch();
+    topRow->addWidget(m_search, 1);
+    m_subtabs = new QTabBar(this);
+    m_subtabs->setObjectName(QStringLiteral("SettingsSubtabs"));
+    m_subtabs->setAccessibleName(tr("Settings pages"));
+    m_subtabs->setExpanding(false);
+    m_subtabs->setDrawBase(false);
+    m_subtabs->setUsesScrollButtons(true);
+    m_subtabs->setElideMode(Qt::ElideNone);
+    m_subtabs->setIconSize(QSize(16, 16));
+    connect(m_subtabs, &QTabBar::currentChanged, this, [this](int index) {
+        if (index >= 0) showTab(m_subtabs->tabData(index).toInt());
     });
 
     auto* pageHeader = new QWidget(this);
     pageHeader->setObjectName(QStringLiteral("SettingsPageHeader"));
     auto* headerRow = new QHBoxLayout(pageHeader);
-    headerRow->setContentsMargins(0, 0, 0, 14);
-    headerRow->setSpacing(12);
-    m_pageIcon = new QLabel(pageHeader);
-    m_pageIcon->setObjectName(QStringLiteral("SettingsPageIcon"));
-    m_pageIcon->setFixedSize(40, 40);
-    m_pageIcon->setAlignment(Qt::AlignCenter);
-    headerRow->addWidget(m_pageIcon);
+    headerRow->setContentsMargins(0, 0, 0, 6);
     auto* heading = new QVBoxLayout;
     heading->setSpacing(3);
-    m_pageCategory = new QLabel(pageHeader);
-    m_pageCategory->setProperty("role", "secondary");
-    heading->addWidget(m_pageCategory);
     m_pageTitle = new QLabel(pageHeader);
     m_pageTitle->setObjectName(QStringLiteral("SettingsPageTitle"));
     m_pageTitle->setProperty("role", "pageTitle");
@@ -772,23 +821,6 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     heading->addWidget(m_pageTitle);
     heading->addWidget(m_pageDescription);
     headerRow->addLayout(heading, 1);
-    connect(m_navigation, &QTreeWidget::currentItemChanged, this,
-            [this](QTreeWidgetItem* current) {
-                if (!current) return;
-                bool valid = false;
-                const int page = current->data(0, Qt::UserRole).toInt(&valid);
-                if (!valid || page < 0 || page >= m_pages->count()) return;
-                if (!m_search->text().isEmpty()) m_search->clear();
-                ensurePage(page);
-                m_pages->setCurrentIndex(page);
-                refreshCurrentPage();
-                refreshSectionLinks();
-                refreshNavigationAppearance();
-                setWindowTitle(tr("Settings — %1 · %2")
-                                   .arg(QApplication::applicationDisplayName(),
-                                        current->text(0)));
-                QSettings().setValue(QStringLiteral("ui/settingsPage"), page);
-            });
     connect(&ThemeManager::instance(), &ThemeManager::changed, this,
             &SettingsWindow::refreshNavigationAppearance);
 
@@ -813,27 +845,17 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     buttons->button(QDialogButtonBox::Close)->setAutoDefault(false);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
 
-    m_sectionLinks = new QComboBox(this);
-    m_sectionLinks->setObjectName(QStringLiteral("SettingsSectionLinks"));
-    m_sectionLinks->setAccessibleName(tr("Jump to section"));
-    m_sectionLinks->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    connect(m_sectionLinks, &QComboBox::activated, this, [this](int index) {
-        if (index > 0 && index <= m_sections.size()) revealSetting(m_sections[index - 1]);
-        m_sectionLinks->setCurrentIndex(0);
-    });
-
     auto* normalPage = new QWidget(this);
     auto* content = new QVBoxLayout(normalPage);
-    content->setContentsMargins(22, 18, 22, 0);
-    content->setSpacing(10);
+    content->setContentsMargins(32, 22, 28, 0);
+    content->setSpacing(14);
     content->addWidget(pageHeader);
-    content->addWidget(m_sectionLinks);
     content->addWidget(m_pages, 1);
     m_content = new QStackedWidget(this);
     m_content->addWidget(normalPage);
     auto* searchPage = new QWidget(this);
     auto* searchColumn = new QVBoxLayout(searchPage);
-    searchColumn->setContentsMargins(22, 18, 22, 0);
+    searchColumn->setContentsMargins(32, 22, 28, 0);
     auto* searchTitle = new QLabel(tr("Search results"), searchPage);
     searchTitle->setProperty("role", "pageTitle");
     searchColumn->addWidget(searchTitle);
@@ -874,15 +896,29 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
     auto* footer = new QWidget(this);
     footer->setObjectName(QStringLiteral("SettingsFooter"));
     auto* footerRow = new QHBoxLayout(footer);
-    m_footerRow = footerRow;
     footerRow->setContentsMargins(22, 10, 22, 12);
     m_pageHint = new QLabel(footer);
     m_pageHint->setProperty("role", "secondary");
     m_pageHint->setWordWrap(true);
     footerRow->addWidget(m_pageHint, 1);
+    // The footer owns this action for the lifetime of the settings window.
+    // Lazy page creation must never add another button or leave an orphan.
+    m_audioApply = new QPushButton(tr("Apply"), footer);
+    m_audioApply->setObjectName(QStringLiteral("ApplyAudioSettings"));
+    m_audioApply->setProperty("accentAction", true);
+    m_audioApply->setAutoDefault(false);
+    m_audioApply->setAccessibleName(tr("Apply audio device settings"));
+    m_audioApply->hide();
+    connect(m_audioApply, &QPushButton::clicked, this, [this] {
+        ensurePage(kAudioTab);
+        if (m_audioPage) m_audioPage->apply();
+    });
+    footerRow->addWidget(m_audioApply);
     footerRow->addWidget(buttons);
     auto* right = new QVBoxLayout;
     right->setSpacing(0);
+    right->addWidget(topBar);
+    right->addWidget(m_subtabs);
     right->addWidget(m_content, 1);
     right->addWidget(footer);
     auto* body = new QHBoxLayout(this);
@@ -900,28 +936,25 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
 }
 
 void SettingsWindow::refreshNavigationAppearance() {
+    const int currentPage = m_pages->currentIndex();
     for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
         auto* group = m_navigation->topLevelItem(i);
-        group->setForeground(0, th().textSecondary);
-        group->setIcon(0, icons::icon(group->isExpanded() ? icons::Glyph::Chevron : icons::Glyph::ChevronRight,
-                                    th().textSecondary));
-    }
-    const int currentPage = m_pages->currentIndex();
-    for (auto it = m_navigationItems.cbegin(); it != m_navigationItems.cend(); ++it) {
-        const bool selected = it.key() == currentPage;
-        auto* item = it.value();
-        item->setIcon(0, icons::icon(kPageAppearance[it.key()].icon,
-                                     selected ? th().accent : th().textSecondary));
-        QFont font = item->font(0);
+        const bool selected = group == m_navigationItems.value(currentPage);
+        group->setForeground(0, selected ? th().textPrimary : th().textSecondary);
+        group->setIcon(0, icons::icon(kPageAppearance[m_categoryPages[i].front()].icon,
+                                    selected ? th().accent : th().textSecondary));
+        QFont font = group->font(0);
         font.setBold(selected);
-        item->setFont(0, font);
-        if (!selected) continue;
-        m_pageTitle->setText(item->text(0));
-        m_pageCategory->setText(item->parent()->text(0));
-        m_pageDescription->setText(item->toolTip(0));
-        m_pageIcon->setPixmap(icons::icon(kPageAppearance[it.key()].icon, th().accent, 24)
-                                  .pixmap(QSize(24, 24), devicePixelRatioF()));
+        group->setFont(0, font);
     }
+    m_pageTitle->setText(currentPage == kAudioTab ? tr("Audio") : m_pageLabels.value(currentPage));
+    m_pageDescription->setText(tr(kPageAppearance[currentPage].description));
+    for (int i = 0; i < m_subtabs->count(); ++i)
+        m_subtabs->setTabIcon(i, icons::icon(kPageAppearance[m_subtabs->tabData(i).toInt()].icon,
+                                         i == m_subtabs->currentIndex() ? th().accent : th().textSecondary, 16));
+    auto* headerIcon = findChild<QLabel*>(QStringLiteral("SettingsHeaderIcon"));
+    headerIcon->setPixmap(icons::icon(icons::Glyph::Gear, th().textSecondary)
+                              .pixmap(QSize(18, 18), devicePixelRatioF()));
     QString hint = tr("Changes apply as you edit.");
     if (currentPage == kAudioTab)
         hint = tr("Use Apply for device changes. The CPU display updates immediately.");
@@ -937,6 +970,35 @@ void SettingsWindow::refreshNavigationAppearance() {
         hint = tr("Account information is synchronized with VLTONE.");
     if (m_pageHint) m_pageHint->setText(hint);
     if (m_audioApply) m_audioApply->setVisible(currentPage == kAudioTab && m_content->currentIndex() == 0);
+}
+
+void SettingsWindow::refreshAccount() {
+    auto* service = account::Service::instance();
+    QString name = service && service->authenticated() ? service->snapshot().nickname : QString();
+    if (name.isEmpty() && service && service->authenticated()) name = service->snapshot().email;
+    if (name.isEmpty()) name = tr("Not signed in");
+    m_accountName->setText(name);
+    m_accountAvatar->setText(name.left(1).toUpper());
+    m_accountButton->setAccessibleName(tr("Account settings: %1").arg(name));
+    m_accountButton->setToolTip(name + QLatin1Char('\n') + tr("Account settings"));
+}
+
+void SettingsWindow::refreshSubtabs(int page) {
+    const QSignalBlocker blocker(m_subtabs);
+    auto* category = m_navigationItems.value(page);
+    const int categoryIndex = category ? category->data(0, Qt::UserRole).toInt() : -1;
+    if (m_subtabs->property("category").toInt() != categoryIndex || !m_subtabs->count()) {
+        while (m_subtabs->count()) m_subtabs->removeTab(0);
+        const QVector<int> pages = category ? m_categoryPages[categoryIndex] : QVector<int>{kAccountTab};
+        for (int id : pages) {
+            const int tab = m_subtabs->addTab(m_pageLabels.value(id));
+            m_subtabs->setTabData(tab, id);
+            m_subtabs->setTabToolTip(tab, tr(kPageAppearance[id].description));
+        }
+        m_subtabs->setProperty("category", categoryIndex);
+    }
+    for (int i = 0; i < m_subtabs->count(); ++i)
+        if (m_subtabs->tabData(i).toInt() == page) m_subtabs->setCurrentIndex(i);
 }
 
 void SettingsWindow::preparePage(QWidget* page) {
@@ -977,7 +1039,7 @@ void SettingsWindow::preparePage(QWidget* page) {
     for (auto* group : page->findChildren<QGroupBox*>()) {
         group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         if (group->layout()) {
-            group->layout()->setContentsMargins(16, 18, 16, 16);
+            group->layout()->setContentsMargins(16, 12, 16, 16);
             group->layout()->setSpacing(12);
         }
     }
@@ -1012,6 +1074,9 @@ void SettingsWindow::preparePage(QWidget* page) {
         if (label->text().size() > 90) {
             label->setWordWrap(true);
             label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            if (!label->property("role").isValid() &&
+                !label->textInteractionFlags().testFlag(Qt::TextSelectableByMouse))
+                label->setProperty("role", "secondary");
         }
     }
     for (auto* button : page->findChildren<QPushButton*>()) button->setAutoDefault(false);
@@ -1024,21 +1089,6 @@ void SettingsWindow::preparePage(QWidget* page) {
         combo->setMinimumContentsLength(16);
         combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
-}
-
-void SettingsWindow::refreshSectionLinks() {
-    m_sections.clear();
-    m_sectionLinks->clear();
-    m_sectionLinks->addItem(tr("On this page…"));
-    auto* scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
-    if (scroll && scroll->widget()) {
-        for (auto* group : scroll->widget()->findChildren<QGroupBox*>()) {
-            if (group->title().isEmpty()) continue;
-            m_sections.push_back(group);
-            m_sectionLinks->addItem(group->title());
-        }
-    }
-    m_sectionLinks->setVisible(m_sections.size() > 1);
 }
 
 namespace {
@@ -1055,7 +1105,7 @@ void SettingsWindow::buildSearchIndex() {
         ensurePage(page);
         auto* scroll = qobject_cast<QScrollArea*>(m_pages->widget(page));
         auto* navigation = m_navigationItems.value(page);
-        const QString pagePath = navigation->parent()->text(0) + QStringLiteral(" / ") + navigation->text(0);
+        const QString pagePath = (navigation ? navigation->text(0) + QStringLiteral(" / ") : QString()) + m_pageLabels.value(page);
         const auto add = [&](const QString& title, QWidget* target, const QString& extra = QString()) {
             if (title.trimmed().isEmpty()) return;
             QString section;
@@ -1066,7 +1116,7 @@ void SettingsWindow::buildSearchIndex() {
             const QString terms = settingsSearchText(title + QLatin1Char(' ') + path + QLatin1Char(' ') + extra);
             m_searchIndex.push_back({page, title, path, terms, target});
         };
-        add(navigation->text(0), scroll->widget(), navigation->toolTip(0) + QLatin1Char(' ') + QLatin1String(kPageAppearance[page].description));
+        add(m_pageLabels.value(page), scroll->widget(), tr(kPageAppearance[page].description) + QLatin1Char(' ') + QLatin1String(kPageAppearance[page].description));
         QSet<QWidget*> indexed;
         for (auto* label : scroll->widget()->findChildren<QLabel*>()) {
             if (!label->buddy()) continue;
@@ -1230,7 +1280,7 @@ void SettingsWindow::constrainToScreen() {
     if (!target) return;
 
     constexpr int kScreenInset = 20;
-    constexpr int kPreferredHeight = 680;
+    constexpr int kPreferredHeight = 700;
     constexpr int kAbsoluteHeightCap = 760;
     const QRect available =
         target->availableGeometry().adjusted(kScreenInset, kScreenInset,
@@ -1260,16 +1310,11 @@ void SettingsWindow::constrainToScreen() {
 
 void SettingsWindow::ensurePage(int index) {
     if (index < 0 || index >= int(m_pageFactories.size()) || !m_pageFactories[index]) return;
-    auto create = std::move(m_pageFactories[index]);
+    // A moved-from std::function is not required to be empty.
+    auto create = std::exchange(m_pageFactories[index], {});
     QWidget* placeholder = m_pages->widget(index);
     QWidget* body = create();
     preparePage(body);
-    if (index == kAudioTab) {
-        m_audioApply = body->findChild<QPushButton*>(QStringLiteral("ApplyAudioSettings"));
-        m_footerRow->insertWidget(1, m_audioApply);
-        m_audioApply->setAccessibleName(tr("Apply audio device settings"));
-        m_audioApply->setVisible(m_pages->currentIndex() == kAudioTab && m_search->text().isEmpty());
-    }
     QWidget* page = scrollablePage(body);
     m_pages->removeWidget(placeholder);
     m_pages->insertWidget(index, page);
@@ -1296,17 +1341,20 @@ void SettingsWindow::showTab(int index) {
     m_search->clear();
     ensurePage(index);
     m_pages->setCurrentIndex(index);
-    if (QTreeWidgetItem* item = m_navigationItems.value(index)) {
-        item->parent()->setExpanded(true);
+    {
+        const QSignalBlocker blocker(m_navigation);
+        QTreeWidgetItem* item = m_navigationItems.value(index);
         m_navigation->setCurrentItem(item);
-        m_navigation->scrollToItem(item);
-        setWindowTitle(tr("Settings — %1 · %2")
-                           .arg(QApplication::applicationDisplayName(),
-                                item->text(0)));
+        if (!item) m_navigation->clearSelection();
+        if (item) m_navigation->scrollToItem(item);
     }
+    m_accountButton->setChecked(index == kAccountTab);
+    refreshSubtabs(index);
+    setWindowTitle(tr("Settings — %1 · %2")
+                       .arg(QApplication::applicationDisplayName(), m_pageLabels.value(index)));
+    QSettings().setValue(QStringLiteral("ui/settingsPage"), index);
     refreshCurrentPage();
     refreshNavigationAppearance();
-    refreshSectionLinks();
 }
 
 void SettingsWindow::reloadRecordingPage() {
@@ -1331,6 +1379,41 @@ bool SettingsWindow::checkOrganizationForTest() {
     };
     const int originalPage = m_pages->currentIndex();
     const QString theme = ThemeManager::instance().themeId();
+    if (m_navigation->topLevelItemCount() != 5 || !m_accountButton || !m_subtabs)
+        return fail("primary navigation");
+    QSet<int> navigationPages{kAccountTab};
+    for (int category = 0; category < m_navigation->topLevelItemCount(); ++category) {
+        auto* item = m_navigation->topLevelItem(category);
+        if (item->childCount()) return fail("flat sidebar");
+        if (m_navigation->currentItem() == item) showTab(m_categoryPages[category].front());
+        else m_navigation->setCurrentItem(item);
+        if (m_pages->currentIndex() != m_categoryPages[category].front() ||
+            m_subtabs->count() != m_categoryPages[category].size()) return fail("category landing page");
+        for (int i = 0; i < m_subtabs->count(); ++i) {
+            const int id = m_subtabs->tabData(i).toInt();
+            if (navigationPages.contains(id)) return fail("duplicate page");
+            navigationPages.insert(id);
+            m_subtabs->setCurrentIndex(i);
+            if (m_pages->currentIndex() != id || m_navigation->currentItem() != item)
+                return fail("subtab navigation");
+        }
+    }
+    if (navigationPages.size() != kPageCount) return fail("page coverage");
+    m_accountButton->click();
+    QApplication::processEvents();
+    if (m_pages->currentIndex() != kAccountTab || !m_accountButton->isChecked() ||
+        !m_navigation->selectedItems().isEmpty() || m_subtabs->count() != 1 ||
+        m_accountButton->mapTo(this, QPoint()).y() < height() / 2 ||
+        m_accountName->text().isEmpty()) return fail("account footer navigation");
+    for (auto* label : m_accountButton->findChildren<QLabel*>()) {
+        if (!m_accountButton->rect().contains(QRect(label->mapTo(m_accountButton, QPoint()), label->size())))
+            return fail("account card clipping");
+    }
+    showTab(kAudioTab);
+    m_subtabs->setFocus();
+    QKeyEvent nextTab(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QApplication::sendEvent(m_subtabs, &nextTab);
+    if (m_pages->currentIndex() != kRecordingTab) return fail("keyboard subtab navigation");
     const auto pageContains = [this](int page, const char* object) {
         ensurePage(page);
         return m_pages->widget(page)->findChild<QWidget*>(QLatin1String(object)) != nullptr;
@@ -1382,11 +1465,12 @@ bool SettingsWindow::checkOrganizationForTest() {
     if (m_audioApply->isVisible()) return fail("audio action page scope");
 
     showTab(kBackgroundsTab);
-    if (m_sections.size() != 2) return fail("section links");
-    revealSetting(m_sections.back());
+    const auto groups = m_pages->currentWidget()->findChildren<QGroupBox*>();
+    if (groups.size() != 2) return fail("background sections");
+    revealSetting(groups.back());
     QApplication::processEvents();
     scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
-    if (!scroll || scroll->verticalScrollBar()->value() == 0) return fail("section link scroll");
+    if (!scroll || scroll->verticalScrollBar()->value() == 0) return fail("section reveal scroll");
 
     const QString screenshot = qEnvironmentVariable("DAW_SETTINGS_SCREENSHOT");
     if (!screenshot.isEmpty()) {
@@ -1395,7 +1479,8 @@ bool SettingsWindow::checkOrganizationForTest() {
             {kThemesTab, QStringLiteral("themes")}, {kTimelineTab, QStringLiteral("timeline")},
             {kPerformanceTab, QStringLiteral("performance")}, {kPluginsTab, QStringLiteral("plugins")},
             {kBrowserTab, QStringLiteral("files")}, {kRecordingTab, QStringLiteral("recording")},
-            {kAiTab, QStringLiteral("ai")}, {kWebBrowserTab, QStringLiteral("web")}};
+            {kAiTab, QStringLiteral("ai")}, {kWebBrowserTab, QStringLiteral("web")},
+            {kAccountTab, QStringLiteral("account")}};
         for (const auto& [page, name] : examples) {
             showTab(page);
             QApplication::processEvents();
@@ -1605,6 +1690,67 @@ QWidget* SettingsWindow::buildThemesTab() {
     auto* col = new QVBoxLayout(page);
     col->addWidget(new QLabel(
         tr("Choose a built-in palette, or apply a complete saved theme.")));
+
+    auto* knobGroup = new QGroupBox(tr("Knob design"), page);
+    knobGroup->setObjectName(QStringLiteral("KnobDesignGroup"));
+    auto* knobColumn = new QVBoxLayout(knobGroup);
+    auto* knobRow = new QHBoxLayout;
+    auto* knobDesign = new QComboBox(knobGroup);
+    knobDesign->setObjectName(QStringLiteral("KnobDesignSelector"));
+    knobDesign->setAccessibleName(tr("Knob design"));
+    knobDesign->addItem(tr("Classic"), int(ui::KnobDesign::Classic));
+    knobDesign->addItem(tr("Brushed metal"), int(ui::KnobDesign::BrushedMetal));
+    knobDesign->setCurrentIndex(knobDesign->findData(int(ui::knobDesign())));
+    connect(knobDesign, &QComboBox::currentIndexChanged, this, [knobDesign] {
+        ui::setKnobDesign(static_cast<ui::KnobDesign>(knobDesign->currentData().toInt()));
+    });
+    knobRow->addWidget(knobDesign, 1);
+    knobRow->addSpacing(16);
+    auto* panPreview = new ui::PanKnob(knobGroup);
+    panPreview->setAccessibleName(tr("Pan preview"));
+    panPreview->setPan(.35);
+    knobRow->addWidget(panPreview);
+    auto* knobPreview = new ui::Knob({}, knobGroup);
+    knobPreview->setBare(52);
+    knobPreview->setRange(0, 1);
+    knobPreview->setValue(.65);
+    knobPreview->setAccessibleName(tr("Knob preview"));
+    knobRow->addWidget(knobPreview);
+    knobColumn->addLayout(knobRow);
+    auto* knobHint = new QLabel(tr("Applies to round controls throughout VLTONE. Colored value rings keep their function."), knobGroup);
+    knobHint->setWordWrap(true);
+    knobColumn->addWidget(knobHint);
+    col->addWidget(knobGroup);
+
+    auto* faderGroup = new QGroupBox(tr("Timeline volume faders"), page);
+    faderGroup->setObjectName(QStringLiteral("TrackFaderDesignGroup"));
+    auto* faderColumn = new QVBoxLayout(faderGroup);
+    auto* faderRow = new QHBoxLayout;
+    auto* faderDesign = new QComboBox(faderGroup);
+    faderDesign->setObjectName(QStringLiteral("TrackFaderDesignSelector"));
+    faderDesign->setAccessibleName(tr("Timeline volume faders"));
+    using FaderDesign = ui::FaderWidget::TrackHeaderDesign;
+    faderDesign->addItem(tr("Classic"), int(FaderDesign::Classic));
+    faderDesign->addItem(tr("Recessed"), int(FaderDesign::Recessed));
+    faderDesign->setCurrentIndex(faderDesign->findData(int(ui::FaderWidget::trackHeaderDesign())));
+    connect(faderDesign, &QComboBox::currentIndexChanged, this, [faderDesign] {
+        ui::FaderWidget::setTrackHeaderDesign(
+            static_cast<FaderDesign>(faderDesign->currentData().toInt()));
+    });
+    faderRow->addWidget(faderDesign, 1);
+    faderRow->addSpacing(16);
+    auto* faderPreview = new ui::FaderWidget(Qt::Horizontal, faderGroup);
+    faderPreview->setObjectName(QStringLiteral("TrackFaderPreview"));
+    faderPreview->setTrackHeaderStyle(true);
+    faderPreview->setFixedWidth(140);
+    faderPreview->setGain(.8);
+    faderPreview->setAccessibleName(tr("Volume fader preview"));
+    faderRow->addWidget(faderPreview);
+    faderColumn->addLayout(faderRow);
+    auto* faderHint = new QLabel(tr("Choose the volume fader design for timeline track headers."), faderGroup);
+    faderHint->setWordWrap(true);
+    faderColumn->addWidget(faderHint);
+    col->addWidget(faderGroup);
 
     m_themeList = new QListWidget(page);
     m_themeList->setObjectName(QStringLiteral("ThemePaletteGallery"));
@@ -3191,10 +3337,24 @@ void SettingsWindow::refreshShortcutEditors() {
 }
 
 QWidget* SettingsWindow::buildMixerTab() {
+    auto& preferences = ui::MixerPreferences::instance();
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
     auto* group = new QGroupBox(tr("Channel strips"), page);
     auto* form = new QFormLayout(group);
+    auto* view = new QComboBox(group);
+    view->setObjectName(QStringLiteral("MixerView"));
+    view->setAccessibleName(tr("Mixer view"));
+    view->addItem(tr("Classic", "mixer view"));
+    view->addItem(tr("Compact"));
+    view->setCurrentIndex(preferences.view() == ui::MixerPreferences::View::Compact ? 1 : 0);
+    form->addRow(tr("Mixer view"), view);
+    auto* compactWidth = new QComboBox(group);
+    compactWidth->setObjectName(QStringLiteral("MixerCompactWidth"));
+    compactWidth->setAccessibleName(tr("Compact channel width"));
+    for (int width : {24, 32, 40, 48}) compactWidth->addItem(tr("%1 px").arg(width), width);
+    compactWidth->setCurrentIndex(compactWidth->findData(preferences.compactWidth()));
+    form->addRow(tr("Compact channel width"), compactWidth);
     auto* controls = new QWidget(group);
     auto* row = new QHBoxLayout(controls);
     row->setContentsMargins(0, 0, 0, 0);
@@ -3211,7 +3371,7 @@ QWidget* SettingsWindow::buildMixerTab() {
     value->setKeyboardTracking(false);
     row->addWidget(slider, 1);
     row->addWidget(value);
-    form->addRow(tr("Channel width"), controls);
+    form->addRow(tr("Classic channel width"), controls);
     auto* hint = new QLabel(tr("Narrow channels show more tracks. Wider channels leave more room "
                               "for names and controls. Changes apply immediately and are saved "
                               "for every project."), group);
@@ -3221,12 +3381,12 @@ QWidget* SettingsWindow::buildMixerTab() {
     reset->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
     reset->setObjectName(QStringLiteral("MixerChannelWidthReset"));
     form->addRow(reset);
-    auto& preferences = ui::MixerPreferences::instance();
-    const auto reload = [slider, value, reset](int width) {
+    const auto reload = [slider, value, reset, &preferences](int width) {
         const QSignalBlocker a(slider), b(value);
         slider->setValue(width);
         value->setValue(width);
-        reset->setEnabled(width != ui::MixerPreferences::kDefaultWidth);
+        reset->setEnabled(preferences.view() == ui::MixerPreferences::View::Classic &&
+                          width != ui::MixerPreferences::kDefaultWidth);
     };
     reload(preferences.channelWidth());
     connect(slider, &QSlider::valueChanged, &preferences, &ui::MixerPreferences::setChannelWidth);
@@ -3235,6 +3395,30 @@ QWidget* SettingsWindow::buildMixerTab() {
         preferences.setChannelWidth(ui::MixerPreferences::kDefaultWidth);
     });
     connect(&preferences, &ui::MixerPreferences::channelWidthChanged, page, reload);
+    const auto updateView = [view, compactWidth, controls, reset, &preferences](ui::MixerPreferences::View mode) {
+        const QSignalBlocker block(view);
+        const bool compact = mode == ui::MixerPreferences::View::Compact;
+        view->setCurrentIndex(compact ? 1 : 0);
+        compactWidth->setEnabled(compact);
+        controls->setEnabled(!compact);
+        reset->setEnabled(!compact && preferences.channelWidth() != ui::MixerPreferences::kDefaultWidth);
+    };
+    updateView(preferences.view());
+    connect(view, &QComboBox::currentIndexChanged, page, [&preferences](int index) {
+        preferences.setView(index == 1 ? ui::MixerPreferences::View::Compact : ui::MixerPreferences::View::Classic);
+    });
+    connect(&preferences, &ui::MixerPreferences::viewChanged, page, updateView);
+    connect(compactWidth, &QComboBox::currentIndexChanged, page, [compactWidth, &preferences] {
+        preferences.setCompactWidth(compactWidth->currentData().toInt());
+    });
+    connect(&preferences, &ui::MixerPreferences::compactWidthChanged, page, [compactWidth](int width) {
+        const QSignalBlocker block(compactWidth);
+        compactWidth->setCurrentIndex(compactWidth->findData(width));
+    });
+    auto* detailsHint = new QLabel(tr("In Compact view, the selected channel's routing, plugins, mini modules "
+                                      "and sends appear on the right. Drag the divider to resize that panel."), group);
+    detailsHint->setWordWrap(true);
+    form->addRow(detailsHint);
     layout->addWidget(group);
 
     auto* colorGroup = new QGroupBox(tr("Mini modules"), page);

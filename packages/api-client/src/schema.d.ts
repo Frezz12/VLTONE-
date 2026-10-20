@@ -4,6 +4,43 @@
  */
 
 export interface paths {
+    "/v1/site-visits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a visible website page view without analytics cookies
+         * @description Requires an allowed Origin. Optional valid web session identifies the account. DNT, GPC and known bots are excluded. IDs deduplicate retransmission. IP and full user agent are not stored; a keyed daily browser/network estimate is used instead.
+         */
+        post: operations["recordSiteVisit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Requires analytics.read. Reporting days use Europe/Moscow. Daily visitor estimates cannot be added to obtain unique people over a period. Records begin at rollout; no historical backfill. */
+        get: operations["adminSiteVisits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -10205,6 +10242,109 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    recordSiteVisit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    id: string;
+                    /** @description Absolute local path; query and fragment are discarded */
+                    path: string;
+                    /** @description Only the hostname is retained */
+                    referrer?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
+    adminSiteVisits: {
+        parameters: {
+            query?: {
+                days?: 1 | 7 | 30;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Today, zero-filled daily history, top 20 pages, and a page of up to 50 visits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        today: {
+                            /** Format: int64 */
+                            views: number;
+                            /** Format: int64 */
+                            visitors: number;
+                            /** Format: int64 */
+                            accounts: number;
+                        };
+                        daily: {
+                            /** Format: date */
+                            day: string;
+                            /** Format: int64 */
+                            views: number;
+                            /** Format: int64 */
+                            visitors: number;
+                            /** Format: int64 */
+                            accounts: number;
+                        }[];
+                        pages: {
+                            path: string;
+                            /** Format: int64 */
+                            views: number;
+                        }[];
+                        visits: {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: date-time */
+                            visited_at: string;
+                            visitor_key: string;
+                            /** Format: uuid */
+                            user_id: string | null;
+                            nickname: string;
+                            path: string;
+                            referrer_host: string;
+                            browser: string;
+                            os: string;
+                        }[];
+                        has_more: boolean;
+                        /** Format: date-time */
+                        generated_at: string;
+                        /** @constant */
+                        timezone: "Europe/Moscow";
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+        };
+    };
     getProcessHealth: {
         parameters: {
             query?: never;

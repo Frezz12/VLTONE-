@@ -182,7 +182,7 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
         const auto& t = th();
         p.setBrush(t.well());
-        p.setPen(QPen(dropActive || hasFocus() ? t.accent : t.separator(), dropActive ? 2. : 1.));
+        p.setPen(QPen(dropActive ? t.accent : t.separator(), dropActive ? 2. : 1.));
         p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
         auto font = p.font(); font.setPixelSize(10); font.setFeature(QFont::Tag("tnum"), 1); p.setFont(font);
         if (dropActive || peaks.isEmpty()) {
@@ -391,13 +391,12 @@ void RackSamplerView::applyTheme() {
     const auto& t = th();
     setStyleSheet(QStringLiteral(
         "#RackSampler QToolButton { color:%1; background:%2; border:1px solid %3; border-radius:4px; padding:1px 6px; font-size:11px; }"
-        "#RackSampler QToolButton:hover { border-color:%4; }"
-        "#RackSampler QToolButton:checked { color:%1; background:%5; border-color:%4; }"
-        "#RackSampler QToolButton:focus { border-color:%4; }"
-        "#RackSamplerInfo { color:%6; font-size:10px; }"
-        "#RackSamplerTabs::tab { color:%6; background:transparent; border:0; padding:3px 5px; font-size:10px; }"
+        "#RackSampler QToolButton:hover { background:%3; }"
+        "#RackSampler QToolButton:checked { color:%1; background:%4; }"
+        "#RackSamplerInfo { color:%5; font-size:10px; }"
+        "#RackSamplerTabs::tab { color:%5; background:transparent; border:0; padding:3px 5px; font-size:10px; }"
         "#RackSamplerTabs::tab:selected { color:%1; background:%2; border-radius:4px; }")
-        .arg(t.textPrimary.name(), t.well().name(), t.separator().name(), t.accent.name(),
+        .arg(t.textPrimary.name(), t.well().name(), t.separator().name(),
              mixColors(t.well(), t.accent, .22).name(), t.textSecondary.name()));
     m_file->setIcon(icons::icon(icons::Glyph::Folder, t.textPrimary, 14));
     m_envelope->setIcon(icons::icon(icons::Glyph::Power, t.textPrimary, 12));

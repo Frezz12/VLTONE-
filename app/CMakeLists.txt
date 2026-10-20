@@ -303,6 +303,18 @@ if(DAW_BUILD_TESTS)
     qt_add_executable(warp_ui_test
         ../tests/warp_ui_test.cpp WarpEditorWidget.cpp WarpEditorWidget.hpp WaveformPaint.cpp Icons.cpp
         WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    qt_add_executable(vocal_alignment_ui_test
+        ../tests/vocal_alignment_ui_test.cpp VocalAlignmentWindow.cpp VocalAlignmentWindow.hpp
+        VocalAlignmentPreview.cpp VocalAlignmentPreview.hpp WaveformPaint.cpp Icons.cpp
+        SelectionModel.cpp SelectionModel.hpp WebPrefs.cpp TimelineBackgroundPrefs.cpp Typography.cpp Theme.cpp Theme.hpp)
+    target_include_directories(vocal_alignment_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(vocal_alignment_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
+    add_test(NAME vocal_alignment_ui_test COMMAND vocal_alignment_ui_test)
+    set_tests_properties(vocal_alignment_ui_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 60)
+    if(WIN32)
+        set_tests_properties(vocal_alignment_ui_test PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     target_include_directories(warp_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(warp_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test Qt6::Svg)
     add_test(NAME warp_ui_test COMMAND warp_ui_test)
@@ -314,6 +326,7 @@ if(DAW_BUILD_TESTS)
     target_include_directories(modulation_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(modulation_ui_test PRIVATE daw_controller vlt_browser_surface Qt6::Test)
     if(APPLE)
+        target_link_libraries(vocal_alignment_ui_test PRIVATE "-framework CoreFoundation")
         target_link_libraries(modulation_ui_test PRIVATE "-framework CoreFoundation")
         target_link_libraries(warp_ui_test PRIVATE "-framework CoreFoundation")
     endif()
@@ -592,7 +605,7 @@ if(TARGET browser_navigation_test)
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon-1024.png")
 endif()
 
-foreach(native_target flux_ui_test morph_ui_test vlt1073_ui_test modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test reverb_ui_test)
+foreach(native_target vocal_alignment_ui_test flux_ui_test morph_ui_test vlt1073_ui_test modulation_ui_test compressor_ui_test delay_ui_test pitch_corrector_ui_test utility_ui_test reverb_ui_test)
     if(TARGET ${native_target})
         # Test captures must use the same Latin/Cyrillic faces as the app.
         qt_add_resources(${native_target} "${native_target}_fonts"
@@ -780,6 +793,32 @@ if(DAW_BUILD_TESTS)
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
     add_test(NAME track_presentation_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+    foreach(mixer_scale 1 1.5 2)
+        add_test(NAME compact_mixer_ui_${mixer_scale} COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+        set_tests_properties(compact_mixer_ui_${mixer_scale} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_COMPACT_MIXER_CHECK_ONLY=1;QT_SCALE_FACTOR=${mixer_scale}"
+            TIMEOUT 120 RUN_SERIAL TRUE)
+        if(WIN32)
+            set_tests_properties(compact_mixer_ui_${mixer_scale} PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
+    add_test(NAME classic_mixer_layout_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+    set_tests_properties(classic_mixer_layout_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_CLASSIC_MIXER_CHECK_ONLY=1"
+        TIMEOUT 120 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(classic_mixer_layout_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    add_test(NAME track_random_color_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+    set_tests_properties(track_random_color_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_TRACK_COLOR_CHECK_ONLY=1"
+        TIMEOUT 45 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(track_random_color_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(track_presentation_ui_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_TRACK_PRESENTATION_CHECK_ONLY=1"
         TIMEOUT 45 RUN_SERIAL TRUE)
@@ -797,6 +836,18 @@ if(DAW_BUILD_TESTS)
         set_tests_properties(track_presentation_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
+    add_test(NAME knob_appearance_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(knob_appearance_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_KNOB_APPEARANCE_ONLY=1"
+        TIMEOUT 120 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(knob_appearance_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    add_test(NAME track_overview_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(track_overview_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_TRACK_OVERVIEW_ONLY=1"
+        TIMEOUT 120 RUN_SERIAL TRUE)
     add_test(NAME track_mixer_sync_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
     add_test(NAME plugin_sidechain_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
     add_test(NAME inspector_normalize_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
@@ -842,9 +893,25 @@ if(DAW_BUILD_TESTS)
         # CTest does not inherit the Qt SDK's bin directory on clean Windows
         # runners. Without this, the loader opens an invisible error dialog for
         # a missing Qt6Core.dll and the headless test appears to time out.
-        set_tests_properties(midi_input_ui_test recording_context_ui_test warp_panel_test collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test track_mixer_sync_ui_test clip_library_ui_test PROPERTIES
+        set_tests_properties(track_overview_ui_test midi_input_ui_test recording_context_ui_test warp_panel_test collaboration_client_selftest track_creation_ui_test plugin_picker_ui_test offline_render_ui_test plugin_batch_ui_test tempo_scrub_ui_test mixer_fader_input_test track_mixer_sync_ui_test clip_library_ui_test PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    add_test(NAME settings_reopen_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(settings_reopen_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_SETTINGS_ONLY=1"
+        TIMEOUT 90 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(settings_reopen_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    add_test(NAME clip_track_move_ui_test COMMAND $<TARGET_FILE:daw> --uiperfcheck)
+    set_tests_properties(clip_track_move_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_CLIP_TRACK_MOVE_CHECK_ONLY=1"
+        TIMEOUT 90 RUN_SERIAL TRUE)
+    if(WIN32)
+        set_tests_properties(clip_track_move_ui_test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
     add_test(NAME timeline_view_controls_ui_test COMMAND $<TARGET_FILE:daw> --selftest)
     set_tests_properties(timeline_view_controls_ui_test PROPERTIES

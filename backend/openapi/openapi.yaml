@@ -6,6 +6,93 @@ info:
 servers:
   - url: http://localhost:8080
 paths:
+  /v1/site-visits:
+    post:
+      operationId: recordSiteVisit
+      summary: Record a visible website page view without analytics cookies
+      description: Requires an allowed Origin. Optional valid web session identifies the account. DNT, GPC and known bots are excluded. IDs deduplicate retransmission. IP and full user agent are not stored; a keyed daily browser/network estimate is used instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id, path]
+              properties:
+                id: { type: string, format: uuid }
+                path: { type: string, maxLength: 512, description: Absolute local path; query and fragment are discarded }
+                referrer: { type: string, maxLength: 2048, description: Only the hostname is retained }
+      responses:
+        "204": { description: Recorded, already recorded, or excluded }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+  /v1/admin/analytics:
+    get:
+      operationId: adminSiteVisits
+      security: [{ adminCookie: [] }]
+      description: Requires analytics.read. Reporting days use Europe/Moscow. Daily visitor estimates cannot be added to obtain unique people over a period. Records begin at rollout; no historical backfill.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, enum: [1, 7, 30], default: 7 } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, maximum: 10000, default: 0 } }
+      responses:
+        "200":
+          description: Today, zero-filled daily history, top 20 pages, and a page of up to 50 visits
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [today, daily, pages, visits, has_more, generated_at, timezone]
+                properties:
+                  today:
+                    type: object
+                    required: [views, visitors, accounts]
+                    properties:
+                      views: { type: integer, format: int64 }
+                      visitors: { type: integer, format: int64 }
+                      accounts: { type: integer, format: int64 }
+                  daily:
+                    type: array
+                    items:
+                      type: object
+                      required: [day, views, visitors, accounts]
+                      properties:
+                        day: { type: string, format: date }
+                        views: { type: integer, format: int64 }
+                        visitors: { type: integer, format: int64 }
+                        accounts: { type: integer, format: int64 }
+                  pages:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, views]
+                      properties:
+                        path: { type: string }
+                        views: { type: integer, format: int64 }
+                  visits:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, visited_at, visitor_key, user_id, nickname, path, referrer_host, browser, os]
+                      properties:
+                        id: { type: string, format: uuid }
+                        visited_at: { type: string, format: date-time }
+                        visitor_key: { type: string }
+                        user_id: { type: [string, "null"], format: uuid }
+                        nickname: { type: string }
+                        path: { type: string }
+                        referrer_host: { type: string }
+                        browser: { type: string }
+                        os: { type: string }
+                  has_more: { type: boolean }
+                  generated_at: { type: string, format: date-time }
+                  timezone: { type: string, const: Europe/Moscow }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
   /healthz:
     get:
       operationId: getProcessHealth

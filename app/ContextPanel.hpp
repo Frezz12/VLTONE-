@@ -108,6 +108,9 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 signals:
+    void importAudioRequested();
+    void createTracksRequested();
+    void vocalAlignmentRequested();
     void sharedPluginsRequested();
     void stripSilenceRequested();
     void silenceSettingsRequested();
@@ -145,6 +148,7 @@ private:
     /// selection and hides the plate.
     enum class Context {
         None,
+        Global,
         Recording,
         AudioClip,
         AudioClipMulti,
@@ -163,6 +167,7 @@ private:
     bool followsClipSelection() const;
     QWidget* buildContent(Context context);
     QWidget* buildAudioClip();
+    QWidget* buildGlobal();
     QWidget* buildAudioClipMulti();
     QWidget* buildAutomationClip(bool multi);
     QWidget* buildMidiClip(bool multi);

@@ -1,5 +1,28 @@
 # VLTONE backend
 
+## Website visits
+
+Apply migration `000037_site_visits` before deploying the API, public web app and
+admin app together. The admin **Посещения** section (`/analytics`) requires
+`analytics.read`; owners have access automatically, and owners can grant it in
+**Команда**. Data starts at deployment; previous visits are not reconstructed.
+
+The public site records visible page opens and client-side path changes using
+`POST /v1/site-visits`. Unique event IDs prevent duplicate inserts. The API
+checks Origin, limits collection to 120 requests per IP/minute, and ignores
+known bots, DNT and GPC. Statistics use Moscow calendar days and include today,
+1/7/30-day history, popular pages and a paginated visit log. Names come only from
+validated account sessions; account deletion removes the account link.
+
+Anonymous daily visitors are an approximate HMAC of the trusted client IP and
+user agent, keyed with a domain-separated signing seed and the Moscow date.
+Shared networks/browsers can merge people; changing networks can split them.
+Configure `TRUSTED_PROXY_CIDRS` for the deployed reverse proxy so its own address
+is not mistaken for visitors. No analytics cookies or browser identifiers are
+created; raw IPs, full user agents, query strings and fragments are not stored.
+Referrers retain only their hostname. The public privacy description documents
+these records. The statistics page never exposes these details publicly.
+
 The Go service is the only business backend for the public site, admin site and
 desktop DAW. It expects a local PostgreSQL 18 instance; Docker is deliberately
 not part of the development workflow.

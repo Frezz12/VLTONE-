@@ -749,8 +749,7 @@ void WarpEditorWidget::updateStyle() {
         "QToolBar#WarpToolbar { background: %1; border: 1px solid %3; border-radius: 8px; padding: 3px; spacing: 2px; }"
         "QToolBar#WarpToolbar QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; }"
         "QToolBar#WarpToolbar QToolButton:hover { background: %2; }"
-        "QToolBar#WarpToolbar QToolButton:checked { background: %8; border-color: %6; }"
-        "QToolBar#WarpToolbar QToolButton:focus { border-color: %6; }")
+        "QToolBar#WarpToolbar QToolButton:checked { background: %8; }")
         .arg(t.surface.name(), t.surfaceElevated.name(), t.separator().name(), t.textSecondary.name(),
              t.textPrimary.name(), t.accent.name(), t.accentText().name(), mixColors(t.surface, t.accent, .22).name()));
     for (auto* button : m_tools->findChildren<QToolButton*>())

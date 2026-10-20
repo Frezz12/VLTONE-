@@ -869,7 +869,6 @@ void AiChatPanel::applyTheme() {
              border-radius: 8px; text-align: left; padding: 10px; font-size: 12px; }
 #AiStarter:hover { background: %MODEL_FILL%; border-color: %INPUT_BORDER%; }
 #AiStarter:pressed { background: %MARK_FILL%; }
-#AiStarter:focus, #AiInteractionMode:focus, #AiMessageAction:focus, #AiModel:focus { border: 1px solid %ACCENT_SOFT%; }
 #AiInteractionMode { background: %MODEL_FILL%; color: %TEXT1%; border: 1px solid %SEP%;
                      border-radius: 6px; padding: 4px 16px 4px 8px; font-size: 11px; }
 #AiInteractionMode::menu-indicator { subcontrol-position: right center; right: 4px; }

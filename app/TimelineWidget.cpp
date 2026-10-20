@@ -4,6 +4,7 @@
 #include "graphics/StretchableRect.hpp"
 #include "ClipLibraryDrag.hpp"
 #include "ClipInfoDialog.hpp"
+#include "ClipTrackPicker.hpp"
 #include <QDrag>
 #include "MenuActions.hpp"
 #include <QScopedValueRollback>
@@ -427,6 +428,10 @@ TimelineWidget::TimelineWidget(daw::EngineController* controller,
         m_navigationFrame->stop();
         syncNavigationControls();
     });
+    m_dragScrollFrame = new ui::FrameTimer(this);
+    connect(m_dragScrollFrame, &ui::FrameTimer::timeout, this, [this] {
+        stepDragAutoScroll(m_dragScrollFrame->deltaSeconds());
+    });
     m_horizontalScrollBar = new TimelineNavigationRail(Qt::Horizontal, this);
     m_horizontalScrollBar->setObjectName(QStringLiteral("TimelineHorizontalScroll"));
     m_horizontalScrollBar->setAccessibleName(tr("Timeline horizontal scroll"));
@@ -781,33 +786,47 @@ void TimelineWidget::moveClipDragToLane(int grabbedLane) {
     m_dragLaneOffset = offset;
 }
 
-void TimelineWidget::autoScrollMarquee(const QPoint& pointer) {
-    const int bottom = std::max(
-        tracksTop(),
-        height() - m_bottomInset - kTimelineScrollExtent);
-    int delta = 0;
-    if (pointer.y() < tracksTop()) {
-        delta = -std::clamp((tracksTop() - pointer.y()) / 3, 2, 32);
-    } else if (pointer.y() > bottom) {
-        delta = std::clamp((pointer.y() - bottom) / 3, 2, 32);
+void TimelineWidget::updateDragAutoScroll() {
+    double velocity = 0.0;
+    const int laneHeight = visibleLaneHeight();
+    if ((m_dragging || m_marqueeActive || m_regionPicking || m_regionMoving) &&
+        !m_duplicateDragPending && laneHeight > 0) {
+        // Start inside the visible canvas so the screen edge and mixer never
+        // prevent reaching the scroll zone. Speed follows edge penetration.
+        const double edge = std::min(32.0, laneHeight / 3.0);
+        const double top = tracksTop();
+        const double bottom = top + laneHeight;
+        const double y = m_lastPointerPosition.y();
+        if (y < top + edge && m_scrollY > 0)
+            velocity = -960.0 * std::clamp((top + edge - y) / edge, 0.0, 1.0);
+        else if (y > bottom - edge && m_scrollY < maxVerticalScroll())
+            velocity = 960.0 * std::clamp((y - bottom + edge) / edge, 0.0, 1.0);
     }
-    if (delta == 0) return;
+    if (velocity * m_dragScrollVelocity <= 0.0) m_dragScrollRemainder = 0.0;
+    m_dragScrollVelocity = velocity;
+    if (velocity == 0.0) m_dragScrollFrame->stop();
+    else m_dragScrollFrame->start();
+}
 
+void TimelineWidget::stepDragAutoScroll(double seconds) {
+    updateDragAutoScroll();
+    if (!m_dragScrollFrame->isActive()) return;
+    // Keep speed independent of display/input frequency and avoid a jump
+    // after a stalled frame. Fractional pixels matter at high refresh rates.
+    m_dragScrollRemainder += m_dragScrollVelocity * std::clamp(seconds, 0.0, 0.05);
+    const int delta = int(m_dragScrollRemainder);
+    m_dragScrollRemainder -= delta;
+    if (delta == 0) return;
     const int before = m_scrollY;
     setVerticalScroll(m_scrollY + delta);
     if (before == m_scrollY) return;
-    // The anchor belongs to content, not the viewport. Keep it attached to the
-    // same lane while that content moves under the stationary pointer.
-    m_marqueeOrigin.ry() += before - m_scrollY;
-    if (!m_marqueeScrollScheduled) {
-        m_marqueeScrollScheduled = true;
-        QTimer::singleShot(30, this, [this] {
-            m_marqueeScrollScheduled = false;
-            if (!m_marqueeActive) return;
-            autoScrollMarquee(m_marqueeCurrent);
-            updateMarqueeSelection();
-        });
-    }
+
+    // Scrolling changes the lane under a stationary pointer. Reuse the live
+    // gesture path so clip placement and selection update in the same frame.
+    QMouseEvent move(QEvent::MouseMove, m_lastPointerPosition,
+                     mapToGlobal(m_lastPointerPosition), Qt::NoButton,
+                     Qt::LeftButton, m_lastPointerModifiers);
+    mouseMoveEvent(&move);
 }
 
 void TimelineWidget::updateMarqueeSelection() {
@@ -842,6 +861,13 @@ void TimelineWidget::updateMarqueeSelection() {
     for (auto it = m_marqueeHits.cbegin(); it != m_marqueeHits.cend(); ++it)
         if (!hits.contains(it.key())) changed += it.value();
     m_marqueeHits = std::move(hits);
+    std::stable_sort(selection.begin(), selection.end(), [this](const auto& a, const auto& b) {
+        const int laneA = laneForTrackId(a.trackId), laneB = laneForTrackId(b.trackId);
+        if (laneA != laneB) return laneA < laneB;
+        const auto* clipA = findClipModel(a.trackId, a.clipId);
+        const auto* clipB = findClipModel(b.trackId, b.clipId);
+        return clipA && clipB && clipA->startSeconds < clipB->startSeconds;
+    });
     m_selection = std::move(selection);
     m_selectedClipId = m_selection.isEmpty() ? QString() : m_selection.front().clipId;
     if (!changed.isEmpty()) {
@@ -885,6 +911,7 @@ void TimelineWidget::publishSelection() {
     QVector<ui::ClipSel> out;
     out.reserve(m_selection.size());
     for (const auto& ref : m_selection) out.push_back({ref.trackId, ref.clipId});
+    const auto chronological = out;
     // The primary clip leads, so a single-clip context shows the one the user
     // acted on last rather than whichever happened to be added first.
     for (int i = 1; i < out.size(); ++i) {
@@ -893,7 +920,7 @@ void TimelineWidget::publishSelection() {
             break;
         }
     }
-    m_selectionModel->setClips(out);
+    m_selectionModel->setClips(out, chronological);
 }
 
 void TimelineWidget::selectClips(const QVector<ui::ClipSel>& clips) {
@@ -1433,8 +1460,11 @@ void TimelineWidget::updateRegionFromDrag(const QPoint& pos, bool snapOn) {
     m_regionStart = snap(std::min(a, b), snapOn);
     m_regionEnd = snap(std::max(a, b), snapOn);
     const int last = int(rows.size()) - 1;
-    const int la = std::clamp(laneAt(m_regionOrigin.y()), 0, last);
-    const int lb = std::clamp(laneAt(pos.y()), 0, last);
+    const int la = std::clamp(m_regionAnchorLane, 0, last);
+    const int y = std::clamp(pos.y(), tracksTop(),
+                             tracksTop() + std::max(0, visibleLaneHeight() - 1));
+    const int lane = laneAt(y);
+    const int lb = lane < 0 ? last : lane;
     m_regionLaneA = std::min(la, lb);
     m_regionLaneB = std::max(la, lb);
     m_regionCurrent = pos;
@@ -1997,6 +2027,9 @@ void TimelineWidget::setVerticalScroll(int y) {
     }
     // Pending edit damage uses the old viewport. Do not move it to another row.
     if (!m_staticDirty.isEmpty()) m_staticFrameValid = false;
+    // The marquee anchor belongs to the content, including when scrolling
+    // comes from the wheel rather than the edge-scroll timer.
+    if (m_marqueeActive) m_marqueeOrigin.ry() += m_scrollY - clamped;
     m_scrollY = clamped;
     scheduleNavigationSync();
     m_requestedPlayheadSeconds.reset();
@@ -6608,6 +6641,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_regionPicking = true;
         m_regionOrigin = pos;
         m_regionCurrent = pos;
+        m_regionAnchorLane = laneAt(pos.y());
         m_selection.clear();
         m_selectedClipId.clear();
         update();
@@ -6857,13 +6891,12 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         return;
     }
     if (over && hit.edge != Edge::None && hit.durationSeconds > 0.0) {
-        // An edge on an already-selected clip resizes the whole selection. An
-        // unselected edge starts the usual one-clip gesture.
-        if (!isClipSelected(hit.clipId))
-            m_selection = {ClipRef{hit.trackId, hit.clipId}};
-        m_selectedClipId = hit.clipId;
-        beginProjectGesture(m_selection.size() > 1 ? tr("Trim Clips")
-                                                   : tr("Trim Clip"),
+        // Edge gestures edit geometry without changing the selection or its
+        // primary clip. A selected edge still resizes the selected group.
+        const QVector<ClipRef> targets = isClipSelected(hit.clipId)
+            ? m_selection : QVector<ClipRef>{{hit.trackId, hit.clipId}};
+        beginProjectGesture(targets.size() > 1 ? tr("Trim Clips")
+                                              : tr("Trim Clip"),
                             ProjectGestureKind::ClipTrim);
         m_trimming = true;
         m_trimEdge = hit.edge;
@@ -6874,9 +6907,9 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_trimOrigDuration = hit.durationSeconds;
         m_trimOrigins.clear();
         std::vector<std::pair<std::string, std::string>> addresses;
-        addresses.reserve(std::size_t(m_selection.size()));
+        addresses.reserve(std::size_t(targets.size()));
         const auto& project = m_controller->project();
-        for (const ClipRef& ref : std::as_const(m_selection)) {
+        for (const ClipRef& ref : targets) {
             const auto* track = project.findTrack(ref.trackId.toStdString());
             if (!track) continue;
             const auto found = std::find_if(
@@ -6902,7 +6935,6 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         m_controller->beginClipTrimEdit(addresses);
         m_clipTrimEditOpen = true;
         setCursor(Qt::SizeHorCursor);
-        emit clipSelected(hit.trackId, hit.clipId);
         update();
         return;
     }
@@ -6993,6 +7025,8 @@ QRegion TimelineWidget::gestureDamage() const {
 }
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
+    const auto autoScroll = qScopeGuard([this] { updateDragAutoScroll(); });
+    m_lastPointerModifiers = ev->modifiers();
     if (m_labelDragRow >= 1 && (ev->buttons() & Qt::LeftButton)) {
         if (m_controller->projectRevision() != m_labelProjectRevision) { m_labelDragRow = -1; m_staticFrameValid = false; update(); return; }
         m_lastPointerPosition = ev->position();
@@ -7061,6 +7095,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     // hand moves on the keyboard halfway through it.
     if (!(ev->buttons() & Qt::LeftButton)) trackSecondaryTool(ev->modifiers());
     const QPoint pos = ev->position().toPoint();
+    const int dragY = std::clamp(pos.y(), tracksTop(),
+                                 tracksTop() + std::max(0, visibleLaneHeight() - 1));
     const bool snapOn =
         m_snapEnabled && !(ev->modifiers() & Qt::AltModifier);
 
@@ -7249,7 +7285,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
             // split-out pieces by the same lane offset, but only when every
             // destination accepts its clip kind; an incompatible lane is a
             // hard edge rather than a partial, destructive move.
-            const int hoveredLane = laneAt(pos.y());
+            const int hoveredLane = laneAt(dragY);
             const int laneCount =
                 int(visibleRows().size());
             if (hoveredLane >= 0 && laneCount > 0 &&
@@ -7304,7 +7340,6 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     if (m_marqueeActive) {
         QRegion damage(QRect(m_marqueeOrigin, m_marqueeCurrent).normalized().adjusted(-2, -2, 2, 2));
         m_marqueeCurrent = pos;
-        autoScrollMarquee(pos);
         updateMarqueeSelection();
         damage += QRect(m_marqueeOrigin, m_marqueeCurrent).normalized().adjusted(-2, -2, 2, 2);
         damage &= rect();
@@ -7454,7 +7489,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     // browser turns it into a native COPY drag and rolls back all provisional
     // placements, including Pattern members and lane crossings.
     QWidget* dropTarget = QApplication::widgetAt(ev->globalPosition().toPoint());
-    while (dropTarget && !dropTarget->property("clipLibraryDropTarget").toBool())
+    while (dropTarget && !dropTarget->property("clipLibraryDropTarget").toBool() &&
+           !dropTarget->property("vocalAlignmentDropTarget").toBool())
         dropTarget = dropTarget->parentWidget();
     if (dropTarget && m_projectGestureLabel != tr("Duplicate Clips") &&
         (pos-m_dragPressPosition).manhattanLength() >= QApplication::startDragDistance()) {
@@ -7468,11 +7504,16 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         for (auto& selected : m_selection)
             for (const auto& initial : m_dragOrigins)
                 if (selected.clipId == initial.clipId) selected.trackId = initial.trackId;
+        publishSelection();
+        QVector<ui::ClipSel> dragged;
+        for (const auto& selected : m_selection) dragged.push_back({selected.trackId, selected.clipId});
         m_dragTrackId = track; m_dragging = false; m_moveGuidesActive = false;
         m_dragOrigins.clear(); m_dragOriginalStarts.clear(); m_duplicateDragPending = false;
         unsetCursor(); update();
         auto* drag = new QDrag(this);
-        drag->setMimeData(ui::cliplibrary::timelineMime(track, clip));
+        auto* mime = ui::cliplibrary::timelineMime(track, clip);
+        ui::cliplibrary::addTimelineGroup(mime, dragged, m_controller, m_controller->projectGeneration());
+        drag->setMimeData(mime);
         if (const auto* model = findClipModel(track,clip)) {
             const QRect area = clipRect(laneForTrackId(track), *model).toAlignedRect().intersected(rect());
             if (!area.isEmpty()) drag->setPixmap(grab(area).scaled(240,72,Qt::KeepAspectRatio,Qt::SmoothTransformation));
@@ -7508,7 +7549,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
 
     // Keep the selected clips' lane spacing. A mixed selection moves only when
     // every destination lane accepts the corresponding clip kind.
-    moveClipDragToLane(laneAt(pos.y()));
+    moveClipDragToLane(laneAt(dragY));
 
     // Original start of the grabbed clip; the group moves by the same delta.
     const double delta = std::max(-m_moveGuideStart,
@@ -7525,6 +7566,11 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
 }
 
 void TimelineWidget::mouseReleaseEvent(QMouseEvent* ev) {
+    if (ev->button() == Qt::LeftButton) {
+        m_dragScrollFrame->stop();
+        m_dragScrollVelocity = 0.0;
+        m_dragScrollRemainder = 0.0;
+    }
     if (m_sequenceEditing && ev->button() == Qt::LeftButton) {
         if (m_sequenceDrag.part == SequencePart::Step) moveSequence(ev);
         finishSequence();
@@ -7943,6 +7989,61 @@ bool TimelineWidget::showSelectedClipActionsMenu() {
     return true;
 }
 
+QStringList TimelineWidget::clipMoveTargets() const {
+    if (!m_controller || m_selection.isEmpty() || !m_controller->sharedEditingAllowed()) return {};
+    const QString source = m_selection.front().trackId;
+    if (m_controller->isTrackTreeEditLocked(source.toStdString())) return {};
+    std::vector<daw::ClipKind> kinds;
+    for (const auto& ref : m_selection) {
+        if (ref.trackId != source) return {};
+        const auto* clip = findClipModel(ref.trackId, ref.clipId);
+        if (!clip || !m_controller->sharedGestureAllowed("clip:" + ref.clipId.toStdString())) return {};
+        if (std::find(kinds.begin(), kinds.end(), clip->kind) == kinds.end()) kinds.push_back(clip->kind);
+    }
+    QStringList targets;
+    for (const auto& track : m_controller->project().tracks) {
+        if (QString::fromStdString(track.id) == source || m_controller->isTrackTreeEditLocked(track.id)) continue;
+        if (std::all_of(kinds.begin(), kinds.end(), [&](auto kind) { return daw::trackAccepts(track.kind, kind); }))
+            targets.push_back(QString::fromStdString(track.id));
+    }
+    return targets;
+}
+
+bool TimelineWidget::showClipTrackPicker() {
+    if (m_projectGestureActive || QApplication::mouseButtons() != Qt::NoButton) return false;
+    const QStringList targets = clipMoveTargets();
+    if (targets.isEmpty()) return false;
+    if (auto* previous = findChild<ClipTrackPicker*>()) previous->close();
+    auto* picker = new ClipTrackPicker(m_controller->project(), targets, this);
+    const auto selection = m_selection;
+    const auto generation = m_controller->projectGeneration();
+    connect(picker, &ClipTrackPicker::trackSelected, this, [this, selection, generation](const QString& track) {
+        // A popup may outlive a remote edit or a project switch. Commit only
+        // the selection it was opened for, and recheck every destination rule.
+        if (generation != m_controller->projectGeneration() || selection.size() != m_selection.size() ||
+            !std::equal(selection.begin(), selection.end(), m_selection.begin(), [](const auto& a, const auto& b) {
+                return a.trackId == b.trackId && a.clipId == b.clipId;
+            })) return;
+        moveSelectedClipsToTrack(track);
+    });
+    picker->popup(QCursor::pos());
+    return true;
+}
+
+bool TimelineWidget::moveSelectedClipsToTrack(const QString& trackId) {
+    if (m_projectGestureActive || !clipMoveTargets().contains(trackId)) return false;
+    std::vector<daw::EngineController::ClipAddress> clips;
+    for (const auto& ref : m_selection) clips.push_back({ref.trackId.toStdString(), ref.clipId.toStdString()});
+    if (!m_controller->moveClipsToTrack(clips, trackId.toStdString())) return false;
+    for (auto& ref : m_selection) ref.trackId = trackId;
+    m_selectedTrackId = trackId;
+    publishSelection();
+    emit clipSelected(trackId, m_selectedClipId);
+    emit projectEdited();
+    update();
+    return true;
+}
+
 void TimelineWidget::showClipInformation(const QString& trackId, const QString& clipId) {
     const auto* clip = findClipModel(trackId, clipId);
     if (!clip) return;
@@ -8053,6 +8154,14 @@ void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
         if (auto* command = window()->findChild<QAction*>(QString::fromLatin1(id)))
             ui::showCommandShortcut(action, command);
     };
+    auto* moveToTrack = menu.addAction(tr("Move to another track…"));
+    moveToTrack->setObjectName(QStringLiteral("MoveClipsToTrackAction"));
+    moveToTrack->setIcon(icons::icon(icons::Glyph::Send, th().textSecondary));
+    useCommandShortcut(moveToTrack, "edit.moveClipsToTrack");
+    moveToTrack->setEnabled(isClipSelected(hit.clipId) && !clipMoveTargets().isEmpty());
+    connect(moveToTrack, &QAction::triggered, this, [this] {
+        QTimer::singleShot(0, this, [this] { showClipTrackPicker(); });
+    });
     QAction* openRoll = nullptr;
     QAction* openPattern = nullptr;
     QAction* warpAudio = nullptr;

@@ -178,6 +178,10 @@ struct ClipFadeGestureCapture {
 const std::vector<ContextTool>& contextPanelTools() {
     [[maybe_unused]] static const char* const translatableToolText[] = {
         QT_TRANSLATE_NOOP("ContextPanelTools", "Audio Clip"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "General"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "Import audio"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "Create track"),
+        QT_TRANSLATE_NOOP("ContextPanelTools", "Vocal Alignment"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Automation Clip"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "MIDI Clip"),
         QT_TRANSLATE_NOOP("ContextPanelTools", "Pattern Clip"),
@@ -208,6 +212,10 @@ const std::vector<ContextTool>& contextPanelTools() {
         QT_TRANSLATE_NOOP("ContextPanelTools", "Auto Silence and settings"),
     };
     static const std::vector<ContextTool> tools = {
+        {"global.import", "General", "Import audio"},
+        {"global.track", "General", "Create track"},
+        {"global.alignment", "General", "Vocal Alignment"},
+        {"clip.alignment", "Audio Clip", "Vocal Alignment"},
         {"clip.colour", "Audio Clip", "Track colour"},
         {"clip.level", "Audio Clip", "Gain and mute"},
         {"clip.fades", "Audio Clip", "Fade in / out"},
@@ -264,6 +272,7 @@ ContextPanel::ContextPanel(daw::EngineController* controller,
         m_recordPinned = false;
         onSelectionChanged();
     });
+    QTimer::singleShot(0, this, [this] { onSelectionChanged(); });
 }
 
 // ── Context resolution ──
@@ -322,7 +331,7 @@ ContextPanel::Context ContextPanel::resolve() const {
     }
     // Nothing selected and Record engaged: the take settings are the most
     // useful thing the island can hold, so it falls back to them.
-    return m_recordEngaged ? Context::Recording : Context::None;
+    return m_recordEngaged ? Context::Recording : Context::Global;
 }
 
 bool ContextPanel::followsClipSelection() const {
@@ -458,6 +467,22 @@ void ContextPanel::forEachSelectedClip(
 
 // ── Content: single audio clip ──
 
+QWidget* ContextPanel::buildGlobal() {
+    QHBoxLayout* row = nullptr;
+    QWidget* host = newRow(row);
+    const auto add = [&](const char* id, icons::Glyph icon, const QString& label, auto signal) {
+        if (!toolEnabled(id)) return;
+        auto* button = islandButton(icon, label, host);
+        button->setObjectName(QString::fromLatin1(id));
+        connect(button, &QAbstractButton::clicked, this, signal);
+        row->addWidget(button);
+    };
+    add("global.import", icons::Glyph::Import, tr("Import audio…"), &ContextPanel::importAudioRequested);
+    add("global.track", icons::Glyph::Plus, tr("Create track…"), &ContextPanel::createTracksRequested);
+    add("global.alignment", icons::Glyph::WarpAlign, tr("Vocal Alignment…"), &ContextPanel::vocalAlignmentRequested);
+    return host;
+}
+
 QWidget* ContextPanel::buildAudioClip() {
     const ui::ClipSel sel = m_selection->singleClip();
     const std::string trackId = sel.trackId.toStdString();
@@ -484,6 +509,12 @@ QWidget* ContextPanel::buildAudioClip() {
     outer->addWidget(actionsHost, 0, Qt::AlignVCenter);
     std::vector<std::function<void()>> loaders;
 
+    if (toolEnabled("clip.alignment")) {
+        auto* alignment = islandButton(icons::Glyph::WarpAlign, tr("Vocal Alignment…"), host);
+        alignment->setObjectName("ContextPanelVocalAlignment");
+        connect(alignment, &QAbstractButton::clicked, this, &ContextPanel::vocalAlignmentRequested);
+        row->addWidget(alignment);
+    }
     if (toolEnabled("clip.silence")) {
         auto* silence = islandButton(icons::Glyph::StripSilence, tr("Strip Silence…"), host);
         silence->setObjectName("ContextPanelStripSilence");
@@ -737,6 +768,13 @@ QWidget* ContextPanel::buildAudioClip() {
 QWidget* ContextPanel::buildAudioClipMulti() {
     QHBoxLayout* row = nullptr;
     QWidget* host = newRow(row);
+
+    if (toolEnabled("clip.alignment")) {
+        auto* alignment = islandButton(icons::Glyph::WarpAlign, tr("Vocal Alignment…"), host);
+        alignment->setObjectName("ContextPanelVocalAlignment");
+        connect(alignment, &QAbstractButton::clicked, this, &ContextPanel::vocalAlignmentRequested);
+        row->addWidget(alignment);
+    }
 
     auto* count = new QLabel(host);
     QFont bold = count->font();
@@ -2091,7 +2129,10 @@ void ContextPanel::setRecordEngaged(bool engaged) {
 
 QWidget* ContextPanel::buildContent(Context context) {
     m_quickAdder = nullptr;
+    m_applyValues = nullptr;
     switch (context) {
+        case Context::Global: return buildGlobal();
+        case Context::Other: return buildGlobal();
         case Context::AudioClip:      return buildAudioClip();
         case Context::AudioClipMulti: return buildAudioClipMulti();
         case Context::AutomationClip: return buildAutomationClip(false);

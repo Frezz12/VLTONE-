@@ -57,6 +57,7 @@ void EngineController::setClipMidiObjects(const std::string &trackId, const std:
                                           std::vector<SlideNoteModel> gestures,
                                           const std::string &label, bool undo,
                                           std::optional<std::string> takeId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto *track = m_project.findTrack(trackId);
     if (!track)
         return;
@@ -145,6 +146,7 @@ void EngineController::setClipSlideNotes(const std::string &trackId, const std::
                                          std::vector<SlideNoteModel> value,
                                          const std::string &label, bool undo,
                                          std::optional<std::string> takeId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     if (!canEditSlideNotes())
         return;
     auto *track = m_project.findTrack(trackId);

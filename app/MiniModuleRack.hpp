@@ -8,6 +8,7 @@ namespace daw {
 class EngineController;
 }
 namespace ui {
+class IconButton;
 class MiniModuleCard;
 class MiniModuleRack final : public QWidget {
   Q_OBJECT
@@ -29,6 +30,7 @@ signals:
   void edited(bool undoable = true);
   void automateRequested(const QString &module, const QString &parameter);
   void layoutChanged();
+  void channelMenuRequested(const QPoint &globalPosition);
 
 protected:
   void hideEvent(QHideEvent *) override;
@@ -44,6 +46,7 @@ private:
   QString m_channel, m_project;
   QVBoxLayout *m_column;
   QWidget *m_well;
+  IconButton *m_power = nullptr;
   int m_stripWidth = 100;
   int m_assignedHeight = 0;
   bool m_syncing = false;

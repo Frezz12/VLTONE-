@@ -25,13 +25,14 @@ public:
 protected:
     bool eventFilter(QObject*, QEvent*) override;
 private:
-    bool switchSource(int index);
+    bool switchSource(int index, bool refresh = false);
     void rebuildRack();
     void addPlugin(const daw::plugins::PluginDescriptor&, bool open = true);
     void openEditor(const QString&);
     void closeEditors();
     void stopAudition();
-    void toggleAudition();
+    void updatePreview();
+    void applyTheme();
     void apply();
     void showError(const QString&);
     void refreshAvailability();
@@ -43,11 +44,14 @@ private:
     QComboBox* m_source = nullptr;
     QLabel* m_status = nullptr;
     QLabel* m_error = nullptr;
-    QPushButton* m_listen = nullptr;
     QPushButton* m_add = nullptr;
     QPushButton* m_apply = nullptr;
+    QPushButton* m_cancel = nullptr;
     QVBoxLayout* m_rack = nullptr;
     QTimer* m_pump = nullptr;
     int m_sourceIndex = -1;
-    bool m_listening = false;
+    std::uint64_t m_projectGeneration = 0;
+    std::uint64_t m_projectRevision = 0;
+    bool m_previewActive = false;
+    bool m_finished = false;
 };

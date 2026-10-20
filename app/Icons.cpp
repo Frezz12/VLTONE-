@@ -60,6 +60,19 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
     p.setBrush(c);
 
     switch (g) {
+    case Glyph::Lock:
+    case Glyph::Unlock: {
+        QPainterPath path;
+        path.addRoundedRect(QRectF(5, 10, 14, 11), 2, 2);
+        path.moveTo(8, 10);
+        path.lineTo(8, 7);
+        path.cubicTo(8, 1, 16, 1, 16, 7);
+        if (g == Glyph::Lock) path.lineTo(16, 10);
+        path.moveTo(12, 14);
+        path.lineTo(12, 17);
+        strokePath(p, path, c, 1.7);
+        break;
+    }
     case Glyph::Play:
         // Slightly larger, bolder triangle for a more prominent play button.
         p.drawPath(roundedTriangle(
@@ -1375,6 +1388,79 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         sparkle.lineTo(12.5, 7); sparkle.lineTo(15.8, 5.8);
         sparkle.closeSubpath();
         p.setPen(Qt::NoPen); p.setBrush(c); p.drawPath(sparkle);
+        break;
+    }
+    case Glyph::BatchSource: {
+        QPainterPath lanes;
+        lanes.addRoundedRect(QRectF(3, 3.5, 17, 5), 1.5, 1.5);
+        lanes.moveTo(3, 12); lanes.lineTo(13, 12);
+        lanes.moveTo(3, 18); lanes.lineTo(11, 18);
+        lanes.moveTo(15, 14); lanes.lineTo(20.5, 17.5); lanes.lineTo(15, 21);
+        strokePath(p, lanes, c, 1.8);
+        break;
+    }
+    case Glyph::BatchAdd: {
+        QPainterPath plug;
+        plug.moveTo(7, 3); plug.lineTo(7, 7);
+        plug.moveTo(12, 3); plug.lineTo(12, 7);
+        plug.moveTo(4, 7); plug.lineTo(15, 7); plug.lineTo(15, 11);
+        plug.quadTo(15, 16, 9.5, 16); plug.quadTo(4, 16, 4, 11); plug.closeSubpath();
+        plug.moveTo(9.5, 16); plug.lineTo(9.5, 21);
+        plug.moveTo(19, 12); plug.lineTo(19, 20);
+        plug.moveTo(15, 16); plug.lineTo(23, 16);
+        strokePath(p, plug, c, 1.8);
+        break;
+    }
+    case Glyph::BatchBypass: {
+        QPainterPath circuit;
+        circuit.moveTo(3, 12); circuit.lineTo(7, 12);
+        circuit.moveTo(17, 12); circuit.lineTo(21, 12);
+        circuit.addRoundedRect(QRectF(7, 5, 10, 14), 3, 3);
+        circuit.moveTo(12, 8.5); circuit.lineTo(12, 15.5);
+        strokePath(p, circuit, c, 1.8);
+        break;
+    }
+    case Glyph::BatchEdit: {
+        QPainterPath controls;
+        controls.moveTo(5, 4); controls.lineTo(5, 8);
+        controls.moveTo(5, 13); controls.lineTo(5, 20);
+        controls.addRoundedRect(QRectF(2.5, 8, 5, 5), 1.2, 1.2);
+        controls.moveTo(12, 4); controls.lineTo(12, 13);
+        controls.moveTo(12, 18); controls.lineTo(12, 20);
+        controls.addRoundedRect(QRectF(9.5, 13, 5, 5), 1.2, 1.2);
+        controls.moveTo(19, 4); controls.lineTo(19, 6);
+        controls.moveTo(19, 11); controls.lineTo(19, 20);
+        controls.addRoundedRect(QRectF(16.5, 6, 5, 5), 1.2, 1.2);
+        strokePath(p, controls, c, 1.7);
+        break;
+    }
+    case Glyph::BatchRemove: {
+        QPainterPath bin;
+        bin.moveTo(4, 7); bin.lineTo(20, 7);
+        bin.moveTo(9, 7); bin.lineTo(9, 3.5); bin.lineTo(15, 3.5); bin.lineTo(15, 7);
+        bin.moveTo(6, 7); bin.lineTo(7, 20.5); bin.lineTo(17, 20.5); bin.lineTo(18, 7);
+        bin.moveTo(9.5, 12); bin.lineTo(14.5, 12);
+        strokePath(p, bin, c, 1.8);
+        break;
+    }
+    case Glyph::BatchApply: {
+        QPainterPath distribute;
+        distribute.addRoundedRect(QRectF(2.5, 9, 5, 6), 1.2, 1.2);
+        distribute.moveTo(8, 12); distribute.lineTo(12, 12);
+        distribute.moveTo(12, 6); distribute.lineTo(12, 18);
+        distribute.moveTo(12, 6); distribute.lineTo(19.5, 6);
+        distribute.moveTo(12, 18); distribute.lineTo(19.5, 18);
+        distribute.moveTo(17, 3.5); distribute.lineTo(19.5, 6); distribute.lineTo(17, 8.5);
+        distribute.moveTo(17, 15.5); distribute.lineTo(19.5, 18); distribute.lineTo(17, 20.5);
+        strokePath(p, distribute, c, 1.8);
+        break;
+    }
+    case Glyph::BatchCancel: {
+        QPainterPath back;
+        back.moveTo(8, 5); back.lineTo(3.5, 9.5); back.lineTo(8, 14);
+        back.moveTo(4, 9.5); back.lineTo(14, 9.5);
+        back.cubicTo(21, 9.5, 21, 20, 14, 20); back.lineTo(10, 20);
+        strokePath(p, back, c, 1.8);
         break;
     }
     case Glyph::Spinner: {

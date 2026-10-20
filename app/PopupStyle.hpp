@@ -20,9 +20,7 @@ public:
 
     void polish(QWidget* widget) override {
         QProxyStyle::polish(widget);
-        if (qobject_cast<QComboBox*>(widget) ||
-            qobject_cast<QToolButton*>(widget) || qobject_cast<QPushButton*>(widget))
-            widget->setAttribute(Qt::WA_MacShowFocusRect, false);
+        widget->setAttribute(Qt::WA_MacShowFocusRect, false);
     }
 
     int pixelMetric(PixelMetric metric, const QStyleOption* option = nullptr,

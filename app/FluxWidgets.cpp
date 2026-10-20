@@ -1,4 +1,5 @@
 #include "FluxWidgets.hpp"
+#include "KnobAppearance.hpp"
 #include "ScrollMotion.hpp"
 #include <QApplication>
 #include <QClipboard>
@@ -290,19 +291,14 @@ void contrastBorder(QPainter &p, const QRect &rect) {
   p.drawRoundedRect(r, radius, radius);
 }
 void controlSurface(QPainter &p, QRectF r, bool down, bool active, bool hover,
-                    QColor tint = accent, bool dark = false, bool flat = false) {
+                    bool dark = false, bool flat = false) {
   const QColor fill = dark ? (down ? QColor("#151b19") : hover ? QColor("#3c4541") : ink)
                           : down ? QColor("#dfe3dc") : hover ? QColor("#e6e9e1")
                           : active ? QColor("#e4eeeb") : field;
   p.setBrush(flat && !hover && !down && !active ? Qt::transparent : fill);
-  p.setPen(flat ? QPen(Qt::NoPen) : QPen(dark ? fill : active ? tint : border, .8));
+  p.setPen(flat ? QPen(Qt::NoPen) : QPen(dark ? fill : border, .8));
   const double radius = std::min(10., r.height() * .28);
   p.drawRoundedRect(r, radius, radius);
-}
-void focusRing(QPainter &p, const QRect &r) {
-  p.setBrush(Qt::NoBrush);
-  p.setPen(QPen(focus, 1.5));
-  p.drawRoundedRect(QRectF(r).adjusted(2, 2, -2, -2), 7, 7);
 }
 void chevron(QPainter &p, QPointF c, double scale, bool open = false) {
   const double d = open ? -1 : 1;
@@ -378,7 +374,7 @@ void Button::paintEvent(QPaintEvent *) {
     p.drawLine(c - QPointF(0, 3 * u), c + QPointF(0, 3 * u));
   } else {
     controlSurface(p, QRectF(rect()).adjusted(1, 1, -1, -1), isDown(), selected,
-                   underMouse(), tint, dark, property("fluxFlat").toBool());
+                   underMouse(), dark, property("fluxFlat").toBool());
     if (isHighContrast(this) && !property("fluxFlat").toBool()) contrastBorder(p, rect());
     if (property("fluxSceneQueued").toBool()) {
       p.setPen(QPen(tint, 1.25, Qt::DashLine));
@@ -406,7 +402,6 @@ void Button::paintEvent(QPaintEvent *) {
     }
     p.drawText(labelRect, align, fontMetrics().elidedText(text(), Qt::ElideRight, int(labelRect.width())));
   }
-  if (hasFocus()) focusRing(p, rect());
 }
 ComboBox::ComboBox(QWidget *parent) : QComboBox(parent) {
   setCursor(Qt::PointingHandCursor);
@@ -451,7 +446,6 @@ void ComboBox::paintEvent(QPaintEvent *) {
   p.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter,
              fontMetrics().elidedText(currentText(), Qt::ElideRight, int(labelRect.width())));
   chevron(p, {width() - 12 * u, height() / 2.}, u, open);
-  if (hasFocus()) focusRing(p, rect());
 }
 void Surface::paintEvent(QPaintEvent *) {
   QPainter p(this);
@@ -510,7 +504,6 @@ void Toggle::paintEvent(QPaintEvent *) {
   p.drawText(QRectF(track.right() + 6 * scale, 0,
                     width() - track.right() - 6 * scale, height()),
              Qt::AlignLeft | Qt::AlignVCenter, text());
-  if (hasFocus()) focusRing(p, rect());
 }
 Knob::Knob(unsigned id, QString label, QColor c, QWidget *parent)
     : ui::Knob(label, parent), index(id), caption(fluxui::localize(label)),
@@ -602,8 +595,10 @@ void Knob::paintEvent(QPaintEvent *) {
   auto point = [&](double radius) {
     return centre + QPointF(std::cos(angle) * radius, std::sin(angle) * radius);
   };
-  p.setPen(QPen(panelWhite, 2.4, Qt::SolidLine, Qt::RoundCap));
-  p.drawLine(point(18), point(23));
+  if (!ui::paintMetalKnob(p, QRectF(17, 11, 54, 54), 225 - 270 * v)) {
+    p.setPen(QPen(panelWhite, 2.4, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(point(18), point(23));
+  }
   p.setBrush(accent);
   p.setPen(QPen(panelWhite, 1.3));
   p.drawEllipse(point(31), 2.7, 2.7);
@@ -625,7 +620,6 @@ void Knob::paintEvent(QPaintEvent *) {
   p.drawText(QRectF(0, height() - (compact || captionTop ? 1 : 2) * labelHeight,
                     width(), labelHeight), Qt::AlignCenter,
              QFontMetrics(valueFont).elidedText(controlText(index, value()), Qt::ElideRight, width() - 2));
-  if (hasFocus()) focusRing(p, rect());
   if (locked)
     fluxui::text(p, {width() - 18., 0, 17, 16}, "L", 10, gold);
 }
@@ -842,11 +836,6 @@ void CurveEditor::paintEvent(QPaintEvent *) {
     text(p, {a.left() + i * a.width() / 4, a.bottom() + 5, a.width() / 4, 17},
          QString("1.%1").arg(i + 1), 10, muted,
          Qt::AlignLeft | Qt::AlignVCenter);
-  if (hasFocus()) {
-    p.setPen(QPen(accent, 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), 6, 6);
-  }
 }
 void CurveEditor::drawAt(QPointF at, Qt::KeyboardModifiers mods) {
   auto point = fromView(at, mods);
@@ -1542,11 +1531,6 @@ void Pad::paintEvent(QPaintEvent *) {
   }
   text(p, {0, height() - 18., double(width()), 16},
        label("X: Move · Y: Texture", "X: Движ. · Y: Текст."), 9, muted);
-  if (hasFocus()) {
-    p.setPen(QPen(accent, 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(rect().adjusted(3, 3, -3, -3));
-  }
 }
 void Pad::edit(QPointF at) {
   if (!state)
@@ -1868,11 +1852,6 @@ void BandEditor::paintEvent(QPaintEvent *) {
     text(p, {position(f) - 19, a.bottom() + 4, 38, 15},
          f >= 1000 ? QString::number(f / 1000) + "k" : QString::number(f), 10,
          muted);
-  if (hasFocus()) {
-    p.setPen(QPen(accent, 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(a);
-  }
 }
 void BandEditor::move(double f) {
   auto &v = state->globals;

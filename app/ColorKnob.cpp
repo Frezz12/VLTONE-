@@ -1,4 +1,5 @@
 #include "ColorKnob.hpp"
+#include "KnobAppearance.hpp"
 
 #include "Theme.hpp"
 
@@ -228,6 +229,8 @@ void ColorKnob::paintEvent(QPaintEvent*) {
                           : t.accent,
                   ringPen, Qt::SolidLine, Qt::RoundCap));
     p.drawArc(track, 90 * 16, int(-sweep * 16));
+    if (paintMetalKnob(p, QRectF(centre.x() - body, centre.y() - body, body * 2, body * 2),
+                       225.0 - f * 270.0)) return;
 
     // The pointer is a cut, not a mark: a dark groove with a lit lip on the
     // side the light comes from.

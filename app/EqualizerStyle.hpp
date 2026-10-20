@@ -51,7 +51,7 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         p.setOpacity(isEnabled() ? 1. : .38);
-        p.setPen(hasFocus() ? QPen(th().accent, 1.3) : QPen(Qt::NoPen));
+        p.setPen(Qt::NoPen);
         p.setBrush(mixColors(field(), th().textPrimary, underMouse() ? .045 : 0.));
         p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
         p.setPen(th().textPrimary);
@@ -77,7 +77,7 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         p.setOpacity(isEnabled() ? 1. : .38);
-        p.setPen(hasFocus() ? QPen(th().accent, 1.2) : QPen(Qt::NoPen));
+        p.setPen(Qt::NoPen);
         p.setBrush(isChecked() ? mixColors(canvas(), th().accent, .17)
                               : underMouse() ? field() : Qt::transparent);
         p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);

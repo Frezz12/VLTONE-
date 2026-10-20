@@ -2,7 +2,7 @@
 #include "TextureStore.hpp"
 #include <QQuickWindow>
 #include <QSGClipNode>
-#include <QSGFlatColorMaterial>
+#include <QSGVertexColorMaterial>
 #include <QSGGeometryNode>
 #include <QSGOpacityNode>
 #include <QSGTextureMaterial>
@@ -14,12 +14,16 @@
 
 namespace ui::graphics {
 namespace {
-QTransform pixelAlignedTranslation(const QTransform& transform, qreal dpr) {
-    if (transform.type() > QTransform::TxTranslate) return transform;
-    // Geometry is recorded in device-aligned local coordinates. Keep it aligned
-    // after widget placement and retained-tile scrolling at fractional DPI.
-    return QTransform::fromTranslate(std::round(transform.dx() * dpr) / dpr,
-                                     std::round(transform.dy() * dpr) / dpr);
+// A uniform colour makes every shade a different material/draw call. Vertex
+// colours let Qt batch the many channel borders, fills and ticks together.
+// Floats preserve QColor's precision, including premultiplied translucent ink.
+struct ColorVertex { float x, y, r, g, b, a; };
+const QSGGeometry::AttributeSet& colorAttributes() {
+    static const QSGGeometry::Attribute attributes[] = {
+        QSGGeometry::Attribute::create(0, 2, QSGGeometry::FloatType, true),
+        QSGGeometry::Attribute::create(1, 4, QSGGeometry::FloatType)};
+    static const QSGGeometry::AttributeSet set{2, sizeof(ColorVertex), attributes};
+    return set;
 }
 struct MeshNode final : QSGOpacityNode {
     QSGGeometryNode* drawing = nullptr;
@@ -44,8 +48,18 @@ struct LayerNode final : QSGTransformNode {
         appendChildNode(content);
     }
 };
+struct ScrollNode final : QSGClipNode {
+    QSGTransformNode* page = new QSGTransformNode;
+    ScrollNode() {
+        setIsRectangular(true);
+        setGeometry(new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4));
+        setFlag(QSGNode::OwnsGeometry);
+        appendChildNode(page);
+    }
+};
 struct RootNode final : QSGNode {
     std::unordered_map<quint64, LayerNode*> layers;
+    std::unordered_map<quint64, ScrollNode*> scrolls;
     std::shared_ptr<TextureStore> textures;
     explicit RootNode(QQuickWindow* window) : textures(TextureStore::forWindow(window)) {}
     std::shared_ptr<const SceneSnapshot> snapshot;
@@ -116,9 +130,9 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
         node->texture.reset();
         node->drawing = new QSGGeometryNode;
         node->drawing->setGeometry(new QSGGeometry(textured ? QSGGeometry::defaultAttributes_TexturedPoint2D() :
-            QSGGeometry::defaultAttributes_Point2D(), 0));
+            colorAttributes(), 0));
         node->drawing->geometry()->setDrawingMode(QSGGeometry::DrawTriangles);
-        node->drawing->setMaterial(textured ? static_cast<QSGMaterial*>(new QSGTextureMaterial) : new QSGFlatColorMaterial);
+        node->drawing->setMaterial(textured ? static_cast<QSGMaterial*>(new QSGTextureMaterial) : new QSGVertexColorMaterial);
         node->drawing->setFlag(QSGNode::OwnsGeometry);
         node->drawing->setFlag(QSGNode::OwnsMaterial);
         node->transform->appendChildNode(node->drawing);
@@ -137,7 +151,8 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
             mesh.smoothTexture ? QSGTexture::Linear : QSGTexture::Nearest);
         node->drawing->markDirty(QSGNode::DirtyMaterial);
     }
-    if (newType || changedTexture || node->previous.vertices != mesh.vertices) {
+    if (newType || changedTexture || node->previous.vertices != mesh.vertices ||
+        (!textured && node->previous.color != mesh.color)) {
         auto* geometry = node->drawing->geometry();
         geometry->allocate(int(mesh.vertices.size()));
         if (textured) {
@@ -148,14 +163,17 @@ bool updateMesh(MeshNode* node, const SceneMesh& mesh, QQuickWindow* window, Tex
                 vertices[i].set(v.x, v.y, float(uv.x() + v.u * uv.width()), float(uv.y() + v.v * uv.height()));
             }
         } else {
-            auto* vertices = geometry->vertexDataAsPoint2D();
+            auto* vertices = static_cast<ColorVertex*>(geometry->vertexData());
+            const float alpha = mesh.color.alphaF();
+            const float red = mesh.color.redF() * alpha, green = mesh.color.greenF() * alpha,
+                        blue = mesh.color.blueF() * alpha;
             for (int i = 0; i < mesh.vertices.size(); ++i)
-                vertices[i].set(mesh.vertices[i].x, mesh.vertices[i].y);
+                vertices[i] = {mesh.vertices[i].x, mesh.vertices[i].y, red, green, blue, alpha};
         }
         node->drawing->markDirty(QSGNode::DirtyGeometry);
     }
-    if (!textured && (newType || node->previous.color != mesh.color)) {
-        static_cast<QSGFlatColorMaterial*>(node->drawing->material())->setColor(mesh.color);
+    if (!textured && (newType || (node->previous.color.alphaF() < 1.0f) != (mesh.color.alphaF() < 1.0f))) {
+        node->drawing->material()->setFlag(QSGMaterial::Blending, mesh.color.alphaF() < 1.0f);
         node->drawing->markDirty(QSGNode::DirtyMaterial);
     }
     if (node->opacity() != mesh.opacity) node->setOpacity(mesh.opacity);
@@ -236,7 +254,44 @@ QSGNode* SceneItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
         else ++it;
     }
     QSGNode* previous = nullptr;
+    QSGNode* previousInScroll = nullptr;
+    ScrollNode* activeScroll = nullptr;
+    std::unordered_set<quint64> wantedScrolls;
+    const auto placeAfter = [](QSGNode* parent, QSGNode* node, QSGNode* preceding) {
+        if (node->parent() == parent && node->previousSibling() == preceding) return;
+        if (node->parent()) node->parent()->removeChildNode(node);
+        if (preceding) parent->insertChildNodeAfter(node, preceding);
+        else parent->prependChildNode(node);
+    };
     if (m_snapshot) for (const auto& layer : m_snapshot->layers) {
+        ScrollNode* scroll = nullptr;
+        QPointF origin = layer->origin;
+        if (layer->scrollGroup) {
+            const auto& group = *layer->scrollGroup;
+            wantedScrolls.insert(group.id);
+            auto& entry = root->scrolls[group.id];
+            if (!entry) entry = new ScrollNode;
+            scroll = entry;
+            if (scroll != activeScroll) {
+                placeAfter(root, scroll, previous);
+                previous = scroll;
+                previousInScroll = nullptr;
+                if (scroll->clipRect() != group.clip) {
+                    scroll->setClipRect(group.clip);
+                    QSGGeometry::updateRectGeometry(scroll->geometry(), group.clip);
+                    scroll->markDirty(QSGNode::DirtyGeometry);
+                }
+                const QMatrix4x4 matrix(pixelAlignedTranslation(
+                    QTransform::fromTranslate(group.origin.x(), group.origin.y()), window()->devicePixelRatio()));
+                if (scroll->page->matrix() != matrix) scroll->page->setMatrix(matrix);
+            }
+            // Match the old device-aligned absolute placement at fractional DPI.
+            const auto aligned = pixelAlignedTranslation(
+                QTransform::fromTranslate(origin.x(), origin.y()), window()->devicePixelRatio());
+            origin = QPointF(aligned.dx() - scroll->page->matrix()(0, 3),
+                             aligned.dy() - scroll->page->matrix()(1, 3));
+        }
+        activeScroll = scroll;
         auto found = root->layers.find(layer->id);
         LayerNode* node = found == root->layers.end() ? nullptr : found->second;
         if (!node) {
@@ -253,18 +308,21 @@ QSGNode* SceneItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
             }
             break;
         }
-        const QMatrix4x4 matrix(pixelAlignedTranslation(
-            QTransform::fromTranslate(layer->origin.x(), layer->origin.y()), window()->devicePixelRatio()));
+        const auto translation = QTransform::fromTranslate(origin.x(), origin.y());
+        const QMatrix4x4 matrix(scroll ? translation : pixelAlignedTranslation(translation, window()->devicePixelRatio()));
         // setMatrix marks the entire subtree dirty even for an equal matrix.
         // Scrolling one canvas must not invalidate the cached batches of every
         // stationary panel/control in the workspace.
         if (node->matrix() != matrix) node->setMatrix(matrix);
-        if (node->parent() != root || node->previousSibling() != previous) {
-            if (node->parent()) node->parent()->removeChildNode(node);
-            if (previous) root->insertChildNodeAfter(node, previous);
-            else root->prependChildNode(node);
-        }
-        previous = node;
+        placeAfter(scroll ? static_cast<QSGNode*>(scroll->page) : root, node,
+                   scroll ? previousInScroll : previous);
+        if (scroll) previousInScroll = node;
+        else previous = node;
+    }
+    for (auto it = root->scrolls.begin(); it != root->scrolls.end();) {
+        if (wantedScrolls.contains(it->first)) { ++it; continue; }
+        delete it->second;
+        it = root->scrolls.erase(it);
     }
     return root;
 }

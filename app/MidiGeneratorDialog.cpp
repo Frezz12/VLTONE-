@@ -441,8 +441,8 @@ void MidiGeneratorDialog::apply() {
 }
 
 void MidiGeneratorDialog::style() {
-    setStyleSheet(QStringLiteral("QDialog#MidiGeneratorDialog { background: %1; color: %2; } #GeneratorStatus { color: %3; } QComboBox:focus, QSpinBox:focus, QPushButton:focus, QToolButton:focus { border: 1px solid %4; }")
-        .arg(th().background.name(), th().textPrimary.name(), th().textSecondary.name(), th().accent.name()));
+    setStyleSheet(QStringLiteral("QDialog#MidiGeneratorDialog { background: %1; color: %2; } #GeneratorStatus { color: %3; }")
+        .arg(th().background.name(), th().textPrimary.name(), th().textSecondary.name()));
     m_preview->update();
     m_listen->setIcon(icons::icon(m_listening ? icons::Glyph::Stop : icons::Glyph::Play, th().textPrimary, 14));
 }

@@ -1,4 +1,5 @@
 #include "MorphPanel.hpp"
+#include "KnobAppearance.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
 #include "Internal/MorphInstance.hpp"
@@ -130,8 +131,7 @@ void controlSurface(QPainter &p, QRectF r, QColor accent, bool pressed,
     fill.setAlpha(pressed ? 40 : 23);
   }
   p.setBrush(fill);
-  p.setPen(QPen(selected ? accent : hovered ? QColor("#aeb6ac") : lineColor,
-                selected ? 1.1 : .8));
+  p.setPen(QPen(hovered ? QColor("#aeb6ac") : lineColor, .8));
   const double radius = std::min(10., r.height() * .28);
   p.drawRoundedRect(r, radius, radius);
 }
@@ -523,11 +523,6 @@ protected:
       p.setBrush(Qt::NoBrush);
       p.drawPath(chevron);
     }
-    if (hasFocus()) {
-      p.setPen(QPen(focusColor, 1.5));
-      p.setBrush(Qt::NoBrush);
-      p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8);
-    }
   }
 };
 
@@ -644,11 +639,6 @@ protected:
     arrow.lineTo(c + QPointF(3.5, -1.5 * direction) * u);
     p.setPen(QPen(ink, 1.3 * u, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     p.drawPath(arrow);
-    if (hasFocus()) {
-      p.setBrush(Qt::NoBrush);
-      p.setPen(QPen(focusColor, 1.5));
-      p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), 7, 7);
-    }
   }
 };
 class MorphValueBox final : public QDoubleSpinBox {
@@ -790,10 +780,13 @@ protected:
           int((225 - 270 * std::clamp(t - std::abs(modulation), 0., 1.)) * 16),
           int(-270 * std::min(1., std::abs(modulation) * 2) * 16));
     }
-    const auto inner = polar(c, 20, 135 + t * 270),
-               outer = polar(c, 28, 135 + t * 270);
-    p.setPen(QPen(panelWhite, 3.2, Qt::SolidLine, Qt::RoundCap));
-    p.drawLine(inner, outer);
+    if (!ui::paintMetalKnob(p, QRectF(c.x() - 34, c.y() - 34, 68, 68),
+                            225 - 270 * t)) {
+      const auto inner = polar(c, 20, 135 + t * 270),
+                 outer = polar(c, 28, 135 + t * 270);
+      p.setPen(QPen(panelWhite, 3.2, Qt::SolidLine, Qt::RoundCap));
+      p.drawLine(inner, outer);
+    }
     p.setPen(QPen(panelWhite, 1.2));
     p.setBrush(accent);
     p.drawEllipse(polar(c, 42, 135 + t * 270), 3.4, 3.4);
@@ -810,11 +803,6 @@ protected:
     p.setPen(ink);
     p.drawStaticText(
         QPointF((100 - number.size().width()) * .5, hero ? 23 : 91), number);
-    if (hasFocus()) {
-      p.setBrush(Qt::NoBrush);
-      p.setPen(QPen(focusColor, 1.3));
-      p.drawRoundedRect(QRectF(1, 1, 98, heightUnits - 2), 10, 10);
-    }
   }
 
   void dragEnterEvent(QDragEnterEvent *e) override {
@@ -1127,7 +1115,6 @@ MorphPanel::Impl::Impl(MorphPanel *owner, daw::EngineController *c, QString ch,
   surface->setStyleSheet(QStringLiteral(
       "QDoubleSpinBox {color:#292d2e;background:#eeefe9;border:1px solid "
       "#dcded7;border-radius:7px;padding:2px 7px;}"
-      "QDoubleSpinBox:focus {border-color:#247d89;}"
       "QDoubleSpinBox::up-button,QDoubleSpinBox::down-button "
       "{border:0;width:16px;}"
       "QDoubleSpinBox::up-arrow,QDoubleSpinBox::down-arrow {image:none;}"
@@ -2225,11 +2212,6 @@ void MorphPanel::Impl::paintPad(QPainter &p) {
   p.setBrush(QColor("#ffffff"));
   p.setPen(QPen(accents[0], 1.3));
   p.drawEllipse(base, 7, 7);
-  if (pad->hasFocus()) {
-    p.setPen(QPen(ink, 1, Qt::DashLine));
-    p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(QRectF(1, 1, 314, 206), 5, 5);
-  }
 }
 void MorphPanel::Impl::paintFlow(QPainter &p) {
   const double w = flow->width(), h = flow->height();
@@ -2369,11 +2351,6 @@ void MorphPanel::Impl::paintFlow(QPainter &p) {
                                        "Doubler"}[m],
            std::max(9, qRound(13 * zoom)), muted);
     }
-  }
-  if (flow->hasFocus()) {
-    p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(ink, 1, Qt::DashLine));
-    p.drawRect(flow->rect().adjusted(1, 1, -2, -2));
   }
   if (canvasTab && !imageError.isEmpty()) {
     p.fillRect(QRectF(0, 0, w, 30 * zoom), QColor(255, 235, 228, 245));

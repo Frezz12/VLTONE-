@@ -118,4 +118,9 @@ std::string AudioRuntime::modulationStatus(const std::string& id, const std::str
     const auto status = channel->second.modulationStatus.find(route);
     return status == channel->second.modulationStatus.end() ? "Assignment unavailable" : status->second;
 }
+float AudioRuntime::modulationPosition(const std::string& id, const std::string& source) const {
+    const auto channel = channels.find(id); if (channel == channels.end()) return 0;
+    const auto node = channel->second.modulators.find(source);
+    return node == channel->second.modulators.end() ? 0 : node->second->position();
+}
 } // namespace daw

@@ -244,7 +244,7 @@ void AudioEditCanvas::paintScene(QPainter& p,const QRegion&){
         p.setPen(QPen(Qt::white,1.5));p.drawLine(QPointF(px,rulerHeight),QPointF(px,bottom));
         p.setPen(Qt::NoPen);p.setBrush(t.cursor);p.drawPolygon(QPolygonF{QPointF(px-5,17),QPointF(px+5,17),QPointF(px+5,23),QPointF(px,28),QPointF(px-5,23)});
     }
-    p.setBrush(Qt::NoBrush);p.setPen(QPen(hasFocus()?t.accent:t.separator(),hasFocus()?1.5:1));p.drawRoundedRect(outline,Theme::cornerRadius,Theme::cornerRadius);p.restore();
+    p.setBrush(Qt::NoBrush);p.setPen(QPen(t.separator(),1));p.drawRoundedRect(outline,Theme::cornerRadius,Theme::cornerRadius);p.restore();
 }
 void AudioEditCanvas::mousePressEvent(QMouseEvent* e){
     if(!m_doc.initialized||m_drag)return;
@@ -505,11 +505,10 @@ void AudioEditPanel::updateAppearance(){
         "QToolBar#AudioEditToolbar, QToolBar#AudioEditSelectionBar { background: %1; border: 1px solid %2; border-radius: 8px; padding: 3px; spacing: 2px; }"
         "QToolBar#AudioEditToolbar QToolButton, QToolBar#AudioEditSelectionBar QToolButton { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; }"
         "QToolBar#AudioEditToolbar QToolButton:hover, QToolBar#AudioEditSelectionBar QToolButton:hover { background: %3; }"
-        "QToolBar#AudioEditToolbar QToolButton:checked { background: %4; border-color: %5; }"
-        "QToolBar#AudioEditToolbar QToolButton:focus, QToolBar#AudioEditSelectionBar QToolButton:focus { border-color: %5; }"
+        "QToolBar#AudioEditToolbar QToolButton:checked { background: %4; }"
         "QToolBar#AudioEditToolbar QToolButton::menu-indicator { image: none; }"
         "QWidget#AudioEditInspector { background: %1; border-radius: 8px; }")
-        .arg(t.surface.name(),t.separator().name(),t.surfaceElevated.name(),mixColors(t.surface,t.accent,.22).name(),t.accent.name()));
+        .arg(t.surface.name(),t.separator().name(),t.surfaceElevated.name(),mixColors(t.surface,t.accent,.22).name()));
     for(auto* a:findChildren<QAction*>())if(a->property("glyph").isValid())a->setIcon(icons::icon(icons::Glyph(a->property("glyph").toInt()),t.textPrimary));
     for(auto* b:findChildren<QToolButton*>())if(b->property("glyph").isValid())b->setIcon(icons::icon(icons::Glyph(b->property("glyph").toInt()),t.textPrimary));
     for(auto* label:{m_status,m_links,m_hint}){auto palette=label->palette();palette.setColor(QPalette::WindowText,t.textSecondary);label->setPalette(palette);}

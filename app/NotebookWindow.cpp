@@ -1056,12 +1056,10 @@ void NotebookWindow::applyTheme() {
 QTabBar { background: %5; border: 1px solid %6; border-radius: 6px; }
 QTabBar::tab { background: transparent; color: %4; border: 0; border-radius: 4px; margin: 2px; padding: 4px 10px; }
 QTabBar::tab:selected { color: %3; background: %7; }
-QTabBar::tab:focus { border: 1px solid %4; }
 QComboBox { background: %5; color: %3; border: 1px solid %6; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
 QToolButton { background: transparent; color: %3; border: 1px solid transparent; border-radius: 4px; padding: 0; }
 QToolButton:hover { background: %7; border-color: %6; }
 QToolButton:pressed { background: %5; }
-QToolButton:focus { border-color: %4; }
 )CSS")
                                  .arg(chrome.name(), edge.name(),
                                       theme.textPrimary.name(),

@@ -2106,6 +2106,7 @@ const ClipModel* EngineController::audioClip(const std::string& trackId,
 bool EngineController::setClipAudioFile(const std::string& trackId,
                                          const std::string& clipId,
                                          const std::string& filePath) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
     if (!track || !clip || clip->kind != ClipKind::Audio) return false;
@@ -2322,6 +2323,7 @@ bool EngineController::replaceAudioClips(const std::string& trackId,
 bool EngineController::setClipMusicalAnalysis(
     const std::string& trackId, const std::string& clipId,
     const ClipMusicalAnalysisModel& analysis, const std::string& label) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     ClipModel* clip = findClip(trackId, clipId);
     if (!clip || clip->kind != ClipKind::Audio) return false;
     const auto shared = submitSharedMutation(
@@ -6489,6 +6491,7 @@ std::string EngineController::addPattern(const std::string& name) {
 std::string EngineController::addPatternClip(const std::string& patternTrackId,
                                              double startSeconds,
                                              double lengthSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(patternTrackId)) return {};
     TrackModel* pattern = m_project.findTrack(patternTrackId);
     if (!pattern || pattern->kind != TrackKind::Pattern) return {};
 
@@ -6944,7 +6947,65 @@ std::string EngineController::appendTrack(TrackModel model) {
     return id;
 }
 
+bool EngineController::isTrackEditLocked(const std::string& trackId) const {
+    if (cloudProjectBound()) return false;
+    const TrackModel* track = m_project.findTrack(trackId);
+    for (size_t guard = 0; track && guard <= m_project.tracks.size(); ++guard) {
+        if (track->editLocked) return true;
+        track = track->parentId.empty() ? nullptr : m_project.findTrack(track->parentId);
+    }
+    return false;
+}
+
+bool EngineController::isTrackTreeEditLocked(const std::string& trackId) const {
+    if (cloudProjectBound()) return false;
+    if (isTrackEditLocked(trackId)) return true;
+    for (const auto& track : m_project.tracks)
+        if (track.editLocked && isDescendantOf(m_project, track.id, trackId)) return true;
+    return false;
+}
+
+bool EngineController::setTracksEditLocked(const std::vector<std::string>& trackIds, bool locked) {
+    // The current shared command schema has no edit-lock property. Never report
+    // a local-only change as a synchronized session edit.
+    if (cloudProjectBound() || isRecording() || offlineRenderInProgress()) return false;
+    std::vector<std::pair<std::string, bool>> before;
+    for (const auto& id : trackIds) {
+        auto* track = m_project.findTrack(id);
+        if (!track || track->kind == TrackKind::Master || track->editLocked == locked) continue;
+        before.emplace_back(id, track->editLocked);
+        track->editLocked = locked;
+    }
+    if (before.empty()) return false;
+    m_undo.push(locked ? "Lock Tracks" : "Unlock Tracks",
+        [this, before] {
+            for (const auto& [id, value] : before)
+                if (auto* track = m_project.findTrack(id)) track->editLocked = value;
+        },
+        [this, before, locked] {
+            for (const auto& [id, value] : before)
+                if (auto* track = m_project.findTrack(id)) track->editLocked = locked;
+        });
+    return true;
+}
+
+bool EngineController::isClipContentEditLocked(const std::string& trackId, const std::string& clipId) const {
+    if (isTrackEditLocked(trackId)) return true;
+    const auto* owner = m_project.findTrack(trackId);
+    if (!owner) return false;
+    const auto original = std::find_if(owner->clips.begin(), owner->clips.end(),
+        [&](const auto& clip) { return clip.id == clipId; });
+    if (original == owner->clips.end() || original->contentId.empty()) return false;
+    // Linked clips share musical data, including copies on protected tracks.
+    for (const auto& track : m_project.tracks) {
+        if (!isTrackEditLocked(track.id)) continue;
+        for (const auto& clip : track.clips) if (clip.contentId == original->contentId) return true;
+    }
+    return false;
+}
+
 void EngineController::removeTrack(const std::string& trackId) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     const TrackModel* requested = m_project.findTrack(trackId);
     if (!requested) return;
     const bool removeTree = isFolder(*requested);
@@ -7143,6 +7204,7 @@ void EngineController::removeTrack(const std::string& trackId) {
 
 collab::SharedMutationResult EngineController::renameTrack(
     const std::string& trackId, const std::string& name) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return collab::SharedMutationResult::Blocked;
     auto* track = m_project.findTrack(trackId);
     if (!track || track->name == name)
         return collab::SharedMutationResult::LocalFallback;
@@ -7590,6 +7652,66 @@ void EngineController::setTrackColor(const std::string& trackId, uint32_t color)
     }
 }
 
+collab::SharedMutationResult EngineController::setTrackColors(
+    const std::vector<std::pair<std::string, uint32_t>>& colors) {
+    const std::unordered_map<std::string, uint32_t> requested(colors.begin(), colors.end());
+    struct Colors {
+        std::string id;
+        uint32_t track;
+        std::vector<std::pair<std::string, uint32_t>> clips;
+    };
+    std::vector<Colors> before, after;
+    auto batch = std::make_shared<collab::BatchCommand>();
+    for (const auto& track : m_project.tracks) {
+        auto chosen = requested.find(track.id);
+        std::string parentId = track.parentId;
+        for (size_t guard = 0; !parentId.empty() && guard < m_project.tracks.size(); ++guard) {
+            const auto* parent = m_project.findTrack(parentId);
+            if (!parent) break;
+            const auto ancestor = requested.find(parentId);
+            if (ancestor != requested.end() &&
+                (isFolder(*parent) || (isAutomationLane(track) && parentId == track.parentId)))
+                chosen = ancestor;
+            parentId = parent->parentId;
+        }
+        if (chosen == requested.end()) continue;
+        const uint32_t color = chosen->second & 0x00FFFFFFu;
+        Colors old{track.id, track.color, {}}, next{track.id, color, {}};
+        bool changed = track.color != color;
+        for (const auto& clip : track.clips) {
+            old.clips.emplace_back(clip.id, clip.color);
+            next.clips.emplace_back(clip.id, color);
+            changed |= clip.color != color;
+        }
+        if (!changed) continue;
+        appendCommand(batch, collab::SetTrackProperty{
+            track.id, collab::TrackProperty::Color, std::int64_t(color)});
+        for (const auto& clip : track.clips)
+            appendCommand(batch, collab::SetClipProperty{
+                track.id, clip.id, collab::ClipProperty::Color, std::int64_t(color)});
+        before.push_back(std::move(old));
+        after.push_back(std::move(next));
+    }
+    if (after.empty()) return collab::SharedMutationResult::LocalFallback;
+    const auto shared = submitSharedMutation(collab::CommandBody{batch}, "Random Track Colors");
+    if (shared != collab::SharedMutationResult::LocalFallback) return shared;
+    const auto apply = [this](const auto& values) {
+        for (const auto& value : values) {
+            auto* track = m_project.findTrack(value.id);
+            if (!track) continue;
+            track->color = value.track;
+            const std::unordered_map<std::string, uint32_t> clipColors(value.clips.begin(), value.clips.end());
+            for (auto& clip : track->clips)
+                if (const auto found = clipColors.find(clip.id); found != clipColors.end())
+                    clip.color = found->second;
+        }
+    };
+    apply(after);
+    m_undo.push("Random Track Colors", [apply, before] { apply(before); },
+                [apply, after] { apply(after); });
+    return collab::SharedMutationResult::LocalFallback;
+}
+
 void EngineController::setTrackHeight(const std::string& trackId, double height) {
     if (!std::isfinite(height)) return;
     if (auto* t = m_project.findTrack(trackId)) {
@@ -7973,6 +8095,7 @@ void EngineController::retargetCaptureInput(const TrackModel& track) {
 
 void EngineController::moveTrackToFolder(const std::string& trackId,
                                          const std::string& parentId) {
+    if (!m_undo.isApplying() && (isTrackTreeEditLocked(trackId) || isTrackEditLocked(parentId))) return;
     if (isDescendantOf(m_project, parentId, trackId)) return;
     TrackModel* moving = m_project.findTrack(trackId);
     if (!moving || moving->parentId == parentId) return;
@@ -8014,6 +8137,10 @@ bool EngineController::moveTrack(const std::string& trackId, size_t targetIndex,
 bool EngineController::moveTracks(const std::vector<std::string>& trackIds,
                                   size_t targetIndex,
                                   const std::string& newParentId) {
+    if (!m_undo.isApplying()) {
+        if (isTrackEditLocked(newParentId)) return false;
+        for (const auto& id : trackIds) if (isTrackTreeEditLocked(id)) return false;
+    }
     if (!newParentId.empty() && !m_project.findTrack(newParentId)) return false;
 
     const std::unordered_set<std::string> selected(trackIds.begin(), trackIds.end());
@@ -8190,6 +8317,7 @@ void EngineController::syncFolderRouting() {
 
 void EngineController::setFolderSumming(const std::string& folderId,
                                         bool summing) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(folderId)) return;
     auto* folder = m_project.findTrack(folderId);
     if (!folder || folder->kind != TrackKind::Folder ||
         folder->summing == summing) {
@@ -8241,6 +8369,8 @@ std::string EngineController::packIntoFolder(
     const std::vector<std::string>& trackIds, const std::string& name,
     bool summing) {
     if (trackIds.empty()) return {};
+    if (!m_undo.isApplying())
+        for (const auto& id : trackIds) if (isTrackTreeEditLocked(id)) return {};
 
     // A visible tree selection can contain both a folder and any number of its
     // descendants (Shift-selecting a range is the common case).  moveTrack()
@@ -10955,6 +11085,7 @@ std::string EngineController::importAudio(const std::string& filePath,
                                           const std::string& trackId,
                                           double startSeconds,
                                           const ClipMusicalAnalysisModel& analysis) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Audio)) return {};
 
@@ -11024,6 +11155,7 @@ std::string EngineController::importAudio(const std::string& filePath,
 void EngineController::setClipStartSeconds(const std::string& trackId,
                                            const std::string& clipId,
                                            double startSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     const ClipStartChange change{trackId, clipId, startSeconds};
     setClipStartsSeconds(std::span<const ClipStartChange>(&change, 1));
@@ -11445,6 +11577,8 @@ void EngineController::publishClipPositionAudio(const std::unordered_set<std::st
 
 void EngineController::setClipStartsSeconds(
     std::span<const ClipStartChange> changes) {
+    if (!m_undo.isApplying())
+        for (const auto& change : changes) if (isTrackTreeEditLocked(change.trackId)) return;
     for (const auto& change : changes) if (!sharedGestureAllowed("clip:" + change.clipId)) return;
     ++m_clipGeometryRevision;
     if (cloudProjectBound() && !m_clipPositionEdit.active) {
@@ -11726,6 +11860,7 @@ void EngineController::setClipSampleParameter(const std::string& trackId,
                                               const std::string& clipId,
                                               const std::string& id,
                                               double value) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
@@ -11929,12 +12064,14 @@ void EngineController::commitClipSampleParameterEdit(
 
 void EngineController::setClipGain(const std::string& trackId,
                                    const std::string& clipId, float gain) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     setClipFxVolume(trackId, clipId, gain);
 }
 
 void EngineController::setClipFade(const std::string& trackId,
                                    const std::string& clipId,
                                    double fadeInSeconds, double fadeOutSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -11995,6 +12132,7 @@ void EngineController::commitClipFadeEdit(const std::string& trackId,
 void EngineController::setClipFadeCurve(const std::string& trackId,
                                         const std::string& clipId,
                                         bool fadeIn, double curve) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -12039,6 +12177,7 @@ void EngineController::commitClipFadeCurveEdit(
 void EngineController::setClipFadeMode(const std::string& trackId,
                                        const std::string& clipId,
                                        bool fadeIn, ClipFadeMode mode) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     for (auto& clip : track->clips) {
@@ -12075,6 +12214,7 @@ void EngineController::setClipFadeMode(const std::string& trackId,
 void EngineController::moveClipToTrack(const std::string& fromTrackId,
                                        const std::string& clipId,
                                        const std::string& toTrackId) {
+    if (!m_undo.isApplying() && (isTrackTreeEditLocked(fromTrackId) || isTrackTreeEditLocked(toTrackId))) return;
     ++m_clipGeometryRevision;
     if (fromTrackId == toTrackId) return;
     auto* from = m_project.findTrack(fromTrackId);
@@ -12431,6 +12571,7 @@ void EngineController::endClipTrimEdit(const std::string& label) {
 void EngineController::setClipTrim(const std::string& trackId,
                                    const std::string& clipId, double startSeconds,
                                    double offsetSeconds, double durationSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -12735,6 +12876,7 @@ void clearSplitSeamFades(ClipModel& left, ClipModel& right) {
 std::string EngineController::splitClip(const std::string& trackId,
                                         const std::string& clipId,
                                         double atSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     if (!cloudProjectBound()) {
         const auto* original=findClip(trackId,clipId);
         if(original && (original->kind==ClipKind::Pattern || m_project.patternPart(*original) ||
@@ -13517,6 +13659,9 @@ audio::Result EngineController::glueClips(
     const std::vector<ClipAddress>& addresses, std::string& gluedClipId,
     const RenderExecutor& execute) {
     gluedClipId.clear();
+    for (const auto& address : addresses)
+        if (isTrackTreeEditLocked(address.trackId))
+            return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     if (!sharedEditingAllowed() || isRecording() || offlineRenderInProgress())
         return audio::Result::fail(audio::EngineError::InvalidArgument,
                                    "clip editing is currently unavailable");
@@ -14008,6 +14153,7 @@ audio::Result EngineController::glueClips(
 
 void EngineController::removeClip(const std::string& trackId,
                                   const std::string& clipId) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     ClipModel snapshot;
@@ -14146,6 +14292,7 @@ void EngineController::removeClip(const std::string& trackId,
 
 void EngineController::setClipMuted(const std::string& trackId,
                                     const std::string& clipId, bool muted) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const auto target = std::find_if(track->clips.begin(), track->clips.end(),
@@ -14260,6 +14407,7 @@ void EngineController::setClipMuted(const std::string& trackId,
 void EngineController::setClipName(const std::string& trackId,
                                    const std::string& clipId,
                                    const std::string& name) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     for (auto& clip : track->clips) {
@@ -14290,6 +14438,7 @@ void EngineController::setClipName(const std::string& trackId,
 
 std::string EngineController::duplicateClip(const std::string& trackId,
                                             const std::string& clipId) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     auto* track = m_project.findTrack(trackId);
     if (!track) return {};
 
@@ -14323,6 +14472,7 @@ std::string EngineController::duplicateClip(const std::string& trackId,
 std::string EngineController::duplicateClipAt(const std::string& trackId,
                                               const std::string& clipId,
                                               double startSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     auto* track = m_project.findTrack(trackId);
     if (!track) return {};
     const ClipModel* source = nullptr;
@@ -14429,6 +14579,7 @@ std::string EngineController::duplicateClipAt(const std::string& trackId,
 std::string EngineController::insertClipCopy(const std::string& trackId,
                                              const ClipModel& source,
                                              double startSeconds) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     if (source.kind == ClipKind::Pattern) {
         PatternClipMembers members;
         for (const TrackModel& memberTrack : m_project.tracks) {
@@ -14825,6 +14976,7 @@ void EngineController::setTrackInstrument(const std::string& trackId,
 std::string EngineController::addMidiClip(const std::string& trackId,
                                           double startSeconds,
                                           double lengthSeconds, const std::string& ownerClipId) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return {};
 
@@ -15181,6 +15333,7 @@ std::string EngineController::addNote(const std::string& trackId,
                                       const std::string& clipId, int pitch,
                                       double startBeats, double lengthBeats,
                                       int velocity) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return {};
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return {};
 
@@ -15236,6 +15389,7 @@ std::string EngineController::addNote(const std::string& trackId,
 void EngineController::removeNote(const std::string& trackId,
                                   const std::string& clipId,
                                   const std::string& noteId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
 
@@ -15283,6 +15437,7 @@ void EngineController::setNote(const std::string& trackId,
                                const std::string& clipId,
                                const std::string& noteId, int pitch,
                                double startBeats, double lengthBeats) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
     if (noteEditTargets(trackId, clipId) && !m_noteEdit.structural) {
@@ -15341,6 +15496,7 @@ void EngineController::setNote(const std::string& trackId,
 void EngineController::setNoteStates(const std::string& trackId,
                                      const std::string& clipId,
                                      std::span<const NoteModel> updates) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     const TrackModel* track = m_project.findTrack(trackId);
     if (!clip || !track || updates.empty()) return;
@@ -15441,6 +15597,7 @@ void EngineController::setNoteStates(const std::string& trackId,
 void EngineController::removeNotes(const std::string& trackId,
                                    const std::string& clipId,
                                    std::span<const std::string> noteIds) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     const TrackModel* track = m_project.findTrack(trackId);
     if (!clip || !track || noteIds.empty()) return;
@@ -15472,6 +15629,7 @@ void EngineController::setNoteVelocity(const std::string& trackId,
                                        const std::string& clipId,
                                        const std::string& noteId,
                                        int velocity) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
     if (noteEditTargets(trackId, clipId) && !m_noteEdit.structural) {
@@ -15512,6 +15670,7 @@ void EngineController::setNoteVelocity(const std::string& trackId,
 void EngineController::setNoteMuted(const std::string& trackId,
                                     const std::string& clipId,
                                     const std::string& noteId, bool muted) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
     if (noteEditTargets(trackId, clipId) && !m_noteEdit.structural) {
@@ -15549,6 +15708,7 @@ void EngineController::setNoteMuted(const std::string& trackId,
 void EngineController::setNotePan(const std::string& trackId,
                                   const std::string& clipId,
                                   const std::string& noteId, float pan) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
     if (noteEditTargets(trackId, clipId) && !m_noteEdit.structural) {
@@ -15588,6 +15748,7 @@ void EngineController::setNotePan(const std::string& trackId,
 
 void EngineController::beginNoteEdit(const std::string& trackId,
                                      const std::string& clipId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     if (!sharedEditingAllowed()) return;
     if (m_noteEdit.active) endNoteEdit("Edit Notes");
@@ -16451,7 +16612,7 @@ std::optional<plugins::ParameterInfo> EngineController::automationParameterInfo(
                 info.name = "Depth"; info.minValue = -1; info.maxValue = 1; info.defaultValue = .2; return info;
             }
         } else for (const auto& source : rackModulation(target.channelId).sources)
-            if (source.id == target.slotId && source.kind == modulation::Kind::Lfo) {
+            if (source.id == target.slotId && modulation::hasRate(source.kind)) {
                 info.name = source.name + " Rate"; info.unit = source.sync ? "cycles/beat" : "Hz";
                 info.minValue = source.sync ? 1.0 / 128.0 : .01; info.maxValue = source.sync ? 32 : 20;
                 info.defaultValue = source.sync ? 1 : 2; return info;
@@ -16784,6 +16945,7 @@ std::string EngineController::addAutomationClip(const std::string& laneTrackId,
                                                 const AutomationTarget& target,
                                                 double startSeconds,
                                                 double lengthSeconds) {
+    if (!m_undo.isApplying() && isTrackEditLocked(laneTrackId)) return {};
     auto* lane = m_project.findTrack(laneTrackId);
     if (!lane || !isAutomationLane(*lane)) return {};
 
@@ -16987,6 +17149,7 @@ std::pair<std::string, std::string> EngineController::ensureAutomation(
 void EngineController::setAutomationTarget(const std::string& trackId,
                                            const std::string& clipId,
                                            const AutomationTarget& target) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip || clip->automation.target == target) return;
     const ClipAutomationModel beforeAutomation = clip->automation;
@@ -17059,6 +17222,7 @@ void EngineController::setAutomationPoints(const std::string& trackId,
                                             const std::string& clipId,
                                             std::vector<AutomationPoint> points,
                                             bool active) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* clip = findAutomationClip(m_project, trackId, clipId);
     if (!clip) return;
@@ -17135,6 +17299,7 @@ void EngineController::commitAutomationEdit(const std::string& trackId,
 std::string EngineController::addControllerLane(const std::string& trackId,
                                                 const std::string& clipId,
                                                 const std::string& name, int cc) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return {};
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return {};
 
@@ -17177,6 +17342,7 @@ std::string EngineController::addControllerLane(const std::string& trackId,
 void EngineController::removeControllerLane(const std::string& trackId,
                                             const std::string& clipId,
                                             const std::string& laneId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     auto* lane = findLane(clip, laneId);
     if (!lane) return;
@@ -17225,6 +17391,7 @@ void EngineController::setLaneTarget(const std::string& trackId,
                                      const std::string& laneId,
                                      const std::string& slotId,
                                      const std::string& parameterId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* lane = findLane(findMidiClip(m_project, trackId, clipId), laneId);
     if (!lane) return;
 
@@ -17266,6 +17433,7 @@ void EngineController::setLanePoints(const std::string& trackId,
                                       const std::string& clipId,
                                       const std::string& laneId,
                                       std::vector<AutomationPoint> points) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     auto* lane = findLane(findMidiClip(m_project, trackId, clipId), laneId);
     if (!lane) return;
@@ -17549,6 +17717,7 @@ void EngineController::setClipNotes(const std::string& trackId,
                                     const std::string& clipId,
                                     std::vector<NoteModel> notes,
                                     const std::string& label, bool stretchSlides) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findMidiClip(m_project, trackId, clipId);
     if (!clip) return;
 
@@ -17909,7 +18078,7 @@ std::vector<std::string> EngineController::resolveRecordingTargets(
         const auto found = children.find(folder);
         if (found == children.end()) return nullptr;
         for (const auto* child : found->second) {
-            if (acceptsRecording(*child) && !chosen.contains(child->id) && free(*child))
+            if (acceptsRecording(*child) && !isTrackEditLocked(child->id) && !chosen.contains(child->id) && free(*child))
                 return child;
             if (isFolder(*child)) {
                 if (const auto* leaf = self(self, child->id, visited)) return leaf;
@@ -17926,7 +18095,7 @@ std::vector<std::string> EngineController::resolveRecordingTargets(
             std::unordered_set<std::string> visited;
             track = firstFreeChild(firstFreeChild, id, visited);
         }
-        if (track && acceptsRecording(*track) && chosen.insert(track->id).second)
+        if (track && acceptsRecording(*track) && !isTrackEditLocked(track->id) && chosen.insert(track->id).second)
             targets.push_back(track->id);
     }
     return targets;
@@ -17992,6 +18161,7 @@ bool EngineController::startRecordingTracksImpl(
     }
     if (requireEveryTarget && !canStartRecordingTracksExactly(trackIds))
         return false;
+    stopPluginAudition();
     stopPreview();   // never into a take
 
     // Restart returns a new take to the run anchor just like Play. Resume keeps
@@ -18183,6 +18353,7 @@ bool EngineController::armCountInImpl(
         if (!recordable) return false;
     }
 
+    stopPluginAudition();
     m_countInTracks = trackIds;
     m_countInBeatsLeft = beats;
     m_countInToNextBeat = beatLength(m_project.tempo);
@@ -19092,6 +19263,7 @@ void EngineController::setClipExpanded(const std::string& trackId,
 
 void EngineController::beginCompEdit(const std::string& trackId,
                                      const std::string& clipId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     if (!sharedEditingAllowed()) return;
     if (m_compEdit.active) return;
@@ -19145,6 +19317,7 @@ void EngineController::setCompSegment(const std::string& trackId,
                                       const std::string& clipId,
                                       const std::string& takeId,
                                       double fromSeconds, double toSeconds) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findClip(trackId, clipId);
     if (!clip) return;
     if (cloudProjectBound()) {
@@ -19174,6 +19347,7 @@ void EngineController::setCompSegment(const std::string& trackId,
 void EngineController::selectTake(const std::string& trackId,
                                   const std::string& clipId,
                                   const std::string& takeId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findClip(trackId, clipId);
     if (!clip || !findTake(*clip, takeId)) return;
     std::vector<CompSegment> before = clip->comp;
@@ -19314,6 +19488,7 @@ template <typename Mutate>
 void EngineController::editTake(const char* label, const std::string& trackId,
                                 const std::string& clipId,
                                 const std::string& takeId, Mutate mutate) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     auto* clip = findClip(trackId, clipId);
     if (!clip) return;
     TakeModel* take = findTake(*clip, takeId);
@@ -19405,6 +19580,7 @@ void EngineController::setSoloTake(const std::string& trackId,
 std::string EngineController::duplicateTake(const std::string& trackId,
                                             const std::string& clipId,
                                             const std::string& takeId) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     auto* clip = findClip(trackId, clipId);
     if (!clip) return {};
     const size_t source = takeIndex(*clip, takeId);
@@ -19456,6 +19632,7 @@ std::string EngineController::addTakeFromFile(const std::string& trackId,
                                               const std::string& filePath,
                                               double clipOffsetSeconds,
     const std::string& name) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     auto* clip = findClip(trackId, clipId);
     if (!clip) return {};
 
@@ -19608,6 +19785,7 @@ std::string EngineController::addTakeFromFile(const std::string& trackId,
 void EngineController::removeTake(const std::string& trackId,
                                   const std::string& clipId,
                                   const std::string& takeId, bool deleteFile) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* clip = findClip(trackId, clipId);
     if (!clip) return;
     const size_t at = takeIndex(*clip, takeId);
@@ -19676,6 +19854,7 @@ void EngineController::removeTake(const std::string& trackId,
 void EngineController::moveTake(const std::string& trackId,
                                 const std::string& clipId,
                                 const std::string& takeId, size_t targetIndex) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* clip = findClip(trackId, clipId);
     if (!clip || clip->takes.empty()) return;
     size_t from = clip->takes.size();
@@ -19709,6 +19888,7 @@ void EngineController::moveTake(const std::string& trackId,
 std::string EngineController::flattenComp(const std::string& trackId,
                                           const std::string& clipId,
                                           bool recordUndo) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return {};
     const bool shared = cloudProjectBound();
     if (!sharedEditingAllowed()) return {};
     auto* clip = findClip(trackId, clipId);
@@ -19899,6 +20079,7 @@ std::string EngineController::flattenComp(const std::string& trackId,
 
 void EngineController::commitComp(const std::string& trackId,
                                   const std::string& clipId) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     // Build the result separately, then publish its complete source atomically
     // after every generated audio asset has been verified.
     if (cloudProjectBound()) {
@@ -20044,7 +20225,7 @@ size_t EngineController::deleteUnusedTakes(bool deleteFiles) {
                 const bool used = std::any_of(
                     clip.comp.begin(), clip.comp.end(),
                     [&](const CompSegment& s) { return s.takeId == take.id; });
-                if (used) {
+                if (used || isTrackEditLocked(track.id)) {
                     keptFiles.insert(take.filePath);
                 } else if (!take.filePath.empty()) {
                     candidates.push_back(take.filePath);
@@ -20062,6 +20243,7 @@ size_t EngineController::deleteUnusedTakes(bool deleteFiles) {
     };
     std::vector<Snapshot> touched;
     for (auto& track : m_project.tracks) {
+        if (isTrackEditLocked(track.id)) continue;
         for (auto& clip : track.clips) {
             std::vector<std::string> unused;
             for (const auto& take : clip.takes) {
@@ -20111,6 +20293,7 @@ size_t EngineController::deleteUnusedTakes(bool deleteFiles) {
 
 size_t EngineController::cropToComp(const std::string& trackId,
                                     const std::string& clipId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return 0;
     // Cropping creates replacement files; cloud mutation must wait for the
     // upload/verify planner that can attach durable AssetRefs atomically.
     if (cloudProjectBound()) {

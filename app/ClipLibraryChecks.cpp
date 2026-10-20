@@ -89,11 +89,9 @@ bool checkSampleDropDestinations(const std::string& wav) {
         auto* sampler = created ? controller.samplerInstance(id, created->instrument.id) : nullptr;
         check(controller.project().tracks.size() == count + 1 && created &&
               created->instrument.uid == "daw.sampler" && sampler && sampler->samplePath() == wav &&
-              created->clips.size() == 1 && created->clips.front().kind == daw::ClipKind::Midi &&
-              created->clips.front().notes.size() == 1 && created->clips.front().notes.front().pitch == 60 &&
-              created->clips.front().startSeconds == 0.0,
-              onHeader ? "track header creates MIDI clip with the dropped sound"
-                       : "empty track list creates MIDI clip with the dropped sound");
+              created->kind == daw::TrackKind::Instrument && created->clips.empty(),
+              onHeader ? "track header creates an empty Sampler with the dropped sound"
+                       : "empty track list creates an empty Sampler with the dropped sound");
         check(controller.undoDepth() == depth + 1, "sample import is one undo step");
         controller.undo();
         check(controller.project().tracks.size() == count && !controller.project().findTrack(id),
@@ -237,6 +235,21 @@ bool checkClipLibraryForTest(const QString& screenshot) {
     mouse(QEvent::MouseButtonRelease,press,Qt::LeftButton,Qt::NoButton);
     check(std::abs(controller.project().findTrack(midiTrack)->clips.front().startSeconds-1)<1e-9 &&
         controller.undoDepth()==undoBefore,"drag handoff and cancellation preserve original placement and history");
+    // Alignment uses the same native handoff, with a group of references in
+    // addition to the library's single reference. Cancelling must roll back
+    // provisional movement even when the destination belongs to another tool.
+    QWidget alignmentSurface(browser);
+    alignmentSurface.setGeometry(browser->rect());
+    alignmentSurface.setProperty("vocalAlignmentDropTarget", true);
+    alignmentSurface.show(); alignmentSurface.raise();
+    mouse(QEvent::MouseButtonPress,press,Qt::LeftButton,Qt::LeftButton);
+    mouse(QEvent::MouseMove,press+QPoint(45,0),Qt::NoButton,Qt::LeftButton);
+    QTimer::singleShot(20, &root, [] { QDrag::cancel(); });
+    mouse(QEvent::MouseMove,timeline->mapFromGlobal(browser->mapToGlobal(QPoint(50,150))),Qt::NoButton,Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease,press,Qt::LeftButton,Qt::NoButton);
+    check(std::abs(controller.project().findTrack(midiTrack)->clips.front().startSeconds-1)<1e-9 &&
+        controller.undoDepth()==undoBefore,"alignment drag cancellation preserves original placement and history");
+    alignmentSurface.hide();
     browser->showClipLibrary(); list->selectEntry(QString::fromStdString(entry));
     QEventLoop settle; QTimer::singleShot(150,&settle,&QEventLoop::quit); settle.exec();
     if (!screenshot.isEmpty()) check(root.grab().save(screenshot),"visual fixture saved");

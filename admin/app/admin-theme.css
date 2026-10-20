@@ -212,6 +212,16 @@ input[type="file"].vlt-input::file-selector-button { color: var(--vlt-text); bac
 .dashboard-priority-links a span { display: grid; gap: 3px; }
 .dashboard-priority-links a strong { font-size: 23px; font-weight: 500; }
 .dashboard-metrics { gap: 16px; }
+.site-stats-toolbar { flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+.site-stats-content { display: grid; gap: 20px; min-width: 0; }
+.site-stats-content > * { min-width: 0; }
+.site-stats-chart { height: 260px; margin-block: 20px; }
+.site-stats-table { overflow-x: auto; }
+.site-stats-table[role="region"] table { min-width: 800px; }
+.site-stats-path { overflow-wrap: anywhere; min-width: 160px; }
+.site-stats-pagination { gap: 12px; margin-top: 20px; }
+.site-stats-content td { font-variant-numeric: tabular-nums; }
+.site-stats-content summary { cursor: pointer; padding-block: 12px; }
 .vlt-stat { min-height: 152px; padding: 22px; display: flex; flex-direction: column; justify-content: space-between; }
 .vlt-stat .vlt-muted { color: #a5bada; }
 .vlt-stat-label { color: inherit; opacity: .8; font: 500 12px/1.4 var(--vlt-font-sans); }

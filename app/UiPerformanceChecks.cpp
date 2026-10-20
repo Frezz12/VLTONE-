@@ -10,6 +10,8 @@
 #include "MixerWidget.hpp"
 #include "ChannelStrip.hpp"
 #include "TimelineWidget.hpp"
+#include "ClipTrackPicker.hpp"
+#include "ShortcutManager.hpp"
 #include "PianoRollWindow.hpp"
 #include "Controls.hpp"
 #include "CreatorStyle.hpp"
@@ -33,6 +35,8 @@
 #include <QDragLeaveEvent>
 #include <QDropEvent>
 #include <QMenu>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QUrl>
@@ -71,6 +75,7 @@
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QTimer>
+#include <QToolButton>
 #include <QWheelEvent>
 #include <cmath>
 #include <cstdio>
@@ -128,6 +133,136 @@ bool TimelineWidget::checkInterruptedPointerGestureForTest() {
         timeline.m_regionActive && timeline.m_regionEnd > timeline.m_regionStart;
 
     return scrubStopped && ungrabStopped && marqueeStopped && regionStopped;
+}
+
+bool TimelineWidget::checkDragAutoScrollForTest() {
+    daw::EngineController controller;
+    if (!controller.initialize(48000.0, 512, false)) return false;
+    auto& project = const_cast<daw::ProjectModel&>(controller.project());
+    project.tracks.clear();
+    for (int i = 0; i < 32; ++i) {
+        daw::TrackModel track;
+        track.id = "edge-track-" + std::to_string(i);
+        track.kind = daw::TrackKind::Midi;
+        daw::ClipModel clip;
+        clip.id = "edge-clip-" + std::to_string(i);
+        clip.kind = daw::ClipKind::Midi;
+        clip.startSeconds = 1.003;
+        clip.durationSeconds = 1.5;
+        track.clips.push_back(std::move(clip));
+        project.tracks.push_back(std::move(track));
+    }
+    project.invalidateTrackIndex();
+    TimelineWidget timeline(&controller);
+    timeline.resize(640, 360);
+    timeline.setBottomInset(80);
+    timeline.m_snapEnabled = false;
+    const int top = timeline.tracksTop();
+    const int bottom = top + timeline.visibleLaneHeight();
+    const QPoint origin(20, top + 40), lower(150, bottom - 4);
+    const auto fail = [](const char* what) {
+        std::fprintf(stderr, "FAIL timeline edge scroll: %s\n", what);
+        return false;
+    };
+    const auto mouse = [&](QEvent::Type type, QPoint pos) {
+        QMouseEvent event(type, pos, timeline.mapToGlobal(pos),
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(&timeline, &event);
+    };
+    const auto advance = [&](int frames, double hz = 60.0) {
+        for (int i = 0; i < frames; ++i) timeline.stepDragAutoScroll(1.0 / hz);
+    };
+    int distance60 = 0;
+    for (const int hz : {60, 240}) {
+        timeline.setVerticalScroll(0);
+        mouse(QEvent::MouseButtonPress, origin);
+        mouse(QEvent::MouseMove, lower);
+        const auto initialSelection = timeline.m_selection.size();
+        if (!timeline.m_dragScrollFrame->isActive())
+            return fail("scroll starts inside the viewport above the mixer");
+        advance(hz / 2, hz);
+        if (timeline.m_scrollY < 300 ||
+            timeline.m_marqueeOrigin.y() + timeline.m_scrollY != origin.y() ||
+            timeline.m_selection.size() <= initialSelection ||
+            !timeline.isClipSelected(QStringLiteral("edge-clip-0")))
+            return fail("stationary marquee grows and keeps its content anchor");
+        if (hz == 60) distance60 = timeline.m_scrollY;
+        else if (std::abs(timeline.m_scrollY - distance60) > 1)
+            return fail("scroll speed differs at 60 and 240 Hz");
+        mouse(QEvent::MouseMove, {150, top + 4});
+        const int beforeReverse = timeline.m_scrollY;
+        advance(1);
+        if (timeline.m_scrollY >= beforeReverse)
+            return fail("direction reverses on the next frame");
+        mouse(QEvent::MouseMove, {150, (top + bottom) / 2});
+        const int stopped = timeline.m_scrollY;
+        advance(5);
+        if (timeline.m_dragScrollFrame->isActive() || timeline.m_scrollY != stopped)
+            return fail("returning to the middle stops scrolling");
+        mouse(QEvent::MouseMove, lower);
+        mouse(QEvent::MouseButtonRelease, lower);
+        advance(5);
+        if (timeline.m_dragScrollFrame->isActive() || timeline.m_scrollY != stopped)
+            return fail("release stops scrolling immediately");
+    }
+
+    timeline.setVerticalScroll(200);
+    timeline.setTool(Tool::SelectRegion);
+    mouse(QEvent::MouseButtonPress, origin);
+    const int anchorLane = timeline.laneAt(origin.y());
+    mouse(QEvent::MouseMove, lower);
+    advance(30);
+    if (timeline.m_regionLaneA != anchorLane ||
+        timeline.m_regionLaneB != timeline.laneAt(lower.y()))
+        return fail("time selection keeps its original lane above the viewport");
+    mouse(QEvent::MouseButtonRelease, lower);
+    timeline.clearRegion();
+
+    timeline.setVerticalScroll(0);
+    timeline.setTool(Tool::Select);
+    timeline.selectClips({{QStringLiteral("edge-track-0"), QStringLiteral("edge-clip-0")},
+                          {QStringLiteral("edge-track-1"), QStringLiteral("edge-clip-1")}});
+    const QPoint pickup = timeline.clipRect(0, project.tracks[0].clips[0]).center().toPoint();
+    const QPoint outside(pickup.x(), bottom + 120);
+    mouse(QEvent::MouseButtonPress, pickup);
+    mouse(QEvent::MouseMove, outside);
+    advance(30);
+    const int lane = timeline.laneAt(bottom - 1);
+    const auto* moved = timeline.findClipModel(timeline.trackIdForLane(lane), QStringLiteral("edge-clip-0"));
+    const auto* companion = timeline.findClipModel(timeline.trackIdForLane(lane + 1), QStringLiteral("edge-clip-1"));
+    if (timeline.m_scrollY < 400 || !moved || !companion ||
+        std::abs(moved->startSeconds - 1.003) > 1e-9 ||
+        std::abs(companion->startSeconds - 1.003) > 1e-9)
+        return fail("group follows a stationary pointer below the viewport without changing time");
+    mouse(QEvent::MouseMove, {pickup.x(), top - 40});
+    const int beforeReverse = timeline.m_scrollY;
+    advance(1);
+    if (timeline.m_scrollY >= beforeReverse ||
+        timeline.m_dragTrackId != timeline.trackIdForLane(timeline.laneAt(top)))
+        return fail("clip follows upward outside the viewport");
+    mouse(QEvent::MouseButtonRelease, {pickup.x(), top - 40});
+    controller.undo();
+    if (!timeline.findClipModel(QStringLiteral("edge-track-0"), QStringLiteral("edge-clip-0")) ||
+        !timeline.findClipModel(QStringLiteral("edge-track-1"), QStringLiteral("edge-clip-1")))
+        return fail("one undo restores the entire scrolled group drag");
+
+    timeline.setVerticalScroll(timeline.maxVerticalScroll() - 3);
+    mouse(QEvent::MouseButtonPress, origin);
+    mouse(QEvent::MouseMove, lower);
+    advance(3);
+    if (timeline.m_scrollY != timeline.maxVerticalScroll() || timeline.m_dragScrollFrame->isActive())
+        return fail("bottom limit stops the frame timer");
+    mouse(QEvent::MouseMove, {150, top + 4});
+    QEvent ungrab(QEvent::UngrabMouse);
+    QApplication::sendEvent(&timeline, &ungrab);
+    const int interrupted = timeline.m_scrollY;
+    advance(5);
+    if (timeline.m_dragScrollFrame->isActive() || timeline.m_scrollY != interrupted)
+        return fail("lost mouse grab stops edge scrolling");
+    std::printf("PASS timeline edge scroll: inside edges, mixer inset, stationary marquee/group, region anchor, reversal, release, undo, limits and 60/240 Hz\n");
+    return true;
 }
 
 bool TimelineWidget::checkMarqueeSelectionForTest() {
@@ -269,6 +404,8 @@ bool TimelineWidget::checkMarqueeSelectionForTest() {
     std::printf("Marquee 500 tracks / 50000 clips: input + scene recording %.3f ms/frame; full invalidation %.3f ms/frame\n", incremental, full);
     mouse(QEvent::MouseButtonRelease, {340, bottom});
     // Autoscroll must update the live result even with a stationary pointer.
+    timeline.show();
+    QApplication::processEvents();
     timeline.setVerticalScroll(200);
     mouse(QEvent::MouseButtonPress, {20, timeline.tracksTop() + 10});
     mouse(QEvent::MouseMove, {150, timeline.tracksTop() - 20});
@@ -279,6 +416,7 @@ bool TimelineWidget::checkMarqueeSelectionForTest() {
     if (timeline.m_scrollY >= beforeScroll || !matches()) return fail("autoscroll updates live selection");
     mouse(QEvent::MouseButtonRelease, {150, timeline.tracksTop() - 20});
     if (!checkInterruptedPointerGestureForTest()) return fail("interrupted pointer gesture");
+    if (!checkDragAutoScrollForTest()) return false;
     std::printf("PASS marquee: live entry/exit, reverse drag, release, click, autoscroll, raster DPR 1/1.5/2 and retained GPU reuse\n");
     return true;
 }
@@ -1379,6 +1517,237 @@ bool TimelineWidget::checkClipEdgesForTest() {
     return ok;
 }
 
+bool TimelineWidget::checkClipTrackMoveForTest() {
+    const QString requestedTheme = qEnvironmentVariable("DAW_CLIP_TRACK_THEME");
+    if (!requestedTheme.isEmpty()) ThemeManager::instance().setThemeId(requestedTheme, false);
+    MainWindow window(false);
+    window.resize(1200, 760);
+    auto* timeline = window.findChild<TimelineWidget*>();
+    auto* command = window.findChild<QAction*>(QStringLiteral("edit.moveClipsToTrack"));
+    if (!timeline || !command) return false;
+    auto& controller = *timeline->m_controller;
+    daw::ProjectModel fixture;
+    const daw::ClipKind kinds[] = {daw::ClipKind::Audio, daw::ClipKind::Midi,
+                                   daw::ClipKind::Pattern, daw::ClipKind::Automation};
+    const daw::TrackKind trackKinds[] = {daw::TrackKind::Audio, daw::TrackKind::Midi,
+                                        daw::TrackKind::Pattern, daw::TrackKind::Automation};
+    for (int kind = 0; kind < 4; ++kind) {
+        daw::TrackModel source;
+        source.id = "move-source-" + std::to_string(kind);
+        source.name = "Source " + std::to_string(kind);
+        source.kind = trackKinds[kind];
+        for (int i = 0; i < 2; ++i) {
+            daw::ClipModel clip;
+            clip.id = source.id + "-clip-" + std::to_string(i);
+            clip.name = "Keep content " + std::to_string(i);
+            clip.kind = kinds[kind];
+            clip.startSeconds = 3.25 + i * 5.5;
+            clip.offsetSeconds = .5 + i;
+            clip.durationSeconds = 2.25;
+            clip.gain = .7f;
+            clip.pan = -.2f;
+            if (kind == 1) clip.notes.push_back({});
+            source.clips.push_back(clip);
+        }
+        fixture.tracks.push_back(source);
+        source.id = "move-target-" + std::to_string(kind);
+        source.name = "Destination " + std::to_string(kind);
+        source.clips.clear();
+        fixture.tracks.push_back(source);
+    }
+    for (int i = 0; i < 24; ++i) {
+        daw::TrackModel extra;
+        extra.id = "move-extra-" + std::to_string(i);
+        extra.name = "Audio " + std::to_string(i + 1);
+        fixture.tracks.push_back(extra);
+    }
+    daw::TrackModel instrument;
+    instrument.id = "move-instrument"; instrument.name = "Instrument"; instrument.kind = daw::TrackKind::Instrument;
+    fixture.tracks.push_back(instrument);
+    daw::TrackModel folder;
+    folder.id = "move-folder"; folder.name = "Protected folder"; folder.kind = daw::TrackKind::Folder; folder.editLocked = true;
+    fixture.tracks.push_back(folder);
+    daw::TrackModel child;
+    child.id = "move-protected-child"; child.parentId = folder.id; child.name = "Protected audio";
+    fixture.tracks.push_back(child);
+    folder.id = "move-hidden-folder"; folder.name = "Hidden folder"; folder.editLocked = false; folder.expanded = false;
+    fixture.tracks.push_back(folder);
+    child.id = "move-hidden-child"; child.name = "Audio destination"; child.parentId = folder.id;
+    fixture.tracks.push_back(child);
+    daw::TrackModel bus;
+    bus.id = "move-bus"; bus.kind = daw::TrackKind::Bus;
+    fixture.tracks.push_back(bus);
+    controller.restoreProject(fixture, "Clip move fixture");
+    window.show(); window.activateWindow(); timeline->setFocus();
+    QApplication::processEvents();
+    const auto check = [](bool pass, const char* name) {
+        std::printf("%s clip track move: %s\n", pass ? "PASS" : "FAIL", name);
+        return pass;
+    };
+    const auto sourceId = [](int kind) { return QStringLiteral("move-source-%1").arg(kind); };
+    const auto targetId = [](int kind) { return QStringLiteral("move-target-%1").arg(kind); };
+    const auto selection = [&](int kind) {
+        return QVector<ui::ClipSel>{{sourceId(kind), sourceId(kind) + "-clip-0"},
+                                   {sourceId(kind), sourceId(kind) + "-clip-1"}};
+    };
+    const auto unchanged = [](const daw::ClipModel* after, const daw::ClipModel& before) {
+        return after && after->id == before.id && after->kind == before.kind && after->name == before.name &&
+            after->startSeconds == before.startSeconds && after->offsetSeconds == before.offsetSeconds &&
+            after->durationSeconds == before.durationSeconds && after->gain == before.gain &&
+            after->pan == before.pan && after->notes.size() == before.notes.size() && after->contentId == before.contentId;
+    };
+    for (int kind = 0; kind < 4; ++kind) {
+        timeline->selectClips(selection(kind));
+        const QString primary = timeline->m_selectedClipId;
+        const auto targets = timeline->clipMoveTargets();
+        bool compatible = targets.contains(targetId(kind)) && !targets.contains(sourceId(kind)) &&
+            !targets.contains(QStringLiteral("move-protected-child")) && !targets.contains(QStringLiteral("move-bus"));
+        for (const auto& id : targets)
+            compatible &= daw::trackAccepts(controller.project().findTrack(id.toStdString())->kind, kinds[kind]);
+        if (kind == 1) compatible &= targets.contains(QStringLiteral("move-instrument"));
+        if (kind == 0) compatible &= targets.contains(QStringLiteral("move-hidden-child"));
+        if (!check(compatible, "destinations respect clip kinds, current lane and inherited locks")) return false;
+        const auto before = controller.project().findTrack(sourceId(kind).toStdString())->clips;
+        const auto depth = controller.undoDepth();
+        if (!check(timeline->moveSelectedClipsToTrack(targetId(kind)) && controller.undoDepth() == depth + 1 &&
+            controller.project().findTrack(sourceId(kind).toStdString())->clips.empty() &&
+            unchanged(timeline->findClipModel(targetId(kind), QString::fromStdString(before[0].id)), before[0]) &&
+            unchanged(timeline->findClipModel(targetId(kind), QString::fromStdString(before[1].id)), before[1]) &&
+            timeline->m_selectedClipId == primary && timeline->m_selection.size() == 2 &&
+            timeline->m_selection.front().trackId == targetId(kind), "group transfer preserves identity, content, timing and primary selection")) return false;
+        controller.undo(); timeline->publishSelection();
+        if (!check(unchanged(timeline->findClipModel(sourceId(kind), QString::fromStdString(before[0].id)), before[0]) &&
+            unchanged(timeline->findClipModel(sourceId(kind), QString::fromStdString(before[1].id)), before[1]) &&
+            controller.project().findTrack(sourceId(kind).toStdString())->clips[0].id == before[0].id &&
+            controller.project().findTrack(sourceId(kind).toStdString())->clips[1].id == before[1].id &&
+            timeline->m_selection.front().trackId == sourceId(kind), "one Undo restores the whole group and selection")) return false;
+        controller.redo(); timeline->publishSelection();
+        if (!check(unchanged(timeline->findClipModel(targetId(kind), QString::fromStdString(before[0].id)), before[0]) &&
+            timeline->m_selection.front().trackId == targetId(kind), "Redo transfers without shifting the clips")) return false;
+        controller.undo(); timeline->publishSelection();
+    }
+    const auto atomicDepth = controller.undoDepth();
+    if (!check(!controller.moveClipsToTrack({{sourceId(0).toStdString(), selection(0).front().clipId.toStdString()},
+                                           {sourceId(0).toStdString(), "missing-clip"}}, targetId(0).toStdString()) &&
+        controller.undoDepth() == atomicDepth && timeline->findClipModel(sourceId(0), selection(0).front().clipId),
+        "a missing member rejects the entire group without an undo entry")) return false;
+    timeline->selectClips({selection(1).front()});
+    const auto midiBefore = *timeline->findClipModel(sourceId(1), selection(1).front().clipId);
+    if (!check(timeline->moveSelectedClipsToTrack(QStringLiteral("move-instrument")) &&
+        unchanged(timeline->findClipModel(QStringLiteral("move-instrument"), selection(1).front().clipId), midiBefore) &&
+        controller.project().findTrack(sourceId(1).toStdString())->clips.size() == 1,
+        "a single MIDI clip can move to an instrument while other clips stay put")) return false;
+    controller.undo(); timeline->publishSelection();
+    timeline->selectClips({selection(0).front(), selection(1).front()});
+    const auto invalidDepth = controller.undoDepth();
+    if (!check(!command->isEnabled() && timeline->clipMoveTargets().isEmpty() &&
+        !timeline->moveSelectedClipsToTrack(targetId(0)) && controller.undoDepth() == invalidDepth,
+        "selection spanning tracks cannot be transferred")) return false;
+    timeline->selectClips(selection(0));
+    if (!check(command->isEnabled() && command->shortcut() == QKeySequence(QStringLiteral("Ctrl+Shift+C")) &&
+        ShortcutManager::remoteScopeForId("edit.moveClipsToTrack") == ShortcutManager::RemoteScope::ForbiddenRemote,
+        "real menu command has Command/Ctrl+Shift+C and a local popup boundary")) return false;
+    // Exercise the application's physical-key fallback too: the Russian С is
+    // on the same key as C, and the command must work under either layout.
+    // Programmatic selection does not focus the arrangement as a user click does.
+    QApplication::processEvents();
+    QApplication::setActiveWindow(&window);
+    timeline->setFocus(Qt::ShortcutFocusReason);
+    QKeyEvent shortcut(QEvent::KeyPress, 0x0421, Qt::ControlModifier | Qt::ShiftModifier, QString(QChar(0x0421)));
+    QApplication::sendEvent(timeline, &shortcut);
+    QApplication::processEvents();
+    QPointer<ClipTrackPicker> picker = timeline->findChild<ClipTrackPicker*>();
+    if (!check(picker && picker->isVisible(), "the actual keyboard shortcut opens the picker")) return false;
+    auto* list = picker->findChild<QListWidget*>(QStringLiteral("ClipTrackDestinations"));
+    if (!list || list->count() != 26 || list->verticalScrollBar()->maximum() <= 0) return false;
+    if (!check(picker->width() == 80 && picker->height() <= 150 &&
+        !picker->findChild<QLineEdit*>() && !picker->findChild<QWidget*>(QStringLiteral("ClipTrackPickerTitle")),
+        "compact 80 px picker contains only the track list, without header or search")) return false;
+    bool namesAndIcons = true;
+    for (int i = 0; i < list->count(); ++i) {
+        const auto* item = list->item(i);
+        const auto* track = controller.project().findTrack(item->data(Qt::UserRole).toString().toStdString());
+        namesAndIcons &= track && !item->icon().isNull() && item->text() == QString::fromStdString(track->name);
+    }
+    if (!check(namesAndIcons, "rows show existing track names and icons without folder paths")) return false;
+    if (auto* screen = QGuiApplication::primaryScreen()) {
+        const auto bounds = screen->availableGeometry();
+        for (const auto& corner : {bounds.topLeft(), bounds.topRight(), bounds.bottomLeft(), bounds.bottomRight()}) {
+            picker->popup(corner); QApplication::processEvents();
+            if (!check(bounds.contains(picker->frameGeometry()), "popup stays on screen near every corner")) return false;
+        }
+    }
+    const auto popupDepth = controller.undoDepth();
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    if (const QString shot = qEnvironmentVariable("DAW_CLIP_TRACK_SCREENSHOT"); !shot.isEmpty())
+        picker->grab().save(shot);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(list, &escape);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QApplication::processEvents();
+    if (!check((!picker || !picker->isVisible()) && controller.undoDepth() == popupDepth, "Escape cancels without changing clips or history")) return false;
+    command->trigger(); QApplication::processEvents();
+    picker = timeline->findChild<ClipTrackPicker*>();
+    if (!picker) return false;
+    list = picker->findChild<QListWidget*>(QStringLiteral("ClipTrackDestinations"));
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+    QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+    QApplication::sendEvent(list, &down);
+    if (!check(list->currentRow() == 1, "arrow keys navigate the list directly")) return false;
+    QApplication::sendEvent(list, &up);
+    const auto chosenTrack = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString{};
+    const int chosenRow = list->currentRow();
+    QApplication::sendEvent(list, &enter);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QApplication::processEvents();
+    if (controller.undoDepth() != popupDepth + 1 || timeline->m_selection.front().trackId != targetId(0))
+        std::fprintf(stderr, "Clip track picker confirmation: row=%d chosen=%s depth=%zu expected=%zu selected=%s expectedTrack=%s visible=%d\n",
+            chosenRow, chosenTrack.toUtf8().constData(), controller.undoDepth(), popupDepth + 1,
+            timeline->m_selection.front().trackId.toUtf8().constData(), targetId(0).toUtf8().constData(),
+            picker && picker->isVisible());
+    if (!check(controller.undoDepth() == popupDepth + 1 && timeline->m_selection.front().trackId == targetId(0),
+        "Enter chooses a destination immediately")) return false;
+    controller.undo(); timeline->publishSelection();
+    QMenu context(timeline);
+    if (!timeline->populateSelectedClipActionsMenu(context)) return false;
+    auto* contextMove = context.findChild<QAction*>(QStringLiteral("MoveClipsToTrackAction"));
+    if (!check(contextMove && contextMove->isEnabled() && contextMove->shortcuts().isEmpty(),
+        "the clip context menu exposes the command without a duplicate shortcut")) return false;
+    contextMove->trigger(); QApplication::processEvents();
+    picker = timeline->findChild<ClipTrackPicker*>();
+    if (!picker) return false;
+    list = picker->findChild<QListWidget*>(QStringLiteral("ClipTrackDestinations"));
+    const QPoint row = list->visualItemRect(list->item(0)).center();
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(row), QPointF(list->viewport()->mapToGlobal(row)),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(row), QPointF(list->viewport()->mapToGlobal(row)),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(list->viewport(), &press); QApplication::sendEvent(list->viewport(), &release);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QApplication::processEvents();
+    if (!check(timeline->m_selection.front().trackId == targetId(0), "a single mouse click commits the chosen track")) return false;
+    controller.undo(); timeline->publishSelection();
+    command->trigger(); QApplication::processEvents();
+    picker = timeline->findChild<ClipTrackPicker*>();
+    if (!picker) return false;
+    controller.setTracksEditLocked({targetId(0).toStdString()}, true);
+    const auto lockedDepth = controller.undoDepth();
+    list = picker->findChild<QListWidget*>(QStringLiteral("ClipTrackDestinations"));
+    QApplication::sendEvent(list, &enter);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QApplication::processEvents();
+    if (!check(controller.undoDepth() == lockedDepth && timeline->m_selection.front().trackId == sourceId(0),
+        "a target locked while the popup is open is revalidated")) return false;
+    command->trigger(); QApplication::processEvents();
+    picker = timeline->findChild<ClipTrackPicker*>();
+    if (!picker) return false;
+    const auto oldGeneration = controller.projectGeneration();
+    if (!controller.newProject(false)) return false;
+    const auto newDepth = controller.undoDepth();
+    list = picker->findChild<QListWidget*>(QStringLiteral("ClipTrackDestinations"));
+    QApplication::sendEvent(list, &enter);
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QApplication::processEvents();
+    if (!check(controller.projectGeneration() != oldGeneration && controller.project().tracks.empty() &&
+        controller.undoDepth() == newDepth, "a popup from a previous project cannot edit the new one")) return false;
+    return true;
+}
+
 bool TimelineWidget::checkClipTrimPreviewForTest() {
     daw::EngineController controller{};
     if (!controller.initialize(48000.0, 512, false)) return false;
@@ -1495,10 +1864,22 @@ bool TimelineWidget::checkClipTrimPreviewForTest() {
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
     layout->setContentsMargins(0, 0, 0, 0);
+    ui::SelectionModel selection;
     TimelineWidget edges(&gestures, &host);
     layout->addWidget(&edges);
     edges.m_pixelsPerSecond = 80; edges.m_scrollSeconds = 0;
     edges.m_snapEnabled = false; edges.setTool(Tool::Select);
+    edges.setSelectionModel(&selection);
+    int selectionSignals = 0;
+    QObject::connect(&edges, &TimelineWidget::clipSelected, &edges, [&] {
+        ++selectionSignals;
+        // Match MainWindow's publication before switching track/Inspector.
+        edges.publishSelection();
+    });
+    const auto clipSelection = [&](int lane) {
+        const auto& [track, clip] = gestureClips[lane];
+        return ui::ClipSel{QString::fromStdString(track), QString::fromStdString(clip)};
+    };
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
@@ -1523,13 +1904,31 @@ bool TimelineWidget::checkClipTrimPreviewForTest() {
         settle(10);
     };
     for (int lane = 0; lane < 4; ++lane) {
+        QVector<ui::ClipSel> selected;
+        if (lane == 1) selected = {clipSelection(0), clipSelection(2)};
+        else if (lane != 2) selected = {clipSelection((lane + 1) % 4)};
+        edges.selectClips(selected);
+        const auto selectedBefore = selection.clips();
+        const auto orderBefore = selection.clipsInSelectionOrder();
+        const auto primary = edges.m_selectedClipId;
+        const auto revision = selection.revision();
+        const int signalsBefore = selectionSignals;
+        const auto before = document.tracks;
+        const auto selectionUnchanged = [&] {
+            edges.publishSelection();
+            return selection.clips() == selectedBefore &&
+                   selection.clipsInSelectionOrder() == orderBefore &&
+                   edges.m_selectedClipId == primary &&
+                   selection.revision() == revision && selectionSignals == signalsBefore;
+        };
         const auto& [track, id] = gestureClips[lane];
         const auto clip = [&]() -> const daw::ClipModel& { return document.findTrack(track)->clips.front(); };
         const auto storage = clip().notes.data();
         const auto depth = gestures.undoDepth();
         const int y = edges.laneTop(lane) + edges.laneBodyHeightAt(lane) / 2;
         pointer(QEvent::MouseButtonPress, {160, y});
-        const bool grabbed = edges.m_trimming && edges.m_trimEdge == Edge::Left && !edges.m_dragging;
+        const bool grabbed = edges.m_trimming && edges.m_trimEdge == Edge::Left &&
+                             !edges.m_dragging && selectionUnchanged();
         pointer(QEvent::MouseMove, {240, y});
         const bool moved = clip().startSeconds == 3 && clip().durationSeconds == 1 &&
             clip().offsetSeconds == (lane < 2 ? 1 : 0) && clip().notes.data() == storage;
@@ -1569,13 +1968,54 @@ bool TimelineWidget::checkClipTrimPreviewForTest() {
         pointer(QEvent::MouseButtonRelease, {160, y});
         passed &= clip().startSeconds == 2 && clip().durationSeconds == 2 && clip().offsetSeconds == 0;
         pointer(QEvent::MouseButtonPress, {320, y});
-        passed &= edges.m_trimming && edges.m_trimEdge == Edge::Right;
+        passed &= edges.m_trimming && edges.m_trimEdge == Edge::Right && selectionUnchanged();
         pointer(QEvent::MouseMove, {280, y}); pointer(QEvent::MouseButtonRelease, {280, y});
         passed &= clip().startSeconds == 2 && clip().durationSeconds == 1.5 && clip().notes.data() == storage;
-        std::printf("%s  clip kind=%d both trim edges, source timing, reversal and history (%s)\n",
+        passed &= selectionUnchanged();
+        for (int other = 0; other < 4; ++other) {
+            if (other == lane) continue;
+            const auto& original = before[other].clips.front();
+            const auto& actual = document.tracks[other].clips.front();
+            passed &= actual.startSeconds == original.startSeconds &&
+                      actual.offsetSeconds == original.offsetSeconds &&
+                      actual.durationSeconds == original.durationSeconds;
+        }
+        std::printf("%s  clip kind=%d both trim edges, unchanged selection, source timing, reversal and history (%s)\n",
                     passed ? "PASS" : "FAIL", int(kinds[lane]), surface ? "gpu" : "widgets");
         ok &= passed;
     }
+    // A selected member trims the group without becoming its primary clip.
+    edges.selectClips({clipSelection(1), clipSelection(0)});
+    const auto selected = selection.clips();
+    const auto revision = selection.revision();
+    const int signalsBefore = selectionSignals;
+    const auto depth = gestures.undoDepth();
+    const int groupY = edges.laneTop(1) + edges.laneBodyHeightAt(1) / 2;
+    pointer(QEvent::MouseButtonPress, {280, groupY});
+    pointer(QEvent::MouseMove, {240, groupY});
+    pointer(QEvent::MouseButtonRelease, {240, groupY});
+    edges.publishSelection();
+    bool groupPassed = document.tracks[0].clips.front().durationSeconds == 1 &&
+        document.tracks[1].clips.front().durationSeconds == 1 &&
+        document.tracks[2].clips.front().durationSeconds == 1.5 &&
+        document.tracks[3].clips.front().durationSeconds == 1.5 &&
+        gestures.undoDepth() == depth + 1 && selection.clips() == selected &&
+        edges.m_selectedClipId == selected.front().clipId &&
+        selection.revision() == revision && selectionSignals == signalsBefore;
+    gestures.undo();
+    groupPassed &= document.tracks[0].clips.front().durationSeconds == 1.5 &&
+                   document.tracks[1].clips.front().durationSeconds == 1.5;
+    std::printf("%s  group trim preserves primary clip and undoes in one step\n",
+                groupPassed ? "PASS" : "FAIL");
+    ok &= groupPassed;
+
+    const int bodyY = edges.laneTop(2) + edges.laneBodyHeightAt(2) / 2;
+    pointer(QEvent::MouseButtonPress, {210, bodyY});
+    pointer(QEvent::MouseButtonRelease, {210, bodyY});
+    const bool bodySelected = selection.clips() == QVector<ui::ClipSel>{clipSelection(2)} &&
+        edges.m_selectedClipId == clipSelection(2).clipId && selectionSignals > signalsBefore;
+    std::printf("%s  clip body click still selects the clip\n", bodySelected ? "PASS" : "FAIL");
+    ok &= bodySelected;
     return ok;
 }
 
@@ -1749,7 +2189,12 @@ protected:
 }
 bool checkMixerPerformance() {
     ThemeManager::instance().apply();
-    FrameClock::instance().setPreference(FrameMode::Display, 60);
+    const bool verifyRetained = qEnvironmentVariableIntValue("VLT_MIXER_VERIFY_RETAINED");
+    // Keep the native rows stable while comparing two rendering paths. The
+    // normal hover/drag checks below still exercise their interactive states.
+    if (verifyRetained) qputenv("DAW_SHOT_SLOT_HOVER", "1");
+    const int targetHz = std::clamp(qEnvironmentVariableIntValue("VLT_MIXER_HZ"), 0, 1000);
+    FrameClock::instance().setPreference(targetHz ? FrameMode::Fixed : FrameMode::Display, targetHz ? targetHz : 60);
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
@@ -1774,6 +2219,7 @@ bool checkMixerPerformance() {
         project.tracks.push_back(std::move(track));
     }
     MixerWidget mixer(&controller);
+    if (verifyRetained) mixer.setWindowFlag(Qt::WindowTransparentForInput);
     mixer.resize(1250, 440);
     auto* surface = graphics::gpuWorkspaceEnabled() ? new graphics::WorkspaceSurface(&mixer) : nullptr;
     bool failed = false;
@@ -1883,7 +2329,7 @@ bool checkMixerPerformance() {
         if (bar->value() != before) ++scrollChanges;
         ++inputs;
     });
-    timer.start(8);
+    timer.start(targetHz ? std::max(1, qRound(1000. / targetHz)) : 8);
     settle(1600); // warm one complete down/up cycle before measuring
     const int warmupInputs = inputs;
     const int warmupChanges = scrollChanges;
@@ -1897,6 +2343,69 @@ bool checkMixerPerformance() {
         qPrintable(gesture), surface ? "gpu" : "widgets", mixer.width(), mixer.height(), mixer.devicePixelRatioF(),
         inputs - warmupInputs, scrollChanges - warmupChanges, frames, static_cast<long long>(measured.elapsed()), channels);
     if (drag) sendPointer(QEvent::MouseButtonRelease, pointerPosition);
+    if (surface && verifyRetained) {
+        sendPointer(QEvent::MouseMove, QPointF(4, 4));
+        const auto verify = [&] {
+            // Native style hover transitions must finish before pixel equality.
+            settle(400);
+            const QImage retained = surface->quickWindow()->grabWindow();
+            const auto mismatch = [&](const char* stage, const QImage& actual) {
+                std::fprintf(stderr, "Mixer pixel mismatch: %s at %d,%d\n", stage,
+                    scroll->horizontalScrollBar()->value(), scroll->verticalScrollBar()->value());
+                const auto at = scroll->viewport()->mapTo(&mixer, QPoint());
+                std::fprintf(stderr, "Viewport: %d,%d %dx%d DPR=%.2f\n", at.x(), at.y(),
+                    scroll->viewport()->width(), scroll->viewport()->height(), mixer.devicePixelRatioF());
+                if (const auto shots = qEnvironmentVariable("VLT_MIXER_VERIFY_SHOTS"); !shots.isEmpty()) {
+                    retained.save(shots + QStringLiteral("-retained.png"));
+                    actual.save(shots + QStringLiteral("-") + QString::fromLatin1(stage) + QStringLiteral(".png"));
+                }
+                return false;
+            };
+            surface->invalidate(); settle(80);
+            const QImage recaptured = surface->quickWindow()->grabWindow();
+            if (retained.isNull() || retained != recaptured) return mismatch("recaptured", recaptured);
+            scroll->widget()->setProperty("vlt.scrollLayerGroup", false);
+            surface->invalidate(); settle(80);
+            const QImage ungrouped = surface->quickWindow()->grabWindow();
+            scroll->widget()->setProperty("vlt.scrollLayerGroup", true);
+            surface->invalidate(); settle(80);
+            const QImage regrouped = surface->quickWindow()->grabWindow();
+            if (retained != regrouped || retained.size() != ungrouped.size()) return mismatch("regrouped", regrouped);
+            // The stationary shared clip fixes half-pixel viewport leakage
+            // from separately aligned children at fractional Windows DPI.
+            // Partially clipped rounded controls can also differ along their
+            // antialiased corner at that viewport edge (three logical pixels).
+            const qreal dpr = mixer.devicePixelRatioF();
+            const QRectF viewport(scroll->viewport()->mapTo(&mixer, QPoint()), scroll->viewport()->size());
+            const QRect pixels = QRectF(viewport.topLeft() * dpr, viewport.size() * dpr).toAlignedRect();
+            const int edge = int(std::ceil(3 * dpr)) - 1;
+            for (int y = 0; y < retained.height(); ++y) for (int x = 0; x < retained.width(); ++x) {
+                if (retained.pixel(x, y) == ungrouped.pixel(x, y)) continue;
+                // Different GPU batch transforms can round an antialiased
+                // gradient by two 8-bit steps. Cached/fresh frames above must
+                // still match exactly; this tolerance only compares batching.
+                const auto a = retained.pixel(x, y), b = ungrouped.pixel(x, y);
+                if (qAlpha(a) == qAlpha(b) && std::abs(qRed(a) - qRed(b)) <= 2 &&
+                    std::abs(qGreen(a) - qGreen(b)) <= 2 && std::abs(qBlue(a) - qBlue(b)) <= 2) continue;
+                if (pixels.adjusted(-1, -1, 1, 1).contains(x, y) &&
+                    (x <= pixels.left() + edge || x >= pixels.right() - edge ||
+                     y <= pixels.top() + edge || y >= pixels.bottom() - edge)) continue;
+                return mismatch("ungrouped", ungrouped);
+            }
+            return true;
+        };
+        for (const QPoint fraction : {QPoint(0, 0), QPoint(1, 1), QPoint(3, 3), QPoint(0, 3), QPoint(0, 0)}) {
+            scroll->horizontalScrollBar()->setValue(scroll->horizontalScrollBar()->maximum() * fraction.x() / 3);
+            scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum() * fraction.y() / 3);
+            if (!verify()) { std::fprintf(stderr, "FAIL mixer retained/grouped scroll pixels\n"); return false; }
+        }
+        // Ordinary content damage must retain the scroll context too.
+        auto* button = scroll->findChild<QToolButton*>(QStringLiteral("SlotButton"));
+        if (!button) return false;
+        button->setText(QStringLiteral("Updated plugin"));
+        if (!verify()) { std::fprintf(stderr, "FAIL mixer grouped content update\n"); return false; }
+        std::printf("PASS mixer grouped/ungrouped pixels: both axes, reversal, fresh capture and content update\n");
+    }
     if (const auto shot = qEnvironmentVariable("VLT_SCROLL_SCREENSHOT"); !shot.isEmpty()) {
         if (surface) surface->quickWindow()->grabWindow().save(shot);
         else mixer.grab().save(shot);
@@ -2239,8 +2748,55 @@ bool checkNavigationMotion() {
 }
 
 bool checkUiScaling() {
+    if (qEnvironmentVariableIsSet("VLT_COMPACT_MIXER_CHECK_ONLY"))
+        return MixerWidget::checkCompactForTest();
+    if (qEnvironmentVariableIsSet("VLT_CLASSIC_MIXER_CHECK_ONLY")) {
+        auto& preferences = ui::MixerPreferences::instance();
+        const auto previous = preferences.view();
+        const auto restore = qScopeGuard([&] { preferences.setView(previous); });
+        preferences.setView(ui::MixerPreferences::View::Classic);
+        bool passed = MixerWidget::checkLayoutForTest();
+        passed &= ChannelStrip::checkRebindForTest();
+        passed &= ChannelStrip::checkFaderInputForTest();
+        passed &= ChannelStrip::checkSectionControlsForTest();
+        passed &= ChannelStrip::checkColorForTest();
+        return passed;
+    }
+    if (qEnvironmentVariableIsSet("VLT_TRACK_COLOR_CHECK_ONLY")) {
+        MainWindow window(false);
+        auto* controller = window.collaborationEngineController();
+        auto* tracks = window.findChild<TrackListWidget*>();
+        auto* timeline = window.findChild<TimelineWidget*>();
+        auto* command = window.findChild<QAction*>(QStringLiteral("track.randomColor"));
+        if (!tracks || !timeline || !command ||
+            command->shortcut() != QKeySequence(QStringLiteral("Ctrl+Shift+R"))) return false;
+        const auto first = controller->addTrack(daw::TrackKind::Audio, "First");
+        const auto second = controller->addTrack(daw::TrackKind::Audio, "Second");
+        tracks->rebuild();
+        tracks->setSelectedTracks({QString::fromStdString(first), QString::fromStdString(second)});
+        window.show();
+        QApplication::processEvents();
+        QApplication::setActiveWindow(&window);
+        timeline->setFocus(Qt::ShortcutFocusReason);
+        const auto before = controller->project().findTrack(first)->color;
+        const auto depth = controller->undoDepth();
+        QKeyEvent key(QEvent::KeyPress, 0x041A, Qt::ControlModifier | Qt::ShiftModifier,
+                      QString(QChar(0x041A)));
+        QApplication::sendEvent(timeline, &key);
+        QApplication::processEvents();
+        const bool changed = controller->undoDepth() == depth + 1 &&
+            controller->project().findTrack(first)->color != before &&
+            controller->project().findTrack(first)->color != controller->project().findTrack(second)->color;
+        controller->undo();
+        const bool restored = controller->project().findTrack(first)->color == before;
+        std::printf("%s Random Color: Ctrl+Shift+R works in Russian layout and one Undo restores colours\n",
+                    changed && restored ? "PASS" : "FAIL");
+        return changed && restored;
+    }
     if (qEnvironmentVariableIsSet("VLT_NAVIGATION_RAILS_CHECK_ONLY"))
         return TimelineWidget::checkNavigationRailsForTest();
+    if (qEnvironmentVariableIsSet("VLT_CLIP_TRACK_MOVE_CHECK_ONLY"))
+        return TimelineWidget::checkClipTrackMoveForTest();
     if (qEnvironmentVariableIsSet("VLT_MARQUEE_CHECK_ONLY"))
         return TimelineWidget::checkMarqueeSelectionForTest();
     if (qEnvironmentVariableIsSet("VLT_TIMELINE_RENDER_CHECK_ONLY"))

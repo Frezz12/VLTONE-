@@ -210,6 +210,9 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
     m_aiSeparator = ui::separatorLine(Qt::Vertical, 18, this);
 
     // Inspector zone: lines up with the inspector column on the left.
+    m_trackOverviewZone = new QWidget(this);
+    m_trackOverviewZone->hide();
+    row->addWidget(m_trackOverviewZone);
     m_inspectorZone = new QWidget(this);
     auto* iz = new QHBoxLayout(m_inspectorZone);
     iz->setContentsMargins(2, 0, 2, 0);
@@ -459,6 +462,11 @@ void ToolPanel::setInspectorVisible(bool) {}
 
 void ToolPanel::setInspectorZoneWidth(int width) {
     if (m_inspectorZone) m_inspectorZone->setFixedWidth(std::max(30, width));
+}
+
+void ToolPanel::setTrackOverviewZoneWidth(int width) {
+    m_trackOverviewZone->setFixedWidth(std::max(0, width));
+    m_trackOverviewZone->setVisible(width > 0);
 }
 
 void ToolPanel::setAiVisible(bool visible) {

@@ -35,6 +35,7 @@ class QTimer;
 class QToolButton;
 class QAction;
 class TrackListWidget;
+class TrackOverviewPanel;
 class TimelineWidget;
 class MixerWidget;
 class WarpEditorWidget;
@@ -578,6 +579,7 @@ private slots:
     void onBounceInPlace();
     void onOfflineRender();
     void onStripSilence();
+    void openVocalAlignment();
     void onSilenceSettings();
     void onSharedPlugins();
     void onNewProject();
@@ -800,6 +802,7 @@ private:
     void setInspectorVisible(bool visible);
     /// Show or hide the file browser, remembering the choice.
     void setBrowserVisible(bool visible);
+    void setTrackOverviewVisible(bool visible);
     /// Create the Chromium surface on first use, then keep it alive while
     /// hidden so downloads are not cancelled.
     void ensureWebBrowser();
@@ -983,11 +986,14 @@ private:
     QWidget* m_workspace = nullptr;
     ToolPanel* m_toolPanel = nullptr;
     TrackListWidget* m_trackList = nullptr;
+    TrackOverviewPanel* m_trackOverview = nullptr;
+    int m_trackOverviewWidth = 180;
     TimelineWidget* m_timeline = nullptr;
     MixerWidget* m_mixer = nullptr;
     QWidget* m_bottomPanel = nullptr;
     // Last explicitly opened Warp tab, used when W has no clip selection.
     QPointer<WarpEditorWidget> m_warpEditor;
+    QPointer<class VocalAlignmentWindow> m_vocalAlignment;
     InspectorWidget* m_inspector = nullptr;
     ContextPanel* m_contextPanel = nullptr;
     NoteContextPanel* m_noteContextPanel = nullptr;
@@ -1033,6 +1039,7 @@ private:
     QAction* m_showInspectorAction = nullptr;
     QAction* m_showContextPanelAction = nullptr;
     QAction* m_showBrowserAction = nullptr;
+    QAction* m_showTrackOverviewAction = nullptr;
     QAction* m_showWebAction = nullptr;
     QAction* m_showAiAction = nullptr;
     QAction* m_showMasterAction = nullptr;

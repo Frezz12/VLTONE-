@@ -8,6 +8,7 @@
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QMouseEvent;
 class QPushButton;
 class QWidget;
 
@@ -61,6 +62,9 @@ public:
     QString selectedPath() const { return m_selectedPath; }
     bool checkForTest() const;
 
+protected:
+    void mousePressEvent(QMouseEvent* event) override;
+
 private:
     void browse();
     void updateSelection();
@@ -73,7 +77,6 @@ private:
     QListWidget* m_projectList = nullptr;
     QPushButton* m_open = nullptr;
     QPushButton* m_location = nullptr;
-    QLabel* m_selection = nullptr;
 };
 
 struct ProjectTemplateSaveOptions {

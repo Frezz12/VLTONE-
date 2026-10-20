@@ -29,7 +29,7 @@ private:
     bool valid = true;
 };
 
-audio::Result AudioRuntime::startAudition(std::shared_ptr<AudioRuntime> secondary) {
+audio::Result AudioRuntime::startAudition(std::shared_ptr<AudioRuntime> secondary, bool followTransport) {
     if (!secondary || secondary.get() == this || auditionRuntime || auditionDriven ||
         secondary->auditionRuntime || secondary->auditionDriven || secondary->deviceSnapshot().hasStream ||
         !prepared || !secondary->prepared || preparation() != secondary->preparation() ||
@@ -42,6 +42,15 @@ audio::Result AudioRuntime::startAudition(std::shared_ptr<AudioRuntime> secondar
         // Worker registration and source pre-roll can wait on OS services.
         // Complete them before gating the primary device's output.
         inheritAudioWorkers(*secondary);
+        if (followTransport) {
+            const auto state = transportSnapshot();
+            secondary->transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = state.tempo});
+            secondary->transportCommand({.action = AudioTransportCommand::Action::Duration, .position = state.duration});
+            secondary->transportCommand({.action = AudioTransportCommand::Action::LoopRange,
+                .position = state.loopStart, .end = state.loopEnd});
+            secondary->transportCommand({.action = AudioTransportCommand::Action::LoopEnabled, .enabled = state.loopEnabled});
+            secondary->transportCommand({.action = AudioTransportCommand::Action::Seek, .position = state.position});
+        }
         secondary->transportCommand({AudioTransportCommand::Action::StartPlayback});
         auto result = audio::Result::ok();
         {
@@ -50,9 +59,17 @@ audio::Result AudioRuntime::startAudition(std::shared_ptr<AudioRuntime> secondar
             if (!published) result = audio::Result::fail(audio::EngineError::InvalidArgument,
                 std::string(engine::describe(published.error())));
             else {
-                transportCommand({AudioTransportCommand::Action::Pause});
+                if (followTransport) {
+                    // Read again under the render gate so both clocks start
+                    // on the same sample even when preparation took a while.
+                    const auto state = transportSnapshot();
+                    secondary->transportCommand({.action = AudioTransportCommand::Action::Seek, .position = state.position});
+                    secondary->transportCommand({state.playing ? AudioTransportCommand::Action::Play
+                                                               : AudioTransportCommand::Action::Pause});
+                } else transportCommand({AudioTransportCommand::Action::Pause});
                 previewCommand({AudioPreviewCommand::Action::Stop});
                 secondary->auditionDriven = true;
+                auditionFollowsTransport = followTransport;
                 auditionRuntime = secondary;
             }
         }
@@ -70,6 +87,7 @@ audio::Result AudioRuntime::startAudition(std::shared_ptr<AudioRuntime> secondar
 
 void AudioRuntime::stopAudition() {
     auto retired = std::move(auditionRuntime);
+    auditionFollowsTransport = false;
     if (!retired) return;
     {
         const engine::RealtimeEngine::RenderGate gate(engine);

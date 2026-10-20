@@ -41,6 +41,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QRandomGenerator>
 #include <QStyle>
 #include <QToolButton>
 #include <QToolTip>
@@ -72,6 +73,17 @@ constexpr int kFaderMin = 68;
 constexpr int kPanWidth = 28;
 constexpr int kPanHeight = 28;
 constexpr int kPartGap = 6;
+
+bool trackTreeIsCompact(const daw::ProjectModel& project, const daw::TrackModel& track) {
+    if (ui::laneHeightFor(track.height) > ui::kCompactLaneHeight) return false;
+    if (daw::isFolder(track)) {
+        for (const auto& id : daw::subtreeOf(project, track.id)) {
+            const auto* child = project.findTrack(id);
+            if (child && ui::laneHeightFor(child->height) > ui::kCompactLaneHeight) return false;
+        }
+    }
+    return true;
+}
 
 /// Full-height row geometry stays aligned to the timeline, while the painted
 /// inset surface gives each channel a modern card silhouette and breathing
@@ -674,6 +686,7 @@ QWidget* TrackListWidget::buildRow(const daw::TrackModel& track, int number,
     ui::LevelMeter* meter = nullptr;
     if (channel) {
         fader = new ui::FaderWidget(Qt::Horizontal, container);
+        fader->setTrackHeaderStyle(true);
         fader->installEventFilter(this);
         fader->setGain(track.volume);
         fader->setMinimumWidth(kFaderMin);
@@ -991,12 +1004,22 @@ void TrackListWidget::refreshMeters() {
 void TrackListWidget::syncRowHeights() { layoutRows(); }
 
 void TrackListWidget::toggleCompactRows(const QString& id) {
-    const auto* source = m_controller->project().findTrack(id.toStdString());
+    const auto& project = m_controller->project();
+    const auto* source = project.findTrack(id.toStdString());
     if (!source) return;
-    const bool minimize = ui::laneHeightFor(source->height) > ui::kCompactLaneHeight;
+    const bool minimize = !trackTreeIsCompact(project, *source);
+    const auto roots = actionTargets(id);
+    auto targets = roots;
+    for (const auto& root : roots) {
+        const auto* track = project.findTrack(root);
+        if (!track || !daw::isFolder(*track)) continue;
+        // Size the document subtree, including children hidden by disclosure.
+        const auto children = daw::subtreeOf(project, root);
+        targets.insert(targets.end(), children.begin(), children.end());
+    }
     std::vector<std::pair<std::string, double>> before;
-    for (const auto& target : actionTargets(id)) {
-        const auto* track = m_controller->project().findTrack(target);
+    for (const auto& target : targets) {
+        const auto* track = project.findTrack(target);
         if (!track) continue;
         // Mixed selections follow the clicked row, and already minimized rows
         // retain their own restore size.
@@ -1038,10 +1061,13 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
     const int lineY = (h - 20) / 2;
     row.icon->setFixedSize(iconSide, iconSide);
     row.icon->move(0, (h - iconSide) / 2);
-    const QString tip = compact ? tr("Double-click to restore track height")
-                                : tr("Double-click to minimize track");
+    const QString tip = row.isFolder
+        ? tr("Double-click to minimize or restore this folder and its tracks")
+        : compact ? tr("Double-click to restore track height")
+                  : tr("Double-click to minimize track");
     row.band->setToolTip(tip);
-    row.nameEdit->setToolTip(QString::fromStdString(track->name) + QLatin1Char('\n') + tip);
+    row.nameEdit->setToolTip(QString::fromStdString(track->name) + QLatin1Char('\n') +
+                             tr("Double-click to rename track"));
 
     int chipCount = 0;
     for (ui::MsrButton* chip : {row.mute, row.solo, row.pattern, row.monitor, row.record}) {
@@ -1075,8 +1101,9 @@ void TrackListWidget::applyRowAdaptivity(const Row& row) {
         row.chips->setGeometry(nameX, nameY + 21, chipWidth, kChipH);
         const int faderX = nameX + stackWidth + kPartGap;
         row.fader->setCompactKnob(knob);
-        row.fader->setGeometry(faderX, (h - (knob ? 24 : 22)) / 2,
-                              knob ? 24 : available - stackWidth, knob ? 24 : 22);
+        const int faderHeight = row.fader->height();
+        row.fader->setGeometry(faderX, (h - faderHeight) / 2,
+                              knob ? 24 : available - stackWidth, faderHeight);
         row.pan->move(w - kPanWidth, (h - kPanHeight) / 2);
     } else {
         // Plain folders keep their count and M/S at the right, as before.
@@ -2128,17 +2155,24 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* ev) {
         return QWidget::eventFilter(obj, ev);
     }
 
-    // Empty header space and an idle name share one size gesture. Check the
+    // Names edit text; only empty header space changes lane height. Check the
     // actual hit area because a control can ignore a double-click and let it
     // bubble through the band and row; resetting pan must never resize a track.
     if (ev->type() == QEvent::MouseButtonDblClick) {
         auto* mouse = static_cast<QMouseEvent*>(ev);
-        const auto* name = qobject_cast<QLineEdit*>(w);
+        auto* name = qobject_cast<ui::InlineNameEdit*>(w);
         const QPoint local = w->mapFromGlobal(mouse->globalPosition().toPoint());
-        if (mouse->button() == Qt::LeftButton && (!name || name->isReadOnly()) &&
+        if (mouse->button() == Qt::LeftButton && name && name->isReadOnly() &&
+            w->rect().contains(local)) {
+            cancelDrag();
+            if (!m_controller->isTrackEditLocked(id.toString().toStdString()))
+                name->beginEditing();
+            mouse->accept();
+            return true;
+        }
+        if (mouse->button() == Qt::LeftButton && !name &&
             w->rect().contains(local) && !w->childAt(local)) {
-            m_pressing = false;
-            m_dragging = false;
+            cancelDrag();
             toggleCompactRows(id.toString());
             mouse->accept();
             return true;
@@ -2398,6 +2432,27 @@ void TrackListWidget::applyTrackIcon(const QStringList& trackIds, const QString&
     emit trackValuesChanged(trackIds, daw::collab::marksLocalFileDirty(result), true);
 }
 
+void TrackListWidget::randomizeSelectedTrackColors() {
+    std::vector<std::pair<std::string, uint32_t>> colors;
+    QSet<uint32_t> used;
+    auto* random = QRandomGenerator::global();
+    for (const auto& id : m_selectedIds) {
+        const auto* track = m_controller->project().findTrack(id.toStdString());
+        if (!track) continue;
+        uint32_t color;
+        do {
+            color = QColor::fromHsv(random->bounded(360), random->bounded(140, 221),
+                                   random->bounded(200, 241)).rgb() & 0x00FFFFFFu;
+        } while (color == track->color || used.contains(color));
+        used.insert(color);
+        colors.emplace_back(track->id, color);
+    }
+    if (colors.empty()) return;
+    const auto result = m_controller->setTrackColors(colors);
+    rebuild();
+    emit tracksChanged(daw::collab::marksLocalFileDirty(result));
+}
+
 void TrackListWidget::showTrackIconPicker(const QString& id) {
     if (!m_selectedIds.contains(id)) clickSelect(id, Qt::NoModifier);
     const auto* track = m_controller->project().findTrack(id.toStdString());
@@ -2460,9 +2515,23 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     const bool isPattern = track->kind == daw::TrackKind::Pattern;
     const bool channel = daw::carriesAudio(*track);
     const int selected = int(m_selectedIds.size());
+    const bool protectedSelection = std::any_of(m_selectedIds.begin(), m_selectedIds.end(),
+        [this](const QString& target) { return m_controller->isTrackTreeEditLocked(target.toStdString()); });
+    auto* lock = menu.addAction(track->editLocked ? tr("Unlock editing") : tr("Lock editing"));
+    lock->setObjectName(QStringLiteral("track.editLock"));
+    lock->setEnabled(!m_controller->hasCloudProjectBinding() && !m_controller->isRecording() &&
+                    !m_controller->isTrackEditLocked(track->parentId));
+    connect(lock, &QAction::triggered, this, [this, id] {
+        const auto* current = m_controller->project().findTrack(id.toStdString());
+        if (current && m_controller->setTracksEditLocked(actionTargets(id), !current->editLocked)) {
+            rebuild(); emit tracksChanged();
+        }
+    });
+    menu.addSeparator();
 
     auto* renameAction = menu.addAction(tr("Rename Track…"));
     renameAction->setObjectName(QStringLiteral("track.rename"));
+    renameAction->setEnabled(!m_controller->isTrackEditLocked(track->id));
     connect(renameAction, &QAction::triggered, this, [this, id] {
         // QMenu restores the previous focus after its action fires. Begin the
         // edit after that restoration, otherwise focusOut commits it at once.
@@ -2473,9 +2542,10 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
                     name->beginEditing();
         });
     });
-    auto* compactAction = menu.addAction(
-        ui::laneHeightFor(track->height) <= ui::kCompactLaneHeight
-            ? tr("Restore track height") : tr("Minimize track"));
+    const bool restoreHeight = trackTreeIsCompact(m_controller->project(), *track);
+    auto* compactAction = menu.addAction(isFolder
+        ? restoreHeight ? tr("Restore folder and track heights") : tr("Minimize folder and tracks")
+        : restoreHeight ? tr("Restore track height") : tr("Minimize track"));
     compactAction->setObjectName(QStringLiteral("track.toggleCompact"));
     connect(compactAction, &QAction::triggered, this,
             [this, id] { toggleCompactRows(id); });
@@ -2532,6 +2602,11 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
                            ? tr("Recolours every track inside the folder too")
                            : QString());
     QAction* trackIcon = menu.addAction(tr("Change track icon…"));
+    auto* randomColor = menu.addAction(icons::icon(icons::Glyph::Dice, th().textPrimary),
+                                      tr("Random Color"));
+    randomColor->setObjectName(QStringLiteral("track.randomColor"));
+    if (auto* command = window()->findChild<QAction*>(QStringLiteral("track.randomColor")))
+        ui::showCommandShortcut(randomColor, command);
     menu.addSeparator();
 
     QAction* dup = nullptr;
@@ -2553,6 +2628,7 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     QAction* summing = nullptr;
     if (isFolder && !isPattern) {
         summing = menu.addAction(tr("Sum Into a Bus"));
+        summing->setEnabled(!protectedSelection);
         summing->setCheckable(true);
         summing->setChecked(track->summing);
         summing->setToolTip(
@@ -2601,6 +2677,9 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
                      : (isPattern ? tr("Delete Pattern")
                                   : isFolder ? tr("Delete Folder")
                                              : tr("Delete Track")));
+    packPlain->setEnabled(!protectedSelection);
+    packSumming->setEnabled(!protectedSelection);
+    del->setEnabled(!protectedSelection);
     // The creation items belong here too: right-clicking a track is the
     // obvious place to look for "add another one", and hunting for a patch of
     // empty column to click is not a thing anyone should have to do.
@@ -2610,6 +2689,7 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     ui::connectMenuActions(menu, this, [=, this](QAction* chosen) {
         const auto* track = m_controller->project().findTrack(id.toStdString());
         if (!track) return;
+        if (chosen == randomColor) { randomizeSelectedTrackColors(); return; }
         if (chosen == trackIcon) { showTrackIconPicker(id); return; }
         if (sharedPlugins && chosen == sharedPlugins) { emit sharedPluginsRequested(); return; }
         if (freeze && chosen == freeze) {

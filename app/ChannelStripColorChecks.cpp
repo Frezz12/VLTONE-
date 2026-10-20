@@ -18,6 +18,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QInputDialog>
 #include <QKeyEvent>
@@ -27,6 +28,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -36,7 +38,7 @@
 #include <cstdio>
 
 bool ChannelStrip::checkColorForTest() {
-  bool ok = true;
+  bool ok = checkSectionControlsForTest();
   const auto check = [&](bool result, const char *label) {
     std::printf("%s %s\n", result ? "PASS" : "FAIL", label);
     ok &= result;
@@ -54,7 +56,12 @@ bool ChannelStrip::checkColorForTest() {
   // Old saved collapse state must not hide controls after removing the toggle.
   QSettings().setValue("mixer/colorExpanded", false);
   const auto id = controller.addTrack(daw::TrackKind::Audio, "Mini modules");
-  ChannelStrip strip(&controller, QString::fromStdString(id), false);
+  // A strip is embedded in the application. A native top-level window has an
+  // OS minimum width that would invalidate the 75/100 px layout checks.
+  QWidget stripHost;
+  stripHost.resize(320, 800);
+  ChannelStrip strip(&controller, QString::fromStdString(id), false, &stripHost);
+  stripHost.show();
   strip.show();
   QApplication::processEvents();
   auto *rack = strip.findChild<ui::MiniModuleRack *>();
@@ -126,7 +133,7 @@ bool ChannelStrip::checkColorForTest() {
   inspector.show();
   auto *caption = rack->findChild<QLabel *>("ChannelSectionCaption");
   check(caption && caption->text() == ui::MiniModuleRack::tr("MINI") &&
-            caption->font().pixelSize() <= 10 && caption->height() == 17 &&
+            caption->font().pixelSize() <= 10 && caption->height() == 20 &&
             !rack->findChild<QPushButton *>("MiniRackExpand"),
         "MINI is a small static section caption matching FX and sends");
   if (auto *title = rack->findChild<QPushButton *>("MiniModuleTitle")) title->click();
@@ -321,7 +328,13 @@ bool ChannelStrip::checkColorForTest() {
     }
     for (const auto *type : {"color", "doubler", "chorus"})
       large.addMiniModule(last, daw::plugins::mini::builtin(type));
+    const QVariant previousRack = QSettings().value("ui/rackMode");
+    const auto restoreRack = qScopeGuard([&] {
+      if (previousRack.isValid()) QSettings().setValue("ui/rackMode", previousRack);
+      else QSettings().remove("ui/rackMode");
+    });
     MixerWidget mixer(&large);
+    mixer.setRackMode(false);
     mixer.resize(640, 900);
     mixer.show();
     const auto settle = [] {
@@ -335,6 +348,15 @@ bool ChannelStrip::checkColorForTest() {
         if (s->trackId().toStdString() == id)
           return s;
       return nullptr;
+    };
+    const auto materialized = [&](const std::string &id) {
+      QElapsedTimer elapsed;
+      elapsed.start();
+      do {
+        if (auto *strip = find(id); strip && !strip->isHidden()) return strip;
+        settle();
+      } while (elapsed.elapsed() < 1500);
+      return static_cast<ChannelStrip *>(nullptr);
     };
     auto *initial = find(first);
     const int row = initial ? initial->m_rackSections[1]->height() : -1;
@@ -363,13 +385,20 @@ bool ChannelStrip::checkColorForTest() {
     if (horizontal)
       horizontal->setValue(horizontal->maximum());
     settle();
-    auto *end = find(last);
+    // Channel creation is spread over frames; wait for the visible channel,
+    // rather than assuming every machine finishes the viewport in 70 ms.
+    auto *end = materialized(last);
+    if (!horizontal || !end || end->m_rackSections[1]->height() != row)
+      std::printf("Rack alignment: expected=%d actual=%d width=%d natural=%d scroll=%d/%d\n",
+          row, end ? end->m_rackSections[1]->height() : -1, end ? end->width() : -1,
+          end ? end->m_rackNaturalHeights[1] : -1,
+          horizontal ? horizontal->value() : -1, horizontal ? horizontal->maximum() : -1);
     check(horizontal && end && end->m_rackSections[1]->height() == row,
           "virtualized strip materialization keeps rack alignment");
     if (horizontal)
       horizontal->setValue(0);
     settle();
-    initial = find(first);
+    initial = materialized(first);
     check(initial && initial->m_rackSections[1]->height() == row,
           "returning to earlier strips keeps rack height stable");
   }

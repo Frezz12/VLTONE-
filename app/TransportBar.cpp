@@ -402,16 +402,20 @@ QString tempoText(double bpm) {
     return value;
 }
 
-struct ToolDef { icons::Glyph glyph; const char* name; };
+struct ToolDef {
+    icons::Glyph glyph;
+    const char* name;
+    qreal visualScale = 1.0;
+};
 const ToolDef kTools[] = {
     {icons::Glyph::Pointer, QT_TRANSLATE_NOOP("TransportBar", "Select")},
-    {icons::Glyph::Knife, QT_TRANSLATE_NOOP("TransportBar", "Scissors")},
+    {icons::Glyph::Knife, QT_TRANSLATE_NOOP("TransportBar", "Scissors"), 0.9},
     {icons::Glyph::Eraser, QT_TRANSLATE_NOOP("TransportBar", "Eraser")},
     {icons::Glyph::Crosshair, QT_TRANSLATE_NOOP("TransportBar", "Region")},
-    {icons::Glyph::Close, QT_TRANSLATE_NOOP("TransportBar", "Mute")},
-    {icons::Glyph::Brush, QT_TRANSLATE_NOOP("TransportBar", "Draw")},
+    {icons::Glyph::Close, QT_TRANSLATE_NOOP("TransportBar", "Mute"), 1.45},
+    {icons::Glyph::Brush, QT_TRANSLATE_NOOP("TransportBar", "Draw"), 1.4},
     {icons::Glyph::ResizeHorizontal,
-     QT_TRANSLATE_NOOP("TransportBar", "Stretch")},
+     QT_TRANSLATE_NOOP("TransportBar", "Stretch"), 1.2},
     {icons::Glyph::Glue, QT_TRANSLATE_NOOP("TransportBar", "Glue")},
 };
 constexpr int kToolCount = int(sizeof(kTools) / sizeof(kTools[0]));
@@ -422,7 +426,23 @@ QString translatedToolName(int index) {
 
 QIcon toolIcon(int index, const QColor& color, int size) {
     if (index == 0) return icons::svgIcon(QStringLiteral("cursor.svg"), color, size);
-    return icons::icon(kTools[index].glyph, color, size);
+    const auto& tool = kTools[index];
+    if (tool.visualScale == 1.0) return icons::icon(tool.glyph, color, size);
+    // Match the eraser's visible size within the shared icon cell. Render the
+    // vectors at each DPR so the optical adjustment stays sharp on scaled screens.
+    QIcon result;
+    const qreal side = size * tool.visualScale;
+    const QRectF bounds((size - side) / 2.0, (size - side) / 2.0, side, side);
+    for (int scale = 1; scale <= 3; ++scale) {
+        QPixmap pixmap(size * scale, size * scale);
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        icons::paint(painter, tool.glyph, bounds, color);
+        painter.end();
+        result.addPixmap(pixmap);
+    }
+    return result;
 }
 
 // Qt styles can replace a checkmark with an action's icon. Keep both visible
@@ -786,38 +806,23 @@ QWidget* TransportBar::buildLeftDock() {
             &TransportBar::inspectorToggled);
     panel->addAction(m_inspectorPanelButton);
 
-    panel->addAction(ui::separatorLine(Qt::Vertical, 14, panel));
-
     m_mixerPanelButton = panelButton(
         icons::Glyph::Mixer, tr("Show or hide the mixer (X)"),
         "HeaderMixerButton");
     m_mixerPanelButton->setCheckable(true);
-    m_mixerPanelButton->setChecked(true);
+    m_mixerPanelButton->setChecked(false);
     connect(m_mixerPanelButton, &QAbstractButton::toggled, this,
             &TransportBar::mixerToggled);
     panel->addAction(m_mixerPanelButton);
 
-    m_warpButton = panelButton(
-        icons::Glyph::Waveform, tr("Open Warp for the selected audio clip (W)"),
-        "HeaderWarpButton");
-    connect(m_warpButton, &QAbstractButton::clicked, this,
-            &TransportBar::warpRequested);
-    panel->addAction(m_warpButton);
-
-    m_detachMixerButton = panelButton(
-        icons::Glyph::Detach, tr("Open the mixer in its own window"),
-        "HeaderDetachMixerButton");
-    connect(m_detachMixerButton, &QAbstractButton::clicked, this,
-            &TransportBar::detachMixerRequested);
-    panel->addAction(m_detachMixerButton);
+    m_trackOverviewPanelButton = panelButton(
+        icons::Glyph::Layers, tr("Show or hide track overview (Alt+T)"), "HeaderTrackOverviewButton");
+    m_trackOverviewPanelButton->setCheckable(true);
+    m_trackOverviewPanelButton->setChecked(false);
+    connect(m_trackOverviewPanelButton, &QAbstractButton::toggled, this, &TransportBar::trackOverviewToggled);
+    panel->addAction(m_trackOverviewPanelButton);
 
     panel->addAction(ui::separatorLine(Qt::Vertical, 14, panel));
-
-    auto* addTrack = panelButton(icons::Glyph::Plus, tr("Add audio track"),
-                                 "HeaderAddTrackButton");
-    connect(addTrack, &QAbstractButton::clicked, this,
-            &TransportBar::addTrackRequested);
-    panel->addAction(addTrack);
 
     auto* settings = panelButton(icons::Glyph::Gear, tr("Audio settings"),
                                  "HeaderSettingsButton");
@@ -2033,6 +2038,10 @@ void TransportBar::setBrowserVisible(bool visible) {
     reflectToggle(m_browserPanelButton, visible);
 }
 
+void TransportBar::setTrackOverviewVisible(bool visible) {
+    reflectToggle(m_trackOverviewPanelButton, visible);
+}
+
 void TransportBar::setWebVisible(bool visible) {
     reflectToggle(m_webPanelButton, visible);
 }
@@ -2045,16 +2054,6 @@ void TransportBar::setMasterVisible(bool visible) { reflectToggle(m_masterPanelB
 
 void TransportBar::setAiVisible(bool visible) {
     reflectToggle(m_aiPanelButton, visible);
-}
-
-void TransportBar::setMixerDetached(bool detached) {
-    if (!m_detachMixerButton) return;
-    m_detachMixerButton->setEnabled(!detached);
-    const QString description = detached
-        ? tr("Mixer is already open in its own window")
-        : tr("Open the mixer in its own window");
-    m_detachMixerButton->setToolTip(description);
-    m_detachMixerButton->setAccessibleName(description);
 }
 
 void TransportBar::syncTempo() {

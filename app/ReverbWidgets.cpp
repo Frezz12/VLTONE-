@@ -56,7 +56,7 @@ ReverbValue::ReverbValue(QWidget* parent):QDoubleSpinBox(parent) {
 void ReverbValue::paintScene(QPainter& p,const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing);const bool focus=hasFocus()||lineEdit()->hasFocus();
     const QRectF r=QRectF(rect()).adjusted(.5,.5,-.5,-.5);
-    p.setPen(QPen(opacity(focus?violet():muted(),focus?220:45),1));p.setBrush(opacity(ink(),th().dark?6:12));p.drawRoundedRect(r,5,5);
+    p.setPen(QPen(opacity(muted(),45),1));p.setBrush(opacity(ink(),th().dark?6:12));p.drawRoundedRect(r,5,5);
     const double f=(value()-minimum())/std::max(.001,maximum()-minimum());
     p.setPen(QPen(opacity(violet(),focus?200:90),1));p.drawLine(QPointF(6,height()-2),QPointF(6+(width()-12)*f,height()-2));
 }
@@ -72,12 +72,11 @@ void ReverbModeButton::paintScene(QPainter& p,const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing);const QRectF r=QRectF(rect()).adjusted(.5,.5,-.5,-.5);const bool on=isChecked();
     if(on||underMouse()||hasFocus()){
         QLinearGradient g(r.topLeft(),r.topRight());g.setColorAt(0,mixColors(surface(),violet(),on?.17:.06));g.setColorAt(1,surface());
-        p.setBrush(g);p.setPen(QPen(opacity(on?violet():muted(),on?85:40),1));p.drawRoundedRect(r,7,7);
+        p.setBrush(g);p.setPen(QPen(opacity(muted(),40),1));p.drawRoundedRect(r,7,7);
     }
     if(on){p.setPen(QPen(violet(),2,Qt::SolidLine,Qt::RoundCap));p.drawLine(QPointF(1,height()*.3),QPointF(1,height()*.7));}
     spaceGlyph(p,QRectF(12,(height()-30)/2.,30,30),m_mode,on?violet():muted());
     p.setFont(reverbUi::font(font(),12,on));p.setPen(on?ink():muted());p.drawText(QRectF(54,0,width()-63,height()),Qt::AlignVCenter|Qt::AlignLeft,text());
-    if(hasFocus()){p.setBrush(Qt::NoBrush);p.setPen(QPen(violet(),1,Qt::DashLine));p.drawRoundedRect(r.adjusted(3,3,-3,-3),4,4);}
 }
 void ReverbModeButton::paintEvent(QPaintEvent*){QPainter p(this);paintScene(p,QRegion(rect()));}
 void ReverbModeButton::enterEvent(QEnterEvent* e){update();QAbstractButton::enterEvent(e);}
@@ -86,7 +85,7 @@ void ReverbModeButton::leaveEvent(QEvent* e){update();QAbstractButton::leaveEven
 ReverbPresetButton::ReverbPresetButton(QWidget* parent):QToolButton(parent) {setFixedHeight(44);setFocusPolicy(Qt::StrongFocus);setCursor(Qt::PointingHandCursor);}
 void ReverbPresetButton::paintScene(QPainter& p,const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing);const QRectF r=QRectF(rect()).adjusted(.5,.5,-.5,-.5);
-    p.setPen(QPen(opacity(hasFocus()?violet():muted(),hasFocus()?180:45),1));p.setBrush(surface());p.drawRoundedRect(r,6,6);
+    p.setPen(QPen(opacity(muted(),45),1));p.setBrush(surface());p.drawRoundedRect(r,6,6);
     p.setFont(reverbUi::font(font(),9,true));p.setPen(muted());p.drawText(QRectF(12,5,width()-38,13),Qt::AlignLeft,QCoreApplication::translate("ReverbPanel","PRESET"));
     p.setFont(reverbUi::font(font(),13,true));p.setPen(ink());p.drawText(QRectF(12,20,width()-38,18),Qt::AlignLeft,fontMetrics().elidedText(text(),Qt::ElideRight,width()-38));
     p.setPen(QPen(muted(),1.2,Qt::SolidLine,Qt::RoundCap));p.drawPolyline(QPolygonF{{width()-19.,20},{width()-15.,24},{width()-11.,20}});
@@ -163,7 +162,7 @@ void ReverbSlider::paintScene(QPainter& p,const QRegion&) {
     const bool cyan=m_info.id=="preDelay"||m_info.id=="width"||m_info.id=="highCut";
     const auto accent=cyan?turquoise():violet();
     QLinearGradient panel(r.topLeft(),r.bottomLeft());panel.setColorAt(0,mixColors(surface(),accent,active?.07:.025));panel.setColorAt(1,background());
-    p.setBrush(panel);p.setPen(QPen(opacity(active?accent:muted(),active?155:34),1));p.drawRoundedRect(r,8,8);
+    p.setBrush(panel);p.setPen(QPen(opacity(muted(),34),1));p.drawRoundedRect(r,8,8);
     p.setFont(reverbUi::font(font(),11,true));p.setPen(ink());
     const QRectF caption(14,8,width()-28,18);p.drawText(caption,Qt::AlignVCenter|Qt::AlignLeft,p.fontMetrics().elidedText(accessibleName(),Qt::ElideRight,int(caption.width())));
     const QRectF diagram(14,34,width()-128,height()-64);const double f=fraction(m_plain);const auto id=m_info.id;

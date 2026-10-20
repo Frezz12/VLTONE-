@@ -5,6 +5,7 @@
 #include "Internal/ModulationRackInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "PluginStyle.hpp"
+#include "PopupStyle.hpp"
 #include "Theme.hpp"
 #include <QAbstractButton>
 #include <QAbstractItemView>
@@ -59,7 +60,7 @@ QColor effectAccent(Effect effect) {
 // Each processor has its own material and scale. The body is anchored during
 // editing; only the pointer and value indication respond to the gesture.
 void effectDial(QPainter &p, QRectF bounds, double value, Effect effect,
-                bool enabled, bool focused) {
+                bool enabled) {
   p.save();
   p.setRenderHint(QPainter::Antialiasing);
   p.setOpacity(enabled ? 1. : .4);
@@ -95,6 +96,7 @@ void effectDial(QPainter &p, QRectF bounds, double value, Effect effect,
     }
   }
 
+  if (!ui::paintMetalKnob(p, QRectF(-40, -40, 80, 80), 225 - fraction * 270)) {
   p.setPen(Qt::NoPen);
   for (int i = 4; i > 0; --i) {
     p.setBrush(QColor(0, 0, 0, th().dark ? 13 : 7));
@@ -142,10 +144,6 @@ void effectDial(QPainter &p, QRectF bounds, double value, Effect effect,
                 Qt::SolidLine, Qt::RoundCap));
   p.drawLine(point(fraction, effect == Effect::Pitch ? 21 : 23),
              point(fraction, capRadius - 4));
-  if (focused) {
-    p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(accent, 1.5, Qt::DotLine));
-    p.drawEllipse(QPointF(), 49, 49);
   }
   p.restore();
 }
@@ -276,8 +274,7 @@ protected:
       key.setColorAt(0, QColor(black ? "#39373f" : "#f0eff2"));
       key.setColorAt(.7, QColor(black ? "#25242b" : "#e1e0e5"));
       key.setColorAt(1, QColor(black ? "#17161c" : "#cfced4"));
-      p.setPen(QPen(hasFocus() ? ink : QColor(black ? "#17161c" : "#b8b7bd"),
-                    hasFocus() ? 2 : 1));
+      p.setPen(QPen(QColor(black ? "#17161c" : "#b8b7bd"), 1));
       p.setBrush(key);
       p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -2), 4, 4);
       if (!isChecked()) {
@@ -300,11 +297,6 @@ protected:
     p.setOpacity(isEnabled() ? 1 : .45);
     pluginStyle::surface(p, QRectF(rect()).adjusted(1, 1, -1, -3),
                          isDown() || isChecked(), 8);
-    if (hasFocus() || isChecked()) {
-      p.setBrush(Qt::NoBrush);
-      p.setPen(QPen(ink, hasFocus() ? 2 : 1));
-      p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -4), 8, 8);
-    }
     p.setPen(isChecked() ? ink : th().textPrimary);
     p.drawText(rect().adjusted(5, 0, -5, 0), Qt::AlignCenter, text());
   }
@@ -374,11 +366,6 @@ protected:
     p.setFont(f);
     p.setPen(palette().text().color());
     p.drawText(rect(), Qt::AlignCenter, currentText());
-    if (hasFocus()) {
-      p.setPen(QPen(palette().highlight().color(), 2));
-      p.setBrush(Qt::NoBrush);
-      p.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 4, 4);
-    }
   }
 };
 
@@ -401,9 +388,10 @@ protected:
                          : (value() - minimumValue()) /
                                std::max(1e-9, maximumValue() - minimumValue());
     if (appearance == Effect::Modulation)
-      pluginStyle::knob(p, rect(), n, isEditing(), isEnabled(), hasFocus());
+      pluginStyle::knob(p, rect(), n, isEditing(), isEnabled(),
+                        minimumValue() < 0 && maximumValue() > 0);
     else
-      effectDial(p, rect(), n, appearance, isEnabled(), hasFocus());
+      effectDial(p, rect(), n, appearance, isEnabled());
   }
 };
 
@@ -715,7 +703,7 @@ NativePluginView::NativePluginView(Kind kind, QWidget *parent)
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, tintControls);
     tintControls();
   }
-  auto *style = QStyleFactory::create("Fusion");
+  auto *style = new PopupStyle(QStyleFactory::create("Fusion"));
   style->setParent(this);
   setStyle(style);
   if (kind == Kind::Delay) {

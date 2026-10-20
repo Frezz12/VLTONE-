@@ -7,10 +7,12 @@
 #include "Theme.hpp"
 #include "UiFrameClock.hpp"
 #include "graphics/ScenePaintSource.hpp"
+#include "graphics/RetainedScene.hpp"
 
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
+#include <QFontMetricsF>
 #include <QGridLayout>
 #include <QHideEvent>
 #include <QLabel>
@@ -72,67 +74,127 @@ public:
     void paintScene(QPainter& p, const QRegion&) override {
         p.setRenderHint(QPainter::Antialiasing);
         const QRectF body = QRectF(rect()).adjusted(0.5, .5, -.5, -.5);
-        QLinearGradient casing(0, 0, 0, height());
-        casing.setColorAt(0, QColor("#3c3e3e")); casing.setColorAt(.15, QColor("#222625"));
-        casing.setColorAt(1, QColor("#121715"));
-        p.setPen(QColor("#080b0a")); p.setBrush(casing); p.drawRoundedRect(body, 10, 10);
         const QRectF face = body.adjusted(6, 6, -6, -30);
-        QLinearGradient glow(face.topLeft(), face.bottomLeft());
-        glow.setColorAt(0, QColor("#bfa777")); glow.setColorAt(.2, QColor("#f2dfaa"));
-        glow.setColorAt(.65, QColor("#e6c98d")); glow.setColorAt(1, QColor("#c09e62"));
-        p.setPen(QPen(QColor("#655233"), 1)); p.setBrush(glow); p.drawRoundedRect(face, 6, 6);
-        p.save(); QPainterPath clip; clip.addRoundedRect(face, 6, 6); p.setClipPath(clip);
-        QRadialGradient light(QPointF(face.center().x(), face.top()+18), face.width()*.7);
-        light.setColorAt(0, QColor(255,248,206,105)); light.setColorAt(1, QColor(255,230,150,0));
-        p.fillRect(face, light);
-        const QPointF pivot(face.center().x(), face.bottom()+10);
-        const double radius = std::min({(face.width()-34.)/1.732, face.height()-12., 126.});
+        QPainterPath clip; clip.addRoundedRect(face, 6, 6);
+        QFont font = p.font(); font.setPixelSize(10); font.setWeight(QFont::DemiBold);
+        font.setLetterSpacing(QFont::AbsoluteSpacing, 0);
+        const QFontMetricsF metrics(font);
+        constexpr double startAngle = 145., endAngle = 35., labelOffset = 13.;
+        constexpr double radiansPerDegree = 3.141592653589793 / 180.;
+        const double labelHalfWidth = metrics.horizontalAdvance(QStringLiteral("−20")) * .5;
+        const QPointF pivot(face.center().x(), face.bottom()+4);
+        const double radius = std::max(1., std::min({
+            (face.width()*.5-labelHalfWidth-5.)/std::cos(endAngle*radiansPerDegree)-labelOffset,
+            pivot.y()-face.top()-metrics.height()*.5-labelOffset-8., 126.}));
+        const auto angle = [](double value) {
+            // Fit the printed −20…+3 range to a symmetric arc. Ticks and
+            // needles share the same voltage response and mechanical stops.
+            const double fraction = std::clamp((std::pow(10., value / 20.) - .1) /
+                                               (std::pow(10., 3. / 20.) - .1), 0., 1.);
+            return startAngle - (startAngle-endAngle) * fraction;
+        };
         const auto position = [&](double value, double length) {
-            // VU's scale follows voltage, giving the familiar compressed
-            // negative range and open 0…+3 region on the right.
-            const double fraction = std::clamp(std::pow(10., value / 20.) / std::pow(10., 3. / 20.), 0., 1.);
-            const double radians = (150. - 120. * fraction) * 3.141592653589793 / 180.;
+            const double radians = angle(value) * radiansPerDegree;
             return pivot + QPointF(std::cos(radians)*length, -std::sin(radians)*length);
         };
-        QPainterPath scale;
-        for (int i=0; i<=100; ++i) {
-            const auto point = position(-20. + 23.*i/100., radius);
-            if (!i) scale.moveTo(point); else scale.lineTo(point);
+        // Only the needles and peak bars move. Native-DPI face/glass assets
+        // avoid rebuilding and submitting the printed scale every meter tick.
+        // RetainedScene also invalidates both assets when screen DPI changes.
+        if (m_faceSize != size() || m_faceFont != p.font()) {
+            m_staticScene.clear(); m_faceSize = size(); m_faceFont = p.font();
         }
-        p.setBrush(Qt::NoBrush); p.setPen(QPen(QColor("#594f36"), 1)); p.drawPath(scale);
-        QFont font = p.font(); font.setPixelSize(9); font.setWeight(QFont::DemiBold); p.setFont(font);
-        for (const int tick : {-20,-10,-7,-5,-3,-2,-1,0,1,2,3}) {
-            p.setPen(QPen(tick > 0 ? QColor("#aa3226") : QColor("#453d2b"), tick==0 ? 2 : 1));
-            p.drawLine(position(tick, radius-10), position(tick, radius+1));
-            if (tick==-7 || tick==-2 || tick==-1 || tick==2) continue;
-            if (face.width()<220 && (tick==-5 || tick==1)) continue;
-            const auto at = position(tick, radius+13);
-            p.drawText(QRectF(at.x()-15, at.y()-7, 30, 14), Qt::AlignCenter,
-                       tick>0 ? QStringLiteral("+%1").arg(tick) : QString::number(tick));
-        }
-        font.setPixelSize(20); font.setLetterSpacing(QFont::AbsoluteSpacing, 2); p.setFont(font);
-        p.setPen(QColor("#6a5939")); p.drawText(QRectF(face.left(),face.bottom()-43,face.width(),26),Qt::AlignCenter,"VU");
-        font.setPixelSize(8); font.setLetterSpacing(QFont::AbsoluteSpacing, .8); p.setFont(font);
-        p.drawText(QRectF(face.left(),face.bottom()-20,face.width(),14),Qt::AlignCenter,"STEREO");
-        const auto needle = [&](float amplitude, QColor color, double offset) {
-            const auto tip = position(db(amplitude) - m_reference, radius-8);
-            p.setPen(QPen(QColor(20,16,10,40), 3, Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(pivot+QPointF(offset+2,2), tip+QPointF(2,2));
-            p.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap)); p.drawLine(pivot+QPointF(offset,0),tip);
+        const auto paintStatic = [&](quint64 key, const auto& draw) {
+            if (!ui::graphics::sceneGeometrySink(p)) { draw(p); return; }
+            m_staticScene.paint(p, key, size(), {}, [&](QPainter& local) {
+                const qreal dpr = local.device()->devicePixelRatioF();
+                QImage image(QSize(int(std::ceil(width()*dpr)), int(std::ceil(height()*dpr))),
+                             QImage::Format_ARGB32_Premultiplied);
+                image.setDevicePixelRatio(dpr); image.fill(Qt::transparent);
+                QPainter raster(&image); raster.setFont(m_faceFont);
+                raster.setRenderHint(QPainter::Antialiasing);
+                draw(raster); raster.end();
+                local.drawImage(QPointF(), image);
+            });
+        };
+        paintStatic(0, [&](QPainter& background) {
+            QLinearGradient casing(0, 0, 0, height());
+            casing.setColorAt(0, QColor("#3c3e3e")); casing.setColorAt(.15, QColor("#222625"));
+            casing.setColorAt(1, QColor("#121715"));
+            background.setPen(QColor("#080b0a")); background.setBrush(casing);
+            background.drawRoundedRect(body, 10, 10);
+            QLinearGradient glow(face.topLeft(), face.bottomLeft());
+            glow.setColorAt(0, QColor("#bfa777")); glow.setColorAt(.2, QColor("#f2dfaa"));
+            glow.setColorAt(.65, QColor("#e6c98d")); glow.setColorAt(1, QColor("#c09e62"));
+            background.setPen(QPen(QColor("#655233"), 1)); background.setBrush(glow);
+            background.drawRoundedRect(face, 6, 6);
+            background.save(); background.setClipPath(clip);
+            QRadialGradient light(QPointF(face.center().x(), face.top()+18), face.width()*.7);
+            light.setColorAt(0, QColor(255,248,206,105)); light.setColorAt(1, QColor(255,230,150,0));
+            background.fillRect(face, light);
+            auto caption = font; background.setFont(caption);
+            const QRectF scale(pivot.x()-radius, pivot.y()-radius, radius*2, radius*2);
+            background.setBrush(Qt::NoBrush); background.setPen(QPen(QColor("#594f36"), 1));
+            background.drawArc(scale, qRound(endAngle*16), qRound((startAngle-endAngle)*16));
+            background.setPen(QPen(QColor("#aa3226"), 1));
+            background.drawArc(scale, qRound(endAngle*16), qRound((angle(0)-endAngle)*16));
+            for (const int tick : {-20,-10,-7,-5,-3,-2,-1,0,1,2,3}) {
+                const bool labeled = tick!=-7 && tick!=-2 && tick!=-1 && tick!=2 &&
+                                     (face.width()>=220 || (tick!=-5 && tick!=1));
+                background.setPen(QPen(tick > 0 ? QColor("#aa3226") : QColor("#453d2b"), tick==0 ? 2 : 1));
+                background.drawLine(position(tick, radius-(labeled ? 9 : 5)), position(tick, radius));
+                if (!labeled) continue;
+                const auto at = position(tick, radius+labelOffset);
+                const QString text = tick<0 ? QStringLiteral("−%1").arg(-tick) :
+                                     tick>0 ? QStringLiteral("+%1").arg(tick) : QStringLiteral("0");
+                background.drawText(at-metrics.tightBoundingRect(text).center(), text);
+            }
+            caption.setPixelSize(20); caption.setLetterSpacing(QFont::AbsoluteSpacing, 2); background.setFont(caption);
+            background.setPen(QColor("#6a5939"));
+            background.drawText(QRectF(face.left(),face.bottom()-43,face.width(),26),Qt::AlignCenter,"VU");
+            caption.setPixelSize(8); caption.setLetterSpacing(QFont::AbsoluteSpacing, .8); background.setFont(caption);
+            background.drawText(QRectF(face.left(),face.bottom()-20,face.width(),14),Qt::AlignCenter,"STEREO");
+            background.restore();
+            caption = font; caption.setPixelSize(9); caption.setLetterSpacing(QFont::AbsoluteSpacing,0);
+            background.setFont(caption); background.setPen(QColor("#b5bdb6"));
+            for (int ch=0; ch<2; ++ch) {
+                const double y=height()-20+ch*9;
+                background.drawText(QRectF(11,y-4,12,12),Qt::AlignCenter,ch==0?"L":"R");
+                background.fillRect(QRectF(30,y,width()-80,4),QColor("#080d0a"));
+            }
+        });
+        p.save(); p.setClipPath(clip);
+        const auto needle = [&](float amplitude, QColor color, quint64 key) {
+            const double degrees = angle(db(amplitude) - m_reference);
+            const auto line = [&](QPointF offset, const QPen& pen, quint64 part) {
+                p.save(); p.translate(pivot+offset); p.rotate(-degrees);
+                const auto draw = [&](QPainter& local) {
+                    local.setRenderHint(QPainter::Antialiasing);
+                    local.setPen(pen); local.drawLine(QPointF(), QPointF(radius-4, 0));
+                };
+                // The stroke geometry stays immutable as the needle rotates.
+                // Keep the shadow offset in screen coordinates, not needle space.
+                if (!m_staticScene.paint(p, key+part, size(), {}, draw)) draw(p);
+                p.restore();
+            };
+            line(QPointF(1,1), QPen(QColor(20,16,10,40), 2.5, Qt::SolidLine, Qt::RoundCap), 0);
+            line({}, QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap), 1);
         };
         needle(m_levels.vuRight, QColor("#bf5c22"), 2);
-        needle(m_levels.vuLeft, QColor("#343c32"), -2);
-        p.setBrush(QColor("#3e4136")); p.setPen(QColor("#897c5a")); p.drawEllipse(pivot,11,11);
-        QLinearGradient glass(face.topLeft(),face.bottomLeft());
-        glass.setColorAt(0,QColor(255,255,255,50)); glass.setColorAt(.3,QColor(255,255,255,0));
-        p.fillRect(face,glass); p.restore();
+        needle(m_levels.vuLeft, QColor("#343c32"), 4);
+        p.restore();
+        paintStatic(1, [&](QPainter& overlay) {
+            overlay.save(); overlay.setClipPath(clip);
+            overlay.setBrush(QColor("#3e4136")); overlay.setPen(QColor("#897c5a"));
+            overlay.drawEllipse(pivot,11,11);
+            QLinearGradient glass(face.topLeft(),face.bottomLeft());
+            glass.setColorAt(0,QColor(255,255,255,50)); glass.setColorAt(.3,QColor(255,255,255,0));
+            overlay.fillRect(face,glass); overlay.restore();
+        });
         // A separate peak bar keeps fast overloads visible beside the slow VU.
         font.setPixelSize(9); font.setLetterSpacing(QFont::AbsoluteSpacing,0); p.setFont(font);
         for (int ch=0;ch<2;++ch) {
             const double y=height()-20+ch*9;
-            p.setPen(QColor("#b5bdb6")); p.drawText(QRectF(11,y-4,12,12),Qt::AlignCenter,ch==0?"L":"R");
             const double w=width()-80;
-            p.fillRect(QRectF(30,y,w,4),QColor("#080d0a"));
             const double gain=ch==0?m_peaks.left:m_peaks.right;
             const double fraction=std::clamp((db(gain)+60)/60.,0.,1.);
             QLinearGradient led(30,0,30+w,0); led.setColorAt(0,QColor("#5a9875"));
@@ -145,6 +207,9 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override { QPainter p(this); paintScene(p, QRegion(rect())); }
 private:
+    ui::graphics::RetainedScene m_staticScene;
+    QSize m_faceSize;
+    QFont m_faceFont;
     daw::engine::LoudnessLevels m_levels;
     daw::AudioMeterSnapshot m_peaks;
     int m_reference=-18;
@@ -208,11 +273,13 @@ MasterPanel::MasterPanel(daw::EngineController* controller, QWidget* parent)
     output->setMinimumHeight(204);
     output->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Expanding);
     auto* outputColumn=new QVBoxLayout(output); outputColumn->setContentsMargins(6,5,6,5); outputColumn->setSpacing(3);
-    auto* balance=new QHBoxLayout; balance->addStretch();
+    auto* balance=new QVBoxLayout; balance->setSpacing(1);
     m_pan=new ui::PanKnob(output); m_pan->setObjectName("MasterBalance"); m_pan->setAutomatable(true);
-    m_pan->setAccessibleName(tr("Master balance")); balance->addWidget(m_pan);
-    m_panValue=label("C","caption",output); m_panValue->setFixedWidth(28); balance->addWidget(m_panValue);
-    balance->addStretch(); outputColumn->addLayout(balance);
+    m_pan->setFixedSize(56,56);
+    m_pan->setAccessibleName(tr("Master balance")); balance->addWidget(m_pan,0,Qt::AlignHCenter);
+    m_panValue=label("C","caption",output); m_panValue->setObjectName("MasterBalanceValue");
+    m_panValue->setFixedSize(56,16); m_panValue->setAlignment(Qt::AlignCenter);
+    balance->addWidget(m_panValue,0,Qt::AlignHCenter); outputColumn->addLayout(balance);
     auto* controls=new QHBoxLayout; controls->setSpacing(5); controls->addStretch();
     m_fader=new ui::FaderWidget(output);
     m_fader->setObjectName("MasterOutputFader"); m_fader->setAccessibleName(tr("Master output gain"));
@@ -293,22 +360,21 @@ void MasterPanel::applyTheme() {
         "QLabel[masterRole=section] { font-size:9px; font-weight:500; color:%6; }"
         "QLabel[masterRole=value] { font-size:17px; font-weight:600; }"
         "QToolButton { padding:3px 6px; }"
-        "QToolButton:focus { border:1px solid %7; border-radius:4px; }"
         "#MasterVuReference { font-size:11px; }"
         "#MasterResetMeters { font-size:10px; padding:3px 4px; }"
         "#SlotButton { background:transparent; border:0; padding:0 5px; font-size:10px; font-weight:500; text-align:left; }"
         "#SlotButton::menu-indicator { image:none; width:0; }"
         "#MasterAddEffect, #MasterAddAnalyzer { background:transparent; border:0; padding:0; border-radius:4px; }"
-        "#MasterAddEffect:hover, #MasterAddEffect:focus, #MasterAddAnalyzer:hover, #MasterAddAnalyzer:focus { background:%8; }"
+        "#MasterAddEffect:hover, #MasterAddEffect:focus, #MasterAddAnalyzer:hover, #MasterAddAnalyzer:focus { background:%7; }"
         "#MasterAnalysisToggle { background:transparent; border:0; text-align:left; color:%6; padding:0; font-size:10px; }"
         "#MasterAnalysisToggle:hover, #MasterAnalysisToggle:focus { color:%5; }"
         "#SlotOverflow { background:%4; color:%5; border:1px solid %2; padding:0; }"
-        "#ChannelGainReadout, #ChannelPeakReadout { background:%9; color:%5; border:1px solid %2; border-radius:3px; font-size:9px; padding:0; }"
+        "#ChannelGainReadout, #ChannelPeakReadout { background:%8; color:%5; border:1px solid %2; border-radius:3px; font-size:9px; padding:0; }"
         "#ChannelPeakReadout { color:%6; }"
-        "#ChannelPeakReadout:hover, #ChannelPeakReadout:focus { background:%8; color:%5; }"
-        "#ChannelPeakReadout[clipped=true] { color:%10; }")
+        "#ChannelPeakReadout:hover, #ChannelPeakReadout:focus { background:%7; color:%5; }"
+        "#ChannelPeakReadout[clipped=true] { color:%9; }")
         .arg(t.surface.name(),t.separator().name(),t.panelBottom().name(),t.well().name(),
-             t.textPrimary.name(),t.textSecondary.name(),t.accent.name(),
+             t.textPrimary.name(),t.textSecondary.name(),
              mixColors(t.well(),t.textPrimary,.06).name(),t.wellTop().name(),Theme::record().name()));
     m_analysisToggle->setIcon(icons::icon(m_analysisToggle->isChecked()?icons::Glyph::Chevron:icons::Glyph::ChevronRight,t.textSecondary,14));
     for(const auto* name:{"MasterAddEffect","MasterAddAnalyzer"})

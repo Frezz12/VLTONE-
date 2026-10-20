@@ -132,9 +132,6 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
 
     m_controlPanel = new QPushButton(tr("Hardware Setup..."));
     m_controlPanel->setObjectName(QStringLiteral("AsioHardwareSetup"));
-    auto* applyButton = new QPushButton(tr("Apply"));
-    applyButton->setObjectName(QStringLiteral("ApplyAudioSettings"));
-    applyButton->setProperty("accentAction", true);
     auto* buttons = new QHBoxLayout;
     buttons->addWidget(m_controlPanel);
     buttons->addStretch(1);
@@ -142,7 +139,6 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
     reconnect->setObjectName(QStringLiteral("ReconnectAudioDevice"));
     reconnect->setAccessibleName(tr("Reconnect audio device"));
     buttons->addWidget(reconnect);
-    buttons->addWidget(applyButton);
     connect(reconnect, &QPushButton::clicked, this, [this] {
         const auto result = m_controller->recoverAudioDevice(true);
         syncSettledConfiguration();
@@ -183,7 +179,6 @@ AudioSettingsPage::AudioSettingsPage(daw::EngineController* controller,
             &AudioSettingsPage::configureInputs);
     connect(m_outputConfig, &QPushButton::clicked, this,
             &AudioSettingsPage::configureOutput);
-    connect(applyButton, &QPushButton::clicked, this, &AudioSettingsPage::apply);
     connect(m_sampleRateCombo, &QComboBox::currentIndexChanged, this, &AudioSettingsPage::updateLatencySummary);
     connect(m_bufferCombo, &QComboBox::currentIndexChanged, this, &AudioSettingsPage::updateLatencySummary);
     connect(m_controlPanel, &QPushButton::clicked, this, [this] {

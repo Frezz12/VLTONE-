@@ -19,6 +19,7 @@
 #include <QQuickWindow>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <memory>
@@ -232,10 +233,25 @@ bool TimelineWidget::checkTrackPresentationForTest() {
 
     check(tracks.findChildren<QWidget*>("TrackCompactButton").isEmpty(),
           "track headers contain no dedicated minimize icon");
-    check(doubleClickHeader("bass") && project.findTrack("bass")->height == 24 &&
+    check(doubleClickHeader("bass") && project.findTrack("bass")->height == 96 &&
           project.findTrack("lead")->height == 72 && aligned() &&
-          rowFor("bass")->findChild<ui::InlineNameEdit*>()->isReadOnly(),
-          "double-clicking the name minimizes just that track without starting rename");
+          !rowFor("bass")->findChild<ui::InlineNameEdit*>()->isReadOnly(),
+          "double-clicking the name starts rename without changing track heights");
+    {
+        auto* name = rowFor("bass")->findChild<ui::InlineNameEdit*>();
+        check(name->selectedText() == name->text(), "rename selects the complete track name");
+        const auto depth = controller.undoDepth();
+        name->setText("Double-click bass");
+        QKeyEvent commit(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(surface ? static_cast<QObject*>(surface->quickWindow()) : name, &commit);
+        check(name->isReadOnly() && project.findTrack("bass")->name == "Double-click bass" &&
+              controller.undoDepth() == depth + 1, "Return commits double-click rename as one undo step");
+        controller.undo(); tracks.syncTrackValues();
+        check(project.findTrack("bass")->name == "Sub bass", "one undo restores the track name");
+    }
+    check(doubleClickHeader("bass", false) && project.findTrack("bass")->height == 24 &&
+          rowFor("bass")->findChild<ui::InlineNameEdit*>()->isReadOnly() && aligned(),
+          "double-clicking free header space minimizes the track");
     check(doubleClickHeader("bass", false) && project.findTrack("bass")->height == 96 && aligned(),
           "double-clicking free header space restores the previous height");
     auto* bassRow = rowFor("bass");
@@ -270,6 +286,10 @@ bool TimelineWidget::checkTrackPresentationForTest() {
     QApplication::sendEvent(surface ? static_cast<QObject*>(surface->quickWindow()) : name, &commit);
     check(name->isReadOnly() && project.findTrack("bass")->name == "Renamed bass",
           "Return commits the inline name after the menu closes");
+    controller.setTracksEditLocked({"bass"}, true);
+    check(doubleClickHeader("bass") && name->isReadOnly() && project.findTrack("bass")->height == 96,
+          "double-clicking a locked name neither edits nor minimizes the track");
+    controller.setTracksEditLocked({"bass"}, false);
     controller.renameTrack("bass", "Sub bass"); tracks.syncTrackValues();
     tracks.setSelectedTracks({"bass", "lead"}, "bass");
     check(toggleSelectedFromMenu(), "track menu provides a keyboard-accessible minimize action");
@@ -317,19 +337,70 @@ bool TimelineWidget::checkTrackPresentationForTest() {
     controller.setTrackMuted("kick", false); timeline.invalidateTrack("kick");
 
     tracks.setSelectedTrack("drums");
-    check(doubleClickHeader("drums"), "folder header supports the same double-click size gesture");
-    check(aligned() && controlsFit() && timeline.laneHeightAt(folderLane) == 24,
-          "a collapsed folder preview also fits a 24 px strip");
+    check(doubleClickHeader("drums") && !project.findTrack("drums")->expanded &&
+          project.findTrack("drums")->height == 112 &&
+          !rowFor("drums")->findChild<ui::InlineNameEdit*>()->isReadOnly(),
+          "double-clicking a folder name starts rename without changing its disclosure or height");
+    {
+        auto* name = rowFor("drums")->findChild<ui::InlineNameEdit*>();
+        QKeyEvent commit(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(surface ? static_cast<QObject*>(surface->quickWindow()) : name, &commit);
+    }
+    controller.setTrackHeight("kick", 104);
+    controller.setTrackHeight("percussion", 60);
+    controller.setTrackHeight("shaker", 88);
+    auto folderIds = daw::subtreeOf(project, "drums");
+    folderIds.insert(folderIds.begin(), "drums");
+    std::vector<std::pair<std::string, double>> folderHeights;
+    for (const auto& id : folderIds) folderHeights.emplace_back(id, project.findTrack(id)->height);
+    // A folder can already be short while its hidden descendants remain tall.
+    controller.setTrackHeight("drums", 24); tracks.syncRowHeights(); timeline.update(); settle();
+    const auto folderDepth = controller.undoDepth();
+    check(doubleClickHeader("drums", false), "folder free space supports the double-click size gesture");
+    const auto folderCompact = [&] {
+        return std::all_of(folderIds.begin(), folderIds.end(), [&](const auto& id) {
+            return project.findTrack(id)->height == 24;
+        });
+    };
+    check(folderCompact() && aligned() && controlsFit() && timeline.laneHeightAt(folderLane) == 24 &&
+          !project.findTrack("drums")->expanded && !project.findTrack("percussion")->expanded &&
+          project.findTrack("bass")->height == 96 && controller.undoDepth() == folderDepth + 1,
+          "folder sizing minimizes every hidden descendant to 24 px in one undo without changing disclosure");
     screenshot("-folder-strip");
-    doubleClickHeader("drums");
-    controller.setFolderExpanded("drums", true); tracks.rebuild(); timeline.update(); settle();
+    controller.undo(); tracks.syncRowHeights(); timeline.update(); settle();
+    bool folderUndone = project.findTrack("drums")->height == 24;
+    for (const auto& [id, height] : folderHeights)
+        if (id != "drums") folderUndone &= project.findTrack(id)->height == height;
+    check(folderUndone && aligned(), "one undo restores all descendant heights");
+    controller.redo(); tracks.syncRowHeights(); timeline.update(); settle();
+    check(folderCompact() && aligned(), "redo minimizes the whole folder tree again");
+    check(doubleClickHeader("drums", false), "a second folder double-click restores track heights");
+    bool folderRestored = true;
+    for (const auto& [id, height] : folderHeights) folderRestored &= project.findTrack(id)->height == height;
+    check(folderRestored && aligned(), "every nested track restores its own previous height");
+    const auto clickDisclosure = [&](const QString& id) {
+        auto* row = rowFor(id);
+        auto* icon = row ? row->findChild<QAbstractButton*>("TrackIcon") : nullptr;
+        if (!icon) return false;
+        icon->click(); settle();
+        return true;
+    };
+    check(clickDisclosure("drums"), "the existing folder icon expands its contents");
     check(timeline.laneForTrackId("kick") >= 0 && aligned() && controlsFit(),
           "folder disclosure restores child lanes without changing the saved folder height");
-    controller.setFolderExpanded("percussion", true); tracks.rebuild(); timeline.update(); settle();
+    check(clickDisclosure("percussion"), "the existing nested folder icon expands its contents");
     check(timeline.laneForTrackId("shaker") >= 0 && aligned() && controlsFit(),
           "nested folder disclosure preserves alignment and controls");
     screenshot("-expanded");
-    controller.setFolderExpanded("drums", false); tracks.rebuild(); timeline.update(); settle();
+    check(doubleClickHeader("drums", false) && folderCompact() &&
+          project.findTrack("drums")->expanded && project.findTrack("percussion")->expanded &&
+          timeline.laneForTrackId("shaker") >= 0 && aligned(),
+          "double-clicking an open folder minimizes all visible descendants without hiding them");
+    screenshot("-folder-compact-children");
+    doubleClickHeader("drums", false);
+    check(clickDisclosure("drums") && !project.findTrack("drums")->expanded &&
+          timeline.laneForTrackId("kick") < 0 && project.findTrack("shaker")->height == 88 && aligned(),
+          "the existing disclosure icon hides children while preserving all track heights");
     // Exercise real header input, through the native Quick window when used.
     const auto order = [&] {
         std::vector<std::string> ids;
@@ -418,6 +489,53 @@ bool TimelineWidget::checkTrackPresentationForTest() {
     check(ui::laneHeightForTrack(*bass) == 24 && aligned(), "minimizing a track hides its take rows without losing take disclosure");
     controller.setTrackHeight("bass", 96); tracks.syncRowHeights(); timeline.update(); settle();
     check(ui::laneHeightForTrack(*bass) > 96 && aligned(), "restoring a track restores its open take rows");
+    // Parent selection wins regardless of the order of selected rows.
+    const auto colorState = [&] {
+        std::vector<uint32_t> values;
+        for (const auto& track : project.tracks) {
+            values.push_back(track.color);
+            for (const auto& clip : track.clips) values.push_back(clip.color);
+        }
+        return values;
+    };
+    const auto originalColors = colorState();
+    const auto colorDepth = controller.undoDepth();
+    tracks.setSelectedTracks({"shaker", "percussion", "drums", "bass", "lead", "chords", "pad"});
+    QMenu colorMenu;
+    check(tracks.populateSelectedTrackActionsMenu(colorMenu), "selected tracks expose their context menu");
+    auto* randomColor = colorMenu.findChild<QAction*>("track.randomColor");
+    check(randomColor != nullptr, "track context menu exposes Random Color");
+    if (randomColor) randomColor->trigger();
+    const auto colorOf = [&](const char* id) { return project.findTrack(id)->color; };
+    check(colorOf("drums") == colorOf("kick") && colorOf("drums") == colorOf("snare") &&
+          colorOf("drums") == colorOf("percussion") && colorOf("drums") == colorOf("shaker") &&
+          colorOf("drums") == colorOf("rim") && colorOf("chords") == colorOf("pad"),
+          "selected folders override selected descendants and colour unselected children");
+    const QSet<uint32_t> rootColors{colorOf("drums"), colorOf("bass"), colorOf("lead"), colorOf("chords")};
+    check(rootColors.size() == 4, "separate selected tracks and folders receive different random colours");
+    bool clipColorsMatch = true;
+    for (const auto* id : {"kick", "snare", "shaker", "rim", "bass", "lead", "chords", "pad"})
+        for (const auto& clip : project.findTrack(id)->clips)
+            clipColorsMatch &= clip.color == colorOf(id);
+    check(clipColorsMatch && colorOf("vocal") == 0xC77A91,
+          "existing clips follow their track while unrelated tracks retain their colour");
+    const auto generatedColors = colorState();
+    check(controller.undoDepth() == colorDepth + 1, "random colours make one undo entry");
+    controller.undo();
+    check(colorState() == originalColors, "one undo restores every original track and clip colour");
+    controller.redo();
+    check(colorState() == generatedColors, "redo restores the same generated colours");
+    controller.undo();
+    tracks.setSelectedTracks({"kick", "snare"});
+    tracks.randomizeSelectedTrackColors();
+    check(colorOf("kick") != colorOf("snare") && colorOf("drums") == 0xC48B56 &&
+          colorOf("shaker") == 0x88B482,
+          "children selected without their folder get independent colours");
+    controller.undo();
+    tracks.setSelectedTracks({});
+    tracks.randomizeSelectedTrackColors();
+    check(colorState() == originalColors && controller.undoDepth() == colorDepth,
+          "empty selection leaves colours and history unchanged");
     surface.reset();
     return ok;
 }

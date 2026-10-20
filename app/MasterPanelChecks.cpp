@@ -4,6 +4,8 @@
 #include "MixerPreferences.hpp"
 #include "TransportBar.hpp"
 #include "Controls.hpp"
+#include "graphics/ScenePaintSource.hpp"
+#include "graphics/SceneRecorder.hpp"
 #include "EngineController.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include <QApplication>
@@ -62,6 +64,37 @@ bool MasterPanel::checkForTest(const QString& prefix) {
     }
     panel.refreshMeters(); QApplication::processEvents();
     if(!check(controller.masterLoudness().vuLeft>.1f,"VU receives measured audio")) return false;
+    auto* vu=panel.findChild<QWidget*>("MasterVuMeter");
+    auto* scene=dynamic_cast<ui::graphics::ScenePaintSource*>(vu);
+    if(!scene) return false;
+    for (qreal dpr : {1., 1.5, 2.}) {
+        std::vector<std::shared_ptr<const ui::graphics::SceneMeshGroup>> previous;
+        std::vector<std::shared_ptr<const ui::graphics::SceneMeshGroup>> previousStrokes;
+        for (int frame=0; frame<2; ++frame) {
+            ui::graphics::SceneRecorder recorder(vu->size(), dpr);
+            { QPainter p(&recorder); p.setFont(vu->font()); scene->paintScene(p, vu->rect()); }
+            if(!recorder.supported()) return false;
+            std::vector<std::shared_ptr<const ui::graphics::SceneMeshGroup>> assets;
+            std::vector<std::shared_ptr<const ui::graphics::SceneMeshGroup>> strokes;
+            for(const auto& mesh : recorder.takeMeshes()) {
+                if(!mesh.group) continue;
+                if(mesh.group->meshes.size()==1 && !mesh.group->meshes.front().texture.isNull())
+                    assets.push_back(mesh.group);
+                else strokes.push_back(mesh.group);
+            }
+            if(!check(assets.size()==2 && (frame==0 || assets==previous),
+                      "VU face and glass reuse native-DPI assets across meter frames")) return false;
+            for(const auto& asset : assets) {
+                const auto& image=asset->meshes.front().texture;
+                if(image.devicePixelRatio()!=dpr || image.width()!=int(std::ceil(vu->width()*dpr)) ||
+                   image.height()!=int(std::ceil(vu->height()*dpr))) return false;
+            }
+            if(!check(strokes.size()==4 && (frame==0 || strokes==previousStrokes),
+                      "VU needle strokes reuse geometry across meter frames")) return false;
+            previous=std::move(assets);
+            previousStrokes=std::move(strokes);
+        }
+    }
     if(!prefix.isEmpty()) panel.grab().save(prefix+"-panel.png");
     panel.resize(196,470); QApplication::processEvents();
     const auto* scroll=panel.findChild<QScrollArea*>();

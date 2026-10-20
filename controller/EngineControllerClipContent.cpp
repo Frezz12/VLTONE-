@@ -4,6 +4,42 @@
 #include <unordered_set>
 
 namespace daw {
+bool EngineController::moveClipsToTrack(const std::vector<ClipAddress>& clips,
+                                       const std::string& toTrackId) {
+    if (clips.empty() || m_clipPositionEdit.active || !sharedEditingAllowed()) return false;
+    const std::string fromTrackId = clips.front().trackId;
+    const auto* source = m_project.findTrack(fromTrackId);
+    const auto* target = m_project.findTrack(toTrackId);
+    if (!source || !target || fromTrackId == toTrackId ||
+        isTrackTreeEditLocked(fromTrackId) || isTrackTreeEditLocked(toTrackId)) return false;
+    std::unordered_set<std::string> ids;
+    for (const auto& clip : clips) {
+        if (clip.trackId != fromTrackId || !ids.insert(clip.clipId).second) return false;
+    }
+    std::vector<std::pair<std::string, ClipPositionOrigin>> origins;
+    for (std::size_t i = 0; i < source->clips.size(); ++i) {
+        const auto& clip = source->clips[i];
+        if (!ids.contains(clip.id)) continue;
+        if (!trackAccepts(target->kind, clip.kind) || !sharedGestureAllowed("clip:" + clip.id)) return false;
+        origins.emplace_back(clip.id, ClipPositionOrigin{fromTrackId, clip.startSeconds, i,
+                                                        fromTrackId, clip.startSeconds, i});
+    }
+    if (origins.size() != ids.size()) return false;
+    beginClipPositionEdit();
+    // Capture all indices before lifting the first clip. Later removals shift
+    // the source vector, including the paint order of overlapping clips.
+    for (const auto& [id, origin] : origins) m_clipPositionEdit.origins.emplace(id, origin);
+    for (const auto& entry : origins) moveClipToTrack(fromTrackId, entry.first, toTrackId);
+    const auto transferred = [&] {
+        return std::all_of(origins.begin(), origins.end(), [&](const auto& entry) {
+            return findClip(toTrackId, entry.first) != nullptr;
+        });
+    };
+    if (!transferred()) { cancelClipPositionEdit(); return false; }
+    endClipPositionEdit("Move Clips to Track");
+    return transferred();
+}
+
 void EngineController::setMidiClipView(const std::string& trackId,
                                       const std::string& clipId, MidiClipView view, bool undoable) {
     auto* clip = findClip(trackId, clipId);
@@ -25,6 +61,7 @@ void EngineController::setMidiClipView(const std::string& trackId,
 }
 
 std::string EngineController::splitLinkedClip(const ClipAddress& address, double at) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(address.trackId, address.clipId)) return {};
     if (!sharedEditingAllowed() || cloudProjectBound()) return {};
     const auto* original = findClip(address.trackId, address.clipId);
     if (!original) return {};
@@ -184,6 +221,7 @@ std::vector<EngineController::ClipAddress> EngineController::linkedClips(const C
 }
 
 std::vector<EngineController::ClipAddress> EngineController::duplicateLinkedClips(const std::vector<ClipAddress>& selected) {
+    for (const auto& address : selected) if (isTrackTreeEditLocked(address.trackId)) return {};
     if (selected.empty() || !sharedEditingAllowed() || cloudProjectBound()) return {};
     for(const auto& address:selected)if(const auto* root=findClip(address.trackId,address.clipId);root&&root->kind==ClipKind::Pattern)
         m_project.initializePatternContent(root->id);
@@ -237,6 +275,7 @@ std::vector<EngineController::ClipAddress> EngineController::duplicateLinkedClip
 }
 
 bool EngineController::makeClipsIndependent(const std::vector<ClipAddress>& selected) {
+    for (const auto& address : selected) if (isTrackTreeEditLocked(address.trackId)) return false;
     if (!sharedEditingAllowed() || cloudProjectBound()) return false;
     struct Binding { ClipAddress address; std::string beforeId, afterId; std::shared_ptr<ClipContent> before, after; };
     std::vector<Binding> changes;

@@ -10,14 +10,14 @@ inline constexpr char kWebStartPageHtml[] = R"HTML(
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.5}
 body{min-height:100vh}button,input{font:inherit}a{color:inherit;text-decoration:none}button,a{touch-action:manipulation}button{cursor:pointer}svg{flex-shrink:0}
 ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--line);border:2px solid var(--bg);border-radius:8px}
-a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+a:focus-visible,button:focus-visible{outline:none;filter:brightness(1.08)}
 .backdrop-media,.backdrop-scrim{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}.backdrop-media{object-fit:cover}.backdrop-scrim{background:var(--scrim)}
 .page{position:relative;max-width:780px;margin:0 auto;padding:32px clamp(16px,5vw,42px) 28px}
 .brandline{display:flex;gap:12px;align-items:center;margin-bottom:36px}.brand{width:36px;height:36px;object-fit:contain}
 .brandname{font-size:13px;font-weight:650;letter-spacing:.12em}.edition{color:var(--muted);font-size:11px}.status{margin-left:auto;padding:3px 8px;border:1px solid var(--line);border-radius:6px;color:var(--muted);font-size:10px;letter-spacing:.05em}
 h1{font-size:clamp(24px,4.5vw,34px);line-height:1.18;font-weight:600;letter-spacing:-.035em;margin:0 0 10px}.subtitle{color:var(--muted);margin:0 0 24px;max-width:470px;font-size:12px}
 .search{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:5px 5px 5px 14px;border:1px solid var(--line);border-radius:8px;background:var(--well);box-shadow:inset 0 1px 2px #0000000d}
-.search:focus-within{border-color:var(--accent);outline:1px solid var(--accent)}.search>svg{width:18px;height:18px;color:var(--muted)}
+.search>svg{width:18px;height:18px;color:var(--muted)}
 .search input{min-width:0;width:100%;flex:1;outline:none;border:0;background:transparent;color:var(--text);padding:6px 0}.search input::placeholder{color:var(--muted);opacity:1}
 .search button{min-height:36px;padding:7px 16px;border:1px solid transparent;border-radius:6px;background:var(--accent);color:var(--accent-ink);font-size:12px;font-weight:600}.search button:hover{filter:brightness(1.08)}.search button:active{filter:brightness(.94)}
 .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:28px 0 10px}.section-head h2{margin:0;font-size:12px;font-weight:600}.section-head span{color:var(--muted);font-size:10px}

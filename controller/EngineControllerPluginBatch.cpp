@@ -332,7 +332,7 @@ audio::Result EngineController::appendPluginBatch(
 }
 
 audio::Result EngineController::createPluginBatchDraft(
-    const PluginBatchTarget& source, std::shared_ptr<EngineController>& out) {
+    const PluginBatchTarget& source, std::shared_ptr<EngineController>& out, bool fullMix) {
     if (const auto valid = validatePluginBatch({source}); !valid) return valid;
     auto snapshot = captureRecoverySnapshot();
     auto draft = std::make_shared<EngineController>();
@@ -343,63 +343,65 @@ audio::Result EngineController::createPluginBatchDraft(
     draft->m_samples = m_samples;
     draft->m_clipSampleCache = m_clipSampleCache;
     draft->m_sharedClipSampleCache = m_sharedClipSampleCache;
-    draft->m_pluginAuditionCapture = source.trackId;
+    if (!fullMix) draft->m_pluginAuditionCapture = source.trackId;
     for (auto& track : draft->m_project.tracks) {
-        track.freeze = {};
+        if (!fullMix || track.id == source.trackId) track.freeze = {};
         track.armed = track.monitor = track.monitorAuto = false;
         track.inputEnabled = false;
     }
-    rendering::Spec selection;
-    // A bus/folder/Pattern source includes its inputs. Existing sidechains
-    // are dependencies too, even when their signal is not mixed into it.
-    std::unordered_set<std::string> upstream{source.trackId};
-    std::unordered_set<std::string> mutedClips;
-    {
-        bool changed;
-        do {
-            changed = false;
-            for (const auto& track : draft->m_project.tracks) {
-                const auto output = track.outputBusId.empty()
-                    ? summingParent(draft->m_project, track.id) : track.outputBusId;
-                const bool feeds = upstream.contains(output) || std::any_of(track.sends.begin(), track.sends.end(),
-                    [&](const auto& send) { return send.enabled && upstream.contains(send.destinationTrackId); });
-                if (feeds) changed |= upstream.insert(track.id).second;
-                if (!upstream.contains(track.id)) continue;
-                const auto sidechain = [&](const InsertModel& slot) {
-                    if (!slot.bypassed)
-                        for (const auto& source : slot.sidechainTrackIds)
-                            changed |= upstream.insert(source).second;
-                };
-                sidechain(track.instrument);
-                for (const auto& slot : track.inserts) sidechain(slot);
-                for (const auto& slot : track.samplerFx.inserts) sidechain(slot);
-                for (const auto& clip : track.clips) {
-                    if (clip.muted) mutedClips.insert(clip.id);
-                    if (track.id != source.trackId || source.clipId.empty() || clip.id == source.clipId)
-                        for (const auto& slot : clip.inserts) sidechain(slot);
+    if (!fullMix) {
+        rendering::Spec selection;
+        // A bus/folder/Pattern source includes its inputs. Existing sidechains
+        // are dependencies too, even when their signal is not mixed into it.
+        std::unordered_set<std::string> upstream{source.trackId};
+        std::unordered_set<std::string> mutedClips;
+        {
+            bool changed;
+            do {
+                changed = false;
+                for (const auto& track : draft->m_project.tracks) {
+                    const auto output = track.outputBusId.empty()
+                        ? summingParent(draft->m_project, track.id) : track.outputBusId;
+                    const bool feeds = upstream.contains(output) || std::any_of(track.sends.begin(), track.sends.end(),
+                        [&](const auto& send) { return send.enabled && upstream.contains(send.destinationTrackId); });
+                    if (feeds) changed |= upstream.insert(track.id).second;
+                    if (!upstream.contains(track.id)) continue;
+                    const auto sidechain = [&](const InsertModel& slot) {
+                        if (!slot.bypassed)
+                            for (const auto& source : slot.sidechainTrackIds)
+                                changed |= upstream.insert(source).second;
+                    };
+                    sidechain(track.instrument);
+                    for (const auto& slot : track.inserts) sidechain(slot);
+                    for (const auto& slot : track.samplerFx.inserts) sidechain(slot);
+                    for (const auto& clip : track.clips) {
+                        if (clip.muted) mutedClips.insert(clip.id);
+                        if (track.id != source.trackId || source.clipId.empty() || clip.id == source.clipId)
+                            for (const auto& slot : clip.inserts) sidechain(slot);
+                    }
                 }
-            }
-        } while (changed);
+            } while (changed);
+        }
+        selection.sourceTrackIds.assign(upstream.begin(), upstream.end());
+        if (!source.clipId.empty()) {
+            selection.sourceClipIds = {source.clipId};
+            for (const auto& track : draft->m_project.tracks)
+                if (track.id != source.trackId && upstream.contains(track.id))
+                    for (const auto& clip : track.clips) selection.sourceClipIds.push_back(clip.id);
+        }
+        applyRenderSelection(selection, draft->m_project);
+        for (auto& track : draft->m_project.tracks) {
+            for (auto& clip : track.clips)
+                if (clip.id != source.clipId && mutedClips.contains(clip.id)) clip.muted = true;
+            if (track.soloed) continue;
+            // Unrelated unavailable plugins must not prevent opening this source,
+            // nor consume realtime CPU while its draft is playing.
+            track.instrument = {};
+            track.inserts.clear(); track.samplerFx = {};
+            for (auto& clip : track.clips) clip.inserts.clear();
+        }
+        draft->m_project.masterInserts.clear();
     }
-    selection.sourceTrackIds.assign(upstream.begin(), upstream.end());
-    if (!source.clipId.empty()) {
-        selection.sourceClipIds = {source.clipId};
-        for (const auto& track : draft->m_project.tracks)
-            if (track.id != source.trackId && upstream.contains(track.id))
-                for (const auto& clip : track.clips) selection.sourceClipIds.push_back(clip.id);
-    }
-    applyRenderSelection(selection, draft->m_project);
-    for (auto& track : draft->m_project.tracks) {
-        for (auto& clip : track.clips)
-            if (clip.id != source.clipId && mutedClips.contains(clip.id)) clip.muted = true;
-        if (track.soloed) continue;
-        // Unrelated unavailable plugins must not prevent opening this source,
-        // nor consume realtime CPU while its draft is playing.
-        track.instrument = {};
-        track.inserts.clear(); track.samplerFx = {};
-        for (auto& clip : track.clips) clip.inserts.clear();
-    }
-    draft->m_project.masterInserts.clear();
     std::unordered_map<std::string, const std::vector<std::uint8_t>*> states;
     for (const auto& state : snapshot.pluginStates) states[state.fileName] = &state.bytes;
     std::vector<AudioPluginStateEdit> restores;
@@ -417,6 +419,10 @@ audio::Result EngineController::createPluginBatchDraft(
     };
     for (const auto& track : draft->m_project.tracks) {
         if (!restore(track.id, track.instrument)) return batchError("Could not prepare the source instrument.");
+        if (fullMix) {
+            if (track.channelColor) restore(track.id, *track.channelColor);
+            for (const auto& slot : track.miniModules) restore(track.id, slot);
+        }
         for (const auto& slot : track.inserts)
             if (!restore(track.id, slot)) return batchError("Could not prepare source effects.");
         for (const auto& slot : track.samplerFx.inserts)
@@ -425,7 +431,12 @@ audio::Result EngineController::createPluginBatchDraft(
             for (const auto& slot : clip.inserts)
                 if (!restore(track.id, slot)) return batchError("Could not prepare source Clip FX.");
     }
-    auto session = draft->prepareAudioSession(AudioPluginLoadPolicy::Required);
+    if (fullMix) {
+        for (const auto& slot : draft->m_project.masterInserts) restore(kMasterChannelId, slot);
+        for (const auto& slot : draft->m_project.masterMiniModules) restore(kMasterChannelId, slot);
+    }
+    auto session = draft->prepareAudioSession(fullMix ? AudioPluginLoadPolicy::PreserveUnavailable
+                                                     : AudioPluginLoadPolicy::Required);
     // The former draft allowed an unavailable bypassed slot, but required every
     // audible source processor. Preserve that policy independently per slot.
     for (auto& chain : session.pluginChains) for (auto& slot : chain.slots)
@@ -442,14 +453,16 @@ audio::Result EngineController::createPluginBatchDraft(
                 end = std::max(end, clip.startSeconds + draft->clipPlaybackDuration(clip));
             }
     if (!(end > start)) { start = 0; end = beatsToSeconds(16, m_project.tempo); }
-    draft->setLoopRangeSeconds(start, end);
-    draft->setLoopEnabled(true);
-    draft->seekSeconds(start);
+    if (!fullMix) {
+        draft->setLoopRangeSeconds(start, end);
+        draft->setLoopEnabled(true);
+        draft->seekSeconds(start);
+    }
     out = std::move(draft);
     return audio::Result::ok();
 }
 
-audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineController> draft) {
+audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineController> draft, bool followTransport) {
     if (!draft || draft.get() == this || draft->m_liveDeviceAllowed ||
         draft->m_sampleRate != m_sampleRate || draft->m_bufferSize != m_bufferSize ||
         isRecording() || m_exportInProgress || m_pluginAuditionOwner)
@@ -457,8 +470,8 @@ audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineContro
     draft->stopPreview();
     draft->flushDeferredClipSync();
     draft->flushSamplerPrecompute();
-    draft->applyTransportStartPolicy();
-    const auto result = m_runtime->startAudition(draft->m_runtime.sharedRuntime());
+    if (!followTransport) draft->applyTransportStartPolicy();
+    const auto result = m_runtime->startAudition(draft->m_runtime.sharedRuntime(), followTransport);
     if (!result) return result;
     m_pluginAuditionOwner = std::move(draft);
     m_pluginAuditionOwner->m_externalPreviewDriven = true;

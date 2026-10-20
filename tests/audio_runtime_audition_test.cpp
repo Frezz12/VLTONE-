@@ -76,8 +76,47 @@ void contract() {
     primary->transportCommand({AudioTransportCommand::Action::StartPlayback});
     require(std::abs(render(*primary) - .15f) < 1e-5f, "return to primary renders the newly committed bus topology");
 }
+
+void timelinePreview() {
+    auto primary = runtime(.5f), secondary = runtime(.2f);
+    primary->transportCommand({.action = AudioTransportCommand::Action::Seek, .position = 512});
+    require(bool(primary->startAudition(secondary, true)), "timeline preview attaches while stopped");
+    require(!primary->transportSnapshot().playing && !secondary->transportSnapshot().playing &&
+            primary->transportSnapshot().position == secondary->transportSnapshot().position,
+            "attaching a preview preserves the stopped transport and playhead");
+    require(std::abs(render(*primary)) < 1e-5f, "a pending plugin preview does not start playback");
+    primary->transportCommand({AudioTransportCommand::Action::StartPlayback});
+    require(std::abs(render(*primary) - .2f) < 1e-5f && secondary->transportSnapshot().playing &&
+            primary->transportSnapshot().position == secondary->transportSnapshot().position,
+            "timeline Play drives the preview on the same sample clock");
+    primary->transportCommand({AudioTransportCommand::Action::Pause});
+    const auto paused = primary->transportSnapshot().position;
+    render(*primary);
+    require(!secondary->transportSnapshot().playing && secondary->transportSnapshot().position == paused &&
+            primary->transportSnapshot().position == paused, "timeline Pause stops both playheads");
+    primary->transportCommand({.action = AudioTransportCommand::Action::SeekSeconds, .value = .02, .prepare = true});
+    primary->transportCommand({.action = AudioTransportCommand::Action::LoopRange, .position = 512, .end = 2048});
+    primary->transportCommand({.action = AudioTransportCommand::Action::LoopEnabled, .enabled = true});
+    primary->transportCommand({.action = AudioTransportCommand::Action::Tempo, .value = 90});
+    primary->transportCommand({AudioTransportCommand::Action::StartPlayback});
+    render(*primary); render(*primary);
+    require(secondary->transportSnapshot().tempo == 90 && secondary->transportSnapshot().loopEnabled &&
+            primary->transportSnapshot().position == secondary->transportSnapshot().position,
+            "seeks, tempo and loop wrapping stay synchronized during preview");
+    primary->transportCommand({AudioTransportCommand::Action::Stop});
+    require(!secondary->transportSnapshot().playing &&
+            primary->transportSnapshot().position == secondary->transportSnapshot().position,
+            "timeline Stop resets the preview with the main transport");
+    primary->transportCommand({AudioTransportCommand::Action::StartPlayback});
+    render(*primary);
+    const auto before = primary->transportSnapshot().position;
+    primary->stopAudition();
+    require(primary->transportSnapshot().playing && primary->transportSnapshot().position == before &&
+            !secondary->transportSnapshot().playing && std::abs(render(*primary) - .5f) < 1e-5f,
+            "closing preview returns to the original mix without stopping or seeking playback");
+}
 }
 int main() {
-    try { contract(); std::puts("PASS runtime audition / primary edits / publication / lifetime"); return 0; }
+    try { contract(); timelinePreview(); std::puts("PASS runtime audition / timeline transport / primary edits / publication / lifetime"); return 0; }
     catch (const std::exception& error) { std::fprintf(stderr, "FAIL %s\n", error.what()); return 1; }
 }

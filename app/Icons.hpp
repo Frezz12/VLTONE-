@@ -54,13 +54,15 @@ enum class Glyph {
     // Collaboration surfaces: the session status strip, the join checklist and
     // the cloud project browser.
     Cloud, CloudUpload, CloudOff, Users, Link, Key, Check, Warning,
-    Copy, Edit,
+    Copy, Edit, Lock, Unlock,
     /// The arrangement with its sidebar and lower panel: workspace controls.
     Workspace,
     /// One piano-roll note, paired with Chord for slide target selection.
     SingleNote,
     /// A warp marker moving onto a beat, and audio with automatic alignment.
     WarpQuantize, WarpAlign,
+    /// Multi-place effects: one distinct mark per action in the batch editor.
+    BatchSource, BatchAdd, BatchBypass, BatchEdit, BatchRemove, BatchApply, BatchCancel,
     /// An open arc, meant to be rotated by the caller to indicate work in
     /// flight. It carries no animation of its own.
     Spinner

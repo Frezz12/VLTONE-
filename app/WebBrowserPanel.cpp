@@ -79,20 +79,7 @@ QString startPageIcon(icons::Glyph glyph) {
         .arg(QString::fromLatin1(png.toBase64()));
 }
 
-class BrowserIconButton final : public ui::IconButton {
-public:
-    using ui::IconButton::IconButton;
-protected:
-    void paintEvent(QPaintEvent* event) override {
-        ui::IconButton::paintEvent(event);
-        if (!hasFocus()) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(th().accentHighlight, 1));
-        painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 6, 6);
-    }
-};
+using BrowserIconButton = ui::IconButton;
 
 /// The application binds bare Return to transport navigation. Explicitly
 /// reserve it while the address field has focus so QLineEdit reliably emits
@@ -139,15 +126,6 @@ public:
     std::function<void()> newTabRequested;
 
 protected:
-    void paintEvent(QPaintEvent* event) override {
-        QTabBar::paintEvent(event);
-        if (!hasFocus() || currentIndex() < 0) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(th().accentHighlight, 1));
-        painter.drawRoundedRect(tabRect(currentIndex()).adjusted(1, 1, -3, -1), 6, 6);
-    }
     void mouseReleaseEvent(QMouseEvent* event) override {
         if (event->button() == Qt::MiddleButton) {
             const int index = tabAt(event->position().toPoint());
@@ -197,11 +175,6 @@ public:
         painter->setPen(th().textSecondary);
         painter->drawText(textRect, Qt::AlignBottom | Qt::AlignLeft,
             QFontMetrics(option.font).elidedText(index.data(Qt::UserRole + 1).toString(), Qt::ElideRight, textRect.width()));
-        if (option.state & QStyle::State_HasFocus) {
-            painter->setBrush(Qt::NoBrush);
-            painter->setPen(QPen(th().accentHighlight, 2));
-            painter->drawRoundedRect(rect.adjusted(1, 1, -1, -1), Theme::cornerRadius - 1, Theme::cornerRadius - 1);
-        }
         painter->restore();
     }
     QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const override {
@@ -2510,16 +2483,13 @@ QTabBar#WebTabBar QToolButton { background: %TOP%; border: 1px solid %LINE%; bor
     selection-background-color: %ACCENT%; selection-color: %ACCENTINK%;
 }
 #WebAddress:hover, #WebFindText:hover, #WebLibrarySearch:hover { border-color: %EDGE%; }
-#WebAddress:focus, #WebFindText:focus, #WebLibrarySearch:focus { border-color: %ACCENT%; }
 #WebMenuButton, #WebZoom { color: %TEXT%; background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: 11px; padding: 0; }
 #WebMenuButton:hover, #WebZoom:hover { background: %HOVER%; border-color: %LINE%; }
 #WebMenuButton:pressed, #WebZoom:pressed { background: %WELL%; }
-#WebMenuButton:focus, #WebZoom:focus { border-color: %ACCENT%; }
 QPushButton#WebRailButton { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0; }
 QPushButton#WebRailButton:hover { background: %HOVER%; border-color: %LINE%; }
-QPushButton#WebRailButton:checked { background: %TINT%; border-color: %ACCENT%; }
+QPushButton#WebRailButton:checked { background: %TINT%; }
 QPushButton#WebRailButton:pressed { background: %WELL%; }
-QPushButton#WebRailButton:focus { border-color: %ACCENT%; }
 #WebDownloadBar { background: %BOTTOM%; border: none; border-top: 1px solid %LINE%; }
 #WebPageProgress, #WebDownloadProgress { border: none; background: %BOTTOM%; border-radius: 1px; }
 #WebPageProgress::chunk, #WebDownloadProgress::chunk { background: %ACCENT%; border-radius: 1px; }
@@ -2532,15 +2502,12 @@ QPushButton#WebBookmarksButton, QPushButton#WebBookmarkChip, QPushButton#WebBook
 QPushButton#WebBookmarksButton { color: %TEXT%; }
 QPushButton#WebBookmarksButton:hover, QPushButton#WebBookmarkChip:hover,
 QPushButton#WebBookmarksMore:hover { color: %TEXT%; background: %HOVER%; }
-QPushButton#WebBookmarksButton:focus, QPushButton#WebBookmarkChip:focus,
-QPushButton#WebBookmarksMore:focus { border-color: %ACCENT%; }
 #WebLibraryTitle { color: %TEXT%; font-size: 17px; font-weight: 600; }
 #WebLibraryEmpty { color: %MUTED%; font-size: 12px; padding: 8px 0; }
 #WebLibraryList { background: transparent; border: none; color: %TEXT%; outline: none; font-size: 12px; }
 #WebLibraryList::item { border: none; }
 #WebLibraryAction { color: %TEXT%; background: %SURFACE%; border: 1px solid %LINE%; border-radius: 6px; padding: 6px 10px; font-size: 11px; }
 #WebLibraryAction:hover { background: %HOVER%; }
-#WebLibraryAction:focus { border-color: %ACCENT%; }
 #WebLibraryAction:disabled { color: %MUTED%; background: %BG%; }
 )");
     const auto color = [&style](const char* key, const QColor& value) { style.replace(QLatin1String(key), value.name()); };

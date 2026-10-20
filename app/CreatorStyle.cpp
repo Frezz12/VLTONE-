@@ -48,20 +48,17 @@ void styleCreator(QWidget *widget) {
     QLabel[creatorRole="section"] { color: $muted; font-size: 11px; font-weight: 600; padding: 8px 0; }
     QWidget#CreatorAiPanel QToolButton { background: transparent; border: 1px solid transparent; text-align: left; padding: 3px 5px; }
     QWidget#CreatorAiPanel QToolButton:hover { background: $hover; }
-    QWidget#CreatorAiPanel QToolButton:focus { border-color: $accent; }
     QWidget#CreatorAiPanel QScrollArea, QWidget#CreatorAiPanel QScrollArea > QWidget > QWidget { background: $panel; }
     QWidget#CreatorAiPanel QPlainTextEdit { background: $field; border: 1px solid $border; border-radius: 7px; padding: 6px; }
-    QWidget#CreatorAiPanel QPlainTextEdit:focus { border-color: $accent; }
     QPushButton#CreatorAiRestore { background: transparent; color: $muted; }
     QToolBar { background: $panel; border: none; border-bottom: 1px solid $border; padding: 5px; spacing: 4px; }
     QToolBar::separator { background: $border; width: 1px; margin: 8px 7px; }
     QToolButton, QPushButton { background: $card; border: 1px solid $border; border-radius: 5px; padding: 4px 8px; min-height: 18px; }
     QToolButton { padding: 5px; }
     QToolButton:hover, QPushButton:hover { background: $hover; border-color: $muted; }
-    QToolButton:pressed, QPushButton:pressed { background: $field; border-color: $accent; }
+    QToolButton:pressed, QPushButton:pressed { background: $field; border-color: $border; }
     QToolButton:disabled, QPushButton:disabled { color: $muted; background: $panel; border-color: $border; }
     QToolButton[creatorPrimary="true"], QPushButton[creatorPrimary="true"] { color: $onAccent; background: $accentFill; border-color: $accentFill; padding-left: 13px; padding-right: 13px; font-weight: 600; }
-    QToolButton[creatorPrimary="true"]:hover { border-color: $accent; }
     QToolButton[creatorPrimary="true"]:disabled { background: $hover; color: $muted; border-color: $border; }
     QToolBar#CreatorToolbar { padding: 7px 10px; spacing: 5px; }
     QToolBar#CreatorToolbar::separator { background: $border; width: 1px; margin: 8px 10px; }
@@ -83,11 +80,11 @@ void styleCreator(QWidget *widget) {
     QListWidget, QTreeWidget { background: $panel; border: none; outline: none; padding: 0; }
     QListWidget::item { padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; }
     QListWidget::item:hover { background: $hover; }
-    QListWidget::item:selected { background: $hover; color: $text; border-color: $accent; }
+    QListWidget::item:selected { background: $hover; color: $text; }
     QListWidget::item:disabled { background: transparent; color: $muted; padding-top: 14px; padding-bottom: 5px; }
     QTreeWidget#CreatorNodeLibrary::item { padding: 3px 5px; border: 1px solid transparent; border-radius: 4px; }
     QTreeWidget#CreatorNodeLibrary::item:hover { background: $hover; }
-    QTreeWidget#CreatorNodeLibrary::item:selected { background: $hover; color: $text; border-color: $accent; }
+    QTreeWidget#CreatorNodeLibrary::item:selected { background: $hover; color: $text; }
     QTreeWidget#CreatorNodeLibrary::branch { background: transparent; }
     QTableWidget { background: $field; alternate-background-color: $card; gridline-color: $border; border: 1px solid $border; selection-background-color: $hover; selection-color: $text; }
     QHeaderView::section { background: $panel; color: $muted; border: none; border-bottom: 1px solid $border; padding: 7px; }

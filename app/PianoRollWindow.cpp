@@ -474,7 +474,7 @@ PianoRollView::PianoRollView(daw::EngineController* controller, QWidget* parent)
 }
 
 PianoRollView::~PianoRollView() {
-    m_controller->clearClipNotePreview(this);
+    if (m_controller) m_controller->clearClipNotePreview(this);
     finishWheelNoteEdit();
     cancelControllerLaneWrite();
     commitPendingErase();

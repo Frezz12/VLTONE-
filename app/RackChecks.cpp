@@ -20,6 +20,7 @@
 #include "UtilityPanel.hpp"
 #include "RackWidget.hpp"
 #include "RackModulationPanel.hpp"
+#include "RackModulationEditor.hpp"
 #include "PatternWindow.hpp"
 #include "Theme.hpp"
 #include "plugins/PluginManager.hpp"
@@ -46,6 +47,8 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpinBox>
+#include <QStyleOptionComboBox>
 #include <QSettings>
 #include <QSlider>
 #include <QTemporaryDir>
@@ -253,7 +256,188 @@ bool RackWidget::checkForTest(QString* error, const QString& screenshot) {
         if (controller.rackModulation(a).sources.size() != 1 || !controller.hasInsert(a, eq))
             return fail("Delete acts on the focused module and preserves the plugin");
         controller.undo();
-        std::fprintf(stderr, "PASS modulation modules UI: Rack add menu, individual cards, click without base movement, keyboard, Esc, parameter search, hidden processing, narrow scrolling, Undo/Redo\n");
+        rack->refresh(); QApplication::processEvents();
+        std::vector<std::string> newSources;
+        for (auto kind : {daw::modulation::Kind::Shaper, daw::modulation::Kind::Steps, daw::modulation::Kind::Random}) {
+            newSources.push_back(controller.addRackModulator(a, kind));
+            if (newSources.back().empty()) return fail("new source creation");
+        }
+        rack->refresh(); QApplication::processEvents(); rack->refresh(); QApplication::processEvents();
+        const auto cardFor = [&](const std::string& sourceId) -> QWidget* {
+            for (auto* card : rack->m_modulation->findChildren<QWidget*>("RackModulatorCard"))
+                if (card->property("sourceId").toString().toStdString() == sourceId) return card;
+            return nullptr;
+        };
+        const auto graphFor = [&](QWidget* parent) -> RackModulationEditor* {
+            if (parent) for (auto* widget : parent->findChildren<QWidget*>("ModulationGraph"))
+                if (auto* editor = dynamic_cast<RackModulationEditor*>(widget)) return editor;
+            return nullptr;
+        };
+        if (rack->m_modulation->findChildren<QWidget*>("RackModulatorCard").size() != 5) return fail("all five module kinds have individual cards");
+        mixer.resize(1340, 370); QApplication::processEvents();
+        for (auto* card : rack->m_modulation->findChildren<QWidget*>("RackModulatorCard")) {
+            card->setFixedHeight(220); QApplication::processEvents();
+            auto* area = card->findChild<QScrollArea*>("ModulationAssignments");
+            if (!area || area->viewport()->height() < 140) return fail("every module reserves five route rows at 220px");
+            auto* controls = graphFor(card)->parentWidget();
+            for (auto* control : controls->findChildren<QWidget*>())
+                if (control->isVisible() && !control->isWindow() && !card->rect().contains(QRect(control->mapTo(card, QPoint()), control->size())))
+                    return fail(QString("controls fit the minimum card: %1").arg(card->accessibleName()));
+            for (auto* combo : controls->findChildren<QComboBox*>()) if (combo->isVisible() && !combo->currentText().isEmpty()) {
+                QStyleOptionComboBox option; option.initFrom(combo); option.currentText = combo->currentText(); option.frame = combo->hasFrame();
+                const auto textRect = combo->style()->subControlRect(QStyle::CC_ComboBox, &option, QStyle::SC_ComboBoxEditField, combo);
+                if (combo->fontMetrics().horizontalAdvance(combo->currentText()) > textRect.width())
+                    return fail(QString("closed combo label fits: %1 (%2 px available)").arg(combo->currentText()).arg(textRect.width()));
+            }
+            card->setMaximumHeight(QWIDGETSIZE_MAX); card->setMinimumHeight(220); QApplication::processEvents();
+        }
+        const auto paintGesture = [&](RackModulationEditor* graph) {
+            graph->window()->activateWindow(); QApplication::setActiveWindow(graph->window());
+            graph->setFocus();
+            const QPointF from(graph->width() * .25, graph->height() * .6), to(graph->width() * .68, graph->height() * .25);
+            const auto mouse = [&](QEvent::Type type, QPointF at, Qt::MouseButton button, Qt::MouseButtons buttons) {
+                QMouseEvent event(type, at, QPointF(graph->mapToGlobal(at.toPoint())), button, buttons, Qt::NoModifier);
+                QApplication::sendEvent(graph, &event);
+            };
+            mouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+            for (int i = 1; i <= 16; ++i) mouse(QEvent::MouseMove, from + (to - from) * (i / 16.), Qt::NoButton, Qt::LeftButton);
+            mouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+            rack->refresh(); QApplication::processEvents();
+        };
+        for (int i = 0; i < 2; ++i) {
+            auto* card = cardFor(newSources[i]); auto* graph = graphFor(card);
+            if (!card || !graph || card->width() != 560) return fail("horizontal card geometry and editable graph");
+            rack->m_scroll->ensureWidgetVisible(card); QApplication::processEvents();
+            const auto before = controller.rackModulation(a);
+            const auto depth = controller.undoDepth(); QPointer<QWidget> originalGraph(graph);
+            QElapsedTimer drawingTimer; drawingTimer.start();
+            paintGesture(graph);
+            std::fprintf(stderr, "BENCH %s 16-move draw gesture: %.3f ms\n", i == 0 ? "Shaper" : "Steps", drawingTimer.nsecsElapsed() / 1000000.);
+            if (controller.rackModulation(a) == before || controller.undoDepth() != std::min(depth + 1, controller.undoLimit())) return fail("drawing is one undoable gesture");
+            if (originalGraph.isNull() || graphFor(cardFor(newSources[i])) != graph || QApplication::focusWidget() != graph)
+                return fail(QString("drawing preserves editor and focus: alive=%1 same=%2 focus=%3")
+                    .arg(!originalGraph.isNull()).arg(graphFor(cardFor(newSources[i])) == graph)
+                    .arg(QApplication::focusWidget() ? QApplication::focusWidget()->objectName() : "none"));
+            controller.undo(); rack->refresh(); QApplication::processEvents();
+            if (controller.rackModulation(a) != before) return fail("one Undo restores the entire shape gesture");
+            controller.redo(); rack->refresh(); QApplication::processEvents();
+            const auto beforeKeys = controller.rackModulation(a); const auto keyDepth = controller.undoDepth();
+            for (int repeat = 0; repeat < 8; ++repeat) {
+                QKeyEvent key(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier, {}, repeat > 0);
+                QApplication::sendEvent(graph, &key);
+            }
+            QKeyEvent keyRelease(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier); QApplication::sendEvent(graph, &keyRelease);
+            if (controller.undoDepth() != std::min(keyDepth + 1, controller.undoLimit())) return fail("held editing key is one Undo");
+            controller.undo(); rack->refresh(); QApplication::processEvents();
+            if (controller.rackModulation(a) != beforeKeys) return fail("keyboard gesture Undo restores values");
+            QKeyEvent deletePoint(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier); QApplication::sendEvent(graph, &deletePoint);
+            QKeyEvent deleteRelease(QEvent::KeyRelease, Qt::Key_Delete, Qt::NoModifier); QApplication::sendEvent(graph, &deleteRelease);
+            rack->refresh(); QApplication::processEvents();
+            if (controller.rackModulation(a).sources.size() != 5 || controller.rackModulation(a) == beforeKeys)
+                return fail("Delete edits the focused graph without removing its module");
+            controller.undo(); rack->refresh(); QApplication::processEvents();
+            if (controller.rackModulation(a) != beforeKeys) return fail("Undo restores the deleted graph value");
+            auto* expand = card->findChild<ui::IconButton*>("ModulationExpand"); if (!expand) return fail("enlarge editor action");
+            expand->click(); QApplication::processEvents();
+            auto* dialog = rack->m_modulation->findChild<QDialog*>("ModulationExpandedEditor");
+            auto* large = graphFor(dialog);
+            if (!dialog || dialog->isModal() || !large) return fail("enlarged editor is nonmodal");
+            paintGesture(large);
+            if (large->source() != graph->source()) return fail("inline and enlarged editor share the same source");
+            if (!screenshot.isEmpty()) dialog->grab().save(screenshot.left(screenshot.lastIndexOf('.')) + (i == 0 ? "-shaper-editor.png" : "-steps-editor.png"));
+            dialog->close(); QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QApplication::processEvents();
+            mixer.activateWindow(); QApplication::setActiveWindow(&mixer);
+        }
+        const auto parameters = controller.insertParameters(a, eq);
+        std::vector<std::string> eligible;
+        for (const auto& info : parameters) if (info.isAutomatable && !info.isReadOnly && info.minValue < info.maxValue) eligible.push_back(info.id);
+        if (eligible.size() < 32) return fail("assignment density fixture");
+        const auto routeId = controller.assignRackModulation(a, newSources[0], eq, eligible[0]);
+        auto routed = controller.rackModulation(a);
+        const auto prototype = *std::find_if(routed.routes.begin(), routed.routes.end(), [&](const auto& r) { return r.id == routeId; });
+        std::erase_if(routed.routes, [&](const auto& r) { return r.sourceId == newSources[0]; });
+        for (unsigned count : {0, 1, 5, 8, 32}) {
+            auto next = routed;
+            for (unsigned i = 0; i < count; ++i) { auto route = prototype; route.id = daw::newUuid(); route.parameterId = eligible[i]; next.routes.push_back(route); }
+            if (!controller.setRackModulation(a, next)) return fail("assignment density setup");
+            rack->refresh(); QApplication::processEvents(); rack->refresh(); QApplication::processEvents();
+            auto* card = cardFor(newSources[0]); rack->m_scroll->ensureWidgetVisible(card); QApplication::processEvents();
+            const auto rows = card->findChildren<QWidget*>("ModulationRoute");
+            if (rows.size() != count) return fail("all assignment rows are present");
+            for (auto* row : rows) if (row->height() != 28) return fail("assignment row is 28 logical pixels");
+            auto* area = card->findChild<QScrollArea*>("ModulationAssignments");
+            if (count == 5) {
+                card->setFixedHeight(220); QApplication::processEvents();
+                if (area->viewport()->height() < 140 || area->verticalScrollBar()->maximum() != 0) return fail("five connections fit minimum card height");
+                if (!screenshot.isEmpty()) card->grab().save(screenshot.left(screenshot.lastIndexOf('.')) + "-minimum-five.png");
+                card->setMaximumHeight(QWIDGETSIZE_MAX); card->setMinimumHeight(220); QApplication::processEvents();
+            }
+            if (count == 32) {
+                area->verticalScrollBar()->setValue(area->verticalScrollBar()->maximum() / 2);
+                QApplication::processEvents();
+                QDoubleSpinBox* spin = nullptr;
+                for (auto* field : card->findChildren<QDoubleSpinBox*>("ModulationDepth"))
+                    if (area->viewport()->rect().contains(field->mapTo(area->viewport(), field->rect().center()))) { spin = field; break; }
+                if (!spin) return fail("scrolled connection has a visible depth control");
+                QPointer<QDoubleSpinBox> original(spin); spin->setFocus(); QApplication::processEvents();
+                const int scroll = area->verticalScrollBar()->value();
+                spin->setValue(35); QMetaObject::invokeMethod(spin, "editingFinished");
+                rack->refresh(); QApplication::processEvents();
+                if (original.isNull() || area->verticalScrollBar()->value() != scroll || QApplication::focusWidget() != spin)
+                    return fail(QString("assignment edit stability: alive=%1 scroll=%2/%3 focus=%4")
+                        .arg(!original.isNull()).arg(area->verticalScrollBar()->value()).arg(scroll)
+                        .arg(QApplication::focusWidget() ? QApplication::focusWidget()->objectName() : "none"));
+            }
+            if (!screenshot.isEmpty()) card->grab().save(screenshot.left(screenshot.lastIndexOf('.')) + QString("-connections-%1.png").arg(count));
+        }
+        for (const auto& id : {source, follower, newSources[0], newSources[1], newSources[2]}) {
+            auto* card = cardFor(id); rack->m_scroll->ensureWidgetVisible(card); QApplication::processEvents();
+            if (!screenshot.isEmpty()) card->grab().save(screenshot.left(screenshot.lastIndexOf('.')) + "-" + QString::fromStdString(graphFor(card)->source().name).toLower() + ".png");
+        }
+        {
+            const auto beforePreset = controller.rackModulation(a); const auto depth = controller.undoDepth();
+            auto* presets = cardFor(newSources[0])->findChild<QComboBox*>("ModulationShapePreset");
+            presets->setCurrentIndex(4); QMetaObject::invokeMethod(presets, "activated", Q_ARG(int, 4));
+            if (controller.rackModulation(a).routes != beforePreset.routes || controller.rackModulation(a) == beforePreset ||
+                controller.undoDepth() != std::min(depth + 1, controller.undoLimit())) return fail("shape preset preserves routes in one Undo");
+            controller.undo(); rack->refresh(); QApplication::processEvents();
+            if (controller.rackModulation(a) != beforePreset) return fail("shape preset Undo restores the complete source");
+        }
+        {
+            const auto beforePattern = controller.rackModulation(a); const auto depth = controller.undoDepth();
+            bool generated = false;
+            QTimer::singleShot(0, [&] {
+                auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget()); if (!menu) return;
+                menu->setActiveAction(menu->actions().back());
+                QTimer::singleShot(0, [&] {
+                    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); if (!dialog) return;
+                    const auto fields = dialog->findChildren<QSpinBox*>(); if (fields.size() != 2) { dialog->reject(); return; }
+                    fields[0]->setValue(5); fields[1]->setValue(3); generated = true; dialog->accept();
+                });
+                QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier); QApplication::sendEvent(menu, &enter);
+            });
+            cardFor(newSources[1])->findChild<QToolButton*>("ModulationPattern")->click();
+            const auto& values = controller.rackModulation(a).sources[3].steps;
+            if (!generated || std::count(values.begin(), values.end(), 1.) != 5 || controller.rackModulation(a).routes != beforePattern.routes ||
+                controller.undoDepth() != std::min(depth + 1, controller.undoLimit())) return fail("Euclidean generator applies one undoable pattern without changing routes");
+            controller.undo(); rack->refresh(); QApplication::processEvents();
+            if (controller.rackModulation(a) != beforePattern) return fail("Euclidean pattern Undo restores previous steps");
+        }
+        auto* randomCard = cardFor(newSources[2]); auto* reseed = randomCard->findChild<QToolButton*>("ModulationReseed");
+        const auto seedBefore = graphFor(randomCard)->source().seed;
+        reseed->click(); rack->refresh(); QApplication::processEvents();
+        if (graphFor(randomCard)->source().seed == seedBefore) return fail("Random reseed produces a new pattern");
+        controller.undo(); rack->refresh(); QApplication::processEvents();
+        if (graphFor(randomCard)->source().seed != seedBefore) return fail("Random seed is undoable");
+        QElapsedTimer timer; timer.start();
+        controller.seekSeconds(0); controller.play();
+        for (int i = 0; i < 200; ++i) { controller.processDeviceBlockForTest(input, output, 256); rack->refresh(); QApplication::processEvents(); }
+        controller.stop();
+        std::fprintf(stderr, "BENCH modulation Rack refresh + 256-frame process: %.3f ms/iteration\n", timer.nsecsElapsed() / 200000000.);
+        if (!screenshot.isEmpty()) randomCard->grab().save(screenshot.left(screenshot.lastIndexOf('.')) + "-random.png");
+        mixer.resize(700, 380); QApplication::processEvents(); capture("five-modules-narrow");
+        if (rack->m_scroll->horizontalScrollBar()->maximum() <= 0) return fail("five modules remain horizontally reachable");
+        std::fprintf(stderr, "PASS modulation modules UI: five kinds, horizontal cards, 28px routes, shape gestures, one Undo, nonmodal editor, persistent focus/scroll, density 0/1/5/8/32, reseed\n");
         return true;
     }
     {

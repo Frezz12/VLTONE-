@@ -2495,6 +2495,12 @@ Will be skipped: %3</source>
 </context>
 <context>
     <name>ChannelStrip</name>
+    <message><source>Stereo level · Click to reset peak</source><translation>Стереоуровень · Нажмите для сброса пика</translation></message>
+    <message><source>Select an audio channel to see its routing, plugins and sends.</source><translation>Выберите аудиоканал, чтобы увидеть маршрутизацию, плагины и посылы.</translation></message>
+    <message><source>
+Shift for fine adjustment · Double-click to reset</source><translation>
+Shift для точной подстройки · Двойной щелчок для сброса</translation></message>
+    <message><source>Switch all sends on or off</source><translation>Включить или выключить все посылы</translation></message>
     <message><source>Restart plugin</source><translation>Перезапустить плагин</translation></message>
     <message><source>Stopped: %1</source><translation>Сбой: %1</translation></message>
     <message><source>Restarting: %1</source><translation>Перезапуск: %1</translation></message>
@@ -6449,6 +6455,11 @@ Release to keep this clip in the project</source><translation>Сохранить
 </context>
 <context>
     <name>MainWindow</name>
+    <message>
+        <source>Random Color</source>
+        <translation>Случайные цвета</translation>
+    </message>
+    <message><source>Move to another track…</source><translation>Перенести на другую дорожку…</translation></message>
     <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
     <message><source>The clip changed during analysis. Try Auto Warp again.</source><translation>Клип изменился во время анализа. Запустите авто-варпинг ещё раз.</translation></message>
     <message><source>Auto Warp could not be applied. Open Warp Editor to adjust the clip manually.</source><translation>Не удалось применить авто-варпинг. Откройте Warp Editor, чтобы подогнать клип вручную.</translation></message>
@@ -9308,6 +9319,14 @@ Retry in session details to continue this publication.</source>
     </message>
     <message><source>Show Master Panel</source><translation>Показать панель мастера</translation></message>
     <message><source>Analyzer disabled. The master output is unchanged. Recovery will wait until playback stops.</source><translation>Анализатор отключён. Звук на мастере не изменился. Восстановление начнётся после остановки воспроизведения.</translation></message>
+    <message>
+        <source>Show Track Overview</source>
+        <translation>Показать панель дорожек</translation>
+    </message>
+    <message>
+        <source>Resize track overview</source>
+        <translation>Изменить ширину панели дорожек</translation>
+    </message>
 </context>
 <context>
     <name>MixerWidget</name>
@@ -13917,6 +13936,36 @@ Legato связывает перекрывающиеся ноты. Диапаз�
 </context>
 <context>
     <name>SettingsWindow</name>
+    <message><source>Mixer view</source><translation>Вид микшера</translation></message>
+    <message><source>Classic</source><comment>mixer view</comment><translation>Классический</translation></message>
+    <message><source>Compact</source><translation>Компактный</translation></message>
+    <message><source>Compact channel width</source><translation>Ширина компактной полосы</translation></message>
+    <message><source>Classic channel width</source><translation>Ширина классической полосы</translation></message>
+    <message><source>%1 px</source><translation>%1 px</translation></message>
+    <message><source>In Compact view, the selected channel's routing, plugins, mini modules and sends appear on the right. Drag the divider to resize that panel.</source><translation>В компактном виде маршрутизация, плагины, мини-модули и посылы выбранного канала находятся справа. Потяните разделитель, чтобы изменить ширину панели.</translation></message>
+    <message><source>Knob design</source><translation>Дизайн ручек</translation></message>
+    <message><source>Timeline volume faders</source><translation>Фейдеры громкости на таймлайне</translation></message>
+    <message><source>Recessed</source><translation>Рельефный</translation></message>
+    <message><source>Volume fader preview</source><translation>Пример фейдера громкости</translation></message>
+    <message><source>Choose the volume fader design for timeline track headers.</source><translation>Выберите дизайн регуляторов громкости в заголовках треков на таймлайне.</translation></message>
+    <message><source>Classic</source><translation>Стандартный</translation></message>
+    <message><source>Brushed metal</source><translation>Шлифованный металл</translation></message>
+    <message><source>Pan preview</source><translation>Пример панорамы</translation></message>
+    <message><source>Knob preview</source><translation>Пример ручки</translation></message>
+    <message><source>Applies to round controls throughout VLTONE. Colored value rings keep their function.</source><translation>Применяется к круглым регуляторам во всей программе. Цветные дуги по-прежнему показывают значение.</translation></message>
+    <message><source>Shortcuts</source><translation>Клавиши</translation></message>
+    <message><source>Performance</source><translation>Быстродействие</translation></message>
+    <message><source>Devices</source><translation>Устройства</translation></message>
+    <message><source>Files</source><translation>Файлы</translation></message>
+    <message><source>Import</source><translation>Импорт</translation></message>
+    <message><source>Inspector</source><translation>Инспектор</translation></message>
+    <message><source>Web</source><translation>Веб</translation></message>
+    <message><source>Palette</source><translation>Палитра</translation></message>
+    <message><source>Assistant</source><translation>Помощник</translation></message>
+    <message><source>Account settings</source><translation>Настройки аккаунта</translation></message>
+    <message><source>Account settings: %1</source><translation>Настройки аккаунта: %1</translation></message>
+    <message><source>Not signed in</source><translation>Нет входа</translation></message>
+    <message><source>Settings pages</source><translation>Подразделы настроек</translation></message>
     <message>
         <source>Track Icons</source>
         <translation>Иконки треков</translation>
@@ -14067,7 +14116,7 @@ Legato связывает перекрывающиеся ноты. Диапаз�
     </message>
     <message>
         <source>Workspace</source>
-        <translation>Рабочее пространство</translation>
+        <translation>Рабочая область</translation>
     </message>
     <message>
         <source>Appearance</source>
@@ -15618,6 +15667,7 @@ Reassign it to &quot;%3&quot;?</source>
 </context>
 <context>
     <name>TimelineWidget</name>
+    <message><source>Move to another track…</source><translation>Перенести на другую дорожку…</translation></message>
     <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
     <message><source>Fit this clip to the project tempo</source><translation>Подогнать этот клип под темп проекта</translation></message>
     <message><source>Audio clip</source><translation>Аудиоклип</translation></message>
@@ -16335,6 +16385,10 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
 </context>
 <context>
     <name>TrackListWidget</name>
+    <message>
+        <source>Random Color</source>
+        <translation>Случайные цвета</translation>
+    </message>
     <message><source>Could not load the sample into Sampler</source><translation>Не удалось загрузить сэмпл в Sampler</translation></message>
     <message>
         <source>Stereo level · L / R · click to clear the clip indicator</source>
@@ -16355,6 +16409,22 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
     <message>
         <source>Double-click to minimize track</source>
         <translation>Двойной щелчок — свернуть дорожку</translation>
+    </message>
+    <message>
+        <source>Double-click to rename track</source>
+        <translation>Двойной щелчок — переименовать дорожку</translation>
+    </message>
+    <message>
+        <source>Double-click to minimize or restore this folder and its tracks</source>
+        <translation>Двойной щелчок — свернуть или развернуть по высоте папку и все вложенные дорожки</translation>
+    </message>
+    <message>
+        <source>Minimize folder and tracks</source>
+        <translation>Свернуть по высоте папку и вложенные дорожки</translation>
+    </message>
+    <message>
+        <source>Restore folder and track heights</source>
+        <translation>Восстановить высоту папки и вложенных дорожек</translation>
     </message>
     <message>
         <source>Minimize track</source>
@@ -16607,6 +16677,14 @@ The files are rewritten on disk and the trimmed audio cannot be recovered.</sour
     <message>
         <source>Open Pattern in Rack</source>
         <translation>Открыть паттерн в рэке</translation>
+    </message>
+    <message>
+        <source>Lock editing</source>
+        <translation>Заблокировать редактирование</translation>
+    </message>
+    <message>
+        <source>Unlock editing</source>
+        <translation>Разблокировать редактирование</translation>
     </message>
 </context>
 <context>
@@ -16902,6 +16980,10 @@ Z…M and Q…P, two octaves from C%1  ·  [ and ] shift the octave</source>
     </message>
     <message><source>Master panel (Alt+M)</source><translation>Панель мастера (Alt+M)</translation></message>
     <message><source>Master panel</source><translation>Панель мастера</translation></message>
+    <message>
+        <source>Show or hide track overview (Alt+T)</source>
+        <translation>Показать или скрыть панель дорожек (Alt+T)</translation>
+    </message>
 </context>
 <context>
     <name>TransportSettingsPage</name>
@@ -16981,6 +17063,11 @@ Restart: when playback is paused, Space jumps back to the position where the cur
 </context>
 <context>
     <name>UndoCommands</name>
+    <message>
+        <source>Random Track Colors</source>
+        <translation>Случайные цвета треков</translation>
+    </message>
+    <message><source>Move Clips to Track</source><translation>Перенести клипы на другую дорожку</translation></message>
     <message><source>Generate MIDI</source><translation>Генерация MIDI</translation></message>
     <message><source>Auto Warp</source><translation>Авто-варпинг</translation></message>
     <message><source>Resize Sequence</source><translation>Изменение длины секвенции</translation></message>
@@ -17386,6 +17473,18 @@ Restart: when playback is paused, Space jumps back to the position where the cur
     <message>
         <source>Assign Modulation</source>
         <translation>Назначить модуляцию</translation>
+    </message>
+    <message>
+        <source>Lock Tracks</source>
+        <translation>Заблокировать дорожки</translation>
+    </message>
+    <message>
+        <source>Unlock Tracks</source>
+        <translation>Разблокировать дорожки</translation>
+    </message>
+    <message>
+        <source>Solo Tracks</source>
+        <translation>Solo для дорожек</translation>
     </message>
 </context>
 <context>
@@ -19281,6 +19380,15 @@ Use File → Save as Template… to create one.</source>
 </context>
 <context>
     <name>PluginBatchDialog</name>
+    <message><source>Apply</source><translation>Применить</translation></message>
+    <message><source>Choose preview track</source><translation>Выбрать дорожку для настройки</translation></message>
+    <message><source>Choose a track. Playback follows the timeline.</source><translation>Выберите дорожку. Воспроизведением управляет таймлайн.</translation></message>
+    <message><source>Playback follows the timeline</source><translation>Воспроизведением управляет таймлайн</translation></message>
+    <message><source>%1 clips</source><translation>Клипов: %1</translation></message>
+    <message><source>%1 tracks</source><translation>Дорожек: %1</translation></message>
+    <message><source>New effects are copied to this selection. Existing effects are kept.</source><translation>Новые эффекты будут добавлены ко всему выделению. Существующие эффекты сохранятся.</translation></message>
+    <message><source>Discard changes</source><translation>Отменить изменения</translation></message>
+    <message><source>The selected tracks or clips are no longer available.</source><translation>Выбранные дорожки или клипы больше недоступны.</translation></message>
     <message>
         <source>Shared Plugins</source>
         <translation>Общие плагины</translation>
@@ -21648,6 +21756,9 @@ I измеряется при воспроизведении. Нажмите д�
 
 <context>
 <name>ui::MiniModuleRack</name>
+<message><source>Bypass all mini modules on this channel</source><translation>Обход всех мини-модулей на этой дорожке</translation></message>
+<message><source>Plugins and channel strip: add, copy, paste</source><translation>Плагины и полоса канала: добавить, копировать, вставить</translation></message>
+<message><source>Channel strip settings</source><translation>Настройки полосы канала</translation></message>
 <message><source>Mini modules are not yet available in shared projects.</source><translation>Мини-модули пока недоступны в совместных проектах.</translation></message>
 <message><source>Could not add the module. Check that the channel still exists and has fewer than three modules.</source><translation>Не удалось добавить модуль. Проверьте, что канал существует и в нём меньше трёх модулей.</translation></message>
 <message><source>Cancel</source><translation>Отмена</translation></message>
@@ -23620,6 +23731,134 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
         <source>All modulation is bypassed. Enable it in the module menu.</source>
         <translation>Вся модуляция выключена. Включите её в меню модуля.</translation>
     </message>
+    <message>
+        <source>%1 beats</source>
+        <translation>%1 доли</translation>
+    </message>
+    <message>
+        <source>%1 steps</source>
+        <translation>%1 шагов</translation>
+    </message>
+    <message>
+        <source>Connections %1</source>
+        <translation>Подключения: %1</translation>
+    </message>
+    <message>
+        <source>Direction</source>
+        <translation>Направление</translation>
+    </message>
+    <message>
+        <source>Ducking</source>
+        <translation>Даккинг</translation>
+    </message>
+    <message>
+        <source>Enlarge editor</source>
+        <translation>Увеличить редактор</translation>
+    </message>
+    <message>
+        <source>Euclidean pattern</source>
+        <translation>Евклидов ритм</translation>
+    </message>
+    <message>
+        <source>Euclidean…</source>
+        <translation>Евклидов ритм…</translation>
+    </message>
+    <message>
+        <source>Forward</source>
+        <translation>Вперёд</translation>
+    </message>
+    <message>
+        <source>Gain</source>
+        <translation>Усиление</translation>
+    </message>
+    <message>
+        <source>Invert</source>
+        <translation>Инвертировать</translation>
+    </message>
+    <message>
+        <source>New pattern</source>
+        <translation>Новый рисунок</translation>
+    </message>
+    <message>
+        <source>No repeat</source>
+        <translation>Без повтора</translation>
+    </message>
+    <message>
+        <source>Pattern…</source>
+        <translation>Рисунок…</translation>
+    </message>
+    <message>
+        <source>Ping pong</source>
+        <translation>Маятник</translation>
+    </message>
+    <message>
+        <source>Pulse</source>
+        <translation>Импульс</translation>
+    </message>
+    <message>
+        <source>Pulses</source>
+        <translation>Импульсы</translation>
+    </message>
+    <message>
+        <source>Random mode</source>
+        <translation>Случайное движение</translation>
+    </message>
+    <message>
+        <source>Repeat pattern</source>
+        <translation>Повтор рисунка</translation>
+    </message>
+    <message>
+        <source>Reverse</source>
+        <translation>Назад</translation>
+    </message>
+    <message>
+        <source>Rotation</source>
+        <translation>Сдвиг</translation>
+    </message>
+    <message>
+        <source>S-curve</source>
+        <translation>S-кривая</translation>
+    </message>
+    <message>
+        <source>Seed: %1. Saved with the project.</source>
+        <translation>Seed: %1. Сохраняется в проекте.</translation>
+    </message>
+    <message>
+        <source>Shape presets</source>
+        <translation>Готовые формы</translation>
+    </message>
+    <message>
+        <source>Shape…</source>
+        <translation>Форма…</translation>
+    </message>
+    <message>
+        <source>Shift left</source>
+        <translation>Сдвинуть влево</translation>
+    </message>
+    <message>
+        <source>Shift right</source>
+        <translation>Сдвинуть вправо</translation>
+    </message>
+    <message>
+        <source>Smooth</source>
+        <translation>Плавно</translation>
+    </message>
+    <message>
+        <source>Step duration</source>
+        <translation>Длительность шага</translation>
+    </message>
+    <message>
+        <source>Stepped</source>
+        <translation>Ступени</translation>
+    </message>
+    <message>
+        <source>Steps</source>
+        <translation>Шаги</translation>
+    </message>
+    <message>
+        <source>Two-sided movement</source>
+        <translation>Движение в обе стороны</translation>
+    </message>
 </context>
 <context>
     <name>RackSamplerView</name>
@@ -23707,5 +23946,381 @@ or choose a file above</source><translation>Перетащите аудио сю
     <message><source>Move down</source><translation>Ниже</translation></message>
     <message><source>Remove plugin</source><translation>Удалить плагин</translation></message>
     <message><source>Your final processing chain</source><translation>Финальная цепочка обработки</translation></message>
+</context>
+<context>
+    <name>RackModulationEditor</name>
+    <message>
+        <source>Click to add a point. Drag to move. Shift-drag a segment to bend it. Alt bypasses the grid. Delete removes the selected point. Right-click for segment shapes.</source>
+        <translation>Нажмите, чтобы добавить точку. Перетаскивайте точки. Shift + перетаскивание изгибает сегмент; Alt отключает сетку. Delete удаляет выбранную точку. Формы сегментов — в контекстном меню.</translation>
+    </message>
+    <message>
+        <source>Drag to paint steps. Left/Right selects a step; Up/Down changes its value.</source>
+        <translation>Протягивайте мышь для рисования шагов. Влево/вправо — выбор шага, вверх/вниз — изменение значения.</translation>
+    </message>
+    <message>
+        <source>Snap to 1/16 grid</source>
+        <translation>Привязка к сетке 1/16</translation>
+    </message>
+    <message>
+        <source>Linear segment</source>
+        <translation>Линейный сегмент</translation>
+    </message>
+    <message>
+        <source>Hold segment</source>
+        <translation>Удержание</translation>
+    </message>
+    <message>
+        <source>S-curve segment</source>
+        <translation>S-кривая</translation>
+    </message>
+    <message>
+        <source>Bend…</source>
+        <translation>Изгиб…</translation>
+    </message>
+    <message>
+        <source>Delete point</source>
+        <translation>Удалить точку</translation>
+    </message>
+    <message>
+        <source>Bend</source>
+        <translation>Изгиб</translation>
+    </message>
+    <message>
+        <source>Bend · −1…1</source>
+        <translation>Изгиб · −1…1</translation>
+    </message>
+</context>
+<context>
+    <name>VocalAlignmentWindow</name>
+    <message><source>Align all</source><translation>Выровнять все</translation></message>
+    <message><source>Align all added targets to the guide. Selecting a row only changes the comparison.</source><translation>Выровнять все добавленные даблы по эталону. Выбор строки меняет только предпросмотр.</translation></message>
+    <message><source>No changes applied. See each clip's result above.</source><translation>Изменения не применены. Результат по каждому клипу указан выше.</translation></message>
+    <message><source>Enable or reset the existing Warp map before aligning vocals.</source><translation>Включите или сбросьте существующую Warp-карту перед выравниванием.</translation></message>
+    <message><source>Unfreeze the track before using Warp.</source><translation>Разморозьте дорожку перед использованием Warp.</translation></message>
+    <message><source>Select an audio clip.</source><translation>Выберите аудиоклип.</translation></message>
+    <message><source>Bounce the comp to an audio clip before using Warp.</source><translation>Сведите комп в аудиоклип перед использованием Warp.</translation></message>
+    <message><source>Disable the sample loop before using Warp.</source><translation>Отключите зацикливание сэмпла перед использованием Warp.</translation></message>
+    <message><source>Warp supports mono and stereo audio.</source><translation>Warp поддерживает моно- и стереоаудио.</translation></message>
+    <message><source>Change tape fades to volume fades before using Warp.</source><translation>Замените ленточные фейды на фейды громкости перед использованием Warp.</translation></message>
+    <message><source>Vocal Alignment</source><translation>Выравнивание вокала</translation></message>
+    <message><source>Guide clip</source><translation>Основной клип</translation></message>
+    <message><source>Take selection</source><translation>Взять выделение</translation></message>
+    <message><source>Align these clips</source><translation>Выровнять эти клипы</translation></message>
+    <message><source>Add selected clips / drop here</source><translation>Добавить выделенные клипы / перетащить сюда</translation></message>
+    <message><source>Set as guide</source><translation>Назначить основным</translation></message>
+    <message><source>Remove</source><translation>Удалить из списка</translation></message>
+    <message><source>Open Warp editor</source><translation>Открыть Warp-редактор</translation></message>
+    <message><source>Hybrid vocal</source><translation>Гибридный вокальный</translation></message>
+    <message><source>Attacks</source><translation>По атакам</translation></message>
+    <message><source>Shift only</source><translation>Только сдвиг</translation></message>
+    <message><source>Method</source><translation>Метод</translation></message>
+    <message><source>Density</source><translation>Плотность</translation></message>
+    <message><source>Advanced</source><translation>Дополнительно</translation></message>
+    <message><source> ms</source><translation> мс</translation></message>
+    <message><source>Tolerance</source><translation>Допуск</translation></message>
+    <message><source>Maximum shift ±</source><translation>Максимальный сдвиг ±</translation></message>
+    <message><source>Maximum stretch factor</source><translation>Коэффициент растяжения</translation></message>
+    <message><source>Tolerance leaves small differences untouched; it is not a recognition accuracy guarantee. Voiced segments stay within the chosen stretch factor and its reciprocal.</source><translation>Допуск сохраняет небольшие расхождения и не гарантирует точность распознавания. Звучащие участки ограничены выбранным коэффициентом растяжения и обратным ему коэффициентом сжатия.</translation></message>
+    <message><source>Cancel analysis</source><translation>Отменить анализ</translation></message>
+    <message><source>Align</source><translation>Выровнять</translation></message>
+    <message><source>Clip unavailable</source><translation>Клип недоступен</translation></message>
+    <message><source>Drop the guide clip here</source><translation>Перетащите основной клип сюда</translation></message>
+    <message><source>The audio changed. Take the selection again.</source><translation>Аудио изменилось. Нажмите «Взять выделение» ещё раз.</translation></message>
+    <message><source>Analyzing vocals…</source><translation>Анализ вокала…</translation></message>
+    <message><source>Analysis cancelled. No changes applied.</source><translation>Анализ отменён. Изменения не применены.</translation></message>
+    <message><source>The audio changed during analysis. Take the selection again.</source><translation>Во время анализа аудио изменилось. Нажмите «Взять выделение» ещё раз.</translation></message>
+    <message><source>Aligned</source><translation>Выровнен</translation></message>
+    <message><source>Partially aligned</source><translation>Частично выровнен</translation></message>
+    <message><source>Skipped</source><translation>Пропущен</translation></message>
+    <message><source>Done. One Undo restores this run. Change settings and press Align to recalculate from the original clips.</source><translation>Готово. Один шаг отмены восстановит состояние до запуска. Измените настройки и нажмите «Выровнять», чтобы пересчитать от исходных клипов.</translation></message>
+    <message><source>Zero density: unchanged.</source><translation>Плотность 0%: исходное состояние.</translation></message>
+    <message><source>No reliable matching phrase nearby.</source><translation>Поблизости не найдено надёжного совпадения фраз.</translation></message>
+    <message><source>Already within tolerance.</source><translation>Расхождение уже в пределах допуска.</translation></message>
+    <message><source>Locked markers prevent a whole-clip shift.</source><translation>Заблокированные маркеры не позволяют сдвинуть весь клип.</translation></message>
+    <message><source>Uncertain or excessive changes were left untouched.</source><translation>Неуверенные совпадения и чрезмерные изменения пропущены.</translation></message>
+    <message><source>The alignment could not produce a valid Warp map.</source><translation>Не удалось построить корректную Warp-карту.</translation></message>
+    <message><source>Invalid alignment settings.</source><translation>Недопустимые настройки выравнивания.</translation></message>
+    <message><source>Alignment cancelled.</source><translation>Выравнивание отменено.</translation></message>
+    <message><source>The clip has no supported readable audio.</source><translation>В клипе нет доступного аудио поддерживаемого формата.</translation></message>
+    <message><source>Editable vocal alignment is available in local projects only.</source><translation>Редактируемое выравнивание вокала доступно только в локальных проектах.</translation></message>
+    <message><source>This session is read-only.</source><translation>Сессия доступна только для чтения.</translation></message>
+    <message><source>Stop recording before aligning vocals.</source><translation>Остановите запись перед выравниванием вокала.</translation></message>
+    <message><source>Choose a guide and at least one target audio clip.</source><translation>Выберите основной и хотя бы один целевой аудиоклип.</translation></message>
+    <message><source>A clip cannot align to itself or appear twice.</source><translation>Нельзя выравнивать клип по самому себе или добавлять его дважды.</translation></message>
+    <message><source>Select audio clips only.</source><translation>Выберите только аудиоклипы.</translation></message>
+    <message><source>Source audio is unavailable.</source><translation>Исходное аудио недоступно.</translation></message>
+    <message><source>Render pitch-changing Warp before aligning vocals.</source><translation>Перед выравниванием запеките Warp с изменением высоты тона.</translation></message>
+    <message><source>The clip has no readable audio.</source><translation>В клипе нет доступного аудио.</translation></message>
+    <message><source>Invalid source Warp map.</source><translation>Некорректная исходная Warp-карта.</translation></message>
+    <message><source>Invalid vocal alignment result.</source><translation>Некорректный результат выравнивания.</translation></message>
+    <message><source>Invalid vocal alignment Warp map.</source><translation>Некорректная Warp-карта выравнивания.</translation></message>
+    <message><source>Drop a clip here to replace the guide. The guide stays unchanged.</source><translation>Перетащите клип сюда, чтобы заменить основной. Основной клип остаётся без изменений.</translation></message>
+    <message><source>Drag clips here to add targets</source><translation>Перетащите сюда клипы для выравнивания</translation></message>
+    <message><source>Remove from alignment (Delete)</source><translation>Убрать из выравнивания (Delete)</translation></message>
+    <message><source>Waveform comparison</source><translation>Сравнение волн</translation></message>
+    <message><source>Show timing changes</source><translation>Показать изменения времени</translation></message>
+    <message><source>Zoom out (−)</source><translation>Уменьшить (−)</translation></message>
+    <message><source>Zoom in (+)</source><translation>Увеличить (+)</translation></message>
+    <message><source>Fit all clips (Home)</source><translation>Показать клипы целиком (Home)</translation></message>
+    <message><source>Advanced settings</source><translation>Дополнительные настройки</translation></message>
+    <message><source>Differences within this tolerance stay untouched.</source><translation>Расхождения в пределах допуска не исправляются.</translation></message>
+    <message><source>Voiced segments stay within this stretch factor and its reciprocal.</source><translation>Растяжение звучащих участков ограничено этим коэффициентом и его обратной величиной.</translation></message>
+    <message><source>Alignment progress</source><translation>Ход выравнивания</translation></message>
+    <message><source>Settings changed. Press Align to update the comparison.</source><translation>Настройки изменены. Нажмите «Выровнять», чтобы обновить сравнение.</translation></message>
+    <message><source>Targets · %1</source><translation>Клипы · %1</translation></message>
+    <message><source>Max shift %1 ms · Matches: %2 · Skipped: %3</source><translation>Макс. сдвиг %1 мс · совпадений: %2 · пропущено: %3</translation></message>
+    <message><source>Compare each target with the guide on the same time scale. Lines between Before and After show timing changes.</source><translation>Сравнивайте клип с основным на общей шкале времени. Линии между «До» и «После» показывают сдвиги.</translation></message>
+    <message><source>Ready</source><translation>Готов к выравниванию</translation></message>
+</context>
+<context>
+    <name>ContextPanel</name>
+    <message><source>Import audio…</source><translation>Импорт аудио…</translation></message>
+    <message><source>Create track…</source><translation>Создать дорожку…</translation></message>
+    <message><source>Vocal Alignment…</source><translation>Выравнивание вокала…</translation></message>
+</context>
+<context>
+    <name>ContextPanelTools</name>
+    <message><source>General</source><translation>Общие</translation></message>
+    <message><source>Import audio</source><translation>Импорт аудио</translation></message>
+    <message><source>Create track</source><translation>Создать дорожку</translation></message>
+    <message><source>Vocal Alignment</source><translation>Выравнивание вокала</translation></message>
+</context>
+<context>
+    <name>UndoCommands</name>
+    <message><source>Disable All Sends</source><translation>Выключить все посылы</translation></message>
+    <message><source>Enable All Sends</source><translation>Включить все посылы</translation></message>
+    <message><source>Bypass Mini Modules</source><translation>Обход мини-модулей</translation></message>
+    <message><source>Enable Mini Modules</source><translation>Включить мини-модули</translation></message>
+    <message><source>Align Vocals</source><translation>Выравнивание вокала</translation></message>
+</context>
+<context>
+    <name>VocalAlignmentPreview</name>
+    <message><source>Guide, before and after waveforms</source><translation>Волны основного клипа и целевого до и после выравнивания</translation></message>
+    <message><source>Wheel to zoom · Drag to pan · Home to fit · Arrow keys to pan</source><translation>Колесо — масштаб · Перетаскивание — прокрутка · Home — целиком · Стрелки — прокрутка</translation></message>
+    <message><source>Guide</source><translation>Основной</translation></message>
+    <message><source>Before</source><translation>До</translation></message>
+    <message><source>After</source><translation>После</translation></message>
+    <message><source>%1 s</source><translation>%1 с</translation></message>
+    <message><source>Press Align to see the result here</source><translation>Нажмите «Выровнять», чтобы увидеть результат</translation></message>
+    <message><source>Add a guide clip</source><translation>Добавьте основной клип</translation></message>
+    <message><source>Select a target clip</source><translation>Выберите клип для выравнивания</translation></message>
+    <message><source>Loading waveform…</source><translation>Загрузка волны…</translation></message>
+    <message><source>Waveform unavailable</source><translation>Волна недоступна</translation></message>
+    <message><source> · Shift %1 ms</source><translation> · Сдвиг %1 мс</translation></message>
+</context>
+<context>
+    <name>TrackOverviewPanel</name>
+    <message>
+        <source>Show Mute</source>
+        <translation>Показывать Mute</translation>
+    </message>
+    <message>
+        <source>Show Solo</source>
+        <translation>Показывать Solo</translation>
+    </message>
+    <message>
+        <source>Show editing lock</source>
+        <translation>Показывать замок</translation>
+    </message>
+    <message>
+        <source>
+Click to expand or collapse</source>
+        <translation>
+Нажмите, чтобы развернуть или свернуть</translation>
+    </message>
+    <message>
+        <source>Tracks</source>
+        <translation>Треки</translation>
+    </message>
+    <message>
+        <source>Track actions</source>
+        <translation>Действия с дорожками</translation>
+    </message>
+    <message>
+        <source>Hide tracks</source>
+        <translation>Скрыть треки</translation>
+    </message>
+    <message>
+        <source>Find tracks…</source>
+        <translation>Найти дорожки…</translation>
+    </message>
+    <message>
+        <source>Find tracks</source>
+        <translation>Поиск дорожек</translation>
+    </message>
+    <message>
+        <source>Track hierarchy</source>
+        <translation>Дерево дорожек</translation>
+    </message>
+    <message>
+        <source>Name</source>
+        <translation>Название</translation>
+    </message>
+    <message>
+        <source>Lock</source>
+        <translation>Замок</translation>
+    </message>
+    <message>
+        <source>
+Editing locked</source>
+        <translation>
+Редактирование заблокировано</translation>
+    </message>
+    <message>
+        <source>Mute — applies to selected tracks</source>
+        <translation>Mute — для выделенных дорожек</translation>
+    </message>
+    <message>
+        <source>Solo — applies to selected tracks</source>
+        <translation>Solo — для выделенных дорожек</translation>
+    </message>
+    <message>
+        <source>Editing locks are available in local projects</source>
+        <translation>Блокировка редактирования доступна в локальных проектах</translation>
+    </message>
+    <message>
+        <source>Unlock the parent folder first</source>
+        <translation>Сначала разблокируйте родительскую папку</translation>
+    </message>
+    <message>
+        <source>Protect clips and track order. Mute and Solo remain available.</source>
+        <translation>Защита клипов и порядка дорожек. Mute и Solo остаются доступны.</translation>
+    </message>
+    <message>
+        <source>Mute</source>
+        <translation>Mute</translation>
+    </message>
+    <message>
+        <source>Solo</source>
+        <translation>Solo</translation>
+    </message>
+    <message>
+        <source>Editing lock</source>
+        <translation>Блокировка редактирования</translation>
+    </message>
+    <message>
+        <source>Selected: %1</source>
+        <translation>Выделено: %1</translation>
+    </message>
+    <message>
+        <source>Add tracks to get started</source>
+        <translation>Добавьте дорожки</translation>
+    </message>
+    <message>
+        <source>No matching tracks</source>
+        <translation>Дорожки не найдены</translation>
+    </message>
+    <message>
+        <source>%1 tracks</source>
+        <translation>Дорожек: %1</translation>
+    </message>
+    <message>
+        <source>Rename track</source>
+        <translation>Переименовать дорожку</translation>
+    </message>
+    <message>
+        <source>Summing folder</source>
+        <translation>Суммирующая папка</translation>
+    </message>
+    <message>
+        <source>Folder</source>
+        <translation>Папка</translation>
+    </message>
+    <message>
+        <source>Show on timeline</source>
+        <translation>Показать на таймлайне</translation>
+    </message>
+    <message>
+        <source>Rename…</source>
+        <translation>Переименовать…</translation>
+    </message>
+    <message>
+        <source>Unmute selected</source>
+        <translation>Включить звук выделенных</translation>
+    </message>
+    <message>
+        <source>Mute selected</source>
+        <translation>Приглушить выделенные</translation>
+    </message>
+    <message>
+        <source>Unsolo selected</source>
+        <translation>Снять Solo с выделенных</translation>
+    </message>
+    <message>
+        <source>Solo selected</source>
+        <translation>Solo для выделенных</translation>
+    </message>
+    <message>
+        <source>Unlock editing</source>
+        <translation>Разблокировать редактирование</translation>
+    </message>
+    <message>
+        <source>Lock editing</source>
+        <translation>Заблокировать редактирование</translation>
+    </message>
+    <message>
+        <source>Move to folder</source>
+        <translation>Переместить в папку</translation>
+    </message>
+    <message>
+        <source>Top level</source>
+        <translation>Верхний уровень</translation>
+    </message>
+    <message>
+        <source>New folder from selection</source>
+        <translation>Выделенные в новую папку</translation>
+    </message>
+    <message>
+        <source>New summing folder from selection</source>
+        <translation>Выделенные в суммирующую папку</translation>
+    </message>
+    <message>
+        <source>Convert to regular folder</source>
+        <translation>Преобразовать в обычную папку</translation>
+    </message>
+    <message>
+        <source>Convert to summing folder</source>
+        <translation>Преобразовать в суммирующую папку</translation>
+    </message>
+    <message>
+        <source>Move up</source>
+        <translation>Переместить выше</translation>
+    </message>
+    <message>
+        <source>Move down</source>
+        <translation>Переместить ниже</translation>
+    </message>
+    <message>
+        <source>Expand all</source>
+        <translation>Развернуть всё</translation>
+    </message>
+    <message>
+        <source>Collapse all</source>
+        <translation>Свернуть всё</translation>
+    </message>
+    <message>
+        <source>Add track</source>
+        <translation>Добавить дорожку</translation>
+    </message>
+    <message>
+        <source>Audio track</source>
+        <translation>Аудиодорожка</translation>
+    </message>
+    <message>
+        <source>Instrument track</source>
+        <translation>Инструментальная дорожка</translation>
+    </message>
+    <message>
+        <source>More track actions…</source>
+        <translation>Другие действия…</translation>
+    </message>
+</context>
+<context>
+    <name>ClipTrackPicker</name>
+    <message><source>Move to track</source><translation>Перенести на дорожку</translation></message>
+    <message><source>Find a track…</source><translation>Найти дорожку…</translation></message>
+    <message><source>Find a destination track</source><translation>Поиск дорожки для переноса</translation></message>
+    <message><source>Compatible destination tracks</source><translation>Доступные дорожки для переноса</translation></message>
+    <message><source>No matching tracks</source><translation>Дорожки не найдены</translation></message>
 </context>
 </TS>

@@ -1,6 +1,7 @@
 #include <QScopeGuard>
 #include "PluginStyle.hpp"
 #include "Controls.hpp"
+#include "KnobAppearance.hpp"
 #include "graphics/RetainedScene.hpp"
 #include "UiFrameClock.hpp"
 #include "EngineController.hpp"
@@ -9,6 +10,7 @@
 #include "UiConstants.hpp"
 
 #include <QAction>
+#include <QApplication>
 #include <QAccessibleWidget>
 #include <QAccessible>
 #include <QInputDialog>
@@ -25,6 +27,7 @@
 #include <QPainterPath>
 #include <QCursor>
 #include <QScreen>
+#include <QSettings>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QWheelEvent>
@@ -287,8 +290,7 @@ QRectF handleRect(const QRectF& track, Qt::Orientation orientation, double axis,
 /// have behind it is the track: the accent fill reads straight through the
 /// glass, which is what makes the handle look like part of the slider instead
 /// of an object parked on it.
-void paintGlassHandle(QPainter& p, const QRectF& handle, bool active,
-                      const QColor& accent) {
+void paintGlassHandle(QPainter& p, const QRectF& handle, bool active) {
     const Theme& t = th();
     const double radius = std::min(handle.width(), handle.height()) / 2.0;
 
@@ -343,9 +345,9 @@ void paintGlassHandle(QPainter& p, const QRectF& handle, bool active,
     p.drawRoundedRect(handle, radius, radius);
 
     QLinearGradient edge(handle.topLeft(), handle.bottomLeft());
-    QColor edgeTop = mixColors(QColor(255, 255, 255), accent, 0.30);
+    QColor edgeTop(Qt::white);
     edgeTop.setAlphaF(t.dark ? (active ? 0.85 : 0.62) : 0.95);
-    QColor edgeMid = accent;
+    QColor edgeMid = t.textSecondary;
     edgeMid.setAlphaF(active ? 0.55 : 0.30);
     QColor edgeBottom(0, 0, 0);
     edgeBottom.setAlphaF(t.dark ? 0.45 : 0.22);
@@ -454,7 +456,7 @@ void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
     }
 
     paintGlassHandle(p, handleRect(track, spec.orientation, handleAxis, spec.flush),
-                     spec.active, accent);
+                     spec.active);
     p.restore();
 }
 
@@ -714,7 +716,7 @@ protected:
         p.setRenderHint(QPainter::Antialiasing, true);
         const Theme& t = th();
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        p.setPen(QPen(t.accent, 1));
+        p.setPen(QPen(t.separator(), 1));
         p.setBrush(mixColors(t.surfaceElevated, t.background, 0.15));
         p.drawRect(r);
         p.setPen(t.textPrimary);
@@ -876,8 +878,13 @@ void IconButton::paintEvent(QPaintEvent*) {
 
     const Theme& t = th();
     const QColor active = m_activeColor.isValid() ? m_activeColor : t.accent;
-    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const qreal radius = (m_prominent || property("circular").toBool())
+    QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const bool circular = property("circular").toBool();
+    if (circular) {
+        const qreal side = std::min(r.width(), r.height());
+        r = QRectF(r.center() - QPointF(side / 2, side / 2), QSizeF(side, side));
+    }
+    const qreal radius = (m_prominent || circular)
                              ? r.height() / 2.0 : Theme::cornerRadius;
 
     auto plate = [&](const QColor& c) {
@@ -1123,6 +1130,12 @@ constexpr double kMinLabelGap = 9.0;
 /// Room above the first mark, where the unit is printed.
 constexpr double kScaleHeadroom = 11.0;
 
+FaderWidget::TrackHeaderDesign& currentTrackFaderDesign() {
+    static auto design = QSettings().value("ui/trackFaderDesign").toString() == "recessed"
+        ? FaderWidget::TrackHeaderDesign::Recessed : FaderWidget::TrackHeaderDesign::Classic;
+    return design;
+}
+
 double positionForDb(double db) {
     return faderPositionFromGain(std::pow(10.0, db / 20.0));
 }
@@ -1155,6 +1168,28 @@ FaderWidget::FaderWidget(Qt::Orientation orientation, QWidget* parent)
 }
 
 FaderWidget::~FaderWidget() = default;
+
+FaderWidget::TrackHeaderDesign FaderWidget::trackHeaderDesign() {
+    return currentTrackFaderDesign();
+}
+
+void FaderWidget::setTrackHeaderDesign(TrackHeaderDesign design) {
+    if (currentTrackFaderDesign() == design) return;
+    currentTrackFaderDesign() = design;
+    QSettings().setValue("ui/trackFaderDesign",
+                        design == TrackHeaderDesign::Classic ? "classic" : "recessed");
+    for (auto* widget : QApplication::allWidgets()) {
+        auto* fader = qobject_cast<FaderWidget*>(widget);
+        if (!fader || !fader->m_trackHeaderStyle) continue;
+        fader->m_capScene.reset();
+        fader->m_staticSceneDirty = true;
+        fader->update();
+    }
+}
+
+bool FaderWidget::usesRecessedTrackStyle() const {
+    return m_trackHeaderStyle && trackHeaderDesign() == TrackHeaderDesign::Recessed;
+}
 
 void FaderWidget::setGain(double gain) {
     const double g = std::clamp(gain, 0.0, 2.0);
@@ -1192,11 +1227,33 @@ void FaderWidget::setCompactKnob(bool compact) {
     } else {
         setMinimumWidth(std::max(1, m_regularMinimumWidth));
         setMaximumWidth(m_regularMaximumWidth);
-        setFixedHeight(22);
+        setFixedHeight(m_trackHeaderStyle ? 28 : 22);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
     m_compactKnob = compact;
+    m_staticSceneDirty = true;
     setCursor(m_compactKnob ? Qt::SizeVerCursor : Qt::SizeHorCursor);
+    updateGeometry();
+    update();
+}
+
+void FaderWidget::setSlim(bool slim) {
+    if (m_orientation != Qt::Vertical || m_slim == slim) return;
+    m_slim = slim;
+    if (slim) setScaleVisible(false);
+    setMinimumWidth(slim ? 16 : int(kCapAcross + 4 + (m_scale ? kScaleWidth : 0.0)));
+    m_capScene.reset();
+    m_staticSceneDirty = true;
+    updateGeometry();
+    update();
+}
+
+void FaderWidget::setTrackHeaderStyle(bool enabled) {
+    if (m_orientation != Qt::Horizontal || m_trackHeaderStyle == enabled) return;
+    m_trackHeaderStyle = enabled;
+    m_capScene.reset();
+    m_staticSceneDirty = true;
+    if (!m_compactKnob) setFixedHeight(enabled ? 28 : 22);
     updateGeometry();
     update();
 }
@@ -1208,9 +1265,17 @@ QRectF FaderWidget::faderColumn() const {
 }
 
 QSizeF FaderWidget::capSize() const {
-    if (m_orientation == Qt::Vertical)
-        return QSizeF(std::min(kCapAcross, std::max(1.0, faderColumn().width() - 4.0)),
-                      kCapAlong);
+    // Both designs share the same hit target and row alignment; the classic
+    // cap retains its original dimensions inside that space.
+    if (m_trackHeaderStyle)
+        return usesRecessedTrackStyle()
+            ? QSizeF(20.0, std::min(24.0, height() - 2.0))
+            : QSizeF(18.0, std::min(20.0, height() - 2.0));
+    if (m_orientation == Qt::Vertical) {
+        const double across =
+            std::min(m_slim ? 20.0 : kCapAcross, std::max(1.0, faderColumn().width() - 4.0));
+        return QSizeF(across, m_slim ? kCapAlong * across / kCapAcross : kCapAlong);
+    }
     // The header row is shorter than the mixer grip is wide, so narrow the
     // shoulders for the horizontal version.
     const double across = std::min(kCapAcross, double(height()) - 2.0);
@@ -1219,6 +1284,9 @@ QSizeF FaderWidget::capSize() const {
 
 QRectF FaderWidget::trackRect() const {
     const QRectF column = faderColumn();
+    if (usesRecessedTrackStyle())
+        return QRectF(column.left() + 1.0, column.center().y() - 7.0,
+                      column.width() - 2.0, 14.0);
     // The scale wants a line above its first mark for the unit, exactly as it
     // is printed on the console, so the throw starts below it.
     const double top = m_scale ? kScaleHeadroom : 1.0;
@@ -1329,12 +1397,78 @@ void FaderWidget::paintCap(QPainter& p, const QRectF& cap) const {
     const Theme& t = th();
     const bool vertical = m_orientation == Qt::Vertical;
     const bool lit = isEnabled() && (m_dragging || m_hovered);
+    if (usesRecessedTrackStyle()) {
+        p.save();
+        if (!isEnabled()) p.setOpacity(p.opacity() * .45);
+        const QRectF shell = cap.adjusted(.8, .7, -.8, -1.3);
+        const QRectF face = shell.adjusted(1.4, 1.1, -1.4, -1.8);
+        const QColor metal = mixColors(t.controlTop(), QColor(Qt::white),
+                                       t.dark ? .74 : .36);
+        const auto silver = [&](double lightness) {
+            return mixColors(t.edgeDark(t.controlBottom()), metal, lightness);
+        };
+        // Keep the casting and shadow out of the translucent face, so the
+        // rail can show through softly instead of revealing a black backing.
+        p.save();
+        QPainterPath rimClip;
+        rimClip.setFillRule(Qt::OddEvenFill);
+        rimClip.addRect(cap);
+        rimClip.addRoundedRect(face, 1.9, 1.9);
+        p.setClipPath(rimClip, Qt::IntersectClip);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, t.dark ? 55 : 24));
+        p.drawRoundedRect(shell.adjusted(-.5, .5, .5, 1.1), 3.3, 3.3);
+        p.setBrush(QColor(0, 0, 0, t.dark ? 140 : 65));
+        p.drawRoundedRect(shell.translated(0, .8), 2.8, 2.8);
+
+        QLinearGradient edge(shell.topLeft(), shell.bottomRight());
+        edge.setColorAt(0, silver(lit ? .98 : .88));
+        edge.setColorAt(.32, silver(.60));
+        edge.setColorAt(.7, silver(.34));
+        edge.setColorAt(1, silver(.18));
+        p.setBrush(edge);
+        p.setPen(QPen(t.edgeDark(t.well()), .8));
+        p.drawRoundedRect(shell, 2.8, 2.8);
+        p.restore();
+
+        const auto faceSilver = [&](double lightness) {
+            QColor color = silver(lightness);
+            color.setAlphaF(.92);
+            return color;
+        };
+        QLinearGradient crown(face.topLeft(), face.bottomRight());
+        crown.setColorAt(0, faceSilver(.77));
+        crown.setColorAt(.19, faceSilver(lit ? 1.0 : .94));
+        crown.setColorAt(.46, faceSilver(.73));
+        crown.setColorAt(.64, faceSilver(.54));
+        crown.setColorAt(.86, faceSilver(.80));
+        crown.setColorAt(1, faceSilver(.60));
+        p.setPen(Qt::NoPen);
+        p.setBrush(crown);
+        p.drawRoundedRect(face, 1.9, 1.9);
+
+        // A dark inlay stays on the exact gain axis; the silver shoulders
+        // provide a larger grip without obscuring where the value is set.
+        const double x = cap.center().x();
+        const double y1 = face.top() + 3.5, y2 = face.bottom() - 3.5;
+        p.setPen(QPen(QColor(255, 255, 255, 80), .8, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(x + .9, y1), QPointF(x + .9, y2));
+        p.setPen(QPen(silver(.12), 1.25, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(x, y1), QPointF(x, y2));
+        p.setPen(QPen(QColor(0, 0, 0, 32), .7, Qt::SolidLine, Qt::RoundCap));
+        for (double side : {-3.0, 3.0})
+            p.drawLine(QPointF(x + side, y1 + 1.5), QPointF(x + side, y2 - 1.5));
+        p.restore();
+        return;
+    }
     p.save();
     p.translate(cap.topLeft());
     // The same sculpted grip in both orientations, lit from the upper left.
+    const bool slimVertical = vertical && m_slim;
+    if (slimVertical) p.scale(cap.width() / kCapAcross, cap.height() / kCapAlong);
     if (!vertical) p.setTransform(QTransform(0, 1, 1, 0, 0, 0), true);
-    const double width = vertical ? cap.width() : cap.height();
-    const double height = vertical ? cap.height() : cap.width();
+    const double width = slimVertical ? kCapAcross : vertical ? cap.width() : cap.height();
+    const double height = slimVertical ? kCapAlong : vertical ? cap.height() : cap.width();
     const QRectF shell(0.8, 0.6, width - 1.6, height - 2.2);
     const QRectF face = shell.adjusted(2.0, 1.2, -2.0, -2.6);
     // Use the same raised-control material as the surrounding theme. Lighting
@@ -1467,6 +1601,7 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
         const QRectF body = ring.adjusted(3.0, 3.0, -3.0, -3.0);
         const bool lit = m_dragging || m_hovered;
 
+        if (knobDesign() == KnobDesign::Classic) {
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, t.dark ? 105 : 42));
         p.drawEllipse(body.translated(0.0, 1.0));
@@ -1476,6 +1611,7 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
         p.setBrush(face);
         p.setPen(QPen(t.separator(), 1.0));
         p.drawEllipse(body);
+        }
 
         QPen arcPen(mixColors(t.separator(), t.background, 0.22), 2.1,
                     Qt::SolidLine, Qt::RoundCap);
@@ -1488,6 +1624,7 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
         p.drawArc(ring, 225 * 16,
                   int(std::lround(-270.0 * position * 16.0)));
 
+        if (!paintMetalKnob(p, body, 225.0 - 270.0 * position)) {
         const double angle = (225.0 - 270.0 * position) * kDegToRad;
         const double radius = body.width() * 0.31;
         const QPointF end = body.center() +
@@ -1495,27 +1632,57 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
         p.setPen(QPen(lit ? t.accent : t.textPrimary, 1.7,
                       Qt::SolidLine, Qt::RoundCap));
         p.drawLine(body.center(), end);
+        }
         return;
     }
 
     const QRectF track = trackRect();
     const double axis = knobPos(position);
+    const int headerTicks = usesRecessedTrackStyle()
+        ? std::max(1, int(std::floor(travel() / 3.5))) : 0;
 
     auto* scene = graphics::sceneGeometrySink(p);
     if (!scene || scene->beginRetainedSection(1, m_staticSceneDirty)) {
         if (m_scale && vertical) paintScale(p);
 
-        // The slot: cut into the panel, not laid on it.
-        p.setPen(Qt::NoPen);
-        p.setBrush(mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.55 : 0.18));
-        p.drawRoundedRect(track, 2.0, 2.0);
-        p.setPen(QPen(t.edgeLight(t.well()), 1.0));
-        if (vertical) {
-            p.drawLine(QPointF(track.right() - 0.5, track.top() + 2.0),
-                       QPointF(track.right() - 0.5, track.bottom() - 2.0));
+        if (usesRecessedTrackStyle()) {
+            QLinearGradient rim(track.topLeft(), track.bottomLeft());
+            rim.setColorAt(0, t.edgeDark(t.well()));
+            rim.setColorAt(.55, t.well());
+            rim.setColorAt(1, t.edgeLight(t.controlBottom()));
+            p.setBrush(rim);
+            p.setPen(Qt::NoPen);
+            p.drawRoundedRect(track, 3, 3);
+            const QRectF bed = track.adjusted(1.2, 1.2, -1.2, -1.2);
+            QLinearGradient depth(bed.topLeft(), bed.bottomLeft());
+            depth.setColorAt(0, mixColors(t.well(), QColor(Qt::black), t.dark ? .45 : .18));
+            depth.setColorAt(.45, t.well());
+            depth.setColorAt(1, t.wellTop());
+            p.setBrush(depth);
+            p.drawRoundedRect(bed, 2, 2);
+            for (int i = 0; i <= headerTicks; ++i) {
+                const double x = knobPos(double(i) / headerTicks);
+                const double half = i % 5 == 0 ? 3.8 : 2.8;
+                p.setPen(QPen(t.edgeLight(t.well()), .8));
+                p.drawLine(QPointF(x + .7, track.center().y() - half),
+                           QPointF(x + .7, track.center().y() + half));
+                p.setPen(QPen(mixColors(t.textSecondary, t.well(), .70), 1.0));
+                p.drawLine(QPointF(x, track.center().y() - half),
+                           QPointF(x, track.center().y() + half));
+            }
         } else {
-            p.drawLine(QPointF(track.left() + 2.0, track.bottom() - 0.5),
-                       QPointF(track.right() - 2.0, track.bottom() - 0.5));
+            // The slot: cut into the panel, not laid on it.
+            p.setPen(Qt::NoPen);
+            p.setBrush(mixColors(t.well(), QColor(0, 0, 0), t.dark ? 0.55 : 0.18));
+            p.drawRoundedRect(track, 2.0, 2.0);
+            p.setPen(QPen(t.edgeLight(t.well()), 1.0));
+            if (vertical) {
+                p.drawLine(QPointF(track.right() - 0.5, track.top() + 2.0),
+                           QPointF(track.right() - 0.5, track.bottom() - 2.0));
+            } else {
+                p.drawLine(QPointF(track.left() + 2.0, track.bottom() - 0.5),
+                           QPointF(track.right() - 2.0, track.bottom() - 0.5));
+            }
         }
         if (scene) scene->endRetainedSection();
     }
@@ -1527,7 +1694,16 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
     const QColor lamp = mixColors(t.accent, t.background, m_dragging ? 0.0 : 0.18);
     p.setPen(Qt::NoPen);
     p.setBrush(lamp);
-    if (vertical) {
+    if (usesRecessedTrackStyle()) {
+        p.setPen(QPen(mixColors(lamp, t.textSecondary, .15), 1.15,
+                      Qt::SolidLine, Qt::RoundCap));
+        for (int i = 0; i <= headerTicks && double(i) / headerTicks <= position; ++i) {
+            const double x = knobPos(double(i) / headerTicks);
+            const double half = i % 5 == 0 ? 3.8 : 2.8;
+            p.drawLine(QPointF(x, track.center().y() - half),
+                       QPointF(x, track.center().y() + half));
+        }
+    } else if (vertical) {
         p.drawRoundedRect(QRectF(track.left(), axis, track.width(),
                                  track.bottom() - axis),
                           2.0, 2.0);
@@ -1555,9 +1731,9 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
 
     const QRectF cap = capRect(position);
     if (scene) {
-        // The sculpted handle only changes its material on hover/press. Keep
-        // its local geometry and move it with one GPU transform while dragging
-        // or following automation, just like the retained timeline tiles.
+        // The sculpted handle only changes on hover/press. Cache this small
+        // control asset at native DPI: its many ribs, masks and gradients then
+        // cost one textured quad while scrolling or following automation.
         if (!m_capScene) m_capScene = std::make_unique<graphics::RetainedScene>();
         if (m_cachedCapSize != cap.size()) {
             m_cachedCapSize = cap.size();
@@ -1567,8 +1743,16 @@ void FaderWidget::paintScene(QPainter& p, const QRegion&) {
                               (quint64(isEnabled()) << 2);
         m_capScene->paint(p, state, cap.size().toSize(), cap.topLeft(),
             [this, cap](QPainter& local) {
-                local.setRenderHint(QPainter::Antialiasing, true);
-                paintCap(local, QRectF(QPointF(), cap.size()));
+                const qreal dpr = local.device()->devicePixelRatioF();
+                QImage face(QSize(int(std::ceil(cap.width() * dpr)), int(std::ceil(cap.height() * dpr))),
+                            QImage::Format_ARGB32_Premultiplied);
+                face.setDevicePixelRatio(dpr);
+                face.fill(Qt::transparent);
+                QPainter raster(&face);
+                raster.setRenderHint(QPainter::Antialiasing, true);
+                paintCap(raster, QRectF(QPointF(), cap.size()));
+                raster.end();
+                local.drawImage(QPointF(), face);
             });
     } else paintCap(p, cap);
 }
@@ -1757,7 +1941,7 @@ protected:
         const Theme& t = th();
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
 
-        p.setPen(QPen(mixColors(t.separator(), t.accent, 0.4), 1));
+        p.setPen(QPen(t.separator(), 1));
         p.setBrush(mixColors(t.surfaceElevated, t.background, 0.1));
         p.drawRect(r);
 
@@ -2115,8 +2299,7 @@ void MiniSlider::wheelEvent(QWheelEvent* ev) {
 PanKnob::PanKnob(QWidget* parent) : QWidget(parent) {
     setFixedSize(30, 30);
     setCursor(Qt::SizeAllCursor);
-    // Keyboard users keep a visible focus target, but a mouse drag no longer
-    // leaves a ring around the knob after every adjustment.
+    // Keep keyboard navigation without leaving a focus ring after editing.
     setFocusPolicy(Qt::TabFocus);
     setAccessibleName(tr("Pan"));
     setToolTip(
@@ -2130,6 +2313,10 @@ void PanKnob::setPan(double pan) {
     if (std::abs(v - m_pan) < 1e-6) return;
     m_pan = v;
     update();
+}
+
+void PanKnob::setCompactSize(int side) {
+    setFixedSize(std::clamp(side, 20, 30), std::clamp(side, 20, 30));
 }
 
 void PanKnob::paintEvent(QPaintEvent*) {
@@ -2166,6 +2353,7 @@ void PanKnob::paintEvent(QPaintEvent*) {
     const double bodyInset = std::max(3.6, side * 0.14);
     const QRectF body = bounds.adjusted(bodyInset, bodyInset,
                                         -bodyInset, -bodyInset);
+    if (!paintMetalKnob(p, body, 90.0 - m_pan * 135.0)) {
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0, 0, 0, t.dark ? 105 : 38));
     p.drawEllipse(body.translated(0.0, std::max(0.8, side * 0.035)));
@@ -2203,6 +2391,7 @@ void PanKnob::paintEvent(QPaintEvent*) {
     p.setPen(QPen(marker, std::max(1.3, side * 0.055),
                   Qt::SolidLine, Qt::RoundCap));
     p.drawLine(markerStart, markerEnd);
+    }
 
     // The zero tick remains visible independently of the pointer position.
     p.setPen(QPen(t.textSecondary, 1.0, Qt::SolidLine, Qt::RoundCap));
@@ -2244,6 +2433,10 @@ void PanKnob::mouseMoveEvent(QMouseEvent* ev) {
 }
 
 void PanKnob::mouseReleaseEvent(QMouseEvent*) {
+    finishEditing();
+}
+
+void PanKnob::finishEditing() {
     if (!m_dragging) return;
     m_dragging = false;
     ValueBubble::dismiss();
@@ -2605,7 +2798,7 @@ void Knob::paintEvent(QPaintEvent*) {
     const auto modulationOverlay = qScopeGuard([&] { paintModulation(p, ring); });
     if (m_visualStyle == VisualStyle::Slicer) {
         const QRectF face = m_bare ? QRectF(rect()) : QRectF((width()-52.)/2.,0,52,52);
-        pluginStyle::knob(p, face, fraction(), m_dragging, isEnabled(), hasFocus());
+        pluginStyle::knob(p, face, fraction(), m_dragging, isEnabled(), m_bipolar);
         if (!m_bare && !m_caption.isEmpty()) {
             auto f = font(); f.setPixelSize(10); f.setWeight(QFont::Medium); p.setFont(f);
             p.setPen(t.textPrimary);
@@ -2653,6 +2846,7 @@ void Knob::paintEvent(QPaintEvent*) {
         const QRectF collar = ring.adjusted(radius * 0.30, radius * 0.30,
                                             -radius * 0.30, -radius * 0.30);
         if (collar.width() < 6.0) return;
+        if (paintMetalKnob(p, collar, 225.0 - f * 270.0)) return;
 
         // Seated, not floating: a stack of soft ellipses under the collar is
         // what makes the machined body read as a physical part.
@@ -2750,6 +2944,7 @@ void Knob::paintEvent(QPaintEvent*) {
 
         const QRectF body = ring.adjusted(radius * 0.19, radius * 0.19,
                                            -radius * 0.19, -radius * 0.19);
+        if (paintMetalKnob(p, body, 225.0 - f * 270.0)) return;
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 145));
         p.drawEllipse(body.translated(0.0, std::max(1.0, radius * 0.045)));
@@ -2800,6 +2995,7 @@ void Knob::paintEvent(QPaintEvent*) {
         p.setPen(QPen(accent, 2.5, Qt::SolidLine, Qt::RoundCap));
         p.drawArc(ring, int(from * 16), int(-sweep * 16));
         const QRectF body = ring.adjusted(4, 4, -4, -4);
+        if (!paintMetalKnob(p, body, 225.0 - f * 270.0)) {
         QLinearGradient surface(body.topLeft(), body.bottomLeft());
         surface.setColorAt(0, interacting ? t.edgeLight(t.controlTop()) : t.controlTop());
         surface.setColorAt(1, t.well());
@@ -2810,6 +3006,7 @@ void Knob::paintEvent(QPaintEvent*) {
         const QPointF direction(std::cos(angle), -std::sin(angle));
         p.setPen(QPen(t.textPrimary, 2, Qt::SolidLine, Qt::RoundCap));
         p.drawLine(centre + direction * 3, centre + direction * 10);
+        }
         if (!m_bare) {
             QFont labelFont = font();
             labelFont.setPixelSize(rackDigital ? 9 : 10);
@@ -2845,6 +3042,10 @@ void Knob::paintEvent(QPaintEvent*) {
     p.drawArc(ring, int(from * 16), int(-sweep * 16 * (m_bipolar ? 1.0 : 1.0)));
 
     p.setPen(Qt::NoPen);
+    const double bodyRadius = radius - pen - 1.0;
+    if (!paintMetalKnob(p, QRectF(centre.x() - bodyRadius, centre.y() - bodyRadius,
+                                bodyRadius * 2, bodyRadius * 2),
+                       225.0 - f * 270.0)) {
     p.setBrush(mixColors(t.surfaceElevated, t.background, 0.35));
     p.drawEllipse(centre, radius - pen - 1.0, radius - pen - 1.0);
 
@@ -2854,6 +3055,7 @@ void Knob::paintEvent(QPaintEvent*) {
     p.setPen(QPen(t.textPrimary, (m_compact || m_bare) ? 1.5 : 2.0, Qt::SolidLine,
                   Qt::RoundCap));
     p.drawLine(centre, tip);
+    }
 
     if (!m_caption.isEmpty()) {
         QFont font = p.font();

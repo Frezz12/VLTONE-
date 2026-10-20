@@ -677,9 +677,35 @@ int main(int argc, char** argv) {
     ui::graphics::cacheLayerBounds(clipLayer);
     clipLayer.clip = innerClip->bounds;
     if (ui::graphics::requiresLayerClip(clipLayer)) return 1;
-    clipLayer.meshes.front().group = std::make_shared<ui::graphics::SceneMeshGroup>();
+    auto boundedGroup = std::make_shared<ui::graphics::SceneMeshGroup>();
+    boundedGroup->meshes = {clippedImages.front()};
+    clipLayer.meshes.front().group = boundedGroup;
+    clipLayer.meshes.front().clip.reset();
+    clipLayer.meshes.front().transform = QTransform::fromTranslate(3, 7);
+    ui::graphics::cacheLayerBounds(clipLayer);
+    if (clipLayer.contentBounds != QRectF(13, 17, 20, 20)) {
+        std::cerr << "Small retained controls lost their transformed bounds\n"; return 1;
+    }
+    clipLayer.clip = *clipLayer.contentBounds;
+    if (ui::graphics::requiresLayerClip(clipLayer)) return 1;
+    clipLayer.clip.adjust(0, 0, -1, 0);
+    if (!ui::graphics::requiresLayerClip(clipLayer)) return 1;
+    clipLayer.meshes.front().transform = QTransform::fromTranslate(1, 1);
+    clipLayer.clip = QRectF(11, 11, 20, 20);
+    ui::graphics::cacheLayerBounds(clipLayer, 1.5);
+    if (!ui::graphics::requiresLayerClip(clipLayer)) {
+        std::cerr << "Clip containment ignored fractional-DPI translation rounding\n"; return 1;
+    }
+    boundedGroup->bytes = 4097 * sizeof(ui::graphics::SceneVertex);
     ui::graphics::cacheLayerBounds(clipLayer);
     if (clipLayer.contentBounds) return 1;
+    clipLayer.meshes = {clippedImages.front()};
+    const auto triangle = clipLayer.meshes.front().vertices;
+    for (int i = 0; i < 1000; ++i) clipLayer.meshes.front().vertices += triangle;
+    ui::graphics::cacheLayerBounds(clipLayer);
+    if (!clipLayer.contentBounds || *clipLayer.contentBounds != QRectF(10, 10, 20, 20)) {
+        std::cerr << "Large flat paths lost their once-recorded bounds\n"; return 1;
+    }
     ui::graphics::SceneRecorder gradientPass(QSize(320, 140), 2);
     {
         QPainter p(&gradientPass);
@@ -693,6 +719,46 @@ int main(int argc, char** argv) {
     if (ramps.size() != 3 || ramps[0].texture.isNull() || ramps[0].texture.cacheKey() != ramps[1].texture.cacheKey() ||
         ramps[0].texture.cacheKey() != ramps[2].texture.cacheKey()) {
         std::cerr << "Scrolling an identical gradient recreated its texture\n"; return 1;
+    }
+    if (ramps[0].texture.hasAlphaChannel()) {
+        std::cerr << "An opaque gradient unnecessarily entered the alpha pass\n"; return 1;
+    }
+    // A shorter meter exposes the same part of the full-scale colour ramp;
+    // its colours must not stretch to the changing level or clipped bounds.
+    ui::graphics::SceneRecorder clippedGradient(QSize(320, 180), 1.5);
+    {
+        QPainter p(&clippedGradient);
+        p.translate(7, 9); p.scale(2, 1.5);
+        p.setClipRect(QRectF(20, 40, 25, 35));
+        QLinearGradient gradient(0, 20, 0, 80);
+        gradient.setColorAt(0, Qt::red); gradient.setColorAt(1, Qt::blue);
+        p.fillRect(QRectF(10, 20, 100, 60), gradient);
+    }
+    const auto clippedRamp = clippedGradient.takeMeshes();
+    if (clippedRamp.size() != 1 || clippedRamp[0].vertices.size() != 6 ||
+        clippedRamp[0].texture.cacheKey() != ramps[0].texture.cacheKey()) return 1;
+    for (const auto& vertex : clippedRamp[0].vertices) {
+        const bool top = std::abs(vertex.y - 69.f) < .001f;
+        const bool bottom = std::abs(vertex.y - 121.5f) < .001f;
+        const double rampPosition = top ? 1./3 : 55./60;
+        const double expectedV = (rampPosition * 1023. + .5) / 1024.;
+        if ((!top && !bottom) || (vertex.x != 47.f && vertex.x != 97.f) ||
+            std::abs(vertex.v - expectedV) > 1e-6 || vertex.u != .5f) {
+            std::cerr << "Clipping/scaling a meter changed its colour scale\n"; return 1;
+        }
+    }
+    ui::graphics::SceneRecorder transparentGradient(QSize(100, 100), 1);
+    {
+        QPainter p(&transparentGradient);
+        p.setOpacity(.5);
+        QLinearGradient gradient(0, 0, 0, 100);
+        gradient.setColorAt(0, Qt::transparent); gradient.setColorAt(1, Qt::blue);
+        p.fillRect(QRectF(0, 0, 100, 100), gradient);
+    }
+    const auto transparentRamps = transparentGradient.takeMeshes();
+    if (transparentRamps.size() != 1 || !transparentRamps[0].texture.hasAlphaChannel() ||
+        transparentRamps[0].texture.pixelColor(0, 0).alpha() != 0 || transparentRamps[0].opacity != .5) {
+        std::cerr << "A translucent gradient lost alpha or painter opacity\n"; return 1;
     }
     auto retained = std::make_shared<ui::graphics::SceneRecordingCache>();
     std::shared_ptr<const ui::graphics::SceneMeshGroup> original;
@@ -997,10 +1063,12 @@ int main(int argc, char** argv) {
 
     QScrollArea scroll(canvas);
     scroll.setFrameShape(QFrame::NoFrame);
+    scroll.viewport()->setProperty("vlt.staticScrollViewport", true);
     scroll.setGeometry(10, 10, 200, 100);
     scroll.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* page = new PlainControl;
     page->setProperty("vlt.retainOffscreen", true);
+    page->setProperty("vlt.scrollLayerGroup", true);
     page->color = QColor("#203040");
     page->setFixedSize(180, 240);
     auto* tile = new PlainControl(page);
@@ -1087,6 +1155,52 @@ int main(int argc, char** argv) {
     if (upper.underMouse() || !lower.underMouse()) {
         std::cerr << "Scrolling retained hover on the slot that moved away\n"; return 1;
     }
+    // The common viewport clip must be pixel-equivalent to flattened layers,
+    // including a partial channel, child masks, and reversing both axes.
+    moveTo(QPointF(280, 130));
+    page->setFixedSize(480, 240);
+    tile->setMask(QRegion(tile->rect()).subtracted(QRegion(0, 0, 20, 20)));
+    for (const QPoint position : {QPoint(0, 0), QPoint(11, 37), QPoint(230, 140), QPoint(11, 37), QPoint(0, 0)}) {
+        scroll.horizontalScrollBar()->setValue(position.x());
+        scroll.verticalScrollBar()->setValue(position.y());
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        const QImage grouped = surface->quickWindow()->grabWindow();
+        page->setProperty("vlt.scrollLayerGroup", false);
+        surface->invalidate();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        const QImage flat = surface->quickWindow()->grabWindow();
+        page->setProperty("vlt.scrollLayerGroup", true);
+        surface->invalidate();
+        QTimer::singleShot(80, &loop, &QEventLoop::quit); loop.exec();
+        bool samePixels = grouped.size() == flat.size();
+        const QPoint viewportOrigin = scroll.viewport()->mapTo(canvas, QPoint());
+        const QRectF viewportPixels(QPointF(viewportOrigin) * dpr, QSizeF(scroll.viewport()->size()) * dpr);
+        for (int y = 0; samePixels && y < grouped.height(); ++y)
+            for (int x = 0; samePixels && x < grouped.width(); ++x) {
+                if (grouped.pixel(x, y) == flat.pixel(x, y)) continue;
+                // The flattened path rounds each child transform separately,
+                // allowing a half-pixel leak past the viewport at fractional
+                // DPI. The common scissor fixes that; all interior pixels and
+                // child masks must still match exactly.
+                samePixels = viewportPixels.adjusted(-1, -1, 1, 1).contains(QPointF(x, y)) &&
+                    (x <= viewportPixels.left() + 1 || x >= viewportPixels.right() - 1 ||
+                     y <= viewportPixels.top() + 1 || y >= viewportPixels.bottom() - 1);
+                if (!samePixels) std::cerr << "Difference " << x << ',' << y << " viewport "
+                    << viewportPixels.x() << ',' << viewportPixels.y() << ',' << viewportPixels.width()
+                    << ',' << viewportPixels.height() << '\n';
+            }
+        const QImage fresh = surface->quickWindow()->grabWindow();
+        if (!samePixels || grouped != fresh) {
+            std::cerr << "Grouped scroll changed pixels at " << position.x() << ',' << position.y()
+                      << " flat=" << samePixels << " fresh=" << (grouped == fresh) << '\n';
+            if (const auto shots = qEnvironmentVariable("VLT_SCROLL_TEST_SHOTS"); !shots.isEmpty()) {
+                grouped.save(shots + "-grouped.png"); flat.save(shots + "-flat.png");
+                fresh.save(shots + "-fresh.png");
+            }
+            return 1;
+        }
+    }
+    std::cout << "PASS grouped scroll, content damage, offscreen edits, masks and reversal\n";
     scroll.hide();
     {
         // An item view scrolls both viewport pixels and embedded editors. Keep

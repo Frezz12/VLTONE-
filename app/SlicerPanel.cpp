@@ -125,7 +125,7 @@ protected:
             ? std::log(value()/minimumValue())/std::log(maximumValue()/minimumValue())
             : (value()-minimumValue())/std::max(1e-9,maximumValue()-minimumValue());
         pluginStyle::knob(painter, QRectF(width()/2.-36,0,72,72), fraction,
-                          isEditing(), isEnabled(), hasFocus());
+                          isEditing(), isEnabled(), minimumValue() < 0 && maximumValue() > 0);
         auto face=font(); face.setPixelSize(11); face.setWeight(QFont::Medium); painter.setFont(face);
         painter.setPen(isEnabled()?t.textPrimary:t.textSecondary);
         painter.drawText(QRect(2,74,width()-4,13),Qt::AlignCenter,painter.fontMetrics().elidedText(accessibleName(),Qt::ElideRight,width()-4));

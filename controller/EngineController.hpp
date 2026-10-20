@@ -4,6 +4,7 @@
 #include "AudioEdit.hpp"
 #include "MidiRecording.hpp"
 #include "StripSilence.hpp"
+#include "VocalAlignment.hpp"
 #include "RenderSpec.hpp"
 #include "RenderSessionSpec.hpp"
 #include "PluginReadout.hpp"
@@ -220,6 +221,22 @@ public:
         std::string clipId;
         friend bool operator==(const ClipAddress&, const ClipAddress&) = default;
     };
+
+    struct VocalAlignmentClip {
+        ClipAddress address;
+        ClipModel original, prepared;
+        alignment::AlignmentSource source;
+        std::string expectedFingerprint;
+        double expectedStart = 0;
+        std::uint64_t generation = 0;
+        bool applied = false;
+    };
+    std::string vocalAlignmentUnavailableReason() const;
+    audio::Result prepareVocalAlignment(const std::vector<ClipAddress>& clips,
+        std::vector<VocalAlignmentClip>& sources);
+    bool vocalAlignmentSourcesCurrent(const std::vector<VocalAlignmentClip>& sources) const;
+    audio::Result applyVocalAlignment(std::vector<VocalAlignmentClip>& sources,
+        const std::vector<alignment::AlignmentProposal>& proposals);
 
     struct StripSilenceSource {
         ClipAddress address;
@@ -481,6 +498,11 @@ public:
     /// One timeline owner for the existing master channel; creates no audio bus.
     std::string ensureMasterTrack();
     void removeTrack(const std::string& trackId);
+    bool isTrackEditLocked(const std::string& trackId) const;
+    bool isTrackTreeEditLocked(const std::string& trackId) const;
+    bool isClipContentEditLocked(const std::string& trackId, const std::string& clipId) const;
+    /// Local document protection, saved with the project and undoable as a group.
+    bool setTracksEditLocked(const std::vector<std::string>& trackIds, bool locked);
     collab::SharedMutationResult renameTrack(const std::string& trackId,
                                              const std::string& name);
     void setTrackVolume(const std::string& trackId, float volume);
@@ -535,6 +557,9 @@ public:
     /// filed inside it too — a folder is how a group of tracks is named and
     /// seen, so its colour is the group's colour.
     void setTrackColor(const std::string& trackId, uint32_t color);
+    /// One undoable recolour; a selected folder overrides selected descendants.
+    collab::SharedMutationResult setTrackColors(
+        const std::vector<std::pair<std::string, uint32_t>>& colors);
     collab::SharedMutationResult setTrackIcons(const std::vector<std::string>& trackIds,
                                               const std::string& iconId);
     /// Lane height in pixels (document-only; the arrangement reads it). Live.
@@ -787,8 +812,8 @@ public:
     /// An isolated project/engine copy for listening while editing. It never
     /// opens another device or changes the original project's document/undo.
     audio::Result createPluginBatchDraft(const PluginBatchTarget& source,
-                                        std::shared_ptr<EngineController>& draft);
-    audio::Result startPluginAudition(std::shared_ptr<EngineController> draft);
+                                        std::shared_ptr<EngineController>& draft, bool fullMix = false);
+    audio::Result startPluginAudition(std::shared_ptr<EngineController> draft, bool followTransport = false);
     void stopPluginAudition();
 
     /// Render selected arrangement material and insert the generated audio as
@@ -870,6 +895,7 @@ public:
     std::string assignRackModulation(const std::string& channelId, const std::string& sourceId,
         const std::string& slotId, const std::string& parameterId);
     float rackModulationValue(const std::string& channelId, const std::string& sourceId) const;
+    float rackModulationPosition(const std::string& channelId, const std::string& sourceId) const;
     std::string rackModulationStatus(const std::string& channelId, const std::string& routeId) const;
     const std::vector<RackGroupModel>& rackGroups(const std::string& channelId) const;
     bool createRackGroup(const std::string& channelId, const std::vector<std::string>& ids,
@@ -1398,6 +1424,10 @@ public:
     void moveClipToTrack(const std::string& fromTrackId,
                          const std::string& clipId,
                          const std::string& toTrackId);
+    /// Move one lane's selection as a single undoable edit. Timing and clip
+    /// order survive the transfer and Undo; invalid selections are rejected.
+    bool moveClipsToTrack(const std::vector<ClipAddress>& clips,
+                          const std::string& toTrackId);
     /// Non-destructively resize a clip: set its timeline start, its start-in-
     /// source offset and its length together (used by edge-drag trimming). All
     /// three are clamped to the source's bounds. Live; the arrangement commits

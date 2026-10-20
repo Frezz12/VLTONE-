@@ -40,12 +40,14 @@ namespace ui { class FaderWidget; class PanKnob; class LevelMeter; class MsrButt
 class ChannelStrip : public QWidget {
     Q_OBJECT
 public:
+    enum class Presentation { Classic, Compact, Details };
     static constexpr int kWidth = ui::MixerPreferences::kDefaultWidth;
     /// Routing, COLOR, instrument/LUFS, FX and sends share mixer rows.
     using RackHeights = std::array<int, 5>;
     ChannelStrip(daw::EngineController* controller, const QString& trackId,
                  bool master, QWidget* parent = nullptr,
-                 bool insertsOnly = false, int insertSlots = 0);
+                 bool insertsOnly = false, int insertSlots = 0,
+                 Presentation presentation = Presentation::Classic);
     ~ChannelStrip() override;
 
     /// The master sidebar uses the same slot face and hover actions as channels.
@@ -55,6 +57,12 @@ public:
 
     const QString& trackId() const { return m_trackId; }
     bool isMaster() const { return m_master; }
+    Presentation presentation() const { return m_presentation; }
+    void setChannelNumber(int number);
+    /// The single details surface can follow any supported channel, or show
+    /// an empty state. Finish old gestures before changing its identity.
+    void setDetailsChannel(const QString& trackId);
+    void finishEdits();
     /// Mixer-wide slot count; zero in the constructor keeps the standalone fit.
     int insertSlotCount() const { return m_insertSlotCount; }
     /// Reuse the shell of an unfocused, idle channel of the same track kind.
@@ -88,6 +96,7 @@ public:
     static bool checkGroupInputsForTest();
     static bool checkContextMenusForTest();
     static bool checkColorForTest();
+    static bool checkSectionControlsForTest();
     /// Re-read volume/pan/flags from the document (after undo, load, …).
     void syncFromModel();
     void refreshPluginHealth();
@@ -146,6 +155,12 @@ private:
     void reportPluginFailure(const daw::plugins::PluginDescriptor& descriptor);
 
     QWidget* buildHeader();
+    QWidget* buildCompactHeader();
+    void buildPresentation();
+    void buildDetails();
+    void bindPan();
+    void buildMonoButton(QWidget* parent);
+    void updatePresentationHeader();
     QWidget* buildRouting();
 QWidget* buildColor();
     void syncColor(bool automation);
@@ -190,13 +205,13 @@ QWidget* buildColor();
                            const std::vector<QWidget*>& rows,
                            std::function<bool(const QString&)> accepts,
                            std::function<void(const QString&)> onDrop,
-                           WellDrag drag);
+                           WellDrag drag, QWidget* leadingButton = nullptr);
     /// The common case: a plain titled well with no drag or drop behaviour.
     QWidget* buildSlotWell(const QString& title, QWidget* addButton,
                            const std::vector<QWidget*>& rows) {
         return buildSlotWell(title, addButton, rows, {}, {}, WellDrag{});
     }
-    /// The Audio FX header's menu: add a plugin, and the copy/paste that moves
+    /// The MINI header's channel menu: add a plugin, and the copy/paste that moves
     /// a whole chain — or a whole strip — from one channel to another.
     QMenu* buildChainMenu(QWidget* parent);
     QMenu* buildContextMenu(QWidget* parent);
@@ -242,6 +257,7 @@ QWidget* buildColor();
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
     bool m_master = false;
+    Presentation m_presentation = Presentation::Classic;
     bool m_insertsOnly = false;
     int m_insertSlotCount = 0;
     bool m_selected = false;
@@ -258,6 +274,9 @@ QWidget* buildColor();
     QToolButton* m_peakLabel = nullptr;
     QLabel* m_headerName = nullptr;
     QWidget* m_headerSwatch = nullptr;
+    QLabel* m_headerIcon = nullptr;
+    QLabel* m_channelNumber = nullptr;
+    QBoxLayout* m_buttonsLayout = nullptr;
     QString m_headerSwatchStyleKey;
     RoutingField* m_inputButton = nullptr;
     RoutingField* m_outputButton = nullptr;
@@ -275,6 +294,8 @@ QWidget* buildColor();
 std::array<QWidget*, 5> m_rackSections{};
     QWidget* m_colorWell = nullptr;
     ui::IconButton* m_colorPower = nullptr;
+    ui::IconButton* m_fxPower = nullptr;
+    ui::IconButton* m_sendsPower = nullptr;
     ui::Knob* m_colorDrive = nullptr;
     ui::Knob* m_colorTone = nullptr;
     std::vector<std::function<void()>> m_finishColorEdits;

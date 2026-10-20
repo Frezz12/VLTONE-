@@ -73,6 +73,7 @@ bool EngineController::autoWarpClip(const std::string& trackId, const std::strin
 
 bool EngineController::setClipWarp(const std::string& trackId, const std::string& clipId,
                                   const ClipWarpModel& warp, const std::string& label) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return false;
     if (!sharedGestureAllowed("clip:" + clipId)) return false;
     if (!warpUnavailableReason(trackId, clipId).empty() || !validWarp(warp) ||
         (!warp.empty() && warpMaximumRatio(warp, tempo()) > 1000)) return false;
@@ -121,6 +122,7 @@ void EngineController::applyClipWarpState(const std::string& trackId, const std:
 }
 
 void EngineController::beginWarpEdit(const std::string& trackId, const std::string& clipId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     cancelWarpPreview();
     cancelWarpEdit();
@@ -186,6 +188,7 @@ const ClipWarpModel* EngineController::warpPreviewMap() const {
 }
 
 bool EngineController::beginWarpPreview(const std::string& trackId, const std::string& clipId) {
+    if (!m_undo.isApplying() && isClipContentEditLocked(trackId, clipId)) return false;
     if (!sharedGestureAllowed("clip:" + clipId)) return false;
     cancelWarpEdit();
     cancelWarpPreview();

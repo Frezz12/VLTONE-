@@ -1,4 +1,5 @@
 #include "MiniModuleRack.hpp"
+#include "KnobAppearance.hpp"
 #include "RackParameterBinding.hpp"
 #include "Controls.hpp"
 #include "EngineController.hpp"
@@ -183,10 +184,12 @@ protected:
         p.drawArc(QRectF(4, 4, 28, 28), qRound((225 - 270 * origin) * 16),
                   qRound(-270 * (f - origin) * 16));
       }
-      const double a = (135 + 270 * f) * 3.141592653589793 / 180;
-      const QPointF dir(std::cos(a), std::sin(a));
-      p.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap));
-      p.drawLine(QPointF(18, 18) + 4 * dir, QPointF(18, 18) + 9 * dir);
+      if (!paintMetalKnob(p, QRectF(7.5, 7.5, 21, 21), 225 - 270 * f)) {
+        const double a = (135 + 270 * f) * 3.141592653589793 / 180;
+        const QPointF dir(std::cos(a), std::sin(a));
+        p.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(18, 18) + 4 * dir, QPointF(18, 18) + 9 * dir);
+      }
     }
     paintModulation(p, style == "fader" ? QRectF(0, 5, 29, 26) : QRectF(6, 6, 24, 24), style == "fader");
   }
@@ -223,10 +226,10 @@ protected:
                          isDown()       ? .25
                          : underMouse() ? .16
                                         : .07));
-    p.drawRoundedRect(QRectF(3, 3, 18, 18), 4, 4);
+    p.drawEllipse(QRectF(2, 2, 20, 20));
     p.setPen(QPen(lamp, 1.5, Qt::SolidLine, Qt::RoundCap));
-    p.drawArc(QRectF(7.5, 7.5, 9, 9), 130 * 16, 280 * 16);
-    p.drawLine(QPointF(12, 6.5), QPointF(12, 11));
+    p.drawArc(QRectF(6.5, 6.5, 11, 11), 130 * 16, 280 * 16);
+    p.drawLine(QPointF(12, 5.5), QPointF(12, 11));
   }
 
 private:
@@ -370,6 +373,8 @@ public:
     menu->setObjectName("MiniModuleMenu");
     menu->setIdleColor(ink);
     menu->setButtonSize(compact ? 24 : 18, 24);
+    menu->setGlyphSize(14);
+    menu->setProperty("circular", true);
     menu->setFocusPolicy(Qt::StrongFocus);
     bar->addWidget(m_power);
     bar->addWidget(title, 1);
@@ -702,17 +707,57 @@ MiniModuleRack::MiniModuleRack(daw::EngineController *controller,
   auto *outer = new QVBoxLayout(this);
   outer->setContentsMargins(0, 0, 0, 0);
   outer->setSpacing(2);
+  auto *header = new QWidget(this);
+  header->setObjectName("MiniModuleHeader");
+  auto *row = new QHBoxLayout(header);
+  row->setContentsMargins(0, 0, 0, 0);
+  row->setSpacing(0);
+  m_power = new IconButton(icons::Glyph::Power,
+                          tr("Bypass all mini modules on this channel"), header);
+  m_power->setObjectName("ChannelMiniPower");
+  m_power->setAccessibleName(tr("Bypass all mini modules on this channel"));
+  m_power->setButtonSize(20, 20);
+  m_power->setGlyphSize(14);
+  m_power->setProperty("circular", true);
+  m_power->setFocusPolicy(Qt::StrongFocus);
+  m_power->setCheckable(true);
+  m_power->setActiveColor(Theme::mute());
+  connect(m_power, &QAbstractButton::clicked, this, [this](bool bypassed) {
+    finishEdits();
+    const auto channel = m_channel.toStdString();
+    std::vector<std::string> ids;
+    for (const auto &module : m_controller->miniModules(channel)) ids.push_back(module.id);
+    const auto group = m_controller->beginUndoGroup();
+    for (const auto &id : ids) m_controller->setInsertBypassed(channel, id, bypassed);
+    m_controller->collapseUndo(group, bypassed ? "Bypass Mini Modules" : "Enable Mini Modules");
+    sync(false);
+    emit edited();
+  });
+  row->addWidget(m_power);
   auto *caption = new QLabel(tr("MINI"), this);
   caption->setObjectName("ChannelSectionCaption");
   caption->setProperty("role", "section");
-  caption->setFixedHeight(17);
+  caption->setFixedHeight(20);
   caption->setToolTip(tr("Mini modules"));
   auto font = caption->font();
   font.setPixelSize(9);
   font.setWeight(QFont::Medium);
   caption->setFont(font);
-  outer->addWidget(caption);
-  caption->setVisible(!m_compact);
+  row->addWidget(caption, 1);
+  auto *settings = new IconButton(icons::Glyph::Gear,
+                                  tr("Plugins and channel strip: add, copy, paste"), header);
+  settings->setObjectName("ChannelStripMenu");
+  settings->setAccessibleName(tr("Channel strip settings"));
+  settings->setButtonSize(18, 20);
+  settings->setGlyphSize(14);
+  settings->setProperty("circular", true);
+  settings->setFocusPolicy(Qt::StrongFocus);
+  connect(settings, &QAbstractButton::clicked, this, [this, settings] {
+    emit channelMenuRequested(settings->mapToGlobal(QPoint(0, settings->height())));
+  });
+  row->addWidget(settings);
+  outer->addWidget(header);
+  header->setVisible(!m_compact);
   m_well = new QWidget(this);
   m_well->setObjectName("SlotWell");
   m_well->setAttribute(Qt::WA_StyledBackground, true);
@@ -747,7 +792,7 @@ void MiniModuleRack::finishEdits() {
 int MiniModuleRack::naturalHeight(const daw::ProjectModel &,
                                   const std::vector<daw::InsertModel> &modules,
                                   int width) {
-  int height = 21;
+  int height = 24;
   for (const auto &m : modules)
     height += cardHeight(m, width) + 1;
   if (modules.size() < 3)
@@ -779,6 +824,9 @@ void MiniModuleRack::sync(bool automation) {
     return;
   QScopedValueRollback<bool> syncing(m_syncing, true);
   const auto &modules = m_controller->miniModules(m_channel.toStdString());
+  m_power->setEnabled(!modules.empty());
+  m_power->setChecked(!modules.empty() && std::all_of(modules.begin(), modules.end(),
+      [](const auto &module) { return module.bypassed; }));
   const bool changed =
       modules.size() != m_models.size() ||
       !std::equal(modules.begin(), modules.end(), m_models.begin(),
@@ -836,7 +884,6 @@ void MiniModuleRack::rebuild() {
     add->setStyleSheet("QPushButton{border:0;border-radius:3px;background:transparent;color:"
         + th().textSecondary.name() + ";font-size:18px;}"
           "QPushButton:hover{background:" + th().surface.name() + ";color:"
-        + th().accent.name() + ";} QPushButton:focus{border:1px solid "
         + th().accent.name() + ";}");
   }
   add->setAccessibleName(tr("Add mini module"));

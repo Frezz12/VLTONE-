@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <cstdlib>
 #include <new>
+#include <chrono>
 
 static thread_local bool countAllocations = false;
 static thread_local unsigned allocations = 0;
@@ -160,6 +161,85 @@ static std::vector<float> lfo(unsigned blockSize, modulation::Source source, boo
 int main() try {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     modulation::Source source; source.id = newUuid(); source.smoothMs = 0;
+    {
+        using K = modulation::Kind;
+        auto s = source;
+        s.kind = K::Shaper;
+        check(near(modulation::sourceValue(s, .25), .25), "Shaper interpolates breakpoints");
+        s.points = {{0, 1, 0, engine::curve::Shape::Hold}, {.5, .2}, {1, .8}};
+        check(near(modulation::sourceValue(s, .499), 1) && near(modulation::sourceValue(s, .5), .2), "Shaper hold has an exact segment boundary");
+        for (unsigned preset = 0; preset < 5; ++preset) {
+            modulation::shapePreset(s, preset);
+            check(modulation::valid(s), "factory Shaper shape is valid");
+            const auto a = lfo(64, s), b = lfo(511, s);
+            check(a == b && std::all_of(a.begin(), a.end(), [](float v) { return std::isfinite(v) && v >= 0 && v <= 1; }), "Shaper presets are bounded and block independent");
+        }
+        auto invalid = s; invalid.points[1].x = 0;
+        check(!modulation::valid(invalid), "duplicate Shaper positions rejected");
+        invalid = s; invalid.points.resize(65);
+        check(!modulation::valid(invalid), "Shaper point limit enforced");
+        s.kind = K::Steps; s.steps = {.1, .4, .9};
+        check(near(modulation::sourceValue(s, 1.2), .4) && near(modulation::sourceValue(s, -1), .9), "Steps uses step duration and handles negative preroll");
+        s.direction = modulation::Direction::Reverse;
+        check(near(modulation::sourceValue(s, 0), .9) && near(modulation::sourceValue(s, 2), .1), "Steps reverse direction");
+        s.direction = modulation::Direction::PingPong;
+        check(near(modulation::sourceValue(s, 3), .4) && near(modulation::sourceValue(s, 4), .1), "Steps ping pong does not repeat endpoints");
+        s.steps.resize(16); modulation::euclideanSteps(s, 5, 3);
+        check(std::count(s.steps.begin(), s.steps.end(), 1.) == 5, "Euclidean pattern has exact pulse count");
+        s.kind = K::Random; s.seed = 354123; s.randomLoop = 8;
+        check(modulation::sourceValue(s, -1) == modulation::sourceValue(s, 7) && modulation::sourceValue(s, 1) == modulation::sourceValue(s, 9), "Random repeats its seed loop including preroll");
+        const auto original = modulation::sourceValue(s, 2); ++s.seed;
+        check(original != modulation::sourceValue(s, 2), "new seed changes Random pattern");
+        s.randomSmooth = true;
+        check(std::abs(modulation::sourceValue(s, 8 - 1e-6) - modulation::sourceValue(s, 8)) < 1e-6, "smooth Random is continuous across loop seam");
+        for (const auto kind : {K::Shaper, K::Steps, K::Random}) for (const bool sync : {false, true}) {
+            s.kind = kind; s.sync = sync; s.smoothMs = 9; s.beats = .25;
+            const auto a = lfo(64, s), b = lfo(511, s);
+            check(a == b, "new sources with smoothing are block independent in Hz and Sync");
+            engine::ModulationNode node("new source"); auto settings = std::make_shared<engine::ModulationNode::Settings>();
+            settings->source = s; settings->rate.fallback = 4; node.setSettings(settings); Block block;
+            allocations = 0; countAllocations = true;
+            for (unsigned i = 0; i < 100; ++i) node.process(block.context);
+            countAllocations = false;
+            check(allocations == 0, "new source processing allocates no memory");
+            const auto loop = [&](unsigned size) {
+                engine::ModulationNode looping("automated loop");
+                auto automated = std::make_shared<engine::ModulationNode::Settings>(*settings);
+                automated->rate.points = {{0, 48}, {.01, 96}, {.02, 160}}; automated->rate.prepare();
+                looping.setSettings(automated);
+                Block b; b.context.playing = true; b.context.transport.looping = true;
+                b.context.transport.loopStartPpq = 0; b.context.transport.loopEndPpq = .02;
+                std::vector<float> output;
+                for (unsigned start = 0; start < 9600; start += size) {
+                    b.context.timelinePosition = start % 480; b.context.transport.ppqPosition = (start % 480) / 24000.;
+                    b.context.frames = std::min(size, 9600 - start); looping.process(b.context);
+                    output.insert(output.end(), b.out.begin(), b.out.begin() + b.context.frames);
+                }
+                // Jump backwards after playback: the clock must derive from the timeline, including rate automation.
+                b.context.transport.looping = false; b.context.timelinePosition = 240;
+                b.context.transport.ppqPosition = .01; b.context.frames = 1; looping.process(b.context);
+                check(near(b.out[0], modulation::sourceValue(s, automated->rate.integral(.01) * (sync ? 1 : .5) + s.phase)),
+                    "new source seeks to the integrated automated rate");
+                return output;
+            };
+            const auto loopA = loop(64), loopB = loop(511);
+            check(std::equal(loopA.begin(), loopA.end(), loopB.begin(), [](float a, float b) { return near(a, b, 1e-6); }),
+                "new source rate automation and in-block loop wrap are block independent");
+        }
+        nlohmann::json old = source;
+        for (const auto* field : {"points", "steps", "direction", "seed", "randomLoop", "randomSmooth"}) old.erase(field);
+        check(old.get<modulation::Source>() == source, "legacy sources load with compatible defaults");
+        for (const auto kind : {K::Shaper, K::Steps, K::Random}) {
+            s.kind = kind;
+            check(nlohmann::json(s).get<modulation::Source>() == s, "new source settings survive JSON round trip");
+        }
+        const auto start = std::chrono::steady_clock::now();
+        engine::ModulationNode node("benchmark"); auto settings = std::make_shared<engine::ModulationNode::Settings>();
+        settings->source = s; settings->rate.fallback = 4; node.setSettings(settings); Block block;
+        block.context.playing = true; block.context.frames = 256;
+        for (unsigned i = 0; i < 10000; ++i) { block.context.timelinePosition = i * 256; block.context.transport.ppqPosition = i * 256 / 24000.; node.process(block.context); }
+        std::printf("BENCH Random 2.56M samples: %.3f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
     {
         modulation::Curve curve; curve.fallback = 2; curve.points = {{1, 3}, {2, 5}}; curve.prepare();
         check(near(curve.integral(.5), 1) && near(curve.integral(1), 2) && near(curve.integral(2), 6) && near(curve.integral(3), 11), "rate integral holds default before curve and integrates ramps");
@@ -363,6 +443,64 @@ int main() try {
         AutomationPoint point; point.beats = 0; point.value = .6;
         c.setAutomationPoints(depthLane.first, depthLane.second, {point});
         check(!c.freezeUnavailableReason(a).empty(), "Freeze follows existing external parameter-automation restriction");
+    }
+    for (const auto kind : {modulation::Kind::Shaper, modulation::Kind::Steps, modulation::Kind::Random}) {
+        std::printf("Integration: %s\n", modulation::kindName(kind));
+        Temp temp; writeConstant(temp.path / "program.wav", .1f);
+        EngineController c; check(bool(c.initialize(48000, 256, false)), "new source integration runtime");
+        const auto track = c.addTrack(TrackKind::Audio, "New modulator");
+        check(!c.importAudio((temp.path / "program.wav").string(), track, 0).empty(), "new source test audio");
+        const auto slot = c.addInsert(track, plugins::equalizer::EqualizerInstance::staticDescriptor());
+        const auto id = c.addRackModulator(track, kind);
+        const auto route = c.assignRackModulation(track, id, slot, "output.gain");
+        auto rack = c.rackModulation(track);
+        check(!id.empty() && !route.empty() && rack.routes[0].depth == .2 &&
+            rack.routes[0].bipolar == (kind != modulation::Kind::Shaper), "new source default routing depth and polarity");
+        auto& s = rack.sources[0]; s.beats = .25; s.smoothMs = 4; s.phase = .1;
+        modulation::shapePreset(s, 4); s.steps = {.1, .9, .3, .7, 1};
+        s.direction = modulation::Direction::PingPong; s.seed = 0x13579bdf; s.randomLoop = 8; s.randomSmooth = true;
+        check(c.setRackModulation(track, rack), "custom settings retain the assignment");
+        const auto before = render(c, temp.path / "before", track, 64);
+        check(difference(before, render(c, temp.path / "large", track, 511)) < 2e-5, "new source export is independent of block size");
+        check(difference(before, render(c, temp.path / "repeat", track, 64)) < 1e-7, "new source repeated export is deterministic");
+        check(c.freezeUnavailableReason(track).empty(), "new source allows local Freeze");
+        c.setRecordDirectory(temp.path.string()); rendering::Report frozen;
+        check(bool(c.freezeTrack(track, {}, frozen)) && c.isTrackFrozen(track), "freeze new source");
+        check(difference(before, render(c, temp.path / "frozen", track, 64)) < 2e-5, "Freeze retains new source sound");
+        c.unfreezeTrack(track);
+        const AutomationTarget target{AutomationTargetKind::ModulatorRate, track, id, "rate", {}};
+        const auto lane = c.ensureAutomation(target);
+        check(!lane.first.empty() && near(c.automationToPlain(target, c.plainToAutomation(target, 12)), 12), "new source exposes rate automation");
+        AutomationPoint start; start.beats = 0; start.value = c.plainToAutomation(target, 2);
+        AutomationPoint end; end.beats = 1; end.value = c.plainToAutomation(target, 12);
+        c.setAutomationPoints(lane.first, lane.second, {start, end});
+        const auto automated = render(c, temp.path / "automated", track, 64);
+        check(difference(automated, render(c, temp.path / "automated-large", track, 511)) < 2e-5 && difference(before, automated) > .001,
+            "new source rate automation changes sound and preserves export parity");
+        const auto saved = (temp.path / "new-modulator.vlt").string();
+        check(bool(c.saveProject(saved)), "save new source project");
+        EngineController reopened; check(bool(reopened.initialize(48000, 256, false)) && bool(reopened.openProject(saved)), "reopen new source project");
+        check(reopened.rackModulation(track) == rack && difference(automated, render(reopened, temp.path / "reopened", track, 64)) < 1e-7,
+            "project reload preserves source, routes, automation and audio");
+        const auto preset = c.copyChannelStrip(track, true); EngineController::ChannelSnapshot loaded;
+        const auto presetPath = (temp.path / "new-modulator.vlts").string();
+        check(bool(ChannelStripPreset::save(preset, presetPath)) && bool(ChannelStripPreset::load(loaded, presetPath)) &&
+            loaded.modulation == rack && loaded.modulationAutomation.size() == 1, "rack preset retains new source and rate automation");
+        const auto copiedTrack = c.addTrack(TrackKind::Audio, "Pasted"); EngineController::ChannelSnapshot selection;
+        check(bool(c.captureRackSelection(track, {slot}, selection)) && bool(c.pasteRackSelection(copiedTrack, selection, 0)), "copy device with new source");
+        auto copied = c.rackModulation(copiedTrack).sources.front(); copied.id = id;
+        check(copied == s && captureModulationAutomation(c.project(), copiedTrack, c.rackModulation(copiedTrack)).size() == 1,
+            "device copy preserves seed, shape, steps and independent rate automation");
+        const auto duplicate = c.duplicateRackModulator(track, id);
+        auto duplicated = c.rackModulation(track).sources.back(); duplicated.id = id; duplicated.name = s.name;
+        check(!duplicate.empty() && duplicated == s && captureModulationAutomation(c.project(), track, c.rackModulation(track)).size() == 2,
+            "duplicate source preserves pattern, assignments and rate automation");
+        c.undo(); check(c.rackModulation(track) == rack, "Undo removes duplicate new source in one action");
+        c.redo(); check(c.rackModulation(track).sources.size() == 2, "Redo restores duplicate new source"); c.undo();
+        const auto duplicateTrack = c.duplicateTrack(track);
+        check(!duplicateTrack.empty() && c.rackModulation(duplicateTrack).sources.size() == 1, "track duplication includes new source");
+        auto trackSource = c.rackModulation(duplicateTrack).sources.front(); trackSource.id = id;
+        check(trackSource == s, "track duplication keeps the exact modulation pattern");
     }
 #if DAW_ENABLE_CLAP && defined(DAW_TEST_CLAP_PATH)
     { plugins::ClapFactory factory; const auto descriptors = factory.inspect(DAW_TEST_CLAP_PATH); check(!descriptors.empty(), "CLAP fixture");

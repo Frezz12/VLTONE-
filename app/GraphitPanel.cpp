@@ -71,6 +71,7 @@ protected:
             p.drawLine(point(i / 40., i % 5 == 0 ? 96 : 100), point(i / 40., 104));
         }
         p.setPen(Qt::NoPen);
+        if (!ui::paintMetalKnob(p, QRectF(-87, -87, 174, 174), 225 - value() * 270)) {
         for (int i = 5; i > 0; --i) {
             p.setBrush(QColor(0, 0, 0, 16));
             p.drawEllipse(QPointF(0, 3), 86 + i, 86 + i);
@@ -99,9 +100,6 @@ protected:
         for (int r = 20; r < 75; r += 3) p.drawEllipse(QPointF(), r, r);
         p.setPen(QPen(graphitCopper(), 4, Qt::SolidLine, Qt::RoundCap));
         p.drawLine(point(value(), 56), point(value(), 72));
-        if (hasFocus()) {
-            p.setPen(QPen(graphitCopper(), 1.5, Qt::DotLine));
-            p.drawEllipse(QPointF(), 108, 108);
         }
     }
 };
@@ -238,8 +236,7 @@ GraphitPanel::GraphitPanel(daw::EngineController* controller, QString channelId,
             "#GraphitModeButton, #GraphitActiveButton { color: %1; background: %2;"
             " border: 1px solid %3; border-radius: 6px; font-size: 12px; }"
             "#GraphitModeButton:checked, #GraphitActiveButton:checked { color: %4;"
-            " border-color: %4; background: %5; }"
-            "#GraphitModeButton:focus, #GraphitActiveButton:focus { border: 2px solid %4; }")
+            " background: %5; }")
             .arg(th().textPrimary.name(), pluginStyle::shell().name(), th().separator().name(),
                  graphitCopper().name(), mixColors(th().well(), graphitCopper(), .10).name()));
     };

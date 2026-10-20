@@ -863,6 +863,9 @@ struct TrackModel {
     float pan = 0.0f;
     bool muted = false;
     bool soloed = false;
+    /// Protect arrangement content and hierarchy; playback/mixing stay live.
+    /// A folder's protection is inherited by its descendants.
+    bool editLocked = false;
     bool armed = false;
     bool monitor = false;
     /// This track's override of the global recording mode.

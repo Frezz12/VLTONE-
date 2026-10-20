@@ -211,6 +211,13 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
                "widening the browser keeps navigation controls available")) return false;
     strip.setBrowserZoneWidth(30);
     QApplication::processEvents();
+    panel.setRecordEngaged(false); selection.clear(); panel.setPanelEnabled(true); settle();
+    const auto* importButton = panel.findChild<QAbstractButton*>("global.import");
+    const auto* create = panel.findChild<QAbstractButton*>("global.track");
+    const auto* alignment = panel.findChild<QAbstractButton*>("global.alignment");
+    if (!check(panel.isVisible() && importButton && create && alignment &&
+        importButton->isVisible() && create->isVisible() && alignment->isVisible(),
+        "empty selection shows import, create track and vocal alignment")) return false;
     return check(viewControls->isVisible(),
                  "navigation controls remain visible after the arrangement widens");
 }

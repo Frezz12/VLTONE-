@@ -93,6 +93,50 @@ int main() {
     check(level(c) < 1.e-7, "stopping audition removes its signal from the device output");
     check(document(c) == before && c.undoDepth() == depth, "audition and cancel leave project and undo history unchanged");
 
+    {
+        Controller mix{};
+        check(mix.initialize(48000, 256, false).isOk(), "timeline mix initializes without a second device");
+        const auto a = mix.addTrack(daw::TrackKind::Audio, "Preview source");
+        const auto b = mix.addTrack(daw::TrackKind::Audio, "Unselected accompaniment");
+        mix.importAudio(wav, a, 0); mix.importAudio(wav, b, 0);
+        const auto master = mix.addInsert(Controller::kMasterChannelId, eq);
+        mix.setInsertParameter(Controller::kMasterChannelId, master, "output.gain", -3);
+        mix.setLoopRangeSeconds(0, 1); mix.setLoopEnabled(true);
+        mix.play();
+        const double original = level(mix);
+        mix.pause(); mix.seekSeconds(.125);
+        const auto unchanged = document(mix);
+        const auto originalDepth = mix.undoDepth();
+        const auto originalGraph = mix.routingGraph();
+        std::shared_ptr<Controller> preview;
+        check(mix.createPluginBatchDraft({a, {}}, preview, true).isOk(), "full mix draft keeps the accompaniment and master chain");
+        const auto trial = preview->addInsert(a, eq);
+        preview->setInsertParameter(a, trial, "output.gain", -6.020599913);
+        check(mix.startPluginAudition(preview, true).isOk() && !mix.isPlaying() &&
+              !preview->isPlaying() && std::abs(preview->positionSeconds() - .125) < 1e-6,
+              "new effects follow the stopped timeline without starting a private player");
+        mix.play();
+        const double processed = level(mix);
+        check(original > .01 && std::abs(processed / original - .75) < .025,
+              "timeline playback hears the selected source's new effect inside the complete mix");
+        preview->setInsertParameter(a, trial, "output.gain", 0);
+        check(std::abs(level(mix) / original - 1) < .025,
+              "live plugin edits preserve accompaniment and original master processing");
+        mix.pause(); mix.seekSeconds(.25);
+        check(!preview->isPlaying() && std::abs(preview->positionSeconds() - .25) < 1e-6,
+              "timeline Pause and seek reach the draft immediately");
+        mix.play(); level(mix);
+        check(std::abs(preview->positionSeconds() - mix.positionSeconds()) < 1e-6,
+              "the displayed timeline playhead matches audible preview timing");
+        const auto position = mix.positionSeconds();
+        mix.stopPluginAudition();
+        check(mix.isPlaying() && std::abs(mix.positionSeconds() - position) < 1e-6 &&
+              std::abs(level(mix) / original - 1) < .025 && mix.routingGraph() == originalGraph,
+              "discard returns to the original processors while timeline playback continues");
+        check(document(mix) == unchanged && mix.undoDepth() == originalDepth,
+              "mix preview never edits the original project or its undo history");
+    }
+
     std::vector<std::vector<std::string>> ids;
     check(c.appendPluginBatch(tracks, settings, ids).isOk() && ids.size() == 3, "applies settings to every selected track");
     if (ids.size() != 3) return 1;

@@ -3,6 +3,7 @@
 #include "MiniModuleRack.hpp"
 #include "MixerPreferences.hpp"
 #include <QLayout>
+#include <QMenu>
 #include <algorithm>
 
 ChannelStrip::~ChannelStrip() {
@@ -22,6 +23,12 @@ QWidget *ChannelStrip::buildColor() {
   m_colorWell = rack;
   rack->setStripWidth(m_stripWidth);
   connect(rack, &ui::MiniModuleRack::edited, this, &ChannelStrip::edited);
+  connect(rack, &ui::MiniModuleRack::channelMenuRequested, this,
+          [this, rack](const QPoint &position) {
+            auto *menu = buildChainMenu(rack);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            menu->popup(position);
+          });
   connect(rack, &ui::MiniModuleRack::automateRequested, this,
           [this](const QString &id, const QString &parameter) {
             emit automatePluginRequested(
@@ -42,7 +49,8 @@ void ChannelStrip::refreshColorRackRow() {
   if (!m_rackSections[1])
     return;
   const bool shown =
-      m_colorWell && ui::MixerPreferences::instance().colorVisible();
+      m_colorWell && (m_presentation == Presentation::Details ||
+                     ui::MixerPreferences::instance().colorVisible());
   if (m_colorWell) {
     m_colorWell->setVisible(shown);
     m_colorWell->layout()->activate();

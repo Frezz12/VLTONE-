@@ -6,6 +6,7 @@ void ModulationNode::reset() {
     m_envelope = m_freePhase = 0.0; m_smoothed = 0.5;
     m_low = {}; m_high = {}; m_initialized = m_wasPlaying = false;
     m_value.store(0.0f, std::memory_order_relaxed);
+    m_position.store(0.0f, std::memory_order_relaxed);
 }
 void ModulationNode::process(const ProcessContext& c) {
     const auto settings = m_settings.read();
@@ -60,7 +61,8 @@ void ModulationNode::process(const ProcessContext& c) {
                 phase = m_freePhase;
                 m_freePhase += settings->rate.at(beat) / c.sampleRate;
             }
-            value = modulation::waveValue(s.wave, phase + s.phase);
+            value = modulation::sourceValue(s, phase + s.phase);
+            if (frame + 1 == c.frames) m_position.store(float(modulation::sourcePosition(s, phase + s.phase)), std::memory_order_relaxed);
             if ((discontinuity && frame == 0) || wrapped || s.smoothMs == 0) m_smoothed = value;
             else m_smoothed = smooth * m_smoothed + (1.0 - smooth) * value;
             value = m_smoothed;

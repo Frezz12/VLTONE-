@@ -168,8 +168,7 @@ QWidget#fluxSurface {color:#292d2e;background:transparent;}
 QDialog {background:#f2f2ed;color:#292d2e;font-family:"Segoe UI";font-size:13px;}
 QPushButton,QComboBox,QLineEdit,QDoubleSpinBox,QSpinBox {color:#292d2e;border:1px solid #dcded7;border-radius:8px;padding:5px 9px;background:#eeefe9;}
 QPushButton:hover,QComboBox:hover {border-color:#aeb6ac;background:#e6e9e1;}
-QPushButton:pressed,QPushButton:checked {color:#205e67;border-color:#318b98;background:#e4eeeb;}
-QPushButton:focus,QComboBox:focus,QLineEdit:focus,QDoubleSpinBox:focus,QSpinBox:focus {border:1px solid #247d89;}
+QPushButton:pressed,QPushButton:checked {color:#205e67;background:#e4eeeb;}
 QPushButton:disabled,QComboBox:disabled {color:#92988f;border-color:#e1e3dc;background:#eeefe9;}
 QComboBox::drop-down {border:0;width:22px;}
 QComboBox::down-arrow {image:none;width:0;height:0;}

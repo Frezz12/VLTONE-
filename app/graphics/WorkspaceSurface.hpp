@@ -50,9 +50,14 @@ private:
     void requestCapture(bool hierarchyChanged = true);
     void capture();
     void present(std::shared_ptr<const SceneSnapshot>);
+    struct ScrollContext {
+        std::shared_ptr<const SceneScrollGroup> group;
+        QRect parentClip;
+        QRegion parentMask;
+    };
     void visit(QWidget*, std::shared_ptr<SceneSnapshot>&, QSet<quintptr>&,
                QPoint parentOrigin, QRect parentClip, const QRegion& parentMask,
-               bool descendants = true);
+               bool descendants = true, const ScrollContext& scroll = {});
     bool forwardInput(QEvent*);
     void updateHover(QWidget* target, const QPointF& globalPosition,
                      Qt::KeyboardModifiers modifiers = Qt::NoModifier,
@@ -83,6 +88,7 @@ private:
         QPoint parentOrigin;
         QRect parentClip;
         QRegion parentMask;
+        ScrollContext scroll;
     };
     std::unordered_map<quintptr, CachedLayer> m_layers;
     struct OffscreenLayer { CachedLayer cached; qint64 bytes; std::list<quintptr>::iterator recency; };
