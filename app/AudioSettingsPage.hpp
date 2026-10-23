@@ -26,6 +26,7 @@ public:
     bool checkForTest() const;
 
 signals:
+    void configurationChanged();
     void cpuStatusBarVisibilityChanged(bool visible);
 
 private slots:

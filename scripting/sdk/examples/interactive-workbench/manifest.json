@@ -1,0 +1,24 @@
+{
+  "format": "vltscript",
+  "sdk": 1,
+  "id": "vlt.example.interactive-workbench",
+  "name": "Project workbench",
+  "version": "1.0.0",
+  "description": "Dockable media table, workspace navigation and an interactive drawing widget.",
+  "permissions": [
+    "project.read",
+    "files.read"
+  ],
+  "commands": [
+    {
+      "id": "open",
+      "label": "Open project workbench",
+      "entry": "main.lua",
+      "contexts": [
+        "global",
+        "arrangement",
+        "clip"
+      ]
+    }
+  ]
+}

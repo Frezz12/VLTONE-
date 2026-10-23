@@ -1,0 +1,58 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>Свои стили окон — VLTONE Lua SDK</title>
+<style>:root{color-scheme:light dark}body{font:16px/1.65 system-ui;max-width:960px;margin:40px auto;padding:0 24px;background:Canvas;color:CanvasText}pre{padding:20px;border:1px solid #8886;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}td,th{padding:10px;border-bottom:1px solid #8886;text-align:left;vertical-align:top}a{color:LinkText}a:focus-visible{outline:3px solid Highlight;outline-offset:3px}code{font-size:.92em}</style>
+<nav><a href="USER_RU.html">Пользователям</a> · <a href="UI_RU.html">Окна и виджеты</a> · <a href="API_RU.html">API</a></nav>
+<h1>Оформите окно под свой инструмент</h1>
+<p>У каждого окна может быть своя палитра. Контейнеры, подписи, поля и кнопки принимают стили: цвет, шрифт, скругление, границу, отступы и состояния. Настройки действуют только внутри этого окна. Привычные клавиатурное управление, масштабирование и фокус сохраняются.</p>
+<h2>Начните с рабочего примера</h2>
+<p>Откройте <a href="examples/styled-workbench/main.lua">examples/styled-workbench/main.lua</a> в Creator и нажмите «Предпросмотр». Для установки всего примера упакуйте папку командой CLI из <a href="SDK_RU.html">руководства SDK</a>; манифест лежит рядом с исходником. Пример не требует разрешений и не меняет проект. Переключайте палитру, меняйте название и двигайте рисунок мышью или стрелками. Изменение палитры сохраняет введённые значения.</p>
+<h2>Палитра, карточка и основная кнопка</h2>
+<pre>vlt.ui.window{
+  id="tool", title="Мой инструмент", width=520, height=340,
+  theme={background="#151d26", surface="#223140", field="#101820",
+         text="#f0f6fc", muted="#a7b9c9", accent="#78e3bc",
+         onAccent="#102820", border="#3b5063"},
+  style={padding=24, fontSize=14},
+  styles={
+    card={background="$surface", radius=12, padding=18},
+    title={fontSize=24, fontWeight=700},
+    action={background="$accent", color="$onAccent", radius=8,
+            borderWidth=0, padding=10,
+            pressed={background="$surface",color="$text"}}
+  },
+  children={
+    {type="label", text="Новый инструмент", style="title"},
+    {type="column", style="card", spacing=12, children={
+      {type="field", id="name", value="Мой пресет"},
+      {type="button", text="Применить", style="action", onClick=function()
+        vlt.ui.set{id="result", text=vlt.ui.get{id="name"}.value}
+      end}
+    }},
+    {type="label", id="result", text="Готово к работе", style={color="$muted"}}
+  }
+}</pre>
+<h2>Как работают стили</h2>
+<p><code>theme</code> задаётся у окна. Все восемь цветов необязательны: пропущенные берутся из темы VLTONE. Цвета темы должны быть непрозрачными. Для стилей подходят цвета Qt: <code>#RRGGBB</code>, <code>#AARRGGBB</code>, <code>transparent</code> и имена цветов. Токены <code>$background</code>, <code>$surface</code>, <code>$field</code>, <code>$text</code>, <code>$muted</code>, <code>$accent</code>, <code>$onAccent</code>, <code>$border</code> ссылаются на текущую палитру окна.</p>
+<p><code>styles</code> — словарь до 64 именованных стилей. У виджета укажите <code>style="card"</code>, объект <code>style={radius=10}</code> или сочетание <code>style={use="card",padding=24}</code>. Поля объекта заменяют одноимённые поля именованного стиля; вложенное состояние заменяется целиком. Именованные определения не ссылаются друг на друга.</p>
+<p>Если accent изменён, а onAccent не указан, цвет текста на акценте выбирается по контрасту.</p>
+<table><tr><th>Поле style</th><th>Значение</th></tr>
+<tr><td>background, color, accent, borderColor</td><td>Фон, текст, акцент контрола, цвет рамки. Цвет либо токен палитры.</td></tr>
+<tr><td>borderWidth</td><td>Целое 0…12; ноль убирает рамку.</td></tr>
+<tr><td>radius</td><td>Целое 0…96: радиус углов.</td></tr>
+<tr><td>padding</td><td>Целое 0…96: внутренний отступ. У контейнера меняет отступ компоновки.</td></tr>
+<tr><td>fontSize, fontWeight, fontFamily</td><td>Размер 10…96; насыщенность 100…900 с шагом 100; имя установленного шрифта. Если шрифта нет, ОС выбирает замену.</td></tr>
+<tr><td>hover, pressed, checked, disabled, focus</td><td>Объекты с background, color, borderColor для соответствующего состояния. Фокус также обозначается штатной рамкой доступности.</td></tr></table>
+<p>Размеры указаны в логических пикселях: Qt учитывает масштаб дисплея. Цвет текста и шрифты наследуются дочерними элементами. Фон, граница и отступы относятся к самому виджету. У штатной ручки сохраняется её геометрия; для полностью собственного вида ручки используйте canvas с событиями указателя и клавиш. Для изображений есть image с ресурсом пакета.</p>
+<h2>Меняйте оформление без пересоздания</h2>
+<pre>-- Заменить локальные стили, сохранив значение и обработчики:
+vlt.ui.set{id="name", style={color="$accent",fontWeight=600}}
+-- Сбросить локальные переопределения:
+vlt.ui.set{id="name", style={}}
+-- Заменить палитру окна; остальные цвета возьмутся из темы VLTONE:
+vlt.ui.set{id="tool", theme={accent="#d795ff"}}
+-- Полностью следовать теме приложения:
+vlt.ui.set{id="tool", theme={}}</pre>
+<p><code>ui.set</code> заменяет переданный объект style/theme целиком, а не объединяет с прошлым. При ошибке аргументов контролы остаются прежними. <code>ui.get{id}.style</code> возвращает развёрнутые локальные свойства, без наследуемых значений. <code>ui.replace</code> сохраняет тему, определения и корневой стиль, если новые не переданы, но заменяет все дочерние контролы. Для смены значений или оформления используйте ui.set.</p>
+<h2>Собирайте понятные окна</h2>
+<p>Используйте column/row для потока, grid для равномерных ячеек, scroll для длинного содержимого и tabs для отдельных задач. stretch распределяет свободное место в строке, колонке и корне окна. spacing задаёт расстояние между элементами; margin — внутренние отступы контейнера. У label доступны wrap и align: left/center/right. У ui.set width/height, как и в дереве, фиксируют размер виджета; размер самого окна остаётся изменяемым пользователем.</p>
+<p>Оставляйте один основной акцент, проверяйте контраст текста и подписывайте неоднозначные элементы. Проверяйте клавишу Tab, длинные русские подписи и масштабы 100/150/200%. Не полагайтесь только на цвет для ошибок и состояния. Для адаптации к светлой и тёмной теме удобнее токены, чем жёстко заданные цвета.</p>
+<p>Сырые CSS/QSS, селекторы и URL не принимаются: ошибочное оформление не меняет интерфейс DAW и не открывает файлы. Это API собственных окон VLTONE, а не средство управления другими программами.</p></html>

@@ -750,7 +750,7 @@ void NotebookWindow::updateTimedTextPosition() {
 void NotebookWindow::setDetached(bool detached) {
     if (!m_detachButton) return;
     const QString text = detached ? tr("Return to right panel") : tr("Open in separate window");
-    m_detachButton->setGlyph(detached ? icons::Glyph::Sidebar : icons::Glyph::Detach);
+    m_detachButton->setGlyph(detached ? icons::Glyph::Inspector : icons::Glyph::Detach);
     m_detachButton->setToolTip(text);
     m_detachButton->setAccessibleName(text);
 }

@@ -1,5 +1,6 @@
 #include "ScrollMotion.hpp"
 #include "SettingsWindow.hpp"
+#include "McpSettingsPage.hpp"
 #include "TrackIcons.hpp"
 #include "graphics/GraphicsPreferences.hpp"
 #include "UiFrameClock.hpp"
@@ -126,6 +127,7 @@ constexpr SettingsPageAppearance kPageAppearance[] = {
     {icons::Glyph::Gear, QT_TRANSLATE_NOOP("SettingsWindow", "Refresh rate, rendering quality and navigation motion.")},
     {icons::Glyph::Plugin, QT_TRANSLATE_NOOP("SettingsWindow", "Plugin formats, search results and insertion behavior.")},
     {icons::Glyph::Globe, QT_TRANSLATE_NOOP("SettingsWindow", "Home page, bookmarks and the browser start background.")},
+    {icons::Glyph::Assistant, QT_TRANSLATE_NOOP("SettingsWindow", "Local AI agent connections, access and activity.")},
 };
 static_assert(std::size(kPageAppearance) == SettingsWindow::kPageCount);
 
@@ -655,6 +657,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
         connect(page, &BrowserSettingsPage::changed, this, &SettingsWindow::browserSettingsChanged);
         return page;
     };
+    m_pageFactories[kMcpTab] = [this] { return new ui::McpSettingsPage(this); };
     for (const auto& factory : m_pageFactories) m_pages->addWidget(new QWidget(m_pages));
 
     auto* sidebar = new QWidget(this);
@@ -735,7 +738,7 @@ SettingsWindow::SettingsWindow(daw::EngineController* controller,
               {tr("Backgrounds"), kBackgroundsTab},
               {tr("Fonts & Icons"), kFontsTab},
               {tr("Palette"), kThemeEditorTab}});
-    addGroup(tr("AI"), {{tr("Assistant"), kAiTab}});
+    addGroup(tr("AI"), {{tr("Assistant"), kAiTab}, {tr("External agents / MCP"), kMcpTab}});
     m_pageLabels.insert(kAccountTab, tr("Account"));
     connect(m_navigation, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
         if (!item) return;
@@ -3451,6 +3454,19 @@ QWidget* SettingsWindow::buildInterfaceTab() {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
 
+    auto* projectsGroup = new QGroupBox(tr("Projects"), page);
+    auto* projectsLayout = new QVBoxLayout(projectsGroup);
+    auto* projectTabs = new QCheckBox(tr("Use project tabs"), projectsGroup);
+    projectTabs->setObjectName("ProjectTabsEnabled");
+    projectTabs->setAccessibleName(projectTabs->text());
+    projectTabs->setChecked(QSettings().value("projects/tabsEnabled", true).toBool());
+    connect(projectTabs, &QCheckBox::toggled, this, &SettingsWindow::projectTabsEnabledRequested);
+    projectsLayout->addWidget(projectTabs);
+    auto* projectsHint = new QLabel(tr("Open several projects in one window. When disabled, only the selected project stays open and the tab bar is hidden. Unsaved changes are checked before closing other projects."), projectsGroup);
+    projectsHint->setWordWrap(true);
+    projectsLayout->addWidget(projectsHint);
+    layout->addWidget(projectsGroup);
+
     auto* startupGroup = new QGroupBox(tr("Startup"), page);
     auto* startupForm = new QFormLayout(startupGroup);
     m_startupTemplate = new QComboBox(startupGroup);
@@ -3640,6 +3656,13 @@ QWidget* SettingsWindow::buildPerformanceTab() {
 
     layout->addStretch();
     return page;
+}
+
+void SettingsWindow::refreshProjectTabsPreference() {
+    if (auto* toggle = findChild<QCheckBox*>("ProjectTabsEnabled")) {
+        const QSignalBlocker blocker(toggle);
+        toggle->setChecked(QSettings().value("projects/tabsEnabled", true).toBool());
+    }
 }
 
 void SettingsWindow::refreshStartupTemplateOptions() {

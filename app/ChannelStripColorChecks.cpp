@@ -195,6 +195,31 @@ bool ChannelStrip::checkColorForTest() {
             ui::MiniModuleLibrary::entries(files.path()).size() == 2,
         "invalid shared file remains visible with explanation");
   const auto shots = qEnvironmentVariable("DAW_COLOR_SCREENSHOTS");
+  {
+    QWidget gallery;
+    auto* row = new QHBoxLayout(&gallery);
+    row->setContentsMargins(8, 8, 8, 8); row->setSpacing(8);
+    for (const auto type : daw::plugins::mini::builtinIds()) {
+      if (type == "color" || type == "doubler" || type == "chorus") continue;
+      const auto channel = controller.addTrack(daw::TrackKind::Audio, std::string(type));
+      const auto slot = controller.addMiniModule(channel, daw::plugins::mini::builtin(type));
+      auto* mini = new ui::MiniModuleRack(&controller, QString::fromStdString(channel), &gallery);
+      mini->setStripWidth(180); mini->setFixedWidth(180); mini->sync(false);
+      row->addWidget(mini, 0, Qt::AlignTop);
+      check(!slot.empty() && mini->findChildren<ui::Knob*>().size() == 2,
+            "new built-in module exposes two native controls in its rack");
+      if (type == "pitch-formant") {
+        auto* modes = mini->findChild<QComboBox*>("MiniModuleMode");
+        check(modes && modes->count() == 2 && modes->itemText(0) == "Live" && modes->itemText(1) == "Pro",
+              "Pitch/Formant exposes exactly Live and Pro modes");
+      }
+    }
+    gallery.adjustSize(); gallery.show(); QApplication::processEvents();
+    if (!shots.isEmpty()) {
+      QDir().mkpath(shots);
+      check(gallery.grab().save(shots + "/new-mini-effects.png"), "new Mini effects gallery saved");
+    }
+  }
   for (int width : {75, 100, 150, 180}) {
     strip.setStripWidth(width);
     QApplication::processEvents();

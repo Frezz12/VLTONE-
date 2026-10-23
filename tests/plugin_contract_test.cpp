@@ -7,6 +7,10 @@
 #include "Nodes/BasicNodes.hpp"
 #if DAW_ENABLE_VST3
 #include "Vst3/Vst3Support.hpp"
+#include "Vst3/Vst3Module.hpp"
+#endif
+#if defined(_WIN32)
+#include <objbase.h>
 #endif
 #include <algorithm>
 #include <array>
@@ -244,12 +248,25 @@ int main() try {
         {
             Environment release("DAW_TEST_VST3_RELEASE_HOST");
             auto instance = create(d);
+            auto sibling = create(d);
+            require(bool(sibling), "VST3 instances share the module-retained host application");
             std::vector<std::uint8_t> state;
             require(instance->saveState(state) && !state.empty(), "VST3 state fixture");
             state.pop_back();
             require(!instance->loadState(state), "truncated controller state must fail");
             instance.reset(); // Plugin destructor queries the still-live host.
+            sibling.reset();
+            require(bool(create(d)), "module-retained host survives destruction of all instances");
         }
+#if defined(_WIN32)
+        ULONG_PTR apartmentToken = 0;
+        require(SUCCEEDED(CoGetContextToken(&apartmentToken)), "VST3 host owns a COM apartment");
+        const HRESULT anotherPlugin = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        require(SUCCEEDED(anotherPlugin), "another plugin can initialize COM");
+        CoUninitialize();
+        require(SUCCEEDED(CoGetContextToken(&apartmentToken)),
+                "another plugin's teardown cannot end the host COM apartment");
+#endif
         std::cout << "PASS VST3 initialization failure and host teardown lifetime\n";
     }
     {
@@ -405,6 +422,20 @@ int main() try {
         require(instance->process(block.context) != PluginProcessDisposition::Error && block.outLeft.back() == 0.25f,
                 "VST2 resumes after safe reallocation");
         std::cout << "PASS VST2 dynamic IO bounds and recovery\n";
+    }
+#endif
+#if DAW_ENABLE_VST3
+    {
+        const auto d = descriptor(Format::Vst3, DAW_TEST_VST3_PATH);
+        auto live = create(d);
+        Vst3Module::releaseUnusedModules();
+        std::vector<std::uint8_t> state;
+        require(live->saveState(state), "module cleanup retains live processors");
+        live.reset();
+        Vst3Module::releaseUnusedModules();
+        require(bool(create(d)), "module may reopen after controlled shutdown");
+        Vst3Module::releaseUnusedModules();
+        std::cout << "PASS VST3 controlled module shutdown\n";
     }
 #endif
     return 0;

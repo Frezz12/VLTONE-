@@ -20,19 +20,25 @@
 #include <QDoubleSpinBox>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QContextMenuEvent>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QLineF>
 #include <QMouseEvent>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTabBar>
+#include <QTimer>
+#include <QToolTip>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <cmath>
 #include <array>
 #include <tuple>
@@ -65,12 +71,14 @@ class RackPlot final : public QWidget {
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
         setAccessibleName(tr("Device display"));
+        if (kind == Equalizer) createBandTools();
     }
+    ~RackPlot() override { stopAudition(); }
     std::function<void(int)> bandSelected;
     int band = 0;
     QString uid;
     QString prefix;
-    RackParameterBinding* binding;
+    QPointer<RackParameterBinding> binding;
     Kind kind;
     daw::EffectMeterSnapshot meter;
     std::optional<daw::EqualizerSnapshot> equalizer;
@@ -86,6 +94,16 @@ class RackPlot final : public QWidget {
     std::array<double, 3> compressorCurve{};
     std::vector<double> displayParameters;
     QPointF dragOffset;
+    int wheelBand = -1;
+    int wheelRemainder = 0;
+    bool wheelResonance = false;
+    bool explicitBandSelection = false;
+    std::array<bool, eq::kBandCount> retainedBands{};
+    int auditionedBand = -1;
+    QWidget* bandTools = nullptr;
+    ui::IconButton *bandListen = nullptr, *bandPower = nullptr;
+    eqUi::ComboBox* bandType = nullptr;
+    QString bandToolsStyle;
     QString dragParameter;
     int sliceDrag = -1;
     std::shared_ptr<daw::plugins::slicer::SliceTable> dragTable;
@@ -230,11 +248,10 @@ class RackPlot final : public QWidget {
             : QStringLiteral("−%1 dB").arg(reduction, 0, 'f', 1);
         p.drawText(frame.adjusted(27, 4, -9, -4), Qt::AlignTop | Qt::AlignRight, reading);
 
-        const double side = std::min(frame.width() - 44., frame.height() - 53.);
-        const QRectF graph(frame.left() + 20, frame.top() + 30, side, side);
+        const QRectF graph = frame.adjusted(20, 30, -24, -23);
         const auto point = [&](double input, double output) {
-            return QPointF(graph.left() + (input + 60.) / 60. * side,
-                           graph.bottom() - (output + 60.) / 60. * side);
+            return QPointF(graph.left() + (input + 60.) / 60. * graph.width(),
+                           graph.bottom() - (output + 60.) / 60. * graph.height());
         };
         p.setRenderHint(QPainter::Antialiasing, false);
         p.setPen(QPen(t.separator(), 1));
@@ -297,8 +314,177 @@ class RackPlot final : public QWidget {
                     std::log(std::clamp(state.frequency, 10., 30000.) / 10.) / std::log(3000.) * r.width(),
                 r.center().y() - state.gainDb / 24. * r.height() / 2.};
     }
+    void stopAudition() {
+        if (auditionedBand >= 0 && binding && binding->available()) {
+            const auto state = binding->controller()->equalizerSnapshot(binding->channel(), binding->slot());
+            if (state && state->auditionBand == auditionedBand) {
+                binding->controller()->auditionEqualizerBand(binding->channel(), binding->slot(), -1);
+                if (equalizer) equalizer->auditionBand = -1;
+            }
+        }
+        auditionedBand = -1;
+    }
+    void audition(bool enabled) {
+        if (!binding || !binding->available() || !equalizer) return;
+        if (enabled && !equalizer->bands[band].enabled) return;
+        if (binding->controller()->auditionEqualizerBand(binding->channel(), binding->slot(), enabled ? band : -1))
+            auditionedBand = enabled ? band : -1;
+        refresh();
+    }
+    void setFilterType(eq::FilterType type) {
+        if (!binding || !binding->available()) return;
+        binding->write(bandId(eq::BandParam::Type), double(type));
+        if (isCut(type)) binding->write(bandId(eq::BandParam::Gain), 0.);
+        binding->finishAll();
+        refresh();
+        setAccessibleDescription(bandTip(band));
+    }
+    void createBandTools() {
+        bandTools = new QWidget(this);
+        bandTools->setObjectName("RackEqualizerBandTools");
+        bandTools->setAttribute(Qt::WA_StyledBackground);
+        auto* row = new QHBoxLayout(bandTools);
+        row->setContentsMargins(2, 2, 2, 2);
+        row->setSpacing(2);
+        const auto button = [&](icons::Glyph glyph, const QString& text, const QString& name) {
+            auto* control = new ui::IconButton(glyph, text, bandTools);
+            control->setObjectName(name);
+            control->setAccessibleName(text);
+            control->setProperty("consoleButton", true);
+            control->setButtonSize(22, 22);
+            control->setGlyphSize(13);
+            control->setCheckable(true);
+            row->addWidget(control);
+            return control;
+        };
+        bandListen = button(icons::Glyph::Headphones, tr("Solo selected band"), "RackEqualizerBandListen");
+        bandPower = button(icons::Glyph::Power, tr("Enable selected band"), "RackEqualizerBandPower");
+        bandType = new eqUi::ComboBox(bandTools);
+        bandType->setObjectName("RackEqualizerBandType");
+        bandType->setAccessibleName(tr("Filter type"));
+        bandType->setToolTip(tr("Filter type"));
+        bandType->addItems(filterNames());
+        bandType->setFixedSize(104, 22);
+        auto small = bandType->font(); small.setPixelSize(10); bandType->setFont(small);
+        row->addWidget(bandType);
+        bandTools->setFixedSize(156, 26);
+        bandTools->hide();
+        connect(bandListen, &QAbstractButton::clicked, this, [this](bool on) { audition(on); });
+        connect(bandPower, &QAbstractButton::clicked, this, [this](bool on) {
+            if (!binding || !binding->available()) return;
+            if (!on) stopAudition();
+            retainedBands[band] = true;
+            binding->write(bandId(eq::BandParam::Enabled), on ? 1. : 0.);
+            binding->finishAll();
+            refresh();
+        });
+        connect(bandType, &QComboBox::currentIndexChanged, this,
+                [this](int type) { if (type >= 0) setFilterType(eq::FilterType(type)); });
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] { refreshBandTools(); });
+        // A card owns its binding before its face. Release audition even when
+        // Qt destroys the binding first during a rack rebuild.
+        connect(binding, &QObject::destroyed, this,
+                [this, controller = binding->controller(), channel = binding->channel(), slot = binding->slot()] {
+            if (auditionedBand >= 0) {
+                const auto state = controller->equalizerSnapshot(channel, slot);
+                if (state && state->auditionBand == auditionedBand)
+                    controller->auditionEqualizerBand(channel, slot, -1);
+            }
+            auditionedBand = -1;
+        });
+    }
+    void positionBandTools() {
+        if (!bandTools || !equalizer || bandTools->isHidden()) return;
+        const auto point = bandPoint(equalizer->bands[band]);
+        const int x = std::clamp(qRound(point.x() - bandTools->width() / 2.), 4,
+                                 std::max(4, width() - bandTools->width() - 4));
+        double y = point.y() + 14.;
+        if (y + bandTools->height() > area().bottom()) y = point.y() - bandTools->height() - 14.;
+        bandTools->move(x, std::clamp(qRound(y), 3, std::max(3, height() - bandTools->height() - 3)));
+    }
+    void refreshBandTools() {
+        if (!bandTools) return;
+        const bool visible = binding && binding->available() && equalizer &&
+                             (equalizer->bands[band].enabled || explicitBandSelection || retainedBands[band]);
+        bandTools->setVisible(visible);
+        if (!visible) { stopAudition(); return; }
+        const auto& state = equalizer->bands[band];
+        if (state.enabled) explicitBandSelection = true;
+        if (auditionedBand >= 0 && equalizer->auditionBand != auditionedBand) auditionedBand = -1;
+        if (!state.enabled && auditionedBand >= 0) {
+            stopAudition();
+            equalizer->auditionBand = -1;
+        }
+        const auto color = eqUi::bandColor(band, th().dark);
+        const auto style = QStringLiteral("#RackEqualizerBandTools { background: %1; border: 1px solid %2; border-radius: 6px; }")
+            .arg(mixColors(eqUi::canvas(), th().textPrimary, .065).name(),
+                 mixColors(eqUi::canvas(), color, state.enabled ? .45 : .18).name());
+        if (bandToolsStyle != style) { bandToolsStyle = style; bandTools->setStyleSheet(style); }
+        bandListen->setActiveColor(color);
+        bandPower->setActiveColor(color);
+        bandListen->setEnabled(state.enabled);
+        bandListen->setChecked(equalizer->auditionBand == band);
+        bandPower->setChecked(state.enabled);
+        const QSignalBlocker block(bandType);
+        bandType->setCurrentIndex(int(state.type));
+        positionBandTools();
+    }
+    int bandAt(QPointF point) const {
+        int chosen = -1;
+        double closest = 12. * 12.;
+        if (equalizer)
+            for (int i = 0; i < int(equalizer->bands.size()); ++i)
+                if (equalizer->bands[i].enabled || retainedBands[i] || (i == band && explicitBandSelection)) {
+                    const auto offset = bandPoint(equalizer->bands[i]) - point;
+                    const double distance = QPointF::dotProduct(offset, offset);
+                    if (distance < closest || (distance == closest && i == band)) {
+                        closest = distance;
+                        chosen = i;
+                    }
+                }
+        return chosen;
+    }
+    static QStringList filterNames() {
+        return {tr("Bell"), tr("Low shelf"), tr("High shelf"), tr("Low cut"), tr("High cut"),
+                tr("Notch"), tr("Band pass"), tr("Tilt"), tr("All pass")};
+    }
+    static bool isCut(eq::FilterType type) {
+        return type == eq::FilterType::LowCut || type == eq::FilterType::HighCut;
+    }
+    QString bandTip(int index) const {
+        if (!equalizer || index < 0) return {};
+        const auto& state = equalizer->bands[index];
+        auto text = tr("Band %1").arg(index + 1) + " · " + filterNames().value(int(state.type)) + "\n" +
+                    tr("%1 Hz").arg(state.frequency, 0, 'f', state.frequency < 100. ? 1 : 0);
+        if (isCut(state.type)) {
+            constexpr std::array slopes{6, 12, 18, 24, 36, 48, 72, 96};
+            text += " · " + tr("%1 dB/oct").arg(slopes[std::clamp(int(state.slope), 0, 7)]);
+        } else if (state.type == eq::FilterType::Bell || state.type == eq::FilterType::LowShelf ||
+                   state.type == eq::FilterType::HighShelf || state.type == eq::FilterType::Tilt) {
+            text += " · " + tr("%1 dB").arg(state.gainDb, 0, 'f', 1);
+        }
+        if (eq::supportsQ(state.type, state.slope))
+            text += QStringLiteral(" · Q %1").arg(state.q, 0, 'f', 2);
+        text += "\n" + (isCut(state.type)
+            ? tr("Wheel: slope · Shift+wheel: resonance · Right-click: filter type")
+            : tr("Wheel: bandwidth · Right-click: filter type"));
+        return text;
+    }
+    void adjustBand(int steps, bool resonance) {
+        if (!steps || !equalizer || !binding->available()) return;
+        const auto& state = equalizer->bands[band];
+        if (isCut(state.type) && !resonance) {
+            const auto id = bandId(eq::BandParam::Slope);
+            binding->write(id, std::clamp(int(state.slope) + steps, 0, int(eq::Slope::Db96)));
+        } else if (eq::supportsQ(state.type, state.slope)) {
+            binding->write(bandId(eq::BandParam::Q), state.q * std::exp2(steps / 4.));
+        }
+        binding->finishAll();
+        refresh();
+        setAccessibleDescription(bandTip(band));
+    }
     void refresh() {
-        if (!binding->available())
+        if (!binding || !binding->available())
             return;
         auto* c = binding->controller();
         const auto previousAudio = audio;
@@ -313,7 +499,7 @@ class RackPlot final : public QWidget {
                 (next->telemetry.pre != equalizer->telemetry.pre ||
                  next->telemetry.post != equalizer->telemetry.post ||
                  next->analyzer.pre != equalizer->analyzer.pre ||
-                 next->analyzer.post != equalizer->analyzer.post));
+                 next->analyzer.post != equalizer->analyzer.post || next->auditionBand != equalizer->auditionBand));
             equalizer = std::move(next);
             std::vector<double> key{binding->value("gain.scale"), binding->value("processing.mode"),
                                     c->sampleRate()};
@@ -386,6 +572,7 @@ class RackPlot final : public QWidget {
         displayParameters = std::move(parameters);
         if (changed) update();
         haveDisplay = true;
+        refreshBandTools();
     }
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
@@ -395,10 +582,6 @@ class RackPlot final : public QWidget {
         if (r.width() < 1 || r.height() < 1)
             return;
         QRectF frame = QRectF(rect()).adjusted(.5, .5, -.5, -.5);
-        if (kind == Compressor) {
-            const double side = std::min(frame.width(), frame.height());
-            frame = QRectF(frame.center() - QPointF(side / 2., side / 2.), QSizeF(side, side));
-        }
         p.setBrush(kind == Equalizer ? eqUi::canvas() : t.well());
         p.setPen(kind == Equalizer ? QPen(Qt::NoPen) : QPen(t.separator(), 1));
         p.drawRoundedRect(frame, 6, 6);
@@ -461,9 +644,11 @@ class RackPlot final : public QWidget {
             }
             if (response) {
                 QPainterPath path;
-                for (int i = 0; i < int(response->combined.size()); ++i) {
-                    const auto db = std::clamp(response->combined[i], -24., 24.);
-                    const QPointF point(r.left() + r.width() * i / (response->combined.size() - 1),
+                const int solo = equalizer->auditionBand;
+                const int count = solo >= 0 ? int(response->bands[solo].size()) : int(response->combined.size());
+                for (int i = 0; i < count; ++i) {
+                    const auto db = std::clamp(solo >= 0 ? double(response->bands[solo][i]) : response->combined[i], -24., 24.);
+                    const QPointF point(r.left() + r.width() * i / (count - 1),
                                         r.center().y() - db * r.height() / 48.);
                     if (!i)
                         path.moveTo(point);
@@ -483,9 +668,11 @@ class RackPlot final : public QWidget {
             }
             p.restore();
             for (int i = 0; i < int(equalizer->bands.size()); ++i)
-                if (equalizer->bands[i].enabled) {
+                if (equalizer->bands[i].enabled || retainedBands[i] || (i == band && explicitBandSelection)) {
                     const auto point = bandPoint(equalizer->bands[i]);
                     const QColor color = eqUi::bandColor(i, t.dark);
+                    p.setOpacity(!equalizer->bands[i].enabled ? .35 :
+                                 equalizer->auditionBand >= 0 && equalizer->auditionBand != i ? .4 : 1.);
                     p.setBrush(i == band ? color : eqUi::canvas());
                     p.setPen(QPen(color, 1.5));
                     p.drawEllipse(point, i == band ? 6 : 4, i == band ? 6 : 4);
@@ -495,6 +682,7 @@ class RackPlot final : public QWidget {
                                    Qt::AlignCenter, QString::number(i + 1));
                     }
                 }
+            p.setOpacity(1.);
         } else if (kind == Waveform) {
             if (peaks.isEmpty()) {
                 p.setPen(t.textSecondary);
@@ -554,29 +742,21 @@ class RackPlot final : public QWidget {
         if (kind == Equalizer && equalizer) {
             if (!area().contains(e->position()))
                 return;
-            int chosen = -1;
-            double closest = 100;
-            for (int i = 0; i < int(equalizer->bands.size()); ++i)
-                if (equalizer->bands[i].enabled) {
-                    const auto d = bandPoint(equalizer->bands[i]) - e->position();
-                    const auto distance = d.x() * d.x() + d.y() * d.y();
-                    if (distance < closest) {
-                        closest = distance;
-                        chosen = i;
-                    }
-                }
+            int chosen = bandAt(e->position());
             const bool creating = chosen < 0;
             if (creating)
                 for (int i = 0; i < int(equalizer->bands.size()); ++i)
-                    if (!equalizer->bands[i].enabled) {
+                    if (!equalizer->bands[i].enabled && !retainedBands[i]) {
                         chosen = i;
                         break;
                     }
             if (chosen < 0)
                 return;
-            band = chosen;
+            setFocus(Qt::MouseFocusReason);
             if (bandSelected)
-                bandSelected(band);
+                bandSelected(chosen);
+            else
+                band = chosen;
             dragOffset = creating ? QPointF{} : e->position() - bandPoint(equalizer->bands[band]);
             if (creating) {
                 const double x = std::clamp((e->position().x() - area().left()) / area().width(), 0., 1.);
@@ -584,9 +764,9 @@ class RackPlot final : public QWidget {
                 binding->write(bandId(eq::BandParam::Type), double(type));
                 binding->write(bandId(eq::BandParam::Q), eq::qForNewBand(type));
             }
-            binding->write(bandId(eq::BandParam::Enabled), 1);
+            if (creating) binding->write(bandId(eq::BandParam::Enabled), 1);
             dragging = true;
-            move(e->position());
+            if (creating) move(e->position());
         } else if (kind == Waveform && uid == "daw.slicer" && audio && slices) {
             sliceDrag = -1;
             for (unsigned i = 1; i < slices->count; ++i) {
@@ -647,6 +827,77 @@ class RackPlot final : public QWidget {
     void mouseMoveEvent(QMouseEvent* e) override {
         if (dragging)
             move(e->position());
+        else if (kind == Equalizer) {
+            const int hovered = bandAt(e->position());
+            setCursor(hovered >= 0 ? Qt::OpenHandCursor : Qt::CrossCursor);
+            setToolTip(hovered >= 0 ? bandTip(hovered) : tr("Click empty space to add a band."));
+        }
+    }
+    void wheelEvent(QWheelEvent* event) override {
+        if (kind != Equalizer || dragging || !binding->available())
+            return QWidget::wheelEvent(event);
+        const int hovered = bandAt(event->position());
+        if (hovered < 0) {
+            wheelBand = -1;
+            wheelRemainder = 0;
+            return QWidget::wheelEvent(event);
+        }
+        const bool resonance = event->modifiers().testFlag(Qt::ShiftModifier);
+        if (wheelBand != hovered || wheelResonance != resonance || event->phase() == Qt::ScrollBegin)
+            wheelRemainder = 0;
+        wheelBand = hovered;
+        wheelResonance = resonance;
+        const int delta = event->angleDelta().y() ? event->angleDelta().y() : event->pixelDelta().y() * 3;
+        if ((delta > 0 && wheelRemainder < 0) || (delta < 0 && wheelRemainder > 0))
+            wheelRemainder = 0;
+        wheelRemainder += delta;
+        const int steps = wheelRemainder / 120;
+        wheelRemainder %= 120;
+        if (bandSelected) bandSelected(hovered);
+        adjustBand(steps, resonance);
+        QToolTip::showText(event->globalPosition().toPoint(), bandTip(band), this);
+        event->accept();
+    }
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        if (kind != Equalizer || !equalizer || !binding->available())
+            return QWidget::contextMenuEvent(event);
+        const int chosen = event->reason() == QContextMenuEvent::Keyboard
+            ? (equalizer->bands[band].enabled || explicitBandSelection ? band : -1) : bandAt(event->pos());
+        if (chosen < 0) return;
+        event->accept();
+        finish();
+        if (bandSelected) bandSelected(chosen);
+        setFocus(Qt::PopupFocusReason);
+        QToolTip::hideText();
+        QMenu menu;
+        menu.setObjectName("RackEqualizerBandMenu");
+        const auto names = filterNames();
+        for (int i = 0; i < names.size(); ++i) {
+            auto* action = menu.addAction(names[i]);
+            action->setObjectName(QStringLiteral("RackEqualizerType.%1").arg(i));
+            action->setData(i);
+            action->setCheckable(true);
+            action->setChecked(i == int(equalizer->bands[band].type));
+        }
+        menu.addSeparator();
+        auto* remove = menu.addAction(tr("Remove band"));
+        remove->setObjectName("RackEqualizerRemoveBand");
+        const auto position = event->reason() == QContextMenuEvent::Keyboard
+            ? mapToGlobal(bandPoint(equalizer->bands[band]).toPoint()) : event->globalPos();
+        const QPointer<RackPlot> alive(this);
+        const auto* action = menu.exec(position);
+        if (!alive || !action || !binding->available()) return;
+        if (action == remove) {
+            stopAudition();
+            explicitBandSelection = false;
+            retainedBands[band] = false;
+            binding->write(bandId(eq::BandParam::Enabled), 0.);
+            binding->finishAll();
+        } else {
+            setFilterType(eq::FilterType(action->data().toInt()));
+        }
+        refresh();
+        setAccessibleDescription(bandTip(band));
     }
     void finish() {
         if (dragging && sliceDrag >= 0) {
@@ -656,20 +907,37 @@ class RackPlot final : public QWidget {
         dragging = false;
         sliceDrag = -1;
         dragTable.reset();
-        binding->finishAll();
+        if (binding) binding->finishAll();
     }
     void mouseReleaseEvent(QMouseEvent*) override {
         finish();
     }
     void hideEvent(QHideEvent*) override {
+        stopAudition();
         finish();
+    }
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        positionBandTools();
     }
     void keyPressEvent(QKeyEvent* event) override {
         if (kind == Equalizer && bandSelected &&
             (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)) {
-            bandSelected((band + (event->key() == Qt::Key_Right ? 1 : int(eq::kBandCount) - 1)) %
-                         int(eq::kBandCount));
+            if (equalizer)
+                for (int offset = 1; offset <= int(eq::kBandCount); ++offset) {
+                    const int next = (band + (event->key() == Qt::Key_Right ? offset : -offset) +
+                                      int(eq::kBandCount)) % int(eq::kBandCount);
+                    if (equalizer->bands[next].enabled || retainedBands[next]) {
+                        bandSelected(next);
+                        break;
+                    }
+                }
             update();
+            event->accept();
+            return;
+        }
+        if (kind == Equalizer && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+            adjustBand(event->key() == Qt::Key_Up ? 1 : -1, event->modifiers().testFlag(Qt::ShiftModifier));
             event->accept();
             return;
         }
@@ -677,8 +945,9 @@ class RackPlot final : public QWidget {
     }
 };
 QWidget* knobs(RackParameterBinding* binding, const QStringList& ids, int columns, QWidget* parent,
-               int width = 62) {
+               int width = 62, const QStringList& captions = {}) {
     auto* host = new QWidget(parent);
+    host->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     auto* grid = new QGridLayout(host);
     grid->setContentsMargins(0, 0, 0, 0);
     grid->setSpacing(2);
@@ -687,7 +956,8 @@ QWidget* knobs(RackParameterBinding* binding, const QStringList& ids, int column
         if (binding->info(id)) {
             auto* knob = binding->knob(id, host, width);
             knob->setVisualStyle(ui::Knob::VisualStyle::RackDigital);
-            knob->setFixedSize(width, 60);
+            knob->setFixedSize(width, 58);
+            if (i < captions.size()) knob->setCaption(captions[i]);
             grid->addWidget(knob, i / columns, i % columns, Qt::AlignCenter);
             ++i;
         }
@@ -701,10 +971,6 @@ class RackBuiltinView::Impl {
     UtilityPanel* utility = nullptr;
     RackPlot* plot = nullptr;
     std::vector<RackPlot*> plots;
-    QWidget* bandControls = nullptr;
-    ui::Knob* equalizerQ = nullptr;
-    ui::Knob* equalizerGain = nullptr;
-    QVBoxLayout* root = nullptr;
     QHBoxLayout* moduleRow = nullptr;
     QList<QWidget*> modules;
     QList<QLabel*> moduleTitles;
@@ -719,9 +985,9 @@ int RackBuiltinView::preferredWidth(const QString& uid) {
     if (uid == "daw.gain") return 184;
     if (uid == "daw.stereo-utility" || uid == "daw.reverse") return 360;
     if (uid == "daw.equalizer")
-        return 420;
+        return 520;
     if (uid == "daw.compressor")
-        return 480;
+        return 384;
     if (uid == "daw.sampler") return 560;
     if (uid == "daw.slicer")
         return 460;
@@ -729,7 +995,7 @@ int RackBuiltinView::preferredWidth(const QString& uid) {
         return 960;
     if (uid == "daw.delay") return 520;
     if (uid == "daw.doubler-pro")
-        return 320;
+        return 384;
     if (uid == "daw.chorus" || uid == "daw.flanger" || uid == "daw.phaser" || uid == "daw.doubler")
         return 360;
     if (uid == "daw.graphit")
@@ -751,25 +1017,16 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
     : QWidget(parent), m_binding(binding), m_uid(std::move(uid)), m_impl(new Impl) {
     connect(this, &QObject::destroyed, [impl = m_impl] { delete impl; });
     auto* root = new QVBoxLayout(this);
-    m_impl->root = root;
-    root->setContentsMargins(6, 4, 6, 4);
+    root->setContentsMargins(6, 0, 6, 0);
     root->setSpacing(3);
     const auto plot = [&](RackPlot::Kind kind, int height) {
         auto* p = new RackPlot(binding, kind, this);
         p->uid = m_uid;
-        p->setMinimumHeight(std::min(32, height));
+        p->setMinimumHeight(std::min(kind == RackPlot::Equalizer ? 32 : 28, height));
         m_impl->plot = p;
         m_impl->plots.push_back(p);
         root->addWidget(p, 1);
         return p;
-    };
-    const auto choices = [&](QWidget* first, QWidget* second = nullptr) {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-        row->addWidget(first);
-        if (second)
-            row->addWidget(second);
-        root->addLayout(row);
     };
     const auto modulationPane = [&](const QString& uid, const QString& prefix, QWidget* parent) {
         auto* pane = new QWidget(parent);
@@ -795,9 +1052,12 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
                                                            : QStringList{tr("Amount"), tr("Rate"), tr("Depth"), tr("Softness")};
         for (int i = 0; i < ids.size(); ++i) {
             auto* number = binding->number(prefix + ids[i], pane);
-            number->setFixedSize(64, 24);
+            number->setFixedSize(64, 22);
+            number->setStyleSheet("QDoubleSpinBox { min-height:18px; padding:0 2px; border-radius:4px; }");
+            number->setAlignment(Qt::AlignRight);
             auto* label = new QLabel(labels[i], pane);
             auto font = label->font(); font.setPixelSize(10); label->setFont(font);
+            label->setStyleSheet("font-size:10px;");
             label->setBuddy(number);
             fields->addWidget(label, i, 0);
             fields->addWidget(number, i, 1);
@@ -806,97 +1066,80 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
         return pane;
     };
     if (daw::plugins::utility::isUtilityUid(m_uid.toStdString())) {
-        root->setContentsMargins(2, 2, 2, 2);
+        root->setContentsMargins(2, 0, 2, 0);
         m_impl->utility = new UtilityPanel(binding, m_uid, this, true);
         root->addWidget(m_impl->utility);
     } else if (m_uid == "daw.equalizer") {
         setObjectName(QStringLiteral("RackEqualizer"));
         const auto restyle = [this] {
-            setStyleSheet(QStringLiteral(
-                "#RackEqualizer { background: %1; border: none; }"
-                "#RackEqualizer QComboBox { background: %2; color: %3; border: none;"
-                "border-radius: 4px; padding: 2px 8px; min-height: 22px; font-size: 11px; }"
-                "#RackEqualizer QComboBox::drop-down { border: none; width: 16px; }")
-                .arg(eqUi::canvas().name(), eqUi::field().name(), th().textPrimary.name()));
+            setStyleSheet(QStringLiteral("#RackEqualizer { background: %1; border: none; }")
+                .arg(eqUi::canvas().name()));
         };
         setAttribute(Qt::WA_StyledBackground);
         restyle();
         connect(&ThemeManager::instance(), &ThemeManager::changed, this, restyle);
+        root->setContentsMargins(2, 2, 2, 2);
         auto* graph = plot(RackPlot::Equalizer, 90);
+        graph->setObjectName("RackEqualizerGraph");
         graph->analyzer = new EqualizerAnalyzerView(binding->controller(), binding->channel(),
                                                     binding->slot(), graph);
         graph->setAccessibleName(tr("EQ spectrum and frequency response"));
-        graph->setToolTip(tr("Click a band to select it; drag to edit. Click empty space to add a band. "
-                            "Left and Right select the previous or next band."));
-        const auto rebuild = [this, graph, binding](int band) {
+        graph->setToolTip(tr("Drag a point to edit; click empty space to add a band. Right-click a point to change "
+                            "filter type. Wheel changes slope for cuts, bandwidth for other filters; "
+                            "Shift+wheel adjusts cut resonance. Left/Right select a band; Up/Down adjust it."));
+        graph->bandSelected = [graph, binding](int band) {
             binding->finishAll();
+            const bool followSolo = graph->band != band && graph->auditionedBand >= 0;
+            if (followSolo) graph->stopAudition();
             graph->band = band;
-            graph->setAccessibleDescription(tr("Band %1").arg(band + 1));
+            graph->explicitBandSelection = true;
+            graph->setAccessibleDescription(graph->bandTip(band));
+            if (followSolo) graph->audition(true);
+            graph->refreshBandTools();
             graph->update();
-            if (m_impl->bandControls) {
-                m_impl->root->removeWidget(m_impl->bandControls);
-                m_impl->bandControls->hide();
-                m_impl->bandControls->deleteLater();
-            }
-            auto* host = new QWidget(this);
-            m_impl->bandControls = host;
-            auto* row = new QHBoxLayout(host);
-            row->setContentsMargins(3, 0, 3, 2);
-            row->setSpacing(5);
-            row->addWidget(binding->toggle(graph->bandId(eq::BandParam::Enabled), tr("On"), host));
-            row->addWidget(
-                binding->choice(graph->bandId(eq::BandParam::Type),
-                                {tr("Bell"), tr("Low shelf"), tr("High shelf"), tr("Low cut"), tr("High cut"),
-                                 tr("Notch"), tr("Band pass"), tr("Tilt"), tr("All pass")},
-                                host), 1);
-            for (auto field : {eq::BandParam::Frequency, eq::BandParam::Gain, eq::BandParam::Q}) {
-                auto* knob = binding->knob(graph->bandId(field), host, 70);
-                knob->setCaption(field == eq::BandParam::Frequency ? tr("Frequency")
-                                 : field == eq::BandParam::Gain    ? tr("Gain")
-                                                                   : tr("Q"));
-                knob->setVisualStyle(ui::Knob::VisualStyle::RackDigital);
-                knob->setFixedSize(70, 60);
-                knob->setArcColor(eqUi::bandColor(band, th().dark));
-                if (field == eq::BandParam::Frequency || field == eq::BandParam::Q)
-                    knob->setLogarithmic(true);
-                if (field == eq::BandParam::Q) m_impl->equalizerQ = knob;
-                if (field == eq::BandParam::Gain) m_impl->equalizerGain = knob;
-                row->addWidget(knob);
-            }
-            m_impl->root->addWidget(host);
         };
-        graph->bandSelected = rebuild;
-        rebuild(0);
     } else if (m_uid == "daw.compressor") {
         auto* content = new QHBoxLayout;
-        content->setSpacing(12);
+        content->setSpacing(8);
+        auto* display = new QVBoxLayout;
+        display->setSpacing(4);
         auto* graph = new RackPlot(binding, RackPlot::Compressor, this);
         graph->setObjectName("RackCompressorDisplay");
         graph->setAccessibleName(tr("Compression curve and gain reduction"));
         graph->setToolTip(tr("GR: gain reduction in dB. IN / OUT: input and output levels in dBFS."));
-        graph->setMinimumHeight(128);
-        graph->setFixedWidth(128);
+        graph->setMinimumSize(110, 70);
         m_impl->plot = graph;
         m_impl->plots.push_back(graph);
-        content->addWidget(graph);
-        auto* settings = new QVBoxLayout;
-        settings->setSpacing(4);
+        display->addWidget(graph, 1);
         auto* mode = new QHBoxLayout;
-        mode->setSpacing(6);
+        mode->setSpacing(4);
         mode->addWidget(binding->choice("mode", {tr("Soft"), tr("Punch")}, this), 1);
-        mode->addWidget(binding->toggle("autoGain", tr("Auto gain"), this));
-        settings->addLayout(mode);
-        auto* sliders = new QGridLayout;
-        sliders->setHorizontalSpacing(6);
-        sliders->setVerticalSpacing(4);
+        auto* autoGain = binding->toggle("autoGain", tr("Auto"), this);
+        autoGain->setObjectName("RackCompressorAutoGain");
+        autoGain->setFixedSize(46, 24);
+        autoGain->setToolTip(tr("Automatic makeup gain"));
+        autoGain->setAccessibleName(autoGain->toolTip());
+        mode->addWidget(autoGain);
+        display->addLayout(mode);
+        content->addLayout(display, 1);
+        auto* controls = new QWidget(this);
+        controls->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        auto* grid = new QGridLayout(controls);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setSpacing(2);
+        const QStringList captions{tr("Threshold"), tr("Ratio"), tr("Knee"),
+                                   tr("Attack"), tr("Release"), tr("Makeup")};
         int index = 0;
         for (const auto* id : {"threshold", "ratio", "knee", "attack", "release", "makeup"}) {
-            sliders->addWidget(binding->slider(id, this), index / 3, index % 3, Qt::AlignVCenter);
+            auto* knob = binding->knob(id, controls, 68);
+            knob->setVisualStyle(ui::Knob::VisualStyle::RackDigital);
+            knob->setFixedSize(68, 58);
+            knob->setCaption(captions[index]);
+            knob->setArcColor(th().accent);
+            grid->addWidget(knob, index / 3, index % 3, Qt::AlignCenter);
             ++index;
         }
-        for (int column = 0; column < 3; ++column) sliders->setColumnStretch(column, 1);
-        settings->addLayout(sliders, 1);
-        content->addLayout(settings, 1);
+        content->addWidget(controls, 0, Qt::AlignVCenter);
         root->addLayout(content);
 #if DAW_ENABLE_REVERB
     } else if (m_uid == "daw.reverb") {
@@ -911,6 +1154,7 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
         root->addWidget(choice);
         root->addStretch();
         auto* mix = binding->knob("mix", this, 86);
+        mix->setCaption(tr("Mix"));
         mix->setArcColor(th().dark ? QColor("#b8a0ed") : QColor("#7352ac"));
         root->addWidget(mix, 0, Qt::AlignCenter);
         root->addStretch();
@@ -952,13 +1196,14 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
         graph->setToolTip(tr("Each colored bar is a repeat. Spacing is delay time; height is relative to the first repeat. Feedback sets the decay."));
         m_impl->plots.push_back(graph);
         content->addWidget(graph, 1);
-        content->addWidget(knobs(binding, {"feedback", "mix", "lowCut", "highCut"}, 4, this, 62));
+        content->addWidget(knobs(binding, {"feedback", "mix", "lowCut", "highCut"}, 4, this, 62,
+                                {tr("Feedback"), tr("Mix"), tr("Low cut"), tr("High cut")}));
         root->addLayout(content, 1);
         connect(m_impl->delayMode, &QComboBox::activated, this, [this] { refresh(); });
     } else if (m_uid == "daw.pitch-corrector") {
         plot(RackPlot::Pitch, 42);
         auto* tonality = new QWidget(this);
-        tonality->setFixedWidth(104);
+        tonality->setFixedWidth(120);
         auto* toneColumn = new QVBoxLayout(tonality);
         toneColumn->setContentsMargins(0, 0, 0, 0);
         toneColumn->setSpacing(2);
@@ -976,6 +1221,8 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
             key->setText(QStringList{"C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"}[i]);
             key->setCheckable(true);
             key->setMinimumSize(24, 24);
+            key->setFixedHeight(24);
+            key->setStyleSheet("font-size:10px; padding:0; border-radius:4px;");
             notes->addWidget(key);
             m_impl->notes.push_back(key);
             connect(key, &QToolButton::clicked, this, [binding, i] {
@@ -989,53 +1236,66 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
         auto* controls = new QHBoxLayout;
         controls->setSpacing(3);
         controls->addWidget(tonality);
-        controls->addWidget(knobs(binding, {"tune", "humanize", "amount", "output_db"}, 4, this, 54), 1);
+        controls->addWidget(knobs(binding, {"tune", "humanize", "amount", "output_db"}, 4, this, 54,
+                                  {tr("Speed"), tr("Humanize"), tr("Amount"), tr("Output")}), 1);
         root->addLayout(controls);
     } else if (m_uid == "daw.sampler") {
         m_impl->sampler = new RackSamplerView(binding, this);
         root->addWidget(m_impl->sampler, 1);
     } else if (m_uid == "daw.slicer") {
-        plot(RackPlot::Waveform, 70);
+        auto* content = new QHBoxLayout;
+        content->setSpacing(8);
+        auto* display = new QVBoxLayout;
+        display->setSpacing(4);
+        auto* waveform = new RackPlot(binding, RackPlot::Waveform, this);
+        waveform->uid = m_uid;
+        m_impl->plots.push_back(waveform);
+        display->addWidget(waveform, 1);
         auto* tabRow = new QHBoxLayout;
+        tabRow->setSpacing(4);
         auto* tabs = new QTabBar(this);
+        tabs->setFixedHeight(24);
         tabs->addTab(tr("Playback"));
         tabs->addTab(tr("Envelope"));
         tabRow->addWidget(tabs, 1);
-        auto* load = new QToolButton(this);
-        load->setText(tr("Load…"));
+        auto* load = new ui::IconButton(icons::Glyph::Folder, tr("Load sample"), this);
+        load->setButtonSize(24, 24);
+        load->setAccessibleName(load->toolTip());
+        load->setFocusPolicy(Qt::StrongFocus);
         tabRow->addWidget(load);
-        root->addLayout(tabRow);
-        connect(load, &QToolButton::clicked, this, [binding, this] {
+        display->addLayout(tabRow);
+        content->addLayout(display, 1);
+        root->addLayout(content);
+        connect(load, &QAbstractButton::clicked, this, [binding, this] {
             const auto file = QFileDialog::getOpenFileName(this, tr("Load sample"));
             if (file.isEmpty())
                 return;
             binding->finishAll();
-            if (m_uid == "daw.sampler")
-                binding->controller()->loadSamplerSample(binding->channel(), binding->slot(),
-                                                         file.toStdString());
-            else
-                binding->controller()->loadSlicerSample(binding->channel(), binding->slot(),
-                                                        file.toStdString());
+            binding->controller()->loadSlicerSample(binding->channel(), binding->slot(), file.toStdString());
             emit binding->edited();
         });
         auto* pages = new QStackedWidget(this);
-        root->addWidget(pages);
+        pages->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        content->addWidget(pages, 0, Qt::AlignVCenter);
         connect(tabs, &QTabBar::currentChanged, pages, &QStackedWidget::setCurrentIndex);
-        pages->addWidget(
-            knobs(binding,
-                  m_uid == "daw.sampler"
-                      ? QStringList{"startoffset", "endoffset", "loop.mode", "stretch.pitch", "vol", "pan"}
-                      : QStringList{"playmode", "tune", "root", "vol", "pan", "gate"},
-                  6, pages, 68));
-        pages->addWidget(knobs(binding,
-                               m_uid == "daw.sampler"
-                                   ? QStringList{"amp.att", "amp.hold", "amp.dec", "amp.sus", "amp.rel"}
-                                   : QStringList{"att", "dec", "sus", "rel"},
-                               5, pages, 72));
+        pages->addWidget(knobs(binding, {"playmode", "tune", "root", "vol", "pan", "gate"}, 3, pages, 68,
+                               {tr("Mode"), tr("Pitch"), tr("Root"), tr("Volume"), tr("Pan"), tr("Gate")}));
+        pages->addWidget(knobs(binding, {"att", "dec", "sus", "rel"}, 3, pages, 68,
+                               {tr("Attack"), tr("Decay"), tr("Sustain"), tr("Release")}));
     } else if (m_uid == "daw.graphit") {
-        plot(RackPlot::Graphit, 76);
-        choices(binding->choice("mode", {"A", "B", "P", "C", "X"}, this));
-        root->addWidget(knobs(binding, {"amount", "priority"}, 2, this, 86));
+        auto* content = new QHBoxLayout;
+        content->setSpacing(8);
+        auto* display = new QVBoxLayout;
+        display->setSpacing(4);
+        auto* graph = new RackPlot(binding, RackPlot::Graphit, this);
+        graph->uid = m_uid;
+        m_impl->plots.push_back(graph);
+        display->addWidget(graph, 1);
+        display->addWidget(binding->choice("mode", {"A", "B", "P", "C", "X"}, this));
+        content->addLayout(display, 1);
+        content->addWidget(knobs(binding, {"amount", "priority"}, 1, this, 72,
+                                {tr("Amount"), tr("Priority")}), 0, Qt::AlignVCenter);
+        root->addLayout(content);
     } else if (m_uid == "daw.modulation") {
         root->setContentsMargins(3, 0, 3, 0);
         m_impl->moduleRow = new QHBoxLayout;
@@ -1095,21 +1355,50 @@ RackBuiltinView::RackBuiltinView(RackParameterBinding* binding, QString uid, QWi
     } else if (m_uid != "daw.doubler-pro") {
         root->addWidget(modulationPane(m_uid, {}, this));
     } else {
-        auto* graph = plot(RackPlot::Modulation, 48);
-        graph->setMinimumHeight(48);
+        auto* content = new QHBoxLayout;
+        content->setSpacing(8);
+        auto* graph = new RackPlot(binding, RackPlot::Modulation, this);
+        graph->uid = m_uid;
+        graph->setMinimumWidth(96);
+        graph->setAccessibleName(tr("Stereo voices"));
+        graph->setToolTip(tr("Voice spread from left to right. Halos show humanization; the center is the original signal."));
+        m_impl->plots.push_back(graph);
+        content->addWidget(graph, 1);
         QStringList ids;
         for (const auto& p : binding->parameters())
             if (!p.isBypass && ids.size() < 8)
                 ids.push_back(QString::fromStdString(p.id));
-        root->addWidget(knobs(binding, ids, m_uid == "daw.doubler-pro" ? 6 : std::max(1, int(ids.size())),
-                              this, m_uid == "daw.doubler-pro" ? 48 : 58));
+        content->addWidget(knobs(binding, ids, ids.size() > 6 ? 4 : 3, this, 62,
+                                {tr("Width"), tr("Humanize"), tr("Softness"), tr("Delay"), tr("Detune"), tr("Body")}),
+                           0, Qt::AlignVCenter);
+        root->addLayout(content);
+    }
+    if (m_uid != "daw.equalizer") {
+        for (auto* choice : findChildren<QComboBox*>()) {
+            choice->setFixedHeight(24);
+            choice->setMinimumWidth(0);
+            choice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            choice->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        }
+        const auto restyle = [this] {
+            const auto& t = th();
+            setStyleSheet(QStringLiteral(
+                "RackBuiltinView QComboBox { font-size:10px; padding:0 18px 0 6px; border:1px solid %1; border-radius:4px; background:%2; color:%3; }"
+                "RackBuiltinView QComboBox:hover { border-color:%4; }"
+                "RackBuiltinView QComboBox:focus { border-color:%6; }"
+                "RackBuiltinView QTabBar::tab { font-size:10px; padding:3px 6px; border:0; border-radius:4px; background:transparent; color:%4; }"
+                "RackBuiltinView QTabBar::tab:selected { background:%2; color:%3; }"
+                "#RackCompressorAutoGain { font-size:10px; padding:0; border:1px solid %1; border-radius:4px; background:%2; color:%4; }"
+                "#RackCompressorAutoGain:hover { border-color:%4; }"
+                "#RackCompressorAutoGain:focus { border-color:%6; }"
+                "#RackCompressorAutoGain:checked { background:%5; color:%3; border-color:%6; }")
+                .arg(t.separator().name(), t.well().name(), t.textPrimary.name(), t.textSecondary.name(),
+                     mixColors(t.well(), t.accent, .20).name(), mixColors(t.separator(), t.accent, .45).name()));
+        };
+        restyle();
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this, restyle);
     }
     refresh();
-}
-void RackBuiltinView::resizeEvent(QResizeEvent* event) {
-    QWidget::resizeEvent(event);
-    if (m_uid == "daw.compressor" && m_impl->plot)
-        m_impl->plot->setFixedWidth(std::clamp(height() - 8, 128, 192));
 }
 void RackBuiltinView::refresh() {
     if (!isVisible())
@@ -1124,20 +1413,6 @@ void RackBuiltinView::refresh() {
     if (m_impl->sampler) m_impl->sampler->refresh();
     for (auto* plot : m_impl->plots)
         plot->refresh();
-    if (m_uid == "daw.equalizer" && m_impl->plot && m_impl->equalizerQ) {
-        auto* plot = m_impl->plot;
-        const auto type = eq::FilterType(int(m_binding->value(plot->bandId(eq::BandParam::Type))));
-        const auto slope = eq::Slope(int(m_binding->value(plot->bandId(eq::BandParam::Slope))));
-        const bool hasQ = eq::supportsQ(type, slope);
-        m_impl->equalizerQ->setEnabled(m_binding->available() && hasQ);
-        m_impl->equalizerQ->setToolTip(hasQ ? tr("Bandwidth / resonance (Q)")
-            : tr("A 6 dB/oct cut has no Q. Choose a steeper slope in the EQ editor."));
-        const bool gain = type == eq::FilterType::Bell || type == eq::FilterType::LowShelf ||
-                          type == eq::FilterType::HighShelf || type == eq::FilterType::Tilt;
-        m_impl->equalizerGain->setEnabled(m_binding->available() && gain);
-        for (auto* knob : m_impl->bandControls->findChildren<ui::Knob*>())
-            knob->setArcColor(eqUi::bandColor(plot->band, th().dark));
-    }
     for (int i = 0; i < m_impl->notes.size(); ++i) {
         const QSignalBlocker block(m_impl->notes[i]);
         m_impl->notes[i]->setChecked(int(m_binding->value("note_mask")) & (1 << i));
@@ -1190,7 +1465,43 @@ bool RackBuiltinView::checkEqualizerForTest(QString* error) {
         pointer(QEvent::MouseButtonRelease, point);
         return graph->equalizer->bands[graph->band];
     };
+    const auto wheel = [&](int delta, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                           std::optional<QPointF> position = {}) {
+        const auto point = position.value_or(graph->bandPoint(graph->equalizer->bands[graph->band]));
+        QWheelEvent event(point, graph->mapToGlobal(point), {}, QPoint(0, delta),
+                          Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(graph, &event);
+        settle();
+    };
+    const auto choose = [&](const QString& name) {
+        bool activated = false;
+        QTimer chooser, timeout;
+        chooser.setSingleShot(true);
+        timeout.setSingleShot(true);
+        connect(&chooser, &QTimer::timeout, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            auto* action = menu ? menu->findChild<QAction*>(name) : nullptr;
+            if (!menu || !action) return;
+            menu->setActiveAction(action);
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(menu, &enter);
+            activated = true;
+        });
+        connect(&timeout, &QTimer::timeout, [] {
+            if (auto* popup = QApplication::activePopupWidget()) popup->close();
+        });
+        chooser.start(25);
+        timeout.start(1500);
+        const auto point = graph->bandPoint(graph->equalizer->bands[graph->band]).toPoint();
+        QContextMenuEvent event(QContextMenuEvent::Mouse, point, graph->mapToGlobal(point));
+        QApplication::sendEvent(graph, &event);
+        settle();
+        return activated;
+    };
     settle();
+    if (!findChildren<ui::Knob*>().isEmpty() ||
+        graph->height() < height() - 8 || graph->width() < 500)
+        return fail("rack EQ dedicates its expanded face to the spectrum and filter graph");
     const auto bell = create(180., 12.);
     if (bell.type != eq::FilterType::Bell || std::abs(bell.frequency - 180.) > .1)
         return fail("rack EQ creates a bell at the pointer frequency");
@@ -1237,14 +1548,12 @@ bool RackBuiltinView::checkEqualizerForTest(QString* error) {
         refresh();
         const auto before = graph->response;
         const auto depth = m_binding->controller()->undoDepth();
-        m_impl->equalizerQ->editValue(2.5);
-        m_impl->equalizerQ->finishEditing();
-        settle();
+        wheel(480, RackPlot::isCut(type) ? Qt::ShiftModifier : Qt::NoModifier);
         double delta = 0.;
         if (before && graph->response)
             for (std::size_t i = 0; i < before->combined.size(); ++i)
                 delta = std::max(delta, std::abs(before->combined[i] - graph->response->combined[i]));
-        if (std::abs(m_binding->value(graph->bandId(eq::BandParam::Q)) - 2.5) > 1.e-6 || delta < .1 ||
+        if (std::abs(m_binding->value(graph->bandId(eq::BandParam::Q)) - 1.) > 1.e-6 || delta < .1 ||
             m_binding->controller()->undoDepth() != std::min(depth + 1, m_binding->controller()->undoLimit()))
             return fail(QStringLiteral("rack Q: type=%1 value=%2 responseDelta=%3 undoSteps=%4")
                 .arg(int(type)).arg(m_binding->value(graph->bandId(eq::BandParam::Q)))
@@ -1256,21 +1565,150 @@ bool RackBuiltinView::checkEqualizerForTest(QString* error) {
             return fail("rack Q undo must restore only the edited width");
         m_binding->controller()->redo();
         settle();
-        if (std::abs(m_binding->value(graph->bandId(eq::BandParam::Q)) - 2.5) > 1.e-6)
+        if (std::abs(m_binding->value(graph->bandId(eq::BandParam::Q)) - 1.) > 1.e-6)
             return fail("rack Q redo must restore the edited width");
     }
+    const double frequency = graph->equalizer->bands[graph->band].frequency;
+    if (!choose("RackEqualizerType.0") || graph->equalizer->bands[graph->band].type != eq::FilterType::Bell ||
+        std::abs(graph->equalizer->bands[graph->band].frequency - frequency) > .01)
+        return fail("right-click menu changes filter type without moving its frequency");
+    const auto typeDepth = m_binding->controller()->undoDepth();
+    if (!choose("RackEqualizerType.4") || graph->equalizer->bands[graph->band].type != eq::FilterType::HighCut ||
+        graph->equalizer->bands[graph->band].gainDb != 0. ||
+        m_binding->controller()->undoDepth() != std::min(typeDepth + 1, m_binding->controller()->undoLimit()))
+        return fail("choosing a cut resets gain and commits one undo step");
+    m_binding->controller()->undo();
+    settle();
+    if (graph->equalizer->bands[graph->band].type != eq::FilterType::Bell ||
+        graph->equalizer->bands[graph->band].gainDb != 9.)
+        return fail("filter type undo restores type and gain together");
+    m_binding->controller()->redo();
+    settle();
+    wheel(120);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db18)
+        return fail("wheel over a cut changes slope from 12 to 18 dB/oct");
+    wheel(120);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db24)
+        return fail("wheel over a cut changes slope from 18 to 24 dB/oct");
+    wheel(-120);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db18)
+        return fail("reversing the wheel immediately decreases cut slope");
+    wheel(60);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db18)
+        return fail("partial wheel deltas must not skip slope steps");
+    wheel(60);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db24)
+        return fail("high-resolution wheel deltas accumulate into one slope step");
+    wheel(120, Qt::NoModifier, graph->area().topLeft() + QPointF(2., 2.));
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db24)
+        return fail("scrolling empty spectrum space must not edit the selected band");
+    wheel(12000);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db96)
+        return fail("cut slope clamps at the highest supported order");
+    wheel(-12000);
+    if (graph->equalizer->bands[graph->band].slope != eq::Slope::Db6)
+        return fail("cut slope clamps at the lowest supported order");
     m_binding->write(graph->bandId(eq::BandParam::Slope), double(eq::Slope::Db6));
     m_binding->finishAll();
     settle();
-    refresh();
-    if (m_impl->equalizerQ->isEnabled())
-        return fail("rack first-order cuts must mark Q unavailable");
-    m_binding->write(graph->bandId(eq::BandParam::Slope), double(eq::Slope::Db12));
-    m_binding->finishAll();
+    const auto q = graph->equalizer->bands[graph->band].q;
+    const auto qDepth = m_binding->controller()->undoDepth();
+    wheel(120, Qt::ShiftModifier);
+    if (graph->equalizer->bands[graph->band].q != q || m_binding->controller()->undoDepth() != qDepth)
+        return fail("first-order cuts ignore resonance gestures without creating undo entries");
+    wheel(120);
+    wheel(120, Qt::ShiftModifier);
+    if (graph->equalizer->bands[graph->band].q <= q)
+        return fail("resonance becomes available again with a steeper cut");
+    if (!choose("RackEqualizerRemoveBand") || graph->equalizer->bands[graph->band].enabled)
+        return fail("band can be removed directly from its context menu");
+    m_binding->controller()->undo();
     settle();
-    refresh();
-    if (!m_impl->equalizerQ->isEnabled())
-        return fail("rack Q must become available again with a resonant slope");
+    if (!graph->equalizer->bands[graph->band].enabled)
+        return fail("undo restores a band removed through the graph");
+    const auto click = [&](QAbstractButton* button) {
+        const QPointF point = button->rect().center();
+        QMouseEvent press(QEvent::MouseButtonPress, point, button->mapToGlobal(point),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, button->mapToGlobal(point),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(button, &press);
+        QApplication::sendEvent(button, &release);
+        settle();
+    };
+    const auto capture = [&](const QString& suffix) {
+        const auto path = qEnvironmentVariable("DAW_RACK_SCREENSHOT");
+        if (!path.isEmpty()) window()->grab().save(path.left(path.lastIndexOf('.')) + suffix + ".png");
+    };
+    if (!graph->bandTools->isVisible() || !graph->rect().contains(graph->bandTools->geometry()) ||
+        graph->bandTools->y() <= graph->bandPoint(graph->equalizer->bands[graph->band]).y())
+        return fail("selected band tools float below the point and stay within the spectrum");
+    const auto soloDepth = m_binding->controller()->undoDepth();
+    const int soloBand = graph->band;
+    click(graph->bandListen);
+    if (graph->equalizer->auditionBand != graph->band || !graph->bandListen->isChecked() ||
+        m_binding->controller()->undoDepth() != soloDepth)
+        return fail("Solo activates the selected processor band without changing the project or Undo");
+    capture("-eq-solo");
+    int another = -1;
+    for (int i = 0; i < int(eq::kBandCount); ++i)
+        if (i != graph->band && graph->equalizer->bands[i].enabled &&
+            QLineF(graph->bandPoint(graph->equalizer->bands[i]),
+                   graph->bandPoint(graph->equalizer->bands[graph->band])).length() > 24.) { another = i; break; }
+    if (another < 0) return fail("another EQ band is available to audition");
+    const auto anotherPoint = graph->bandPoint(graph->equalizer->bands[another]);
+    pointer(QEvent::MouseButtonPress, anotherPoint);
+    pointer(QEvent::MouseButtonRelease, anotherPoint);
+    if (graph->band != another || graph->equalizer->auditionBand != another)
+        return fail("Solo follows the selected point without enabling other bands");
+    const auto bandsBeforeBypass = graph->equalizer->bands;
+    const auto bypassDepth = m_binding->controller()->undoDepth();
+    click(graph->bandPower);
+    if (graph->equalizer->bands[graph->band].enabled || graph->equalizer->auditionBand != -1 ||
+        !graph->bandTools->isVisible() || graph->bandListen->isEnabled() ||
+        m_binding->controller()->undoDepth() != std::min(bypassDepth + 1, m_binding->controller()->undoLimit()))
+        return fail("bypass stops Solo and keeps the selected band's controls available with one Undo");
+    for (int i = 0; i < int(eq::kBandCount); ++i)
+        if (i != graph->band && graph->equalizer->bands[i] != bandsBeforeBypass[i])
+            return fail("bypassing one EQ point must not change any other band");
+    capture("-eq-bypassed");
+    const int bypassedBand = graph->band;
+    const auto bypassedPoint = graph->bandPoint(graph->equalizer->bands[bypassedBand]);
+    const auto previousPoint = graph->bandPoint(graph->equalizer->bands[soloBand]);
+    pointer(QEvent::MouseButtonPress, previousPoint);
+    pointer(QEvent::MouseButtonRelease, previousPoint);
+    pointer(QEvent::MouseButtonPress, bypassedPoint);
+    pointer(QEvent::MouseButtonRelease, bypassedPoint);
+    if (graph->band != bypassedBand || graph->equalizer->bands[bypassedBand].enabled ||
+        !graph->bandTools->isVisible())
+        return fail("a bypassed point stays selectable after choosing another band");
+    if (m_binding->controller()->undoDepth() != std::min(bypassDepth + 1, m_binding->controller()->undoLimit()))
+        return fail("selecting EQ points does not create parameter edits or extra Undo steps");
+    m_binding->controller()->undo();
+    settle();
+    if (!graph->equalizer->bands[graph->band].enabled || !graph->bandPower->isChecked())
+        return fail("Undo restores an enabled EQ point and its toolbar state");
+    click(graph->bandPower);
+    click(graph->bandPower);
+    if (!graph->equalizer->bands[graph->band].enabled || !graph->bandListen->isEnabled())
+        return fail("a bypassed EQ point can be enabled again from its floating controls");
+    const auto typeBefore = graph->equalizer->bands[graph->band].type;
+    graph->bandType->setCurrentIndex(int(eq::FilterType::AllPass));
+    settle();
+    if (graph->equalizer->bands[graph->band].type != eq::FilterType::AllPass)
+        return fail("floating type selector edits the selected EQ band");
+    m_binding->controller()->undo();
+    settle();
+    if (graph->equalizer->bands[graph->band].type != typeBefore || graph->bandType->currentIndex() != int(typeBefore))
+        return fail("Undo synchronizes the floating filter selector");
+    click(graph->bandListen);
+    graph->hide();
+    settle();
+    if (m_binding->controller()->equalizerSnapshot(m_binding->channel(), m_binding->slot())->auditionBand != -1)
+        return fail("hiding the EQ face always releases its temporary Solo");
+    graph->show();
+    settle();
+    QToolTip::hideText();
     static_assert(eq::filterTypeForNewBand(100.) == eq::FilterType::Bell);
     static_assert(eq::filterTypeForNewBand(15000.) == eq::FilterType::Bell);
     return true;

@@ -15,9 +15,11 @@ inline modulation::Rack copyModulation(const modulation::Rack& rack,
     modulation::Rack copy; copy.enabled = rack.enabled;
     std::unordered_map<std::string, std::string> sources;
     for (const auto& source : rack.sources) {
-        if (!keepUnused && std::none_of(rack.routes.begin(), rack.routes.end(), [&](const auto& r) {
+        if (!keepUnused && !slots.contains(source.ownerSlotId) && std::none_of(rack.routes.begin(), rack.routes.end(), [&](const auto& r) {
                 return r.sourceId == source.id && slots.contains(r.slotId); })) continue;
         auto next = source; if (fresh) next.id = newUuid(); sources[source.id] = next.id;
+        if (const auto owner = slots.find(source.ownerSlotId); owner != slots.end()) next.ownerSlotId = owner->second;
+        else next.ownerSlotId.clear();
         if (mappedIds) (*mappedIds)[source.id] = next.id;
         copy.sources.push_back(std::move(next));
     }

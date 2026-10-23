@@ -749,7 +749,6 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     setObjectName(QStringLiteral("ProjectOpenDialog"));
     setWindowTitle(tr("Open Project"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-    setWindowFlag(Qt::FramelessWindowHint);
     setAccessibleName(tr("Open Project"));
     setSizeGripEnabled(true);
     setModal(true);
@@ -856,16 +855,6 @@ ProjectOpenDialog::ProjectOpenDialog(const QStringList& projectPaths,
     updateSelection();
     applyTheme();
     m_projectList->setFocus(Qt::OtherFocusReason);
-}
-
-void ProjectOpenDialog::mousePressEvent(QMouseEvent* event) {
-    // The margins and the space between footer actions replace the title bar.
-    if (event->button() == Qt::LeftButton && windowHandle() &&
-        windowHandle()->startSystemMove()) {
-        event->accept();
-        return;
-    }
-    QDialog::mousePressEvent(event);
 }
 
 void ProjectOpenDialog::updateSelection() {
@@ -1527,10 +1516,10 @@ bool checkProjectDialogsForTest(QWidget* parent) {
     auto* locationButton = cards.findChild<QPushButton*>(QStringLiteral("ProjectLocationButton"));
     check(grid && grid->count() == names.size() && !openButton->isEnabled() && !locationButton->isEnabled(),
           "card grid starts with actions disabled until selection");
-    check(cards.windowFlags().testFlag(Qt::FramelessWindowHint) &&
+    check(!cards.windowFlags().testFlag(Qt::FramelessWindowHint) &&
           cards.layout()->itemAt(0)->widget() == grid &&
           !cards.findChild<QLabel*>(QStringLiteral("ProjectDialogTitle")),
-          "frameless project picker starts directly with cards");
+          "system-framed project picker starts directly with cards");
     check(grid->item(0)->data(kProjectAuthorRole).toString() == authors[0] &&
           grid->item(1)->data(kProjectAuthorRole).toString().isEmpty() &&
           grid->item(2)->data(kProjectAuthorRole).toString().isEmpty() &&

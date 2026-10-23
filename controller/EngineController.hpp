@@ -1,4 +1,5 @@
 #pragma once
+#include "ProjectTransferBundle.hpp"
 
 #include "MidiFile.hpp"
 #include "AudioEdit.hpp"
@@ -243,6 +244,9 @@ public:
         ClipModel original;
         std::string fingerprint;
         std::string renderedPath;
+        // Optional completed render of placements, reused when loop/tape slicing
+        // needs a baked source. Never persisted in the project document.
+        std::string preparedRenderPath;
         double durationSeconds = 0, sampleRate = 48000, tempo = 120;
         engine::ClipPlayerNode::ClipList placements;
     };
@@ -310,6 +314,28 @@ public:
     audio::Result initialize(const audio::AudioDeviceConfig& config,
                              bool openDevice = true);
     void shutdown();
+    /// Document-only sessions never prepare DSP, instantiate plugins or open a
+    /// device. Unlike initialize(..., false), they are not offline renderers.
+    audio::Result initializeDocumentOnly(double sampleRate = 48000.0,
+                                         std::uint32_t bufferSize = 512);
+    audio::Result deactivateAudio();
+    audio::Result activateAudio(const audio::AudioDeviceConfig& config,
+                                bool openDevice = true);
+    bool audioEnabled() const noexcept { return !m_documentOnly && m_prepared; }
+    bool documentOnly() const noexcept { return m_documentOnly; }
+    AudioSessionSpec::PluginLoadProgress setPluginLoadProgress(AudioSessionSpec::PluginLoadProgress callback) {
+        return std::exchange(m_pluginLoadProgress, std::move(callback));
+    }
+    const std::string& documentIdentity() const noexcept { return m_documentIdentity; }
+    audio::Result copyProjectObjects(const std::vector<std::string>& tracks,
+        const std::vector<std::pair<std::string, std::string>>& clips, ProjectTransferBundle& out);
+    audio::Result copyProjectRegion(const std::vector<std::pair<std::string, std::string>>& clips,
+        double fromSeconds, double toSeconds, ProjectTransferBundle& out);
+    audio::Result pasteProjectObjects(const ProjectTransferBundle& bundle,
+        const std::string& targetTrack, double atSeconds,
+        std::vector<std::pair<std::string, std::string>>& inserted,
+        std::string& notice, const AutomationTarget* automationTarget = nullptr);
+    std::size_t loadedPluginCount() const { return m_runtime->pluginAddresses().size(); }
     bool isDeviceOpen() const { return m_deviceOpen && m_runtime->deviceSnapshot().running; }
     bool audioDeviceNeedsRecovery() const;
     audio::Result recoverAudioDevice(bool manualRetry = false);
@@ -341,12 +367,12 @@ public:
     recovery::RecoverySnapshot prepareProjectSave();
     static audio::Result writePreparedProject(recovery::RecoverySnapshot& snapshot,
                                                const std::string& packageDir);
-    void acceptPreparedProjectSave(const ProjectModel& saved);
+    void acceptPreparedProjectSave(const ProjectModel& saved, const std::string& packageDir = {});
     audio::Result openProject(const std::string& packageDir);
     struct PreparedProject;
     static audio::Result prepareProjectOpen(const std::string& packageDir, double rate,
         PreparedProject& output, const std::function<bool()>& keepGoing = {});
-    audio::Result openPreparedProject(PreparedProject prepared);
+    audio::Result openPreparedProject(PreparedProject prepared, bool fromTemplate = false);
     /// Freeze the current local document and every built-in plugin instance
     /// into a move-only upload staging object. This never changes the live
     /// project, transport or undo stack. The returned sources deliberately do
@@ -666,8 +692,9 @@ public:
     // the master bus. The master is a channel like any other here, so none of
     // this needs a second code path.
 
-    PluginManager& pluginManager() { return m_pluginManager; }
-    const PluginManager& pluginManager() const { return m_pluginManager; }
+    PluginManager& pluginManager() { return m_workspacePlugins ? *m_workspacePlugins : m_pluginManager; }
+    const PluginManager& pluginManager() const { return m_workspacePlugins ? *m_workspacePlugins : m_pluginManager; }
+    void useWorkspacePluginManager(PluginManager& manager) { m_workspacePlugins = &manager; }
 
     /// The document's insert list for a channel, or null for an unknown id.
     const std::vector<InsertModel>* channelInserts(const std::string& channelId) const;
@@ -753,6 +780,8 @@ public:
     /// A channel's FX chain, and — when it was copied whole — everything else
     /// the strip holds.
     struct ChannelSnapshot {
+        std::string sourceDocument;
+        std::shared_ptr<ProjectTransferResources> resources;
         std::string rackCutSource; // Transient clipboard move; never serialized.
         // Rack selections may include the channel's single instrument. Its
         // private FX stay attached to it, outside the channel insert chain.
@@ -848,11 +877,21 @@ public:
     const std::string& clipPlaybackFilePath(const ClipModel& clip) const;
 
     struct OfflineRenderReport {
+        struct ClipProgress {
+            enum class State { Pending, Preparing, Rendering, Complete, Failed };
+            State state = State::Pending;
+            double fraction = 0.0;
+        };
         std::vector<std::string> files;
+        std::vector<ClipProgress> clips;
         bool cancelled = false;
         std::size_t clipIndex = 0;
         std::size_t clipCount = 0;
+        std::size_t completedClips = 0;
+        std::size_t workerCount = 0;
     };
+    /// Independent clips run in bounded, isolated workers. Progress and the
+    /// atomic document/undo commit always run on the calling controller thread.
     audio::Result renderClipsOffline(
         const std::vector<ClipAddress>& clips, const ChannelSnapshot& chain,
         bool includeTail,
@@ -880,17 +919,21 @@ public:
     audio::Result applyChannelStripPreset(const std::string& channelId,
                                           const std::string& filePath);
     /// What was copied last. Empty until something is.
-    const ChannelSnapshot& channelClipboard() const { return m_channelClipboard; }
-    void setChannelClipboard(ChannelSnapshot snapshot) {
-        m_channelClipboard = std::move(snapshot);
-    }
+    const ChannelSnapshot& channelClipboard() const;
+    bool setChannelClipboard(ChannelSnapshot snapshot);
+    bool ownChannelTransferResources(ChannelSnapshot& snapshot);
+    static audio::Result prepareProjectTransferResources(recovery::RecoverySnapshot& snapshot,
+        const ProjectTransferResources& resources, bool copyMedia);
+    ChannelSnapshot prepareChannelTransfer(const ChannelSnapshot& source) const;
 
     // Local device rack. All positions are insertion boundaries in the original
     // channel vector; a transfer adjusts them after lifting the selection.
     const modulation::Rack& rackModulation(const std::string& channelId) const;
     bool setRackModulation(const std::string& channelId, const modulation::Rack& rack,
         const std::string& label = "Change Rack Modulation");
-    std::string addRackModulator(const std::string& channelId, modulation::Kind kind);
+    std::string addRackModulator(const std::string& channelId, modulation::Kind kind, const std::string& ownerSlot = {});
+    bool setRackModulationDepth(const std::string& channel, const std::string& route, double depth);
+    void commitRackModulationDepth(const std::string& channel, const std::string& route, double before);
     std::string duplicateRackModulator(const std::string& channelId, const std::string& sourceId);
     std::string assignRackModulation(const std::string& channelId, const std::string& sourceId,
         const std::string& slotId, const std::string& parameterId);
@@ -899,7 +942,13 @@ public:
     std::string rackModulationStatus(const std::string& channelId, const std::string& routeId) const;
     const std::vector<RackGroupModel>& rackGroups(const std::string& channelId) const;
     bool createRackGroup(const std::string& channelId, const std::vector<std::string>& ids,
-                         const std::string& name, std::string* groupId = nullptr);
+                         const std::string& name, std::string* groupId = nullptr, bool parallel = false);
+    bool addRackLayer(const std::string& channelId, const std::string& groupId);
+    bool removeRackLayer(const std::string& channelId, const std::string& groupId, const std::string& layerId);
+    bool setRackLayerState(const std::string& channelId, const std::string& groupId,
+                          const std::string& layerId, float gain, bool muted, bool solo);
+    bool renameRackLayer(const std::string& channelId, const std::string& groupId,
+                         const std::string& layerId, const std::string& name);
     bool removeRackGroup(const std::string& channelId, const std::string& groupId);
     bool renameRackGroup(const std::string& channelId, const std::string& groupId, const std::string& name);
     bool setRackParameters(const std::string& channelId, const std::string& slotId,
@@ -1203,6 +1252,7 @@ public:
     std::vector<AudioFailureNotice> takeAudioFailureNotices();
     audio::Result retryInsertRecovery(const std::string& channelId, const std::string& slotId,
                                      PluginIdentity identity);
+    audio::Result restartInsert(const AudioPluginAddress& address, std::uint64_t project);
     void reportAudioOperationFailure(std::string operation, const audio::Result& failure);
     using PluginRuntimeState = AudioPluginRuntimeState;
     using PluginRuntimeStatus = AudioPluginRuntimeStatus;
@@ -1287,6 +1337,10 @@ public:
     void setClipSampleParameter(const std::string& trackId,
                                 const std::string& clipId,
                                 const std::string& parameterId, double value);
+    /// Apply worker-detected source boundaries as a live, non-destructive Trim.
+    /// Commit with parameter id "trim" for one undoable gesture.
+    void setClipSampleTrim(const std::string& trackId, const std::string& clipId,
+                           double thresholdDb, double sourceBegin, double sourceEnd);
     /// The stretch factor to apply, given the one a knob is asking for and the
     /// grid the arrangement is snapping to (in seconds; 0 or less means no
     /// snapping). Near a grid line the clip's *end* is pulled onto it, so a
@@ -1448,6 +1502,7 @@ public:
     void endClipTrimEdit(const std::string& label = {});
     /// Split a clip in two at `atSeconds` (timeline time). Returns the id of the
     /// new right-hand clip, or empty when the cut is outside the clip. Undoable.
+    static constexpr double minimumClipDurationSeconds = 0.02;
     std::string splitClip(const std::string& trackId, const std::string& clipId,
                           double atSeconds);
     /// Join two or more clips into one. Clips must share a track and kind;
@@ -1916,6 +1971,11 @@ public:
         if (found == m_parameterTouchByChannel.end()) return std::nullopt;
         return found->second.second;
     }
+    const std::vector<std::string>& recentRackParameters(const std::string& slot) const {
+        static const std::vector<std::string> empty;
+        const auto found = m_recentRackParameters.find(slot);
+        return found == m_recentRackParameters.end() ? empty : found->second;
+    }
     std::optional<AutomationTarget> lastTouchedAutomation(
         const std::string& channelId) const;
     enum class AutomationFollowChange { None, Values, Structure };
@@ -1988,6 +2048,9 @@ public:
     void addMasterSpectrumConsumer() noexcept;
     void removeMasterSpectrumConsumer() noexcept;
     float dspLoad() const;
+    AudioPerformanceSnapshot audioPerformanceSnapshot() const { return m_runtime->performanceSnapshot(); }
+    bool audioProcessingUnresponsive() const { return m_runtime->hasUnresponsiveProcessing(); }
+    void setAudioDiagnosticsEnabled(bool enabled) { m_runtime->engine.setDiagnosticsEnabled(enabled); }
     // Diagnostics are drained by one control/benchmark consumer, never the UI
     // and benchmark concurrently. Counters are cumulative and never reset live.
     AudioTimingSnapshot callbackMetrics(bool drain = false);
@@ -2297,6 +2360,12 @@ public:
     /// request", which cannot use `undo()` because the entry is no longer on
     /// top of the stack.
     void restoreProject(const ProjectModel& snapshot, const std::string& label);
+    /// Synchronous control-thread transaction. The callback must not pump an
+    /// event loop or call history operations. Failure restores document and
+    /// history, including the existing redo branch; success creates one entry.
+    audio::Result applyScriptTransaction(std::uint64_t expectedRevision,
+        const std::string& label, const std::function<void()>& apply,
+        bool captureDeviceState = false);
     /// Replace any primitive entries produced during a complex live gesture
     /// with one whole-project before/after entry. Used by arrangement drags
     /// whose result may span clips or tracks.
@@ -2456,6 +2525,7 @@ private:
     };
     modulation::Rack* mutableRackModulation(const std::string& channelId);
     std::vector<RackGroupModel>* mutableRackGroups(const std::string& channelId);
+    bool replaceRackGroups(const std::string& channelId, std::vector<RackGroupModel> groups, const std::string& label);
     bool applyRackEdit(const RackEditState& state);
     bool commitRackEdit(const RackEditState& before, const RackEditState& after, const std::string& label);
     audio::Result captureRackChannel(const std::string& channel, bool instrument, RackChannelState& state);
@@ -2617,7 +2687,19 @@ private:
     };
     std::optional<WarpPreview> m_warpPreview;
     bool validWarpPreview() const;
-    std::unordered_map<std::string, ClipWarpModel> m_sampleWarpOrigins;
+    struct SampleRegionState {
+        double start = 0, offset = 0, duration = 0, fadeIn = 0, fadeOut = 0;
+        double trimThresholdDb = -96;
+        ClipWarpModel warp;
+        ClipMusicalAnalysisModel analysis;
+    };
+    static SampleRegionState sampleRegionState(const ClipModel& clip);
+    void applySampleRegionState(const std::string& trackId, const std::string& clipId,
+                                const SampleRegionState& state);
+    void setSampleRegion(const std::string& trackId, const std::string& clipId,
+                         const std::string& parameterId, double begin, double end,
+                         double thresholdDb);
+    std::unordered_map<std::string, SampleRegionState> m_sampleRegionOrigins;
     void applyClipWarpState(const std::string& trackId, const std::string& clipId,
                            const ClipWarpModel& warp, double fallbackDuration);
     std::optional<uint32_t> m_defaultTrackColor;
@@ -2676,6 +2758,7 @@ private:
     UndoStack m_undo;
     WaveformCache m_waveforms;
     PluginManager m_pluginManager;
+    PluginManager* m_workspacePlugins = nullptr;
     struct CachedPluginState : recovery::RecoverySnapshot::PluginState {
         std::string uid;
         PluginFormat format = PluginFormat::None;
@@ -2690,6 +2773,7 @@ private:
     std::uint64_t m_parameterTouchRevision = 0;
     std::unordered_map<std::string, std::pair<std::uint64_t, AutomationTarget>> m_parameterTouchByChannel;
     std::unordered_map<std::string, AutomationTarget> m_lastTouchedAutomation;
+    std::unordered_map<std::string, std::vector<std::string>> m_recentRackParameters;
     std::unordered_map<std::string, AutomationTarget> m_pendingAutomationTouches;
     mutable bool m_automationReadoutCacheDirty = true;
     mutable std::unordered_map<AutomationTarget, engine::LevelCurve,
@@ -2755,7 +2839,8 @@ private:
         const std::unordered_set<std::string>* channelFilter = nullptr,
         bool includeMaster = true,
         const std::string& fallbackPackageDir = {},
-        bool tolerateStateErrors = false);
+        bool tolerateStateErrors = false,
+        const std::unordered_set<std::string>* slotFilter = nullptr);
     void acceptPluginStateEdits(std::span<const AudioPluginStateEdit> edits,
         std::span<const AudioPluginStateSnapshot> snapshots);
     void loadOfflinePluginStates(const std::string& packageDir,
@@ -2784,7 +2869,7 @@ private:
                                      const InsertModel& model, ChainSlotSnapshot& slot);
     audio::Result restoreInsertState(const std::string& channelId,
         const ChainSlotSnapshot& slot, bool applyAllParameters = true);
-    ChannelSnapshot m_channelClipboard;
+    static ChannelSnapshot& sharedChannelClipboard();
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_samples;
     std::unordered_map<std::string, std::shared_ptr<const engine::SampleBuffer>> m_sourceSamples;
     /// One baked clip sample, and the two things that decide whether it is
@@ -3209,6 +3294,14 @@ private:
     std::uint32_t m_bufferSize = 512;
     bool m_liveDeviceAllowed = false, m_prepared = false, m_isRenderClone = false;
     bool m_deviceOpen = false;
+    bool m_documentOnly = false;
+    AudioSessionSpec::PluginLoadProgress m_pluginLoadProgress;
+    std::string m_documentIdentity;
+    std::vector<std::shared_ptr<ProjectTransferResources>> m_transferResources;
+    double m_documentPosition = 0.0;
+    /// State directory used to resolve unloaded plugins without running them.
+    std::string m_documentPackageDir;
+    std::optional<audio::AudioDeviceConfig> m_documentAudioConfig;
     AudioRuntimeOwner m_runtime;
 };
 

@@ -40,7 +40,7 @@ ClipTrackPicker::ClipTrackPicker(const daw::ProjectModel& project,
         QIcon icon = ui::trackicons::icon(QString::fromStdString(track->iconId), ink);
         if (icon.isNull()) {
             const auto glyph = track->kind == daw::TrackKind::Audio ? icons::Glyph::Waveform
-                : track->kind == daw::TrackKind::Pattern ? icons::Glyph::Grid
+                : track->kind == daw::TrackKind::Pattern ? icons::Glyph::Pattern
                 : track->kind == daw::TrackKind::Automation ? icons::Glyph::Automation
                 : icons::Glyph::MidiKeys;
             icon = icons::icon(glyph, ink, 16);

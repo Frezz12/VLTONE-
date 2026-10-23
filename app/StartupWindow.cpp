@@ -42,8 +42,7 @@ StartupWindow::StartupWindow(account::Service* service, QWidget* parent)
     : QDialog(parent), m_service(service) {
     setObjectName(QStringLiteral("StartupWindow"));
     setWindowTitle(QStringLiteral("VLTONE"));
-    setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
-    setAttribute(Qt::WA_TranslucentBackground);
+    setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(true);
     setFixedSize(kStartupWidth, kCompactHeight);
 
@@ -368,20 +367,7 @@ void StartupWindow::paintEvent(QPaintEvent*) {
         ? t.transportBackground : t.headerBackground;
     surface.setColorAt(0, mixColors(background, t.surfaceElevated, 0.25));
     surface.setColorAt(1, background);
-    painter.setBrush(surface);
-    painter.setPen(mixColors(t.separator(), t.textPrimary, 0.12));
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
-                            Theme::cornerRadius, Theme::cornerRadius);
-}
-
-void StartupWindow::mousePressEvent(QMouseEvent* event) {
-    // The brand area replaces the native title bar; let the OS own dragging.
-    if (event->button() == Qt::LeftButton && event->position().y() < 100 &&
-        windowHandle() && windowHandle()->startSystemMove()) {
-        event->accept();
-        return;
-    }
-    QDialog::mousePressEvent(event);
+    painter.fillRect(rect(), surface);
 }
 
 void StartupWindow::retranslateUi() {
@@ -596,7 +582,7 @@ bool StartupWindow::checkForTest() {
     m_loginPanel->layout()->activate();
     const bool loginFits = size() == QSize(kStartupWidth, kLoginHeight) &&
         layout()->minimumSize().height() <= height() && m_progress->isHidden() &&
-        m_email->width() >= 180 && windowFlags().testFlag(Qt::FramelessWindowHint) &&
+        m_email->width() >= 180 && !windowFlags().testFlag(Qt::FramelessWindowHint) &&
         frameGeometry().center() == centre;
     submit(); // Empty credentials must report the local error without a request.
     layout()->activate();

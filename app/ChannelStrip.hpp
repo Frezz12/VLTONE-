@@ -56,6 +56,7 @@ public:
                                  const std::vector<QAbstractButton*>& actions, QWidget* parent);
 
     const QString& trackId() const { return m_trackId; }
+    daw::EngineController* projectController() const { return m_controller; }
     bool isMaster() const { return m_master; }
     Presentation presentation() const { return m_presentation; }
     void setChannelNumber(int number);

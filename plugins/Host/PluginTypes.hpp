@@ -4,6 +4,8 @@
 #include "Common/Types.hpp"
 
 #include <cstdint>
+#include <memory>
+#include <utility>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -74,7 +76,15 @@ struct PluginDescriptor {
     /// External formats normally leave this at zero; built-ins publish it.
     int stateSchemaVersion = 0;
     /// Canonical parameter/bus schema measured in the disposable scanner.
-    std::string parameterSchema;
+    // Immutable scan payload shared by catalogue snapshots, pickers and live instances.
+    std::shared_ptr<const std::string> parameterSchema;
+    const std::string& parameterSchemaText() const noexcept {
+        static const std::string empty;
+        return parameterSchema ? *parameterSchema : empty;
+    }
+    void setParameterSchema(std::string text) {
+        parameterSchema = text.empty() ? nullptr : std::make_shared<const std::string>(std::move(text));
+    }
     /// Application-supplied SHA-256 of parameterSchema; never a binary hash.
     std::string parameterFingerprint;
     bool producesMidi = false;

@@ -673,6 +673,14 @@ std::vector<ToolSpec> buildSpecs() {
         schema(obj({{"commandId", prop("string", "exact stable command id")}}),
                {"commandId"}));
 
+    add("search_scripts", "Search installed extension commands and their required permissions.",
+        schema(obj({{"query", prop("string", "search text")}}), {}));
+    add("run_script", "Run an installed extension command by its stable id. Host permissions and current mode remain enforced.",
+        schema(obj({{"id", prop("string", "script command id")}, {"arguments", prop("object", "fixed invocation arguments")}}), {"id"}));
+    add("get_script_run", "Get an extension run's result, status and log.",
+        schema(obj({{"id", prop("string", "run id")}}), {"id"}));
+    add("stop_script", "Stop an extension run and cancel its pending jobs.",
+        schema(obj({{"id", prop("string", "run id")}}), {"id"}));
     // ── Reading ──
     add("get_project",
         "The whole project: tempo, time signature, and every track with its "
@@ -1448,10 +1456,10 @@ std::vector<ToolSpec> buildSpecs() {
             spec.effect = ToolSpec::Effect::DestructiveEdit;
         } else if (name == "undo" || name == "redo") {
             spec.effect = ToolSpec::Effect::History;
-        } else if (name == "transport" || name == "set_loop" || name == "focus_in_app") {
+        } else if (name == "transport" || name == "set_loop" || name == "focus_in_app" || name == "stop_script") {
             spec.effect = ToolSpec::Effect::LiveControl;
         } else if (name == "save_project" || name == "export_audio" ||
-                   name == "run_command") {
+                   name == "run_command" || name == "run_script") {
             spec.effect = ToolSpec::Effect::ExternalSideEffect;
         } else {
             spec.effect = ToolSpec::Effect::ReversibleEdit;
@@ -1559,6 +1567,12 @@ ToolResult callTool(EngineController& c, const std::string& name,
 
     std::string err;
 
+    if (name == "search_scripts" || name == "run_script" ||
+        name == "get_script_run" || name == "stop_script") {
+        if (!ctx.extensionTool) return fail("Extension runtime is unavailable");
+        try { return done(ctx.extensionTool(name,args,ctx.mode)); }
+        catch (const std::exception& error) { return fail(error.what()); }
+    }
     if (name == "get_ui_context") return done(ctx.uiContext ? ctx.uiContext() : json::object());
     if (name == "focus_in_app") {
         std::string action, trackId, clipId, insertId;

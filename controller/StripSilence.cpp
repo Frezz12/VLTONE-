@@ -46,7 +46,15 @@ SilenceEnvelope buildSilenceEnvelope(const engine::ClipPlayerNode::ClipList& pla
         planes[ch] = scratch.data() + std::size_t(ch) * block;
     engine::ClipPlayerNode player("Strip Silence analysis");
     player.prepare({rate, block, channels, true});
-    player.setClips(std::make_shared<const engine::ClipPlayerNode::ClipList>(placements));
+    auto analyzed = std::make_shared<engine::ClipPlayerNode::ClipList>(placements);
+    if (renderPath.empty()) {
+        // Measure the material, including explicit fades and comp crossfades.
+        // Playback's automatic edge smoothing synthesizes a short tail past a
+        // cut; treating that tail as source audio moves silence boundaries.
+        // Actual offline renders retain their normal edge smoothing.
+        for (auto& placement : *analyzed) placement.edgeTransitionsRendered = true;
+    }
+    player.setClips(std::move(analyzed));
     audio::platform::AudioFileWriter writer;
     if (!renderPath.empty()) {
         const auto result = writer.open(renderPath, rate, channels, std::uint64_t(total));
@@ -133,6 +141,9 @@ ClipModel sliceSilenceRegion(const ClipModel& source, SilenceRegion region,
     double duration, double fadeMs, double tempo) {
     ClipModel clip = source;
     clip.id = newUuid();
+    // Each fragment has its own comp/take offsets and may use rendered media.
+    // Rebinding it to the original content would also alter linked copies.
+    clip.detachContent();
     clip.startSeconds += region.begin;
     clip.durationSeconds = region.end - region.begin;
     const double stretch = std::max(.001, source.sampleEdit.stretchTime);

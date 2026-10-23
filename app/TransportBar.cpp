@@ -412,7 +412,7 @@ const ToolDef kTools[] = {
     {icons::Glyph::Knife, QT_TRANSLATE_NOOP("TransportBar", "Scissors"), 0.9},
     {icons::Glyph::Eraser, QT_TRANSLATE_NOOP("TransportBar", "Eraser")},
     {icons::Glyph::Crosshair, QT_TRANSLATE_NOOP("TransportBar", "Region")},
-    {icons::Glyph::Close, QT_TRANSLATE_NOOP("TransportBar", "Mute"), 1.45},
+    {icons::Glyph::Mute, QT_TRANSLATE_NOOP("TransportBar", "Mute")},
     {icons::Glyph::Brush, QT_TRANSLATE_NOOP("TransportBar", "Draw"), 1.4},
     {icons::Glyph::ResizeHorizontal,
      QT_TRANSLATE_NOOP("TransportBar", "Stretch"), 1.2},
@@ -816,7 +816,7 @@ QWidget* TransportBar::buildLeftDock() {
     panel->addAction(m_mixerPanelButton);
 
     m_trackOverviewPanelButton = panelButton(
-        icons::Glyph::Layers, tr("Show or hide track overview (Alt+T)"), "HeaderTrackOverviewButton");
+        icons::Glyph::TrackOverview, tr("Show or hide track overview (Alt+T)"), "HeaderTrackOverviewButton");
     m_trackOverviewPanelButton->setCheckable(true);
     m_trackOverviewPanelButton->setChecked(false);
     connect(m_trackOverviewPanelButton, &QAbstractButton::toggled, this, &TransportBar::trackOverviewToggled);
@@ -909,7 +909,7 @@ QWidget* TransportBar::buildRightGroup() {
         emit snapChanged(on);
     });
 
-    m_typingKeysButton = new ui::IconButton(icons::Glyph::MidiKeys, QString(),
+    m_typingKeysButton = new ui::IconButton(icons::Glyph::TypingKeyboard, QString(),
                                             box);
     m_typingKeysButton->setObjectName(QStringLiteral("MidiKeyboardButton"));
     m_typingKeysButton->setFocusPolicy(Qt::StrongFocus);
@@ -1375,7 +1375,7 @@ void TransportBar::updateRulerControls() {
     if (!m_timeFormatButton) return;
     const bool both = m_rulerFormat == ui::RulerFormat::BarsAndTime;
     m_timeFormatButton->setIcon(icons::icon(
-        both ? icons::Glyph::Layers
+        both ? icons::Glyph::TimeFormat
              : showsBars() ? icons::Glyph::GridDivision : icons::Glyph::Clock,
         th().textPrimary, 18));
     const QString description = tr("Timeline ruler — %1").arg(
@@ -1513,7 +1513,6 @@ QMenu#HeaderToolMenu::item:selected { background: %4; }
         button->update();
     }
     if (m_snapButton) m_snapButton->setIcon(icons::svgIcon(QStringLiteral("magnet-straight.svg"), t.textPrimary, 18));
-    if (m_typingKeysButton) m_typingKeysButton->setIcon(icons::svgIcon(QStringLiteral("piano-keys.svg"), t.textPrimary, 18));
     if (m_metroButton) m_metroButton->setIcon(icons::svgIcon(QStringLiteral("metronome.svg"), t.textPrimary, 18));
     if (m_toolButton) m_toolButton->setIcon(toolIcon(m_toolIndex, t.textPrimary, 18));
     if (m_altToolButton) m_altToolButton->setIcon(toolIcon(m_altToolIndex, t.textPrimary, 18));

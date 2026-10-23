@@ -424,7 +424,10 @@ bool EqualizerInstance::activate(const PluginProcessInfo& info) {
         m_linearNormalization[i % m_linearHop] += m_linearWindow[i]*m_linearWindow[i]*
             (2.0*double(m_linearHop)/double(m_linearSize));
     for (auto& sum : m_linearNormalization) sum = sum > 0.0 ? 1.0/sum : 1.0;
-    m_analyzerWork.assign(kAnalyzerSize, {});
+    vlt::spectre::AnalyzerSettings analyzerSettings;
+    analyzerSettings.pointCount = kSpectrumBinCount;
+    for (auto& analyzer : m_analyzers)
+        if (!analyzer.prepare(m_sampleRate, analyzerSettings)) return false;
     m_active = true;
     resetDsp();
     return true;
@@ -439,7 +442,6 @@ void EqualizerInstance::deactivate() {
     for (auto& channel : m_linearSpectrum) channel.clear();
     m_linearWindow.clear();
     m_linearNormalization.clear();
-    m_analyzerWork.clear();
 }
 
 std::span<const ParameterInfo> EqualizerInstance::parameters() const noexcept {
@@ -1177,6 +1179,12 @@ PluginProcessDisposition EqualizerInstance::process(
     const PluginProcessContext& context) noexcept {
     if (!context.outputs || context.outputChannels == 0)
         return PluginProcessDisposition::Continue;
+    const auto flags = m_analyzerFlags.load(std::memory_order_acquire);
+    const auto captureFlags = (flags & 1u) != 0 ? flags & 14u : 0u;
+    for (std::size_t trace = 0; trace < m_analyzers.size(); ++trace)
+        if (((captureFlags ^ m_analyzerCaptureFlags) & (2u << trace)) != 0)
+            m_analyzers[trace].reset();
+    m_analyzerCaptureFlags = captureFlags;
     std::uint32_t cursor = 0;
     for (const PluginEvent& event : context.inputEvents) {
         const std::uint32_t at = std::min(event.frameOffset, context.frames);
@@ -1210,12 +1218,8 @@ void EqualizerInstance::resetDsp() noexcept {
     m_linearOutputPosition = 0;
     m_linearHopCountdown = m_linearHop;
     m_linearSamples = 0;
-    m_analyzerRing = {};
-    m_analyzerPosition = 0;
-    m_analyzerCountdown = kAnalyzerSize / 2;
-    for (auto& value : m_preSpectrum) value.store(kSilenceDb, std::memory_order_relaxed);
-    for (auto& value : m_postSpectrum) value.store(kSilenceDb, std::memory_order_relaxed);
-    for (auto& value : m_sideSpectrum) value.store(kSilenceDb, std::memory_order_relaxed);
+    for (auto& analyzer : m_analyzers) analyzer.reset();
+    m_analyzerCaptureFlags = 0;
     for (auto& value : m_dynamicTelemetry) value.store(0.0f, std::memory_order_relaxed);
     updateFilterCoefficients(
         enumValue(m_smoothed[globalParameter(GlobalParam::ProcessingMode)],
@@ -1240,7 +1244,8 @@ void EqualizerInstance::setAnalyzerConfig(const AnalyzerConfig& config) noexcept
     if (config.frozen) flags |= 16u;
     m_analyzerSpeed.store(std::clamp(config.speed, 0, 2),
                           std::memory_order_relaxed);
-    m_analyzerTilt.store(std::clamp(config.tiltDbPerOctave, 0.0, 6.0),
+    m_analyzerTilt.store(std::isfinite(config.tiltDbPerOctave)
+                            ? std::clamp(config.tiltDbPerOctave, 0.0, 6.0) : 3.0,
                          std::memory_order_relaxed);
     m_analyzerFlags.store(flags, std::memory_order_release);
 }
@@ -1266,67 +1271,43 @@ void EqualizerInstance::setAuditionBand(int band) noexcept {
 void EqualizerInstance::collectAnalyzer(double preLeft, double preRight,
                                         double postLeft, double postRight,
                                         double sideLeft, double sideRight) noexcept {
-    const std::uint32_t flags = m_analyzerFlags.load(std::memory_order_acquire);
-    if ((flags & 1u) == 0 || (flags & 16u) != 0 || m_analyzerWork.empty()) return;
-    const double values[6]{preLeft, preRight, postLeft, postRight,
-                           sideLeft, sideRight};
-    for (int channel = 0; channel < 6; ++channel)
-        m_analyzerRing[channel][m_analyzerPosition] = values[channel];
-    m_analyzerPosition = (m_analyzerPosition + 1) % kAnalyzerSize;
-    if (m_analyzerCountdown > 0) --m_analyzerCountdown;
-    if (m_analyzerCountdown == 0) {
-        m_analyzerCountdown = kAnalyzerSize / 2;
-        publishAnalyzerFrame();
-    }
-}
-
-void EqualizerInstance::publishAnalyzerFrame() noexcept {
-    const std::uint32_t flags = m_analyzerFlags.load(std::memory_order_relaxed);
-    const int speed = m_analyzerSpeed.load(std::memory_order_relaxed);
-    const double smoothing = speed == 0 ? 0.75 : speed == 1 ? 0.48 : 0.24;
-    const double tilt = m_analyzerTilt.load(std::memory_order_relaxed);
-    auto publish = [&](int first, std::array<std::atomic<float>, kSpectrumBinCount>& target,
-                       bool enabled) noexcept {
-        if (!enabled) return;
-        for (std::size_t i = 0; i < kAnalyzerSize; ++i) {
-            const std::size_t source = (m_analyzerPosition + i) % kAnalyzerSize;
-            const double mono = 0.5 * (m_analyzerRing[first][source] +
-                                       m_analyzerRing[first + 1][source]);
-            const double window = 0.5 - 0.5 * std::cos(
-                2.0 * kPi * double(i) / double(kAnalyzerSize));
-            m_analyzerWork[i] = mono * window;
-        }
-        fft(m_analyzerWork, false);
-        for (std::size_t i = 0; i < kSpectrumBinCount; ++i) {
-            const double frequency = 20.0 * std::pow(1000.0,
-                double(i) / double(kSpectrumBinCount - 1));
-            const std::size_t bin = std::clamp<std::size_t>(
-                std::size_t(std::lround(frequency * double(kAnalyzerSize) /
-                                        m_sampleRate)), 0, kAnalyzerSize / 2);
-            const double magnitude = std::abs(m_analyzerWork[bin]) *
-                                     (4.0 / double(kAnalyzerSize));
-            const double tilted = gainToDb(magnitude) +
-                                  tilt * std::log2(frequency / 1000.0);
-            const float wanted = float(std::clamp(tilted, -120.0, 18.0));
-            const float before = target[i].load(std::memory_order_relaxed);
-            const float amount = wanted > before ? float(smoothing)
-                                                  : float(smoothing * 0.35);
-            target[i].store(before + (wanted - before) * amount,
-                            std::memory_order_relaxed);
-        }
-    };
-    publish(0, m_preSpectrum, (flags & 2u) != 0);
-    publish(2, m_postSpectrum, (flags & 4u) != 0);
-    publish(4, m_sideSpectrum, (flags & 8u) != 0);
+    // Freeze holds consumption, not capture: resuming immediately sees live audio.
+    if ((m_analyzerCaptureFlags & 2u) != 0)
+        m_analyzers[0].pushSample(float(preLeft), float(preRight));
+    if ((m_analyzerCaptureFlags & 4u) != 0)
+        m_analyzers[1].pushSample(float(postLeft), float(postRight));
+    if ((m_analyzerCaptureFlags & 8u) != 0)
+        m_analyzers[2].pushSample(float(sideLeft), float(sideRight));
 }
 
 Telemetry EqualizerInstance::telemetry(bool consumeMeters) noexcept {
     Telemetry telemetry;
-    for (std::size_t i = 0; i < kSpectrumBinCount; ++i) {
-        telemetry.pre[i] = m_preSpectrum[i].load(std::memory_order_relaxed);
-        telemetry.post[i] = m_postSpectrum[i].load(std::memory_order_relaxed);
-        telemetry.sidechain[i] = m_sideSpectrum[i].load(std::memory_order_relaxed);
-    }
+    const auto config = analyzerConfig();
+    vlt::spectre::Ballistics ballistics;
+    constexpr double attackMs[]{5.0, 12.0, 30.0};
+    constexpr double releaseMs[]{120.0, 240.0, 480.0};
+    ballistics.attackMs = attackMs[config.speed];
+    ballistics.releaseMs = releaseMs[config.speed];
+    const auto read = [&](std::size_t trace, auto& target, bool visible) {
+        auto& analyzer = m_analyzers[trace];
+        analyzer.setBallistics(ballistics);
+        analyzer.setFrozen(config.frozen);
+        if (config.enabled) analyzer.read(); // FFT stays on the control/UI thread.
+        const auto& frame = analyzer.frame();
+        target.fill(float(kSilenceDb));
+        if (!config.enabled || !visible || !frame.ready) return;
+        for (std::size_t i = 0; i < target.size(); ++i) {
+            // Keep silence and points above Nyquist at the floor, even with tilt.
+            if (frame.levelsDb[i] <= kSilenceDb ||
+                frame.frequenciesHz[i] > frame.sampleRate * 0.5) continue;
+            const double tilted = frame.levelsDb[i] + config.tiltDbPerOctave *
+                std::log2(frame.frequenciesHz[i] / 1000.0);
+            target[i] = float(std::clamp(tilted, kSilenceDb, 18.0));
+        }
+    };
+    read(0, telemetry.pre, config.pre);
+    read(1, telemetry.post, config.post);
+    read(2, telemetry.sidechain, config.sidechain);
     for (std::size_t i = 0; i < kBandCount; ++i)
         telemetry.dynamicGainDb[i] =
             m_dynamicTelemetry[i].load(std::memory_order_relaxed);

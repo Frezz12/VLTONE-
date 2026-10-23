@@ -108,7 +108,7 @@ test -x "$STAGE/$APP_BUNDLE/Contents/MacOS/$APP_NAME" ||
     { echo "no app was staged"; exit 1; }
 python3 "$ROOT/packaging/prune-qml.py" "$STAGE/$APP_BUNDLE" \
     --source "$ROOT/app/graphics/qml"
-for helper in daw_scan daw_guard daw_reporter daw_worker; do
+for helper in daw_scan daw_guard daw_reporter daw_worker vlt_mcp; do
     test -x "$STAGE/$APP_BUNDLE/Contents/MacOS/$helper" ||
         { echo "$helper is missing from the bundle"; exit 1; }
     # macdeployqt can rewrite a helper's libraries to @rpath without adding
@@ -242,7 +242,8 @@ if [[ -n "${DAW_SIGN_ID:-}" ]]; then
         "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_scan" \
         "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_guard" \
         "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_reporter" \
-        "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_worker"
+        "$STAGE/$APP_BUNDLE/Contents/MacOS/daw_worker" \
+        "$STAGE/$APP_BUNDLE/Contents/MacOS/vlt_mcp"
     codesign --force --timestamp --options runtime --deep \
         --sign "$DAW_SIGN_ID" "$STAGE/$APP_BUNDLE"
 else

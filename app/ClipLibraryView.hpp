@@ -9,6 +9,7 @@ class QMenu;
 class ClipLibraryView : public QListWidget {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller) { m_controller = controller; m_signature.clear(); m_loading.clear(); m_requested.clear(); refresh(); }
     explicit ClipLibraryView(daw::EngineController* controller, QWidget* parent = nullptr);
     void refresh();
     void setFilter(const QString& query);

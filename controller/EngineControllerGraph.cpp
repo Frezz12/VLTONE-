@@ -1,5 +1,6 @@
 #include "EngineController.hpp"
 #include "model/MiniModules.hpp"
+#include "model/RackGroups.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,10 @@ void excludeSidechainFeedback(const ProjectModel& project, const std::string& ch
 } // namespace
 
 AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loadPolicy) {
+    // Ordinary slot insertion and replacement must publish the same branch
+    // membership as rack-specific edits, before the graph sees the new chain.
+    normalizeRackGroups(m_project.masterRackGroups, m_project.masterInserts);
+    for (auto& track : m_project.tracks) normalizeRackGroups(track.rackGroups, track.inserts);
     // Preparation belongs to the document/control thread. Runtime assembly
     // receives only routing values and resources, never callbacks into here.
     if (m_clipSampleBake) cancelClipSampleBake();
@@ -59,6 +64,7 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
     ++m_graphRebuildCount;
 
     AudioSessionSpec session;
+    session.pluginLoadProgress = m_pluginLoadProgress;
     const auto plugins = [&](const std::string& channelId, AudioPluginChainSpec::Kind kind,
                              const std::vector<InsertModel>& slots, const std::string& clipId = {}) {
         auto chain = preparePluginChain(channelId, kind, slots, clipId, loadPolicy);
@@ -67,6 +73,7 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
     auto& spec = session.graph;
     spec.channels.reserve(m_project.tracks.size());
     spec.masterModulation = m_project.masterModulation;
+    spec.masterRackGroups = m_project.masterRackGroups;
     spec.masterVolume = m_project.masterVolume;
     spec.masterPan = m_project.masterPan;
     spec.masterMiniModules = miniModuleRoutes(m_project.masterMiniModules);
@@ -83,6 +90,7 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
         auto& description = spec.channels.emplace_back();
         description.id = track.id;
         description.modulation = track.modulation;
+        description.rackGroups = track.rackGroups;
         description.renderControlOnly = track.renderControlOnly;
         description.name = track.name;
         description.outputBusId = track.outputBusId;
@@ -124,13 +132,16 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
         plugins(track.id, AudioPluginChainSpec::Kind::MiniModules, track.miniModules);
         excludeSidechainFeedback(m_project, track.id, description.sidechains);
 
-        if (track.freeze.active()) {
+        if (!m_documentOnly && track.freeze.active()) {
             description.frozenAudio = loadSamples(track.freeze.filePath);
             if (description.frozenAudio) description.frozenFrames = toSamples(track.freeze.durationSeconds);
             else track.freeze = {};
         }
     }
 
+    // A parked document needs descriptors for state/import validation, but no
+    // decoded playback buffers, DSP graph or live plugin instances.
+    if (m_documentOnly) return session;
     session.channels.reserve(spec.channels.size() + 1);
     for (const auto& track : m_project.tracks) {
         if (!carriesAudio(track)) continue;
@@ -152,6 +163,11 @@ AudioSessionSpec EngineController::prepareAudioSession(AudioPluginLoadPolicy loa
 
 audio::Result EngineController::publishAudioSession(AudioSessionSpec session,
     bool reconfigurePlugins, std::span<const AudioPluginStateEdit> restores) {
+    if (m_documentOnly) {
+        acceptPluginStateEdits(restores, {});
+        updateTimelineDuration();
+        return audio::Result::ok();
+    }
     std::vector<AudioPluginAddress> retiring;
     if (m_prepared && m_pluginRetiring) {
         retiring = m_runtime->retiringPlugins(session.pluginChains);

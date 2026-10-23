@@ -41,6 +41,7 @@ public:
     ~PluginNode() override;
 
     std::string_view name() const noexcept override { return m_name; }
+    bool alwaysMeasureProcessing() const noexcept override { return true; }
     bool isSource() const noexcept override { return m_isSource; }
     engine::MidiNodeRole midiRole() const noexcept override {
         // VST2 has no reliable output-port declaration; preserve its ability

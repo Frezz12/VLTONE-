@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
              "--uid=com.daw.test.gain", "--shared-state"}, std::chrono::milliseconds(20000));
         std::vector<plugins::PluginDescriptor> contracts;
         check(validated.succeeded() && plugins::scan::decodeResult(validated.output, contracts) &&
-                  contracts.size() == 1 && !contracts.front().parameterSchema.empty(),
+                  contracts.size() == 1 && !contracts.front().parameterSchemaText().empty(),
               "isolated shared-state probe preserves parameters and reports its canonical contract");
         if (contracts.size() == 1) {
             const auto statePath = sandbox / "gain.state";
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
             manager.setScannerPath(scanner);
             check(manager.probeSharedState(contracts.front(), statePath.string()).empty(),
                   "current asset bytes restore through a separate plugin process");
-            auto drifted = contracts.front(); drifted.parameterSchema += " ";
+            auto drifted = contracts.front(); drifted.setParameterSchema(drifted.parameterSchemaText() + " ");
             check(!manager.probeSharedState(drifted, statePath.string()).empty(),
                   "runtime contract drift rejects editor readiness even with the same plugin version");
             { std::ofstream output(statePath, std::ios::binary); output << "broken"; }
@@ -334,8 +334,8 @@ int main(int argc, char** argv) {
         descriptor.name = "Good";
         descriptor.isInstrument = true;
         descriptor.stateSchemaVersion = 3;
-        descriptor.parameterSchema = "{\"escaped\":\"\\n\\\\\",\"payload\":\"" +
-                                     std::string(1024 * 1024, 'x') + "\"}";
+        descriptor.setParameterSchema("{\"escaped\":\"\\n\\\\\",\"payload\":\"" +
+                                     std::string(1024 * 1024, 'x') + "\"}");
         good.plugins.push_back(descriptor);
         cache.put(good);
 
@@ -367,6 +367,14 @@ int main(int argc, char** argv) {
               plugins::scan::descriptorToJson(readGood->plugins.front()) == plugins::scan::descriptorToJson(descriptor) &&
               plugins::scan::descriptorToJson(readGood->components.front().descriptor) == plugins::scan::descriptorToJson(descriptor),
               "cache catalog and scan components preserve a large escaped parameter schema");
+        check(readGood && readGood->plugins.front().parameterSchema == readGood->components.front().descriptor.parameterSchema,
+              "catalog and scan results share one immutable schema allocation");
+        auto catalogue = reloaded.allPlugins();
+        check(readGood && catalogue.front().parameterSchema == readGood->plugins.front().parameterSchema,
+              "catalogue snapshots do not copy schema payloads");
+        catalogue.front().setParameterSchema("changed");
+        check(readGood && readGood->plugins.front().parameterSchemaText() == descriptor.parameterSchemaText(),
+              "replacing a snapshot schema preserves the cached contract");
         check(readGood && readGood->scannerVerified && readBad && !readBad->scannerVerified,
               "the cache preserves whether the scanner protocol was verified");
         check(readGood && PluginCache::isCurrent(*readGood, 1234, 5678),

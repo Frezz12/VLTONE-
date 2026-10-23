@@ -1,0 +1,6 @@
+{
+  "format": "vltscript", "sdk": 1, "id": "vlt.example.device-console",
+  "name": "Device parameter console", "version": "1.0.0",
+  "permissions": ["project.read", "project.write"],
+  "commands": [{"id": "open", "label": "Open parameter console", "entry": "main.lua", "contexts": ["global", "track", "mixer", "device", "parameter"]}]
+}

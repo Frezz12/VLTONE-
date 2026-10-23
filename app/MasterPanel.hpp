@@ -18,6 +18,7 @@ class QVBoxLayout;
 class MasterPanel final : public QWidget {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
     explicit MasterPanel(daw::EngineController*, QWidget* parent = nullptr);
     void sync();
     void refreshMeters();

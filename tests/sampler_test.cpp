@@ -1157,6 +1157,7 @@ int main() {
                       "channel gain attenuates, preserves or boosts the original level");
             }
             controller.setTrackVolume(track, 1.0f);
+            controller.moveTrackToFolder(track, {});
             controller.removeTrack(group);
 
             // The same knob, driven the way the panel drives it — through the

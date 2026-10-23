@@ -56,15 +56,7 @@ std::vector<PluginEvent> PluginNode::pendingParameterEvents() {
 }
 
 std::vector<PluginEvent> PluginNode::pendingHostEvents() {
-    std::vector<PluginEvent> events;
-    if (m_inbound.empty()) return events;
-    // Allocate before touching the queue: even an allocation failure must
-    // leave the live session's parameters and MIDI exactly as they were.
-    events.reserve(kEventQueueCapacity);
-    PluginEvent event;
-    while (m_inbound.pop(event)) events.push_back(event);
-    for (const auto& pending : events) (void)m_inbound.push(pending);
-    return events;
+    return m_inbound.snapshotFromProducer();
 }
 
 void PluginNode::prepare(const engine::PrepareInfo& info) {

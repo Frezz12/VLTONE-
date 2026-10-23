@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,8 @@ namespace daw { class EngineController; struct MidiInputStamp; }
 class MidiInputManager final : public QObject {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
+    daw::EngineController* projectController() const { return m_controller; } // UI thread only
     explicit MidiInputManager(daw::EngineController* controller,
                               QObject* parent = nullptr);
     ~MidiInputManager() override;
@@ -42,6 +45,7 @@ public:
                               quint64 source = 0xFFFFFFFFu);
 
     bool checkQueueOverflowForTest();
+    bool checkProjectHandoffForTest(daw::EngineController* previous);
 
 signals:
     /// One physical key changed state after its live event was accepted.
@@ -80,6 +84,10 @@ private:
     std::string m_lastTarget;
     std::atomic<unsigned> m_pendingMessages{0};
     std::atomic<bool> m_inputOverflow{false};
+    // The backend only reads the binding while taking a timestamp. Detaching
+    // waits for that read before the UI can unload or destroy the controller.
+    std::mutex m_bindingMutex;
+    quint64 m_bindingGeneration = 1;
     quint64 m_generation = 1;
 #if defined(Q_OS_MACOS)
     /// The first CoreMIDI call a process makes is a synchronous XPC round trip

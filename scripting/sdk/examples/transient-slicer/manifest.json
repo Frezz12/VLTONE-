@@ -1,0 +1,23 @@
+{
+  "commands": [
+    {
+      "contexts": [
+        "clip",
+        "global"
+      ],
+      "entry": "main.lua",
+      "id": "run",
+      "label": "Slice at transients"
+    }
+  ],
+  "format": "vltscript",
+  "id": "example.transient-slicer",
+  "name": "Transient slicer",
+  "permissions": [
+    "project.read",
+    "project.write",
+    "files.read"
+  ],
+  "sdk": 1,
+  "version": "1.1.0"
+}

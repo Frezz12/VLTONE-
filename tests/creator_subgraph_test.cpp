@@ -17,6 +17,11 @@ int main(int argc,char **argv) {
   QCoreApplication app(argc,argv); int failures=0;
   const auto check=[&](bool ok,const char *name){std::printf("%s %s\n",ok?"PASS":"FAIL",name);failures+=!ok;};
   auto p=ui::CreatorProject::create("Test","Group");
+  for(int version:{1,2,3,4}){
+    auto legacy=p.toJson();legacy["version"]=version;if(version<4)legacy.erase("kind");
+    ui::CreatorProject reopened;QString legacyError;
+    check(ui::CreatorProject::fromJson(legacy,reopened,legacyError)&&reopened.definition.id==p.definition.id,"Creator versions 1–4 retain mini-module compatibility");
+  }
   p.definition.nodes.push_back(makeNode("audio_scale","scale")); p.definition.nodes.push_back(makeNode("hard_clip","clip"));
   p.definition.connections={{"input","scale","out","in"},{"scale","clip","out","in"},{"clip","output","out","in"}};
   p.positions[{}]["scale"]={300,100};p.positions[{}]["clip"]={600,100};

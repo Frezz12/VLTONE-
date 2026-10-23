@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <type_traits>
+#include <vector>
 
 namespace daw::engine {
 
@@ -51,6 +52,19 @@ public:
     bool empty() const noexcept {
         return m_readIndex.load(std::memory_order_acquire) ==
                m_writeIndex.load(std::memory_order_acquire);
+    }
+
+    /// Producer thread only, without reentrant push/clear calls. The consumer
+    /// only reads slots, so copying them here neither consumes events nor
+    /// requires stopping audio. Allocates on this control-thread path only.
+    std::vector<T> snapshotFromProducer() const {
+        const auto read = m_readIndex.load(std::memory_order_acquire);
+        const auto write = m_writeIndex.load(std::memory_order_relaxed);
+        std::vector<T> result;
+        result.reserve((write - read) & (Capacity - 1));
+        for (auto index = read; index != write; index = (index + 1) & (Capacity - 1))
+            result.push_back(m_buffer[index]);
+        return result;
     }
 
     /// Consumer thread: throw away everything queued.

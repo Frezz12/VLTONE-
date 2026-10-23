@@ -123,6 +123,8 @@ public:
     JobSystem& operator=(const JobSystem&) = delete;
 
     unsigned workerCount() const noexcept { return m_activeWorkerCount.load(std::memory_order_relaxed); }
+    // Control thread: unprepared documents have no background DSP threads.
+    unsigned poolThreadCount() const noexcept { return unsigned(m_threads.size()); }
     // Control thread with rendering stopped. Waits for helpers to re-register
     // on their own threads before the audio device is allowed to start.
     void configureAudioWorkers(const rt::AudioWorkerConfig& config);
@@ -134,10 +136,11 @@ public:
         m_profiles[worker].push(event);
     }
     bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept {
-        return worker < m_workerCount && m_profiles[worker].pop(event);
+        return m_profiles && worker < m_workerCount && m_profiles[worker].pop(event);
     }
     std::uint64_t droppedProfileEvents() const noexcept {
         std::uint64_t dropped = 0;
+        if (!m_profiles) return dropped;
         for (unsigned i = 0; i < m_workerCount; ++i) dropped += m_profiles[i].dropped();
         return dropped;
     }
@@ -189,6 +192,9 @@ private:
     };
 
     void workerLoop(unsigned index);
+    void startWorkers();
+    void stopWorkers() noexcept;
+    void waitForConfiguration();
     /// Take an item from our own deque, else steal from someone else.
     bool acquireItem(unsigned index, std::uint32_t& item) noexcept;
     void completeItems(std::uint64_t count) noexcept;
@@ -208,6 +214,7 @@ private:
     std::size_t m_itemCapacity = 0;
     std::vector<Worker> m_workers;
     std::vector<std::thread> m_threads;
+    bool m_started = false;
     std::unique_ptr<rt::DiagnosticRing<rt::ProfileEvent, 1024>[]> m_profiles;
     std::atomic<bool> m_profiling{false};
     std::mutex m_configurationMutex;

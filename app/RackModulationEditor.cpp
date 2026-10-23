@@ -120,7 +120,11 @@ void RackModulationEditor::drawSteps(QPointF p) {
     m_active = m_lastStep = step; m_lastValue = value; apply();
 }
 void RackModulationEditor::mousePressEvent(QMouseEvent* e) {
-    if (e->button() != Qt::LeftButton || (m_source.kind != Kind::Shaper && m_source.kind != Kind::Steps)) { QWidget::mousePressEvent(e); return; }
+    if (e->button() != Qt::LeftButton) { QWidget::mousePressEvent(e); return; }
+    setFocus(Qt::MouseFocusReason);
+    // Read-only wave previews are still selectable sources. Consuming the click
+    // prevents the rack background from taking focus and starting a marquee.
+    if (m_source.kind != Kind::Shaper && m_source.kind != Kind::Steps) { e->accept(); return; }
     finishGesture();
     setFocus(); m_dragging = true; m_down = e->position(); m_offset = {}; m_lastStep = -1;
     if (begin) begin();

@@ -50,7 +50,7 @@ public:
     explicit RackSamplerWaveform(RackParameterBinding* binding, QWidget* parent)
         : QWidget(parent), binding(binding) {
         setObjectName("RackSamplerWaveform");
-        setMinimumSize(180, 96);
+        setMinimumSize(180, 60);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
@@ -93,7 +93,7 @@ public:
             ? double(sample->audio->frames()) / sample->audio->sampleRate() : duration();
         return std::max(audioLength, envelopeOn() ? noteOff() + value("amp.rel") : 0.);
     }
-    QRectF area() const { return QRectF(rect()).adjusted(14, 20, -14, -24); }
+    QRectF area() const { return QRectF(rect()).adjusted(14, height() < 90 ? 14 : 20, -14, -24); }
     QPointF point(double seconds, double level) const {
         const auto r = area();
         return {r.left() + r.width() * seconds / span(), r.bottom() - r.height() * level};
@@ -353,19 +353,25 @@ RackSamplerView::RackSamplerView(RackParameterBinding* binding, QWidget* parent)
     sample->addWidget(m_waveform, 1);
     m_info = new QLabel(this); m_info->setObjectName("RackSamplerInfo");
     m_info->setMinimumWidth(0); m_info->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    m_info->setFixedHeight(14); sample->addWidget(m_info);
+    m_info->setFixedHeight(14);
+    auto* footer = new QHBoxLayout;
+    footer->setSpacing(6);
+    footer->addWidget(m_info, 1);
+    sample->addLayout(footer);
     row->addLayout(sample, 1);
-    auto* parameters = new QVBoxLayout; parameters->setSpacing(2);
     m_tabs = new QTabBar(this); m_tabs->setObjectName("RackSamplerTabs");
     m_tabs->addTab(tr("Playback")); m_tabs->addTab(tr("Envelope"));
-    m_tabs->setExpanding(true); m_tabs->setFixedHeight(24); parameters->addWidget(m_tabs);
-    m_pages = new QStackedWidget(this); m_pages->setFixedWidth(180); parameters->addWidget(m_pages, 1);
+    m_tabs->setExpanding(false); m_tabs->setFixedHeight(24); footer->addWidget(m_tabs);
+    m_pages = new QStackedWidget(this);
+    m_pages->setFixedWidth(180);
+    m_pages->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    row->addWidget(m_pages, 0, Qt::AlignVCenter);
     const auto page = [&](const QStringList& ids, const QStringList& labels) {
         auto* host = new QWidget(m_pages); auto* grid = new QGridLayout(host);
         grid->setContentsMargins(0, 0, 0, 0); grid->setSpacing(0);
         for (int i = 0; i < ids.size(); ++i) {
             auto* knob = binding->knob(ids[i], host, 60);
-            knob->setVisualStyle(ui::Knob::VisualStyle::RackDigital); knob->setFixedSize(60, 60);
+            knob->setVisualStyle(ui::Knob::VisualStyle::RackDigital); knob->setFixedSize(60, 58);
             knob->setCaption(labels[i]);
             connect(knob, &ui::Knob::valueChanged, m_waveform, [this] { m_waveform->update(); });
             grid->addWidget(knob, i / 3, i % 3, Qt::AlignCenter);
@@ -376,7 +382,6 @@ RackSamplerView::RackSamplerView(RackParameterBinding* binding, QWidget* parent)
          {tr("Start"), tr("End"), tr("Loop"), tr("Pitch"), tr("Volume"), tr("Pan")});
     page({"amp.delay", "amp.att", "amp.hold", "amp.dec", "amp.sus", "amp.rel"},
          {tr("Delay"), tr("Attack"), tr("Hold"), tr("Decay"), tr("Sustain"), tr("Release")});
-    row->addLayout(parameters);
     connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
         m_waveform->finish(); m_binding->finishAll(); m_pages->setCurrentIndex(index);
     });

@@ -195,9 +195,9 @@ PluginQuickAdder::PluginQuickAdder(daw::EngineController* controller,
     });
 
     m_sectionCollapsed.fill(false, sectionOrder().size());
-    refreshFavorites();
-    refreshRecent();
-    rebuildEntries();
+    // A collapsed search only paints its button. Loading and sorting the plugin
+    // catalogue here made every track/clip selection pay for an unopened menu.
+    // openSearch() always reads the current catalogue and preferences.
     updateGeometryForState();
 }
 
@@ -211,7 +211,7 @@ void PluginQuickAdder::setTrackId(const QString& trackId) {
     if (m_trackId == trackId && m_clipId.isEmpty()) return;
     m_trackId = trackId;
     m_clipId.clear();
-    rebuildEntries();
+    if (m_expanded) rebuildEntries();
     if (m_overlay) m_overlay->update();
 }
 
@@ -224,7 +224,7 @@ void PluginQuickAdder::setClipTarget(const QString& trackId,
     setToolTip(tr("Search Clip FX (%1)")
                    .arg(QKeySequence(QKeySequence::Find)
                             .toString(QKeySequence::NativeText)));
-    rebuildEntries();
+    if (m_expanded) rebuildEntries();
     if (m_overlay) m_overlay->update();
 }
 
@@ -704,7 +704,7 @@ void PluginQuickAdder::paintEvent(QPaintEvent*) {
         p.setBrush(withAlpha(m_accent, m_pressed ? 42 : 24));
         p.drawRoundedRect(hit, 5, 5);
     }
-    icons::paint(p, icons::Glyph::Search, QRectF(4, 3, 14, 14),
+    icons::paint(p, icons::Glyph::Search, QRectF(3, 2, 16, 16),
                  m_hover || hasFocus() ? th().textPrimary : th().textSecondary);
 }
 
@@ -1114,6 +1114,7 @@ bool PluginQuickAdder::checkInteractionForTest() {
     PluginQuickAdder adder(&probe, &island);
     adder.move(40, 40);
     adder.setTrackId(trackId);
+    if (!adder.m_all.empty() || !adder.m_visible.empty()) return false;
     shell.show();
 
     int inserted = 0;

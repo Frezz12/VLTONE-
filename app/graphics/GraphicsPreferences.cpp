@@ -105,4 +105,12 @@ void GraphicsPreferences::reportFrame(const FrameStats& frame) {
     }
     if (m_policy.observe(aggregate, now)) emit effectiveQualityChanged();
 }
+std::vector<FrameStats> GraphicsPreferences::recentFrames() const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    std::vector<FrameStats> result;
+    const auto now = m_time.elapsed();
+    for (const auto& [id, sample] : m_windows)
+        if (sample.frame.active && now - sample.at <= 1000) result.push_back(sample.frame);
+    return result;
+}
 } // namespace ui::graphics

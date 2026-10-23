@@ -286,7 +286,8 @@ $application = Join-Path $binaryDirectory "VLTONE.exe"
 foreach ($requiredFile in $application, `
          (Join-Path $binaryDirectory "daw_scan.exe"), `
          (Join-Path $binaryDirectory "daw_guard.exe"), `
-         (Join-Path $binaryDirectory "daw_reporter.exe")) {
+         (Join-Path $binaryDirectory "daw_reporter.exe"), `
+         (Join-Path $binaryDirectory "vlt_mcp.exe")) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "The deployed application is incomplete; missing '$requiredFile'."
     }
@@ -300,7 +301,7 @@ if ($SignPfxPath) {
     if (-not (Test-Path -LiteralPath $SignPfxPath -PathType Leaf)) {
         throw "Signing certificate does not exist: $SignPfxPath"
     }
-    foreach ($ownedExecutable in "VLTONE.exe", "daw_scan.exe", "daw_guard.exe", "daw_reporter.exe") {
+    foreach ($ownedExecutable in "VLTONE.exe", "daw_scan.exe", "daw_guard.exe", "daw_reporter.exe", "vlt_mcp.exe") {
         Sign-File (Join-Path $binaryDirectory $ownedExecutable)
     }
 }

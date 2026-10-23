@@ -3,6 +3,29 @@
 #include <algorithm>
 
 namespace daw {
+namespace {
+// FX layers share audio, but MIDI leaves the container exactly once, unchanged.
+class RackJunctionNode final : public engine::Node {
+public:
+    RackJunctionNode(std::string label, bool dryMidi = false) : label(std::move(label)), dryMidi(dryMidi) {}
+    std::string_view name() const noexcept override { return label; }
+    engine::MidiNodeRole midiRole() const noexcept override { return engine::MidiNodeRole::Passthrough; }
+    engine::OfflineNodePolicy offlineNodePolicy() const noexcept override { return engine::OfflineNodePolicy::Ordered; }
+    bool canFuseTask() const noexcept override { return true; }
+    bool supportsInPlace() const noexcept override { return true; }
+    void process(const engine::ProcessContext& context) override {
+        const auto audio = dryMidi && !context.inputs.empty() ? context.inputs.first(context.inputs.size() - 1) : context.inputs;
+        engine::dsp::sumInto(context.output, audio);
+        if (!context.midiOutput) return;
+        const auto first = dryMidi && !context.midiInputs.empty() ? context.midiInputs.size() - 1 : 0;
+        for (auto i = first; i < context.midiInputs.size(); ++i) if (const auto* input = context.midiInputs[i])
+            for (const auto& event : input->events()) if (!context.midiOutput->push(event)) return;
+    }
+private:
+    std::string label;
+    bool dryMidi;
+};
+}
 
 void AudioRuntime::clearGraphIds(std::span<InsertSlot> slots) {
     for (auto& slot : slots) {
@@ -73,6 +96,79 @@ engine::NodeId AudioRuntime::connectMiniModules(
     return head;
 }
 
+void AudioRuntime::updateRackLayers(const std::string& channelId, const std::vector<RackGroupModel>& groups) {
+    const auto found = channels.find(channelId); if (found == channels.end()) return;
+    for (const auto& group : groups) {
+        const bool solo = std::any_of(group.layers.begin(), group.layers.end(), [](const auto& layer) { return layer.solo; });
+        for (const auto& layer : group.layers) if (const auto fader = found->second.layerFaders.find(layer.id); fader != found->second.layerFaders.end()) {
+            fader->second->setGain(layer.gain);
+            fader->second->setSilent(layer.muted || (solo && !layer.solo));
+        }
+    }
+}
+engine::NodeId AudioRuntime::connectRackSlots(engine::AudioGraph& graph, TrackChannel& channel,
+    std::span<InsertSlot> slots, const std::vector<RackGroupModel>& groups, engine::NodeId head, engine::NodeId analysisSource) {
+    if (std::none_of(groups.begin(), groups.end(), [](const auto& g) { return !g.layers.empty(); })) {
+        channel.layerFaders.clear();
+        return connectSlots(graph, slots, channel.ids.inserts, head, analysisSource);
+    }
+    clearGraphIds(slots);
+    channel.ids.inserts.clear();
+    // All incoming audio joins before the split, including routed tracks and bounce injection.
+    const auto entry = graph.adoptNode(std::make_shared<RackJunctionNode>("Rack input"));
+    graph.connect(head, entry); channel.ids.inserts.push_back(entry);
+    std::unordered_set<std::string> retained;
+    using Chain = std::vector<InsertSlot*>;
+    std::function<engine::NodeId(const Chain&, const std::string&, engine::NodeId, int)> connect;
+    connect = [&](const Chain& chain, const std::string& parent, engine::NodeId input, int depth) {
+        auto tail = input;
+        for (std::size_t i = 0; i < chain.size();) {
+            const RackGroupModel* group = nullptr;
+            if (depth < 9) for (const auto& g : groups)
+                if (g.parentId == parent && !g.insertIds.empty() && g.insertIds.front() == chain[i]->slotId) { group = &g; break; }
+            if (group) {
+                Chain members;
+                while (i < chain.size() && std::find(group->insertIds.begin(), group->insertIds.end(), chain[i]->slotId) != group->insertIds.end())
+                    members.push_back(chain[i++]);
+                if (group->layers.empty()) tail = connect(members, group->id, tail, depth + 1);
+                else {
+                    const auto sum = graph.adoptNode(std::make_shared<RackJunctionNode>(group->name + " sum", true));
+                    const bool solo = std::any_of(group->layers.begin(), group->layers.end(), [](const auto& layer) { return layer.solo; });
+                    for (const auto& layer : group->layers) {
+                        Chain branch;
+                        for (auto* slot : members)
+                            if (std::find(layer.insertIds.begin(), layer.insertIds.end(), slot->slotId) != layer.insertIds.end()) branch.push_back(slot);
+                        const auto end = connect(branch, group->id, tail, depth + 1);
+                        auto& fader = channel.layerFaders[layer.id];
+                        if (!fader) fader = std::make_shared<engine::GainNode>(layer.name + " level");
+                        retained.insert(layer.id); fader->setGain(layer.gain); fader->setSilent(layer.muted || (solo && !layer.solo));
+                        const auto level = graph.adoptNode(fader);
+                        graph.connect(end, level); graph.connect(level, sum);
+                    }
+                    graph.connect(tail, sum, engine::InputRole::Sidechain);
+                    tail = sum;
+                }
+            } else {
+                auto* slot = chain[i++];
+                if (slot->configuration.analysisOnly) continue;
+                std::vector<engine::NodeId> ids;
+                tail = connectSlots(graph, std::span(slot, 1), ids, tail);
+                channel.ids.inserts.insert(channel.ids.inserts.end(), ids.begin(), ids.end());
+            }
+        }
+        // Analyzers hear the finished branch; they never become a serial processor.
+        for (auto* slot : chain) if (slot->configuration.analysisOnly && slot->nodeId == engine::kInvalidNode) {
+            std::vector<engine::NodeId> ids;
+            connectSlots(graph, std::span(slot, 1), ids, tail, depth == 0 ? analysisSource : engine::kInvalidNode);
+        }
+        return tail;
+    };
+    Chain chain; for (auto& slot : slots) chain.push_back(&slot);
+    const auto tail = connect(chain, {}, entry, 0);
+    std::erase_if(channel.layerFaders, [&](const auto& item) { return !retained.contains(item.first); });
+    return tail;
+}
+
 void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
     // Reuse the processors and their DSP state. The published graph co-owns
     // the old topology until every render using it has completed.
@@ -101,7 +197,7 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
     masterChannel.ids.fader = masterFaderId;
     masterChannel.ids.meter = masterFaderId;
     const auto masterMiniEnd = connectMiniModules(graph, masterChannel, spec.masterMiniModules, false, masterSumId);
-    auto masterChainEnd = connectSlots(graph, masterChannel.inserts, masterChannel.ids.inserts, masterMiniEnd, masterFaderId);
+    auto masterChainEnd = connectRackSlots(graph, masterChannel, masterChannel.inserts, spec.masterRackGroups, masterMiniEnd, masterFaderId);
     masterChainEnd = connectMiniModules(graph, masterChannel, spec.masterMiniModules, true, masterChainEnd);
     masterChannel.ids.preFaderTap = masterChainEnd;
     graph.connect(masterChainEnd, masterFaderId);
@@ -349,9 +445,9 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
         head = connectMiniModules(graph, channel, track.miniModules, false, head, &channel.ids.channelColor);
         engine::NodeId chainEnd;
         if (firstFxInstrument) {
-            chainEnd = connectSlots(graph, std::span(channel.inserts).subspan(1), channel.ids.inserts, head);
+            chainEnd = connectRackSlots(graph, channel, std::span(channel.inserts).subspan(1), track.rackGroups, head);
             channel.ids.inserts.insert(channel.ids.inserts.begin(), firstFxIds.begin(), firstFxIds.end());
-        } else chainEnd = connectSlots(graph, channel.inserts, channel.ids.inserts, head);
+        } else chainEnd = connectRackSlots(graph, channel, channel.inserts, track.rackGroups, head);
 
         // With no instrument, the notes still have to reach the first insert —
         // that is where a user who loaded a synth into slot 1 expects them.
@@ -363,6 +459,7 @@ void AudioRuntime::buildGraph(const AudioGraphSpec& spec) {
             !channel.ids.inserts.empty()) {
             graph.connect(channel.ids.midiClips, channel.ids.inserts.front());
             if (!channel.inserts.empty() &&
+                channel.ids.inserts.front() == channel.inserts.front().leftSelectorId &&
                 channel.inserts.front().channelMode ==
                     PluginChannelMode::DualMono &&
                 channel.inserts.front().rightSelectorId !=

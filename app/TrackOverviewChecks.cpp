@@ -2,6 +2,8 @@
 #include "MainWindow.hpp"
 #include "TrackListWidget.hpp"
 #include "InspectorWidget.hpp"
+#include "ChannelStrip.hpp"
+#include "Controls.hpp"
 #include "FileBrowserPanel.hpp"
 #include "EngineController.hpp"
 #include "ProjectSerializer.hpp"
@@ -55,6 +57,9 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
     controller.setFolderExpanded(drums, false);
     TrackOverviewPanel panel(&controller);
     panel.resize(200, 560); panel.show(); QApplication::processEvents();
+    check(panel.m_tree->geometry().left() == 2 &&
+          panel.width() - panel.m_tree->geometry().right() - 1 == 2,
+          "overview has two-pixel gutters on both sides");
     const auto q = [](const std::string& id) { return QString::fromStdString(id); };
     const auto item = [&](const std::string& id) { return panel.m_items.value(q(id)); };
     check(panel.m_items.size() == 9 && item(kick)->parent() == item(drums) &&
@@ -128,6 +133,9 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
     check(item(drums)->isExpanded(), "modified folder clicks preserve expansion for multi-selection");
     click(kick); click(snare, Qt::ControlModifier);
     check(panel.selectedTrackIds() == QStringList{q(kick), q(snare)}, "Ctrl-click selects multiple tracks");
+    click(snare); click(kick, Qt::ControlModifier);
+    check(panel.selectedTrackIds() == QStringList{q(kick), q(snare)},
+          "selection ranges retain document order when tracks are clicked backwards");
     const auto beforeMute = controller.undoDepth();
     click(kick, Qt::NoModifier, 1);
     check(project.findTrack(kick)->muted && project.findTrack(snare)->muted &&
@@ -195,6 +203,7 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
     check(!panel.moveSelection(q(vocals), panel.afterSubtree(q(vocals))), "an ordinary audio track cannot become a folder");
 
     panel.setSelectedTracks({q(kick), q(snare)});
+    const auto protectedSend = controller.addSend(kick, music);
     controller.setTracksEditLocked({kick, snare}, true); panel.refresh();
     const auto lockedRevision = controller.projectRevision();
     controller.setClipStartSeconds(kick, clip, 8);
@@ -208,11 +217,44 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
           controller.projectRevision() == lockedRevision, "locks reject content edits, deletion, renaming and track moves without history changes");
     check(!controller.moveTracks({drums}, project.tracks.size(), {}) &&
           controller.packIntoFolder({kick, lead}).empty(), "locked descendants protect the folder and reject partial packing");
+    const auto lockedTrack = *project.findTrack(kick);
+    const auto lockedDepth = controller.undoDepth();
+    controller.setTrackVolume(kick, .25f);
+    controller.setTrackPan(kick, .75f);
+    controller.setTrackVolumeLive(kick, .35f);
+    controller.setTrackPanLive(kick, -.75f);
+    controller.setTrackVolumeGestureSample(kick, .45f);
+    controller.setTrackPanGestureSample(kick, .5f);
     controller.setTrackMuted(kick, true);
-    check(project.findTrack(kick)->muted, "playback controls remain available on protected tracks");
-    controller.setTrackMuted(kick, false);
+    controller.setTrackSoloed(kick, true);
+    controller.setTrackMono(kick, !lockedTrack.mono);
+    controller.setTrackMonitor(kick, !lockedTrack.monitor);
+    controller.setTrackArmed(kick, !lockedTrack.armed);
+    const std::array lockedTracks{kick, snare};
+    controller.setTracksMuted(lockedTracks, true);
+    controller.setSendLevel(kick, protectedSend, .1f);
+    controller.setSendEnabled(kick, protectedSend, false);
+    controller.removeSend(kick, protectedSend);
+    const auto* protectedTrack = project.findTrack(kick);
+    check(protectedTrack->volume == lockedTrack.volume && protectedTrack->pan == lockedTrack.pan &&
+          protectedTrack->muted == lockedTrack.muted && protectedTrack->soloed == lockedTrack.soloed &&
+          protectedTrack->mono == lockedTrack.mono && protectedTrack->monitor == lockedTrack.monitor &&
+          protectedTrack->armed == lockedTrack.armed && controller.undoDepth() == lockedDepth &&
+          controller.projectRevision() == lockedRevision,
+          "lock rejects mixer, header and live gesture edits without changing history");
+    check(!protectedSend.empty() && protectedTrack->sends.size() == lockedTrack.sends.size() &&
+          protectedTrack->sends.back().level == lockedTrack.sends.back().level &&
+          protectedTrack->sends.back().enabled == lockedTrack.sends.back().enabled,
+          "locked sends keep their level, power and routing");
+    check(!item(kick)->data(1, Qt::UserRole + 2).toBool() && !item(kick)->data(2, Qt::UserRole + 2).toBool() &&
+          item(kick)->data(3, Qt::UserRole + 2).toBool(), "locked row disables Mute and Solo while keeping Unlock available");
+    ChannelStrip protectedStrip(&controller, q(kick), false);
+    protectedStrip.syncFromModel();
+    check(!protectedStrip.isEnabled(), "locked channel disables its strip controls");
     controller.undo(); panel.refresh();
     check(!controller.isTrackEditLocked(kick) && !controller.isTrackEditLocked(snare), "group unlock through undo restores editing");
+    protectedStrip.syncFromModel();
+    check(protectedStrip.isEnabled(), "undoing the lock restores strip interaction");
     controller.redo(); panel.refresh();
     std::string bytes; daw::ProjectModel restored;
     check(daw::ProjectSerializer::serializeDocument(project, bytes).isOk() &&
@@ -374,10 +416,20 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
     {
         MainWindow window(false); window.populateDemo();
         window.resize(1440, 900); window.show(); QApplication::processEvents();
-        auto* overview = window.findChild<TrackOverviewPanel*>();
-        auto* headers = window.findChild<TrackListWidget*>();
-        auto* browser = window.findChild<FileBrowserPanel*>();
-        auto* inspector = window.findChild<InspectorWidget*>();
+        auto* toggle = window.findChild<QAction*>("view.toggleTrackOverview");
+        if (toggle && !toggle->isChecked()) toggle->trigger();
+        QApplication::processEvents();
+        // Project tabs retain hidden widget trees. Exercise the active workspace,
+        // not the first retired view returned by QObject's child traversal.
+        const auto visibleChild = [&]<typename T>() -> T* {
+            for (auto* widget : window.findChildren<T*>())
+                if (widget->isVisible()) return widget;
+            return nullptr;
+        };
+        auto* overview = visibleChild.operator()<TrackOverviewPanel>();
+        auto* headers = visibleChild.operator()<TrackListWidget>();
+        auto* browser = visibleChild.operator()<FileBrowserPanel>();
+        auto* inspector = visibleChild.operator()<InspectorWidget>();
         if (!check(overview && headers && browser && inspector, "panel is integrated into the workspace")) return false;
         check(overview->width() == qBound(180, QSettings().value("ui/trackOverviewWidth", 180).toInt(), 420),
               "workspace defaults to 180 px and clamps saved narrower widths");
@@ -391,6 +443,30 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
         }
         overview->setSelectedTracks(ids); overview->publishSelection();
         check(headers->selectedTrackIds() == ids, "overview multi-selection reaches timeline headers");
+        if (!ids.isEmpty()) {
+            overview->applyState(overview->m_items.value(ids.front()), 3, true);
+            bool headerLocked = false;
+            for (auto* row : headers->findChildren<QWidget*>("TrackRow")) {
+                if (row->property("trackId").toString() != ids.front()) continue;
+                auto* fader = row->findChild<ui::FaderWidget*>();
+                auto* pan = row->findChild<ui::PanKnob*>();
+                headerLocked = fader && pan && !fader->isEnabled() && !pan->isEnabled();
+            }
+            int protectedStrips = 0;
+            bool stripsLocked = true;
+            for (auto* strip : window.findChildren<ChannelStrip*>()) {
+                if (!ids.contains(strip->trackId())) continue;
+                ++protectedStrips;
+                stripsLocked &= !strip->isEnabled();
+            }
+            check(headerLocked && protectedStrips > 0 && stripsLocked,
+                  "overview lock immediately disables header faders, pan and workspace strips");
+            overview->applyState(overview->m_items.value(ids.front()), 3, false);
+            bool stripsUnlocked = true;
+            for (auto* strip : window.findChildren<ChannelStrip*>())
+                if (ids.contains(strip->trackId())) stripsUnlocked &= strip->isEnabled();
+            check(stripsUnlocked, "overview unlock immediately restores workspace strip interaction");
+        }
         if (ids.size() == 2) {
             clickIn(*overview, ids.front().toStdString());
             clickIn(*overview, ids.back().toStdString(), Qt::ControlModifier);
@@ -418,7 +494,6 @@ bool TrackOverviewPanel::checkForTest(const QString& screenshots) {
                       "the next workspace click replaces the selection after a drop");
             }
         }
-        auto* toggle = window.findChild<QAction*>("view.toggleTrackOverview");
         if (check(toggle, "View menu exposes the panel command")) {
             toggle->trigger(); check(overview->isHidden(), "panel command hides the view");
             toggle->trigger(); check(!overview->isHidden(), "panel command restores the view");

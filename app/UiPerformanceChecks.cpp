@@ -7,6 +7,7 @@
 #include "graphics/GraphicsPreferences.hpp"
 #include "graphics/SceneRecorder.hpp"
 #include "TrackListWidget.hpp"
+#include "TrackOverviewPanel.hpp"
 #include "MixerWidget.hpp"
 #include "ChannelStrip.hpp"
 #include "TimelineWidget.hpp"
@@ -76,6 +77,8 @@
 #include <QScrollArea>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QWheelEvent>
 #include <cmath>
 #include <cstdio>
@@ -799,6 +802,61 @@ bool PluginEditorWindow::checkGenericVirtualizationForTest() {
 }
 
 bool TimelineWidget::checkLocalDamageForTest() {
+    for (auto shape : {daw::AutomationSegment::Linear, daw::AutomationSegment::Hold,
+                       daw::AutomationSegment::SCurve}) for (double bend : {-0.8, 0., 0.8}) {
+        const std::vector<daw::AutomationPoint> points{
+            {1., .15, shape, bend}, {3., .9, shape, -bend}, {5., .25}};
+        QPolygonF original, reduced;
+        for (int x = 0; x <= 1200; ++x) {
+            const QPointF point(x, 90. - daw::automationValueAt(points, x / 200., .5) * 70.);
+            original.append(point); appendAutomationCurvePoint(reduced, point);
+        }
+        if (reduced.front() != original.front() || reduced.back() != original.back() ||
+            reduced.size() >= original.size()) return false;
+        int segment = 0;
+        for (const auto& point : original) {
+            while (segment + 2 < reduced.size() && reduced[segment + 1].x() < point.x()) ++segment;
+            const auto& from = reduced[segment]; const auto& to = reduced[segment + 1];
+            const double y = from.y() + (to.y() - from.y()) * (point.x() - from.x()) / (to.x() - from.x());
+            if (std::abs(y - point.y()) > 1e-8) return false;
+        }
+        if ((shape == daw::AutomationSegment::Hold ||
+             (shape == daw::AutomationSegment::Linear && bend == 0.)) && reduced.size() > 12)
+            return false;
+    }
+    std::puts("Automation geometry: linear/bent/S/Hold curves preserve every sampled point");
+    {
+        daw::EngineController controller;
+        if (!controller.initialize(48000, 512, false)) return false;
+        auto& project = const_cast<daw::ProjectModel&>(controller.project());
+        project.tracks.clear();
+        for (int i = 0; i < 2; ++i) {
+            daw::TrackModel track; track.id = "automation-press-" + std::to_string(i);
+            track.kind = daw::TrackKind::Automation;
+            daw::ClipModel clip; clip.id = track.id + "-clip";
+            clip.kind = daw::ClipKind::Automation; clip.durationSeconds = 4;
+            clip.automation.points = {{0., .2}, {8., .8}};
+            track.clips.push_back(std::move(clip)); project.tracks.push_back(std::move(track));
+        }
+        project.invalidateStructure();
+        TimelineWidget timeline(&controller); timeline.resize(500, 300);
+        timeline.m_pixelsPerSecond = 100; timeline.setTool(Tool::Select);
+        timeline.selectAutomationClip("automation-press-0", "automation-press-0-clip");
+        timeline.setSelectedTracks({"automation-press-0"});
+        QObject::connect(&timeline, &TimelineWidget::clipSelected, &timeline,
+            [&](const QString& track, const QString&) {
+                timeline.setSelectedTrack(track); timeline.setSelectedTracks({track});
+            });
+        timeline.m_staticDirty = {};
+        const QPoint pos(150, timeline.laneTop(1) + 45);
+        QMouseEvent press(QEvent::MouseButtonPress, pos, timeline.mapToGlobal(pos),
+            Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+        QApplication::sendEvent(&timeline, &press);
+        if (!timeline.m_bendingSegment || timeline.m_selectedTrackId != "automation-press-1" ||
+            !timeline.m_staticDirty.contains(QPoint(10, timeline.laneTop(0) + 10)) ||
+            !timeline.m_staticDirty.contains(QPoint(10, timeline.laneTop(1) + 10))) return false;
+        std::puts("Automation Alt press: old/new clip and lane selection paint before release");
+    }
     const auto paint = [&] {
         ui::graphics::SceneRecorder recorder(size(), devicePixelRatioF());
         { QPainter painter(&recorder); paintScene(painter, QRegion(rect())); }
@@ -830,6 +888,53 @@ bool TimelineWidget::checkLocalDamageForTest() {
     if (!paint() || m_gpuLaneTiles.builds() != afterPan) return false;
     setVerticalScroll(savedScrollY);
     if (!paint() || m_gpuLaneTiles.builds() != afterPan) return false;
+    const QString savedTrack = m_selectedTrackId;
+    const QStringList savedTracks = m_selectedTrackIds;
+    setSelectedTrack({}); setSelectedTracks({});
+    if (!paint()) return false;
+    const auto& rows = visibleRows();
+    if (rows.empty()) return false;
+    const QString selected = QString::fromStdString(
+        m_controller->project().tracks[rows.front().index].id);
+    const auto layoutBuilds = m_laneLayoutBuilds;
+    const auto selectionBefore = m_gpuLaneTiles.builds();
+    setSelectedTrack(selected); setSelectedTracks({selected});
+    if (!paint() || m_laneLayoutBuilds != layoutBuilds) return false;
+    const auto selectionBuilds = m_gpuLaneTiles.builds() - selectionBefore;
+    if (selectionBuilds == 0 || selectionBuilds >= complete) return false;
+    const auto selectedBefore = m_gpuLaneTiles.builds();
+    setSelectedTrack(selected); setSelectedTracks({selected});
+    // The multi-selection still owns the wash when the primary is cleared.
+    setSelectedTrack({});
+    if (!paint() || m_gpuLaneTiles.builds() != selectedBefore ||
+        m_laneLayoutBuilds != layoutBuilds) return false;
+    setSelectedTracks(savedTracks); setSelectedTrack(savedTrack);
+    if (!paint()) return false;
+    std::printf("Track selection: lane rebuilds=0 tiles=%llu/%llu repeated=0\n",
+        static_cast<unsigned long long>(selectionBuilds), static_cast<unsigned long long>(complete));
+    // A selected top edge straddles a tile boundary. Select it while both
+    // adjoining tiles are offscreen, then verify both are rebuilt on return.
+    const auto boundary = std::find_if(m_laneOffsets.begin() + 1, m_laneOffsets.end() - 1,
+        [](int offset) { return offset % 256 == 0; });
+    if (boundary == m_laneOffsets.end() - 1) return false;
+    const int boundaryLane = int(boundary - m_laneOffsets.begin());
+    const int boundaryScroll = *boundary - 256;
+    const QString boundaryTrack = QString::fromStdString(
+        m_controller->project().tracks[rows[boundaryLane].index].id);
+    setSelectedTrack({}); setSelectedTracks({});
+    setVerticalScroll(boundaryScroll); if (!paint()) return false;
+    setVerticalScroll(boundaryScroll + 2048); if (!paint()) return false;
+    setSelectedTrack(boundaryTrack);
+    const auto boundaryBefore = m_gpuLaneTiles.builds();
+    setVerticalScroll(boundaryScroll); if (!paint()) return false;
+    const int tileWidth = std::max(1, std::min(512, width()));
+    const double offset = m_scrollSeconds * m_pixelsPerSecond;
+    const auto columns = quint64(std::floor((offset + width()) / tileWidth) -
+                                std::floor(offset / tileWidth) + 1);
+    if (m_gpuLaneTiles.builds() - boundaryBefore < 2 * columns) return false;
+    setSelectedTracks(savedTracks); setSelectedTrack(savedTrack);
+    setVerticalScroll(savedScrollY); if (!paint()) return false;
+    std::puts("Track selection: offscreen tile-boundary antialias damage retires both rows");
     // A full document/theme invalidation must also retire off-screen rows.
     setVerticalScroll(savedScrollY + 1024);
     if (!paint()) return false;
@@ -2747,7 +2852,63 @@ bool checkNavigationMotion() {
     return ok;
 }
 
+static bool checkButtonScenePainting() {
+    ui::IconButton icon(icons::Glyph::Power, QStringLiteral("Power"));
+    ui::MsrButton chip(QStringLiteral("M"), QColor(220, 70, 70), QStringLiteral("Mute"));
+    icon.setCheckable(true);
+    chip.setAutoMark(true);
+    // Compare the real QWidget route (including its font and clipping setup)
+    // with the direct paint interface used by the retained GPU scene.
+    for (auto* button : {static_cast<QAbstractButton*>(&icon), static_cast<QAbstractButton*>(&chip)}) {
+        auto* source = dynamic_cast<ui::graphics::ScenePaintSource*>(button);
+        if (!source) return false;
+        button->ensurePolished();
+        for (int style = 0; style < 3; ++style) {
+            button->setProperty("consoleButton", style == 1);
+            button->setProperty("circular", style == 2);
+            icon.setProminent(style == 2);
+            for (int state = 0; state < 8; ++state) {
+                button->setChecked(state & 1);
+                button->setEnabled(!(state & 2));
+                button->setDown(state & 4);
+                button->setAttribute(Qt::WA_UnderMouse, state & 4);
+                for (qreal dpr : {1., 1.25, 1.5, 2.}) {
+                    const QSize pixels(int(std::ceil(button->width() * dpr)),
+                                       int(std::ceil(button->height() * dpr)));
+                    QImage native(pixels, QImage::Format_ARGB32_Premultiplied);
+                    native.setDevicePixelRatio(dpr); native.fill(Qt::transparent);
+                    button->render(&native, {}, {}, QWidget::RenderFlags{});
+                    QImage direct(pixels, native.format());
+                    direct.setDevicePixelRatio(dpr); direct.fill(Qt::transparent);
+                    {
+                        QPainter painter(&direct);
+                        painter.setFont(button->font());
+                        painter.setClipRect(button->rect());
+                        source->paintScene(painter, QRegion(button->rect()));
+                    }
+                    if (native != direct) {
+                        std::fprintf(stderr, "Button scene differs: %s style=%d state=%d DPR=%.2f\n",
+                                     button->metaObject()->className(), style, state, double(dpr));
+                        return false;
+                    }
+                    ui::graphics::SceneRecorder recorder(button->size(), dpr);
+                    {
+                        QPainter painter(&recorder);
+                        painter.setFont(button->font());
+                        source->paintScene(painter, QRegion(button->rect()));
+                    }
+                    if (!recorder.supported() || recorder.takeMeshes().empty()) return false;
+                }
+            }
+        }
+    }
+    std::printf("PASS button scene: native/direct pixels and supported recording, 3 styles, 8 states, DPR 1/1.25/1.5/2\n");
+    return true;
+}
+
 bool checkUiScaling() {
+    if (qEnvironmentVariableIsSet("VLT_BUTTON_SCENE_CHECK_ONLY"))
+        return checkButtonScenePainting();
     if (qEnvironmentVariableIsSet("VLT_COMPACT_MIXER_CHECK_ONLY"))
         return MixerWidget::checkCompactForTest();
     if (qEnvironmentVariableIsSet("VLT_CLASSIC_MIXER_CHECK_ONLY")) {
@@ -2821,6 +2982,7 @@ bool checkUiScaling() {
     const auto check = [&](bool result, const char* name) {
         std::printf("%s  %s\n", result ? "PASS" : "FAIL", name); ok = ok && result;
     };
+    check(checkButtonScenePainting(), "custom buttons retain native painting through the scene interface");
     check(PluginEditorWindow::checkGenericVirtualizationForTest(),
           "generic parameter controls stay bounded and preserve focus, drag and keyboard navigation");
     {
@@ -3654,13 +3816,13 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     const auto settle = [](int ms) {
         QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec();
     };
-    m_controller.addTrack(daw::TrackKind::Midi);
+    projectController().addTrack(daw::TrackKind::Midi);
     if (!openDemoSampler({})) {
         std::fprintf(stderr, "Motion check could not open the fixture Sampler\n");
         return false;
     }
     // Heavy UI, without an audio device or hundreds of vendor DSP instances.
-    auto& project = const_cast<daw::ProjectModel&>(m_controller.project());
+    auto& project = const_cast<daw::ProjectModel&>(projectController().project());
     for (int t = 1; t < 500; ++t) {
         daw::TrackModel track;
         track.id = "motion-track-" + std::to_string(t);
@@ -3783,12 +3945,23 @@ bool MainWindow::checkWorkspaceMotionForTest() {
     qApp->installEventFilter(&paints);
     if (targetName == "browser") { setBrowserVisible(true); settle(150); }
     QWidget* target = targetName == "mixer" ? m_mixerHandle : targetName == "browser" ? m_browserHandle
-        : frame->findChild<QWidget*>("InternalEditorTitleBar");
+        : frame;
     if (!target || failed) return false;
     const QPointF anchor = target->mapToGlobal(targetName == "browser" ? QPoint(3, 100)
         : QPoint(120, 2 + (targetName == "mixer" ? 0 : 16)));
     QPointF lastGlobal = anchor;
+    const QPoint initialFramePosition = frame ? frame->pos() : QPoint();
     const auto sendMouse = [&](QEvent::Type type, QPointF global) {
+        if (target == frame) {
+            if (type == QEvent::MouseMove)
+                frame->moveWithinWorkspace(initialFramePosition + (global - anchor).toPoint());
+            else {
+                QEvent nativeTitle(type == QEvent::MouseButtonPress
+                    ? QEvent::NonClientAreaMouseButtonPress : QEvent::NonClientAreaMouseButtonRelease);
+                QApplication::sendEvent(frame, &nativeTitle);
+            }
+            return;
+        }
         // Native plugin frames receive QWidget input directly; other content
         // exercises the Quick-to-Widgets bridge used by the actual workspace.
         const bool throughQuick = surface && targetName != "native";
@@ -3937,16 +4110,23 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
     const bool mixerHorizontal = gestureKind == QStringLiteral("mixer-horizontal");
     const bool playbackOnly = gestureKind == QStringLiteral("playback");
     const bool editorGesture = gestureKind == QStringLiteral("editor");
+    const bool mixerSelection = gestureKind == QStringLiteral("mixer-select");
+    const bool trackSelection = gestureKind == QStringLiteral("track-select");
+    const bool overviewSelection = gestureKind == QStringLiteral("overview-select");
+    const bool selectionGesture = mixerSelection || trackSelection || overviewSelection;
     if (!mixerGesture && !mixerHorizontal && !zoomGesture && !heightGesture &&
-        !playbackOnly && !editorGesture && gestureKind != QStringLiteral("timeline")) return false;
+        !playbackOnly && !editorGesture && !selectionGesture && gestureKind != QStringLiteral("timeline")) return false;
     const unsigned audioBlock = qEnvironmentVariableIntValue("VLT_SCROLL_AUDIO_BLOCK");
     if (audioBlock && audioBlock != 32 && audioBlock != 64 && audioBlock != 128 && audioBlock != 512) return false;
-    if (audioBlock && !m_controller.setBufferSizeFrames(audioBlock)) return false;
-    const auto loaded = m_controller.openProject(path.toStdString());
+    if (audioBlock && !projectController().setBufferSizeFrames(audioBlock)) return false;
+    const auto loaded = projectController().openProject(path.toStdString());
     if (!loaded) { std::fprintf(stderr, "Project load failed: %s\n", loaded.message().c_str()); return false; }
-    const double audioRate = m_controller.sampleRate();
+    const double audioRate = projectController().sampleRate();
     syncViews();
-    if (mixerGesture || mixerHorizontal || playbackOnly) setMixerVisible(true);
+    if (mixerGesture || mixerHorizontal || playbackOnly || selectionGesture) setMixerVisible(true);
+    if (qEnvironmentVariableIsSet("VLT_PROJECT_SHOW_MIXER"))
+        setMixerVisible(qEnvironmentVariableIntValue("VLT_PROJECT_SHOW_MIXER") != 0);
+    if (overviewSelection) setTrackOverviewVisible(true);
     if (qEnvironmentVariableIntValue("VLT_SCROLL_HIDE_MIXER")) setMixerVisible(false);
     m_timeline->setFollowPlayhead(false);
     resize(1600, 960);
@@ -4032,15 +4212,66 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
             return false;
         }
     }
+    // Use visible controls and the native Quick input adapter. A direct call to
+    // selectTrackFromHeader would omit the input-routing and view-selection cost.
+    struct SelectionTarget { QPointer<QWidget> widget; QPoint point; QString id; };
+    std::vector<SelectionTarget> selectionTargets;
+    if (selectionGesture) {
+        const auto visiblePoint = [](QWidget* widget, QPoint point) {
+            // The native Quick overlay makes QWidget::visibleRegion empty.
+            // Test clipping in the original widget hierarchy instead.
+            for (; widget; widget = widget->parentWidget()) {
+                if (!widget->isVisible() || !widget->rect().contains(point)) return false;
+                if (widget->isWindow()) return true;
+                point += widget->pos();
+            }
+            return false;
+        };
+        if (mixerSelection) {
+            if (!mixerScroll) return false;
+            mixerScroll->verticalScrollBar()->setValue(0);
+            run(200);
+            for (auto* strip : m_mixer->findChildren<ChannelStrip*>()) {
+                const QPoint point(strip->width() / 2, 12);
+                if (!strip->isMaster() && strip->presentation() != ChannelStrip::Presentation::Details &&
+                    visiblePoint(strip, point))
+                    selectionTargets.push_back({strip, point, strip->trackId()});
+            }
+        } else if (trackSelection) {
+            for (auto* name : m_trackList->findChildren<QLineEdit*>()) {
+                const QPoint point = name->rect().center();
+                const QPoint mixerPoint = m_mixer->mapFromGlobal(name->mapToGlobal(point));
+                if (name->property("trackSelectionOnly").toBool() && name->isReadOnly() &&
+                    visiblePoint(name, point) &&
+                    (!m_mixer->isVisible() || !m_mixer->rect().contains(mixerPoint)))
+                    selectionTargets.push_back({name, point, name->property("trackId").toString()});
+            }
+        } else if (auto* tree = m_trackOverview->findChild<QTreeWidget*>()) {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                // Folder rows toggle expansion on release; measure ordinary
+                // track selection without changing the fixture's visible rows.
+                if ((*it)->data(0, Qt::UserRole + 3).toBool()) continue;
+                QRect rect = tree->visualItemRect(*it);
+                rect.setRight(tree->columnViewportPosition(0) + tree->columnWidth(0) - 1);
+                const QPoint point = rect.center();
+                if (!rect.isEmpty() && visiblePoint(tree->viewport(), point))
+                    selectionTargets.push_back({tree->viewport(), point, (*it)->data(0, Qt::UserRole).toString()});
+            }
+        }
+        if (selectionTargets.size() < 2) {
+            std::fprintf(stderr, "Selection benchmark needs at least two visible track targets\n");
+            return false;
+        }
+    }
     QPointer<InternalEditorFrame> movingEditor;
     if (editorGesture || qEnvironmentVariableIntValue("VLT_SCROLL_PLUGIN_EDITOR")) {
         QPointer<PluginEditorWindow> nativeEditor;
-        for (const auto& track : m_controller.project().tracks) {
+        for (const auto& track : projectController().project().tracks) {
             for (const auto& insert : track.inserts) {
-                auto editor = m_controller.insertEditorSnapshot(track.id, insert.id);
+                auto editor = projectController().insertEditorSnapshot(track.id, insert.id);
                 if (!editor) {
                     run(100); // Subscribe before measuring; the first process readout is asynchronous.
-                    editor = m_controller.insertEditorSnapshot(track.id, insert.id);
+                    editor = projectController().insertEditorSnapshot(track.id, insert.id);
                 }
                 if (!editor || !editor->hasEditor) continue;
                 const auto channel = QString::fromStdString(track.id), slot = QString::fromStdString(insert.id);
@@ -4066,7 +4297,32 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
         movingEditor = frame;
     }
     bool failed = false, measuring = false;
+    class ExposureCheck final : public QObject {
+    public:
+        QPointer<QWindow> window;
+        bool measuring = false;
+        bool exposed = true;
+        int losses = 0;
+        bool isExposed() const {
+            return window && window->isVisible() && window->isExposed() &&
+                   window->visibility() != QWindow::Minimized;
+        }
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::Expose || event->type() == QEvent::Hide ||
+                event->type() == QEvent::WindowStateChange) {
+                const bool now = isExposed();
+                if (measuring && exposed && !now) ++losses;
+                exposed = now;
+            }
+            return false;
+        }
+    } exposure;
+    if (surface) {
+        exposure.window = surface->quickWindow();
+        exposure.window->installEventFilter(&exposure);
+    }
     std::vector<double> intervals, preparation, synchronization, renderCpu;
+    std::vector<double> selectionInput;
     double renderTotal = 0;
     QMetaObject::Connection measured, fallback;
     if (surface) {
@@ -4088,10 +4344,10 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
     callbacks.reserve(100000);
     std::thread audioThread;
     if (audioBlock) {
-        m_controller.configureAudioWorkersForTest(true, unsigned(std::clamp(
+        projectController().configureAudioWorkersForTest(true, unsigned(std::clamp(
             qEnvironmentVariableIntValue("VLT_SCROLL_AUDIO_WORKERS"), 0, 128)));
-        m_controller.seekSeconds(35);
-        m_controller.play();
+        projectController().seekSeconds(35);
+        projectController().play();
         audioActive.store(true);
         audioThread = std::thread([&] {
             daw::engine::AudioWorkerRegistration registration;
@@ -4105,7 +4361,7 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
             auto next = std::chrono::steady_clock::now();
             while (audioActive.load(std::memory_order_relaxed)) {
                 const auto start = std::chrono::steady_clock::now();
-                m_controller.processDeviceBlockForTest(input, output, audioBlock);
+                projectController().processDeviceBlockForTest(input, output, audioBlock);
                 if (measureAudio.load(std::memory_order_relaxed) && callbacks.size() < callbacks.capacity())
                     callbacks.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
                 next = std::max(next + period, start);
@@ -4115,16 +4371,33 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
     }
     QTimer gesture;
     gesture.setTimerType(Qt::PreciseTimer);
-    gesture.setInterval(targetHz ? std::max(1, qRound(1000. / targetHz)) : 8);
+    gesture.setInterval(selectionGesture ? 150 : targetHz ? std::max(1, qRound(1000. / targetHz)) : 8);
     QElapsedTimer travelClock;
     int previous = 0, inputs = 0;
     std::vector<std::pair<std::string, double>> originalHeights;
-    for (const auto& track : m_controller.project().tracks)
+    for (const auto& track : projectController().project().tracks)
         originalHeights.emplace_back(track.id, track.height);
     const int distance = qEnvironmentVariableIsSet("VLT_SCROLL_DISTANCE") ?
         std::clamp(qEnvironmentVariableIntValue("VLT_SCROLL_DISTANCE"), 100, 20000) : 1800;
     connect(&gesture, &QTimer::timeout, this, [&] {
         if (playbackOnly) return;
+        if (selectionGesture) {
+            const auto& target = selectionTargets[std::size_t(inputs) % selectionTargets.size()];
+            if (!target.widget) { failed = true; return; }
+            const QPointF global = target.widget->mapToGlobal(target.point);
+            const QPointF local = surface ? surface->quickWindow()->mapFromGlobal(global) : target.point;
+            QObject* receiver = surface ? static_cast<QObject*>(surface->quickWindow()) : target.widget.data();
+            QElapsedTimer cost; cost.start();
+            for (const auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+                QMouseEvent click(type, local, global, Qt::LeftButton,
+                    type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(receiver, &click);
+            }
+            if (measuring) selectionInput.push_back(cost.nsecsElapsed() / 1e6);
+            if (m_trackList->selectedTrackId() != target.id || m_selectedTrackId != target.id) failed = true;
+            ++inputs;
+            return;
+        }
         if (editorGesture) {
             const double phase = travelClock.elapsed() * 6.283185307179586 / 1200.;
             ui::perf::Scope cost("motion.input.ms");
@@ -4143,10 +4416,10 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
         if (heightGesture) {
             const auto phase = travelClock.elapsed() % 2400;
             const double factor = 1. + (phase <= 1200 ? phase : 2400 - phase) / 1200.;
-            const auto before = m_controller.trackHeightRevision();
+            const auto before = projectController().trackHeightRevision();
             for (const auto& [id, height] : originalHeights)
-                m_controller.setTrackHeight(id, std::round(height * factor));
-            if (before != m_controller.trackHeightRevision()) {
+                projectController().setTrackHeight(id, std::round(height * factor));
+            if (before != projectController().trackHeightRevision()) {
                 m_trackList->syncRowHeights(); m_timeline->refreshTrackHeights();
             }
             ++inputs;
@@ -4171,19 +4444,27 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
     const auto before = ui::guiThreadCpuMs();
     QElapsedTimer measuredTime; measuredTime.start();
     const int oldInputs = inputs;
+    exposure.exposed = !surface || exposure.isExposed();
+    exposure.measuring = true;
+    if (!exposure.exposed) ++exposure.losses;
     measuring = true;
     measureAudio.store(true);
     std::printf("PROJECT_SCROLL_READY pid=%lld backend=%s tracks=%zu viewport=%dx%d dpr=%.1f distance=%d gesture=%s\n",
-        qint64(QCoreApplication::applicationPid()), surface ? "gpu" : "widgets", m_controller.project().tracks.size(),
+        qint64(QCoreApplication::applicationPid()), surface ? "gpu" : "widgets", projectController().project().tracks.size(),
         m_timeline->width(), m_timeline->height(), devicePixelRatioF(), distance, qPrintable(gestureKind));
+    const auto* display = surface ? surface->quickWindow()->screen() : screen();
+    std::printf("PROJECT_SCROLL_CONFIG requested_hz=%d display_hz=%.3f display=%s swap_interval=%d audio_block=%u input_interval_ms=%d mixer_visible=%d\n",
+        targetHz, display ? display->refreshRate() : 0., display ? qPrintable(display->name()) : "unknown",
+        surface ? surface->quickWindow()->format().swapInterval() : -1, audioBlock, gesture.interval(), int(m_mixer->isVisible()));
     std::fflush(stdout);
     run(qEnvironmentVariableIsSet("VLT_SCROLL_MS") ? std::clamp(qEnvironmentVariableIntValue("VLT_SCROLL_MS"), 2000, 60000) : 7200);
     const auto guiCpu = ui::guiThreadCpuMs() - before;
     const double elapsedMs = measuredTime.nsecsElapsed() / 1e6;
     measureAudio.store(false);
+    exposure.measuring = false;
     measuring = false; gesture.stop();
     audioActive.store(false);
-    if (audioThread.joinable()) { audioThread.join(); m_controller.stop(); }
+    if (audioThread.joinable()) { audioThread.join(); projectController().stop(); }
     const auto percentile = [](std::vector<double> values, double percentile) {
         if (values.empty()) return -1.;
         std::sort(values.begin(), values.end());
@@ -4193,6 +4474,17 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
         inputs-oldInputs, intervals.size(), elapsedMs, guiCpu, renderTotal, percentile(preparation,.95),
         percentile(synchronization,.95), percentile(renderCpu,.95), percentile(intervals,.50), percentile(intervals,.95), percentile(intervals,.99),
         std::size_t(std::count_if(intervals.begin(), intervals.end(), [](double value) { return value > 25.; })));
+    if (selectionGesture) std::printf("PROJECT_SELECTION_RESULT targets=%zu clicks=%zu input_p50_ms=%.3f input_p95_ms=%.3f input_p99_ms=%.3f input_max_ms=%.3f selection_correct=%d\n",
+        selectionTargets.size(), selectionInput.size(), percentile(selectionInput, .50), percentile(selectionInput, .95),
+        percentile(selectionInput, .99), percentile(selectionInput, 1.), int(!failed));
+    if (surface) {
+        std::printf("PROJECT_EXPOSURE_RESULT losses=%d exposed_at_end=%d valid=%d\n",
+            exposure.losses, int(exposure.isExposed()), int(exposure.losses == 0 && exposure.isExposed()));
+        if (exposure.losses || !exposure.isExposed()) {
+            std::fprintf(stderr, "GPU window lost exposure during measurement; benchmark is invalid\n");
+            failed = true;
+        }
+    }
     if (audioBlock) std::printf("PROJECT_SCROLL_AUDIO block=%u callbacks=%zu p95_ms=%.3f over_budget=%zu\n",
         audioBlock, callbacks.size(), percentile(callbacks, .95),
         std::size_t(std::count_if(callbacks.begin(), callbacks.end(), [&](double ms) { return ms > audioBlock * 1000. / audioRate; })));
@@ -4206,5 +4498,5 @@ bool MainWindow::checkProjectScrollForTest(const QString& path) {
         std::fprintf(stderr, "GPU window delivered no frames; benchmark is invalid\n");
         return false;
     }
-    return !failed && (playbackOnly || inputs-oldInputs > 20);
+    return !failed && (playbackOnly || inputs-oldInputs > (selectionGesture ? 10 : 20));
 }

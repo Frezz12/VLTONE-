@@ -1,0 +1,6 @@
+{
+  "format": "vltscript", "sdk": 1, "id": "vlt.example.sample-folder",
+  "name": "Sample folder trimmer", "version": "1.0.0",
+  "permissions": ["files.read", "files.write"],
+  "commands": [{"id": "open", "label": "Trim sample folder…", "entry": "main.lua", "contexts": ["global", "file"]}]
+}

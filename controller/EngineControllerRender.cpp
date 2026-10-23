@@ -67,6 +67,8 @@ std::uint64_t RenderSessionSpec::sourceGeneration() const noexcept {
 audio::Result EngineController::captureRenderSession(
     const rendering::Spec& spec, RenderSessionSpec& out) {
     out = {};
+    if (m_documentOnly) return audio::Result::fail(audio::EngineError::NotSupported,
+        "Enable this project's engine before processing audio.");
     if (auto valid = validateRenderSpec(spec); !valid) return valid;
     if (m_runtime->audioSafetyStopped())
         return audio::Result::fail(audio::EngineError::AudioThreadError, "Save and reopen the project before rendering.");
@@ -83,7 +85,7 @@ audio::Result EngineController::captureRenderSession(
         data->blockSize = m_bufferSize;
         data->revision = projectRevision();
         data->generation = m_projectGeneration;
-        data->catalog = m_pluginManager.catalogSnapshot();
+        data->catalog = pluginManager().catalogSnapshot();
         data->sourceSamples = m_sourceSamples;
         auto& snapshot = data->snapshot;
         auto& pendingParameterOverrides = data->pendingParameterOverrides;
@@ -208,6 +210,8 @@ audio::Result EngineController::renderProject(
     const std::function<bool(const rendering::Progress&)>& onProgress,
     rendering::Report& out) {
     out = {};
+    if (m_documentOnly) return audio::Result::fail(audio::EngineError::NotSupported,
+        "Enable this project's engine before rendering audio.");
     if (auto valid = validateRenderSpec(spec); !valid) return valid;
     if (m_exportInProgress)
         return audio::Result::fail(audio::EngineError::InvalidArgument,
@@ -449,6 +453,10 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
         for (TrackModel& track : project.tracks) {
             for(auto& module:track.miniModules) module.bypassed=true;
             bypassSlots(track.inserts);
+            // Only the render snapshot/draft is changed (captureRenderSession
+            // copies m_project before calling here). Bypassing FX also skips
+            // their parallel summing, so dry export has exactly one signal path.
+            track.rackGroups.clear();
             bypassSlots(track.samplerFx.inserts);
             for (ClipModel& clip : track.clips) bypassSlots(clip.inserts);
         }
@@ -472,6 +480,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
                 continue;
             }
             bypassSlots(track.inserts);
+            track.rackGroups.clear();
             bypassSlots(track.samplerFx.inserts);
             for(auto& module:track.miniModules) module.bypassed=true;
         }
@@ -484,6 +493,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
                 continue;
             }
             bypassSlots(track.inserts);
+            track.rackGroups.clear();
             bypassSlots(track.miniModules);
         }
     }
@@ -497,6 +507,7 @@ void EngineController::applyRenderSelection(const rendering::Spec& spec, Project
     if (spec.bypassMasterChain) {
         bypassSlots(project.masterInserts);
         bypassSlots(project.masterMiniModules);
+        project.masterRackGroups.clear();
     }
 
     // Isolate the requested musical material without touching automation
@@ -997,6 +1008,7 @@ audio::Result EngineController::renderProjectPass(
 }
 
 audio::Result EngineController::applyRenderSampleRate(double rate, uint32_t frames) {
+    if (m_documentOnly) return audio::Result::fail(audio::EngineError::NotSupported, "Enable the audio engine before rendering.");
     if (!frames) frames = m_bufferSize;
     if (std::abs(rate - m_sampleRate) < 0.01 && frames == m_bufferSize)
         return audio::Result::ok();

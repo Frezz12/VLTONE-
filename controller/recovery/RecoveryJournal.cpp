@@ -52,6 +52,34 @@ bool writeStateFile(const fs::path& stateDir,
 
 bool writeSnapshot(const RecoverySnapshot& snapshot, const fs::path& journalFile,
                    const fs::path& sessionDir) {
+    if (!snapshot.documents.empty()) {
+        const std::string generation = "g-" + newUuid().substr(0, 8);
+        const fs::path generationDir = sessionDir / "Documents" / generation;
+        nlohmann::json manifest{{"format", "vlt-workspace-recovery"}, {"version", 1},
+            {"selected", snapshot.selectedDocument}, {"generation", generation}, {"documents", nlohmann::json::array()}};
+        std::error_code error;
+        std::size_t index = 0;
+        for (const auto& document : snapshot.documents) {
+            if (!document || document->id.empty() || document->id == "." || document->id == ".." ||
+                fs::path(document->id).filename() != fs::path(document->id)) return false;
+            // Short storage names leave room for atomic state-file suffixes
+            // below Windows' path limit. Stable identities remain in metadata.
+            const auto storage = std::to_string(index++);
+            const auto directory = generationDir / storage;
+            fs::create_directories(directory, error);
+            if (error || !writeSnapshot(document->snapshot, directory / kJournalFile, directory)) return false;
+            manifest["documents"].push_back({{"id", document->id}, {"path", document->path},
+                {"name", document->name}, {"dirty", document->dirty}, {"directory", storage}});
+            const auto view = nlohmann::json::parse(document->viewState, nullptr, false);
+            if (view.is_object()) manifest["documents"].back()["view"] = view;
+        }
+        // No manifest can reference a partially written set of documents.
+        if (!writeJsonAtomically(manifest, sessionDir / "workspace.json")) return false;
+        for (const auto& entry : fs::directory_iterator(sessionDir / "Documents", error)) {
+            if (error) break;
+            if (entry.path() != generationDir && entry.is_directory(error)) fs::remove_all(entry.path(), error);
+        }
+    }
     const fs::path stateDir = sessionDir / ProjectSerializer::kStateDir;
     std::error_code ec;
     if (!snapshot.pluginStates.empty() || !snapshot.sharedPluginStates.empty()) {

@@ -323,6 +323,7 @@ std::optional<EqualizerSnapshot> AudioRuntime::equalizerSnapshot(const AudioPlug
     out.telemetry = plugin->telemetry(consumeMeters);
     out.comparison = plugin->activeComparison();
     out.preset = plugin->presetReference();
+    out.auditionBand = plugin->auditionBand();
     return out;
 }
 

@@ -35,6 +35,9 @@ class RackParameterBinding final : public QObject {
     void finish(const QString& id);
     void finishAll();
     void refresh();
+    /// Extension windows must recheck permissions at every live write.
+    void setEditGuard(std::function<bool()> guard) { m_editGuard = std::move(guard); }
+    void setDocumentPreviewParameters(std::vector<daw::plugins::ParameterInfo>);
     static void refreshModulation(ui::Knob*, daw::EngineController*, const std::string& channel, const std::string& slot, const std::string& parameter);
     void automate(const QString& id);
     bool available() const;
@@ -57,6 +60,9 @@ class RackParameterBinding final : public QObject {
     daw::PluginIdentity m_identity;
     std::vector<daw::plugins::ParameterInfo> m_parameters;
     QHash<QString, double> m_gestures;
+    std::function<bool()> m_editGuard;
+    std::uint64_t m_previewGeneration=0;
+    std::string m_previewUid;
     struct Control {
         QString id;
         QPointer<QWidget> widget;

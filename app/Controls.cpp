@@ -7,6 +7,7 @@
 #include "EngineController.hpp"
 #include "GlassPanel.hpp"
 #include "Theme.hpp"
+#include "TimelineNavigationPaint.hpp"
 #include "UiConstants.hpp"
 
 #include <QAction>
@@ -75,32 +76,39 @@ ViewControlStrip::ViewControlStrip(QWidget* parent) : QWidget(parent) {
 
 void ViewControlStrip::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    const Theme& theme = th();
-    painter.fillRect(rect(), theme.headerBackground);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setBrush(mixColors(theme.headerBackground, theme.well(), 0.32));
-    painter.setPen(theme.sectionDivider());
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+    navigation::paintRailSurface(painter, rect(), Qt::Vertical);
+    QColor divider = th().textPrimary;
+    divider.setAlphaF(th().dark ? 0.12 : 0.16);
+    painter.setPen(QPen(divider, 1));
     for (int i = 1; i < 3; ++i)
-        painter.drawLine(3, i * kViewControlHeight, width() - 4, i * kViewControlHeight);
+        painter.drawLine(QPointF(5, i * kViewControlHeight + 0.5),
+                         QPointF(width() - 5, i * kViewControlHeight + 0.5));
 }
 
 void paintViewControl(QPainter& painter, const QWidget* control,
                       icons::Glyph glyph, bool pressed) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     const Theme& theme = th();
-    const QRectF cell = QRectF(control->rect()).adjusted(1.0, 1.0, -1.0, -1.0);
-    if (pressed || (control->isEnabled() && control->underMouse())) {
+    const QRectF cell = QRectF(control->rect()).adjusted(2.0, 2.0, -2.0, -2.0);
+    const bool active = control->isEnabled() &&
+        (pressed || control->underMouse() || control->hasFocus());
+    if (active) {
         QColor fill = pressed ? QColor(0, 0, 0, theme.dark ? 40 : 22) : theme.textPrimary;
         if (!pressed) fill.setAlpha(theme.dark ? 22 : 16);
         painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
-        painter.drawRoundedRect(cell, 2, 2);
+        painter.drawRoundedRect(cell, 3, 3);
+    }
+    if (control->hasFocus()) {
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(theme.accent, 1, Qt::DotLine));
+        painter.drawRoundedRect(cell.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
     }
     const QPointF centre = QRectF(control->rect()).center();
     icons::paint(painter, glyph,
                  QRectF(centre.x() - 7.0, centre.y() - 7.0, 14.0, 14.0),
-                 control->isEnabled() ? theme.textPrimary : theme.textSecondary);
+                 active ? theme.textPrimary : theme.textSecondary);
 }
 
 ViewScrubSlider::ViewScrubSlider(icons::Glyph glyph, Axis axis, int resetValue,
@@ -390,8 +398,20 @@ double sliderPositionAt(const QRectF& track, Qt::Orientation orientation,
     return std::clamp((coordinate - from) / (to - from), 0.0, 1.0);
 }
 
-void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
-    const Theme& t = th();
+static Theme paletteTheme(const QPalette& palette) {
+    auto theme = th();
+    theme.background = palette.window().color();
+    theme.surface = palette.base().color();
+    theme.surfaceElevated = palette.button().color();
+    theme.textPrimary = palette.text().color();
+    theme.textSecondary = palette.placeholderText().color();
+    theme.accent = palette.highlight().color();
+    theme.accentHighlight = mixColors(theme.accent, theme.textPrimary, .16);
+    theme.dark = theme.background.lightnessF() < .5;
+    return theme;
+}
+
+static void paintSliderWithTheme(QPainter& p, const QRectF& track, const SliderPaint& spec, const Theme& t) {
     const QColor accent = spec.accent.isValid() ? spec.accent : t.accent;
     const bool vertical = spec.orientation == Qt::Vertical;
     const double thickness = vertical ? track.width() : track.height();
@@ -460,6 +480,10 @@ void paintSlider(QPainter& p, const QRectF& track, const SliderPaint& spec) {
     p.restore();
 }
 
+void paintSlider(QPainter& painter, const QRectF& track, const SliderPaint& spec) {
+    paintSliderWithTheme(painter, track, spec, th());
+}
+
 // ── GlassSlider ───────────────────────────────────────────────────────────
 
 GlassSlider::GlassSlider(Qt::Orientation orientation, QWidget* parent)
@@ -524,7 +548,11 @@ void GlassSlider::paintEvent(QPaintEvent*) {
     spec.fillFrom = m_fillFrom;
     spec.detent = m_detent;
     spec.active = isSliderDown() || underMouse();
-    paintSlider(painter, interactionTrack(), spec);
+    if (property("vlt.scriptPaletteData").isValid()) {
+        const auto theme = paletteTheme(property("vlt.scriptPaletteData").value<QPalette>());
+        spec.accent = theme.accent;
+        paintSliderWithTheme(painter, interactionTrack(), spec, theme);
+    } else paintSlider(painter, interactionTrack(), spec);
 }
 
 void GlassSlider::mousePressEvent(QMouseEvent* event) {
@@ -825,6 +853,10 @@ void IconButton::leaveEvent(QEvent*) {
 
 void IconButton::paintEvent(QPaintEvent*) {
     QPainter p(this);
+    paintScene(p, QRegion(rect()));
+}
+
+void IconButton::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, true);
 
     if (property("consoleButton").toBool()) {
@@ -1024,6 +1056,10 @@ void MsrButton::setActiveColor(const QColor& color) {
 
 void MsrButton::paintEvent(QPaintEvent*) {
     QPainter p(this);
+    paintScene(p, QRegion(rect()));
+}
+
+void MsrButton::paintScene(QPainter& p, const QRegion&) {
     p.setRenderHint(QPainter::Antialiasing, true);
     if (property("consoleButton").toBool()) {
         const auto& t = th();
@@ -2777,15 +2813,19 @@ void Knob::paintModulation(QPainter& p, const QRectF& ring, bool vertical) const
 void Knob::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    const Theme& t = th();
+    Theme localTheme;
+    const auto scriptPalette = property("vlt.scriptPaletteData");
+    if (scriptPalette.isValid()) localTheme = paletteTheme(scriptPalette.value<QPalette>());
+    const Theme& t = scriptPalette.isValid() ? localTheme : th();
 
     const bool rackDigital = m_visualStyle == VisualStyle::RackDigital ||
         (m_visualStyle == VisualStyle::SamplerDigital && height() < 72);
     const bool digital = m_visualStyle == VisualStyle::SamplerDigital || rackDigital;
+    const bool separatedDial = digital && property("rackSeparatedDial").toBool();
     const bool gravityStyle = m_visualStyle == VisualStyle::Gravity;
     const bool graphiteStyle = m_visualStyle == VisualStyle::Graphite;
     const int size = m_bare ? m_bare
-                            : digital ? (rackDigital ? 28 : kSamplerKnobSize)
+                            : digital ? (rackDigital ? (separatedDial ? 32 : 28) : kSamplerKnobSize)
                                       : (m_compact ? kKnobCompactSize : kKnobSize);
     const double inset = m_bare ? 1.5 : 2.0;
     const QRectF ring(double(width() - size) / 2.0 + inset,
@@ -2985,31 +3025,40 @@ void Knob::paintEvent(QPaintEvent*) {
         if (!isEnabled()) p.setOpacity(0.42);
         const double f = fraction();
         const QColor accent = m_arcColor.isValid() ? m_arcColor : t.accent;
-        const bool interacting = m_dragging || underMouse();
+        const bool interacting = m_dragging || underMouse() || hasFocus();
+        const double arcWidth = separatedDial ? 1.6 : 2.5;
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(mixColors(t.separator(), t.textSecondary, 0.25), 2.5,
+        p.setPen(QPen(mixColors(t.separator(), t.textSecondary, separatedDial ? 0.12 : 0.25), arcWidth,
                       Qt::SolidLine, Qt::RoundCap));
         p.drawArc(ring, 225 * 16, -270 * 16);
         const double from = m_bipolar ? 90.0 : 225.0;
         const double sweep = (m_bipolar ? f - 0.5 : f) * 270.0;
-        p.setPen(QPen(accent, 2.5, Qt::SolidLine, Qt::RoundCap));
+        p.setPen(QPen(accent, arcWidth, Qt::SolidLine, Qt::RoundCap));
         p.drawArc(ring, int(from * 16), int(-sweep * 16));
-        const QRectF body = ring.adjusted(4, 4, -4, -4);
+        const double gap = separatedDial ? 5.0 : 4.0;
+        const QRectF body = ring.adjusted(gap, gap, -gap, -gap);
+        if (separatedDial) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0, 0, 0, t.dark ? 50 : 20));
+            p.drawEllipse(body.translated(0, 1));
+        }
         if (!paintMetalKnob(p, body, 225.0 - f * 270.0)) {
         QLinearGradient surface(body.topLeft(), body.bottomLeft());
         surface.setColorAt(0, interacting ? t.edgeLight(t.controlTop()) : t.controlTop());
         surface.setColorAt(1, t.well());
         p.setBrush(surface);
-        p.setPen(QPen(mixColors(t.separator(), t.textSecondary, 0.18), 1));
+        p.setPen(QPen(mixColors(t.separator(), separatedDial && interacting ? accent : t.textSecondary, separatedDial ? .35 : .18), 1));
         p.drawEllipse(body);
         const double angle = (225.0 - f * 270.0) * kDegToRad;
         const QPointF direction(std::cos(angle), -std::sin(angle));
-        p.setPen(QPen(t.textPrimary, 2, Qt::SolidLine, Qt::RoundCap));
-        p.drawLine(centre + direction * 3, centre + direction * 10);
+        p.setPen(QPen(t.textPrimary, separatedDial ? 1.6 : 2, Qt::SolidLine, Qt::RoundCap));
+        // Keep the pointer within the face, with air before the value arc.
+        p.drawLine(centre + direction * (separatedDial ? 1.5 : 3),
+                   centre + direction * (separatedDial ? body.width() / 2 - 2 : 10));
         }
         if (!m_bare) {
             QFont labelFont = font();
-            labelFont.setPixelSize(rackDigital ? 9 : 10);
+            labelFont.setPixelSize(rackDigital && !separatedDial ? 9 : 10);
             labelFont.setWeight(QFont::Medium);
             p.setFont(labelFont);
             p.setPen(t.textSecondary);
@@ -3018,7 +3067,8 @@ void Knob::paintEvent(QPaintEvent*) {
             labelFont.setPixelSize(rackDigital ? 10 : 11);
             p.setFont(labelFont);
             p.setPen(m_dragging ? accent : t.textPrimary);
-            p.drawText(QRect(0, rackDigital ? 43 : 60, width(), rackDigital ? 16 : 17), Qt::AlignCenter,
+            const int valueTop = rackDigital ? std::min(separatedDial ? 45 : 43, height() - 14) : 60;
+            p.drawText(QRect(0, valueTop, width(), rackDigital ? 14 : 17), Qt::AlignCenter,
                        elidedCaption(p, text(), width()));
         }
         return;
@@ -3114,6 +3164,7 @@ void Knob::mouseDoubleClickEvent(QMouseEvent*) {
 void Knob::contextMenuEvent(QContextMenuEvent* event) {
     finishEditing();
     QMenu menu(this);
+    if(m_contextMenuProvider)m_contextMenuProvider(&menu);
     auto* precise=menu.addAction(tr("Enter value…"));
     auto* automate=m_automatable ? menu.addAction(tr("Create automation")) : nullptr;
     const auto picked=menu.exec(event->globalPos());

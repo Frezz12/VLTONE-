@@ -417,7 +417,8 @@ bool completeAsset(const AssetRef& asset, AssetKind expectedKind,
 
 bool sampleEditEqual(const ClipSampleEditModel& a,
                      const ClipSampleEditModel& b) {
-    return a.loopMode == b.loopMode && a.loopStart == b.loopStart &&
+    return a.trimThresholdDb == b.trimThresholdDb &&
+           a.loopMode == b.loopMode && a.loopStart == b.loopStart &&
            a.loopEnd == b.loopEnd && a.stretchMode == b.stretchMode &&
            a.stretchTime == b.stretchTime &&
            a.stretchPitch == b.stretchPitch && a.formant == b.formant &&
@@ -439,7 +440,8 @@ bool validSampleEdit(const ClipSampleEditModel& value) {
         return std::isfinite(number) && number >= minimum && number <= maximum;
     };
     const int stretchMode = static_cast<int>(value.stretchMode);
-    return value.loopMode >= 0 && value.loopMode <= 2 &&
+    return finiteRange(value.trimThresholdDb, -96.0, 0.0) &&
+           value.loopMode >= 0 && value.loopMode <= 2 &&
            finiteRange(value.loopStart, 0.0, 1.0) &&
            finiteRange(value.loopEnd, 0.0, 1.0) &&
            value.loopStart <= value.loopEnd && stretchMode >= 0 &&

@@ -81,7 +81,7 @@ inline constexpr std::uint32_t kBandParameterCount =
     std::uint32_t(BandParam::Count);
 inline constexpr std::uint32_t kParameterCount =
     kGlobalParameterCount + kBandCount * kBandParameterCount;
-inline constexpr std::size_t kSpectrumBinCount = 128;
+inline constexpr std::size_t kSpectrumBinCount = 768;
 
 constexpr std::uint32_t globalParameter(GlobalParam parameter) noexcept {
     return std::uint32_t(parameter);

@@ -1,4 +1,5 @@
 #include "ChannelStrip.hpp"
+#include "ScriptContextMenu.hpp"
 #include "ChannelViewState.hpp"
 #include "RackDrag.hpp"
 #include <QSettings>
@@ -124,7 +125,7 @@ protected:
             return;
         }
         const auto& t = th();
-        const bool off = property("bypassed").toBool() || !isEnabled();
+        const bool off = property("bypassed").toBool() || property("engineOff").toBool() || !isEnabled();
         QPainter p(this);
         p.setFont(font());
         p.setPen(property("missing").toBool() || property("faulted").toBool() ? Theme::mute()
@@ -171,9 +172,25 @@ constexpr auto kInsertMime = "application/x-daw-insert";
 constexpr auto kChainMime = "application/x-daw-chain";
 constexpr auto kSendsMime = "application/x-daw-sends";
 
-QMimeData* dragPayload(const char* mime, const QString& text) {
+QMimeData* dragPayload(const char* mime, const QString& text, QWidget* origin = nullptr) {
+    ChannelStrip* strip = nullptr;
+    for (auto* parent = origin; parent && !strip; parent = parent->parentWidget()) strip = qobject_cast<ChannelStrip*>(parent);
+    if (strip && (mime == kInsertMime || mime == kChainMime)) {
+        QString channel;
+        QStringList ids;
+        if (mime == kInsertMime) {
+            QMimeData plain; plain.setData(kInsertMime, text.toUtf8());
+            const auto drag = ui::rack::decode(&plain); channel = drag.channel; ids = drag.ids;
+        } else {
+            channel = text;
+            if (const auto* chain = strip->projectController()->channelInserts(channel.toStdString()))
+                for (const auto& slot : *chain) ids.append(QString::fromStdString(slot.id));
+        }
+        return ui::rack::ownedMime(*strip->projectController(), channel, ids);
+    }
     auto* data = new QMimeData;
     data->setData(QString::fromLatin1(mime), text.toUtf8());
+    if (strip) data->setData("application/x-vlt-source-document", QByteArray::fromStdString(strip->projectController()->documentIdentity()));
     return data;
 }
 
@@ -244,8 +261,11 @@ protected:
         if (m_payload.isEmpty() || !m_dragGesture.update(ev)) return QLabel::event(ev);
         const QPointer<DragTitle> guard(this);
         const auto finished = m_dragFinished;
+        auto* data = dragPayload(m_mime, m_payload, this);
+        if (!data) { m_dragGesture.finish(); return true; }
+        const ui::rack::DragScope lifetime;
         auto* drag = new QDrag(this);
-        drag->setMimeData(dragPayload(m_mime, m_payload));
+        drag->setMimeData(data);
         // A successful drop rebuilds the strip. Announce it only after exec()
         // returns so the drag source cannot be deleted from its own event stack.
         const auto action = drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
@@ -421,12 +441,27 @@ protected:
         if (isRackSlot(m_slot)) {
             p.setRenderHint(QPainter::Antialiasing);
             const auto& t = th();
-            const QColor base = mixColors(t.well(), t.surfaceElevated, .62);
+            const bool off = m_slot->property("bypassed").toBool() ||
+                m_slot->property("engineOff").toBool() || !m_slot->isEnabled();
+            const bool unavailable = m_slot->property("missing").toBool() ||
+                m_slot->property("faulted").toBool();
+            const QColor accent = unavailable ? Theme::mute() : t.accent;
+            const QColor base = mixColors(t.surfaceElevated, t.well(), .24);
             const QColor face = m_slot->isDown() ? t.well()
-                : m_hovered ? mixColors(base, t.textPrimary, .09) : base;
-            p.setPen(Qt::NoPen);
-            p.setBrush(face);
-            p.drawRoundedRect(QRectF(rect()), 5, 5);
+                : mixColors(base, accent, off ? 0.0 : m_hovered ? .23 : .14);
+            const QRectF plate = QRectF(rect()).adjusted(.5, .5, -.5, -.5);
+            QLinearGradient finish(plate.topLeft(), plate.bottomLeft());
+            finish.setColorAt(0, mixColors(face, t.edgeLight(face), off ? .18 : .55));
+            finish.setColorAt(1, face);
+            p.setPen(QPen(mixColors(face, off ? t.separator() : accent, .30), 1));
+            p.setBrush(finish);
+            p.drawRoundedRect(plate, 3, 3);
+            // A narrow status edge keeps the name readable in dense channels.
+            // Bypass is hollow, so its state does not rely on colour alone.
+            const QRectF status(m_leading ? width() - 3.5 : 1.5, 4, 2, height() - 8);
+            p.setPen(off ? QPen(t.textSecondary, 1) : QPen(Qt::NoPen));
+            p.setBrush(off ? QBrush(Qt::NoBrush) : QBrush(accent));
+            p.drawRoundedRect(status, 1, 1);
         }
         if (!m_dropHover) return;
         // A line where the dragged plugin would land, rather than a box around
@@ -443,8 +478,11 @@ private:
         m_slot->setDown(false);
         const QPointer<SlotRow> guard(this);
         const auto finished = m_dragFinished;
+        auto* data = dragPayload(m_dragMime, m_dragPayload, this);
+        if (!data) { m_dragGesture.finish(); return; }
+        const ui::rack::DragScope lifetime;
         auto* drag = new QDrag(this);
-        drag->setMimeData(dragPayload(m_dragMime, m_dragPayload));
+        drag->setMimeData(data);
         drag->setPixmap(grab());
         drag->setHotSpot(m_dragGesture.pressPosition());
         // The target mutates the model; the source safely requests the shared
@@ -1176,6 +1214,9 @@ bool ChannelStrip::rebindChannel(const QString& trackId, int insertSlots) {
     m_readoutClock.invalidate(); m_meter->clearLevels();
     m_layoutWidth = 0;
     buildRack();
+    m_rack->installEventFilter(this);
+    for (QWidget* child : m_rack->findChildren<QWidget*>())
+        child->installEventFilter(this);
     m_mainLayout->insertWidget(1, m_rack);
     applyTheme(); syncFromModel(); refreshMeter(); measureRack();
     return true;
@@ -1205,6 +1246,22 @@ bool ChannelStrip::checkRebindForTest() {
     slot->click();
     if (editedChannel != QString::fromStdString(second) ||
         editedSlot != QString::fromStdString(second + "-slot")) return false;
+    // Recreated rows accept internal rack drags. Browser payloads must still
+    // pass through the strip's filter before that specialised handler.
+    QMimeData browserPlugin;
+    browserPlugin.setData(ui::kPluginDragMime,
+        ui::encodePluginRef(int(daw::plugins::Format::Internal), QStringLiteral("daw.eq")));
+    auto* row = slot->parentWidget();
+    if (!row || !row->acceptDrops()) return false;
+    strip.setAcceptDrops(false); // Isolate the child's forwarding from parent fallback.
+    QDragEnterEvent enter(QPoint(4, 4), Qt::CopyAction, &browserPlugin,
+                          Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(row, &enter);
+    if (!enter.isAccepted() || !strip.m_browserDropActive) return false;
+    QDragLeaveEvent leave;
+    QApplication::sendEvent(row, &leave);
+    strip.setAcceptDrops(true);
+    if (strip.m_browserDropActive || strip.m_dropHighlight) return false;
     // These are the same signals a live fader gesture sends. The preserved
     // control must commit only to its new channel, with one undo operation.
     const auto undo = controller.undoDepth();
@@ -1544,11 +1601,13 @@ QWidget* ChannelStrip::buildSlotWell(const QString& title, QWidget* addButton,
         well = new QWidget(box);
     }
     well->setObjectName("SlotWell");
+    const bool rackSlots = drag.dropMime == kInsertMime || drag.dragMime == kSendsMime;
+    well->setProperty("rackSlots", rackSlots);
     well->setAttribute(Qt::WA_StyledBackground, true);
     auto* wellCol = new QVBoxLayout(well);
-    // Tight enough that the well reads as a rack of slots rather than a box
-    // with slots floating in it; the border still separates it from the strip.
-    wellCol->setContentsMargins(1, 1, 1, 1);
+    // Filled racks meet their container edges without a dark inset above them.
+    const int inset = rackSlots ? 0 : 1;
+    wellCol->setContentsMargins(inset, inset, inset, inset);
     wellCol->setSpacing(1);
     for (QWidget* row : rows) {
         row->setParent(well);
@@ -1667,7 +1726,7 @@ QWidget* ChannelStrip::buildInserts() {
         // on another machine, a plugin uninstalled, a licence that lapsed. The
         // document still says what belongs here — the strip has to say that it
         // is not there.
-        const bool missing = !m_controller->hasInsert(channel.toStdString(), model->id);
+        const bool missing = m_controller->audioEnabled() && !m_controller->hasInsert(channel.toStdString(), model->id);
         b->setProperty("bypassed", model->bypassed);
         b->setProperty("missing", missing);
         if (missing) {
@@ -1765,7 +1824,7 @@ QWidget* ChannelStrip::buildInserts() {
     bypassAll->setObjectName(QStringLiteral("ChannelFxPower"));
     bypassAll->setAccessibleName(tr("Bypass every plugin on this channel"));
     bypassAll->setButtonSize(kSectionActionSide, kSectionActionSide);
-    bypassAll->setGlyphSize(14);
+    bypassAll->setGlyphSize(13);
     bypassAll->setProperty("circular", true);
     bypassAll->setFocusPolicy(Qt::StrongFocus);
     bypassAll->setCheckable(true);
@@ -1803,8 +1862,7 @@ void ChannelStrip::dropInsertAt(const QString& channel, const QString& payload,
     if (!drag.valid) return;
     {
         std::vector<std::string> landed;
-        const auto result = m_controller->transferRackSelection(drag.channel.toStdString(),
-            ui::rack::ids(drag.ids), channel.toStdString(), index,
+        const auto result = ui::rack::transfer(*m_controller, drag, channel.toStdString(), index,
             mods.testFlag(Qt::AltModifier), {}, &landed);
         if (!result) { QToolTip::showText(QCursor::pos(), QString::fromStdString(result.message()), this); return; }
         QStringList selected; for (const auto& id : landed) selected.push_back(QString::fromStdString(id));
@@ -1982,6 +2040,7 @@ QMenu* ChannelStrip::buildInsertMenu(QWidget* parent, const QString& insertId,
         inserts && index < inserts->size() && (*inserts)[index].bypassed;
 
     auto* menu = new QMenu(parent);
+    ui::scripts::appendContextMenu(menu,m_controller,{{"type","device"},{"target",{{"track",channel.toStdString()},{"device",insertId.toStdString()}}}});
 
     connect(menu->addAction(tr("Open Editor")), &QAction::triggered, this,
             [this, channel, insertId] { emit editorRequested(channel, insertId); });
@@ -2337,7 +2396,7 @@ QWidget* ChannelStrip::buildSends() {
     power->setObjectName(QStringLiteral("ChannelSendsPower"));
     power->setAccessibleName(tr("Switch all sends on or off"));
     power->setButtonSize(kSectionActionSide, kSectionActionSide);
-    power->setGlyphSize(14);
+    power->setGlyphSize(13);
     power->setProperty("circular", true);
     power->setFocusPolicy(Qt::StrongFocus);
     power->setCheckable(true);
@@ -2998,22 +3057,37 @@ void ChannelStrip::refreshPluginHealth() {
         const auto slot = button->property("pluginSlotId").toString();
         if (slot.isEmpty()) continue;
         const auto status = m_controller->insertRuntimeStatus(channel, slot.toStdString());
+        const auto* model = m_controller->insertModel(channel, slot.toStdString());
+        if (!model) continue;
         using State = daw::AudioPluginRuntimeState;
+        const bool engineOff = !m_controller->audioEnabled();
+        const bool missing = !engineOff && !m_controller->hasInsert(channel, slot.toStdString());
         const bool failed = status.state == State::Faulted || status.state == State::AwaitingRecovery ||
                             status.state == State::Recovering;
-        if (button->property("faulted").toBool() == failed) continue;
+        if (button->property("healthInitialized").toBool() &&
+            button->property("faulted").toBool() == failed &&
+            button->property("missing").toBool() == missing &&
+            button->property("engineOff").toBool() == engineOff &&
+            button->property("bypassed").toBool() == model->bypassed) continue;
+        button->setProperty("healthInitialized", true);
+        button->setProperty("missing", missing);
+        button->setProperty("engineOff", engineOff);
+        button->setProperty("bypassed", model->bypassed);
         button->setProperty("faulted", failed);
-        if (failed) button->setProperty("healthyToolTip", button->toolTip());
         const auto label = button->property("pluginLabel").toString();
         button->setText(failed ? QString::fromUtf8("⚠ ") + label : label);
         button->setAccessibleName(failed ? tr("%1 — plugin error. Show recovery actions").arg(label) : label);
         button->setToolTip(failed ? tr("%1 — plugin error. Click for recovery actions.").arg(label)
-                                  : button->property("healthyToolTip").toString());
+                          : engineOff ? tr("%1 — engine off").arg(label)
+                          : missing ? tr("%1 — device unavailable").arg(label)
+                          : model->bypassed ? tr("%1 — bypassed. Click to edit, right-click for options.").arg(label)
+                          : tr("%1 — click to edit, right-click for options.").arg(label));
         button->update();
     }
 }
 
 void ChannelStrip::syncFromModel() {
+    setEnabled(m_master || !m_controller->isTrackEditLocked(m_trackId.toStdString()));
     refreshPluginHealth();
     syncColor(false);
     if (m_fxPower) {
@@ -3254,6 +3328,7 @@ void ChannelStrip::contextMenuEvent(QContextMenuEvent* ev) {
 QMenu* ChannelStrip::buildContextMenu(QWidget* parent) {
     auto* menu = new QMenu(parent);
     menu->setObjectName(QStringLiteral("MixerChannelContextMenu"));
+    ui::scripts::appendContextMenu(menu,m_controller,{{"type","mixer"},{"target",{{"track",channelId().toStdString()}}}});
     const QString channel = channelId();
     auto* timeline = menu->addAction(m_master ? tr("Show Master on Timeline")
                                             : tr("Show on Timeline"));
@@ -3508,6 +3583,10 @@ bool ChannelStrip::checkContextMenusForTest() {
           "reset actions edit the real master fader and pan");
     InspectorWidget inspector(&controller);
     inspector.setTrack(QString::fromStdString(row));
+    check(!inspector.findChild<ChannelStrip*>(),
+          "an unexposed inspector defers channel construction");
+    inspector.setAttribute(Qt::WA_DontShowOnScreen);
+    inspector.show();
     QString inspectorChannel;
     bool createRequested = false;
     connect(&inspector, &InspectorWidget::timelineRequested, &inspector,
@@ -3524,6 +3603,115 @@ bool ChannelStrip::checkContextMenusForTest() {
     inspectorCreate->actions().last()->trigger();
     check(inspectorChannel == QLatin1String(daw::EngineController::kMasterChannelId) && createRequested,
           "the inspector forwards timeline and advanced track creation actions");
+    const auto visibleInspectorStrip = [&]() -> ChannelStrip* {
+        for (auto* candidate : inspector.findChildren<ChannelStrip*>())
+            if (!candidate->isHidden()) return candidate;
+        return nullptr;
+    };
+    const QPointer<ChannelStrip> masterInspectorStrip = inspectorStrip;
+    QPointer<ChannelStrip> hiddenStrip = inspectorStrip;
+    inspector.setCollapsed(true);
+    inspector.setTrack(QString::fromStdString(track));
+    inspector.rebuildForTrack(QString::fromStdString(track));
+    inspector.syncFromModel();
+    check(hiddenStrip && inspector.findChildren<ChannelStrip*>().size() == 1 &&
+          hiddenStrip->trackId().toStdString() == row,
+          "collapsed selection keeps the old hidden strip without constructing channels");
+    inspector.setCollapsed(false);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    inspectorStrip = visibleInspectorStrip();
+    check(hiddenStrip && hiddenStrip->isHidden() && inspectorStrip &&
+          inspectorStrip->trackId().toStdString() == track,
+          "expanding the inspector immediately shows the latest channel");
+    hiddenStrip = inspectorStrip;
+    inspector.hide();
+    inspector.setSelection(QString::fromStdString(row), {});
+    check(hiddenStrip && inspector.findChildren<ChannelStrip*>().size() == 2,
+          "hidden window selection also defers the channel rebuild");
+    inspector.show();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    inspectorStrip = visibleInspectorStrip();
+    check(hiddenStrip && hiddenStrip->isHidden() && inspectorStrip == masterInspectorStrip,
+          "showing the inspector reuses the latest channel's existing controls");
+    const float previousMasterVolume = controller.masterVolume();
+    auto& inspectorProject = const_cast<daw::ProjectModel&>(controller.project());
+    inspectorProject.findTrack(track)->volume = .63f;
+    inspector.setTrack(QString::fromStdString(track));
+    inspectorStrip = visibleInspectorStrip();
+    check(inspectorStrip == hiddenStrip && inspectorStrip &&
+          std::abs(inspectorStrip->m_fader->gain() - .63) < 1e-5,
+          "returning to a retained channel synchronizes its latest values");
+    if (!inspectorStrip) return false;
+    emit inspectorStrip->m_fader->gainChanged(.41);
+    emit inspectorStrip->m_fader->editFinished();
+    check(std::abs(inspectorProject.findTrack(track)->volume - .41f) < 1e-5 &&
+          controller.masterVolume() == previousMasterVolume,
+          "a retained fader still edits only its own channel");
+    inspector.setTrack(QString::fromStdString(row));
+    daw::InsertModel changedSlot;
+    changedSlot.id = "inspector-cache-slot";
+    changedSlot.name = "Changed while hidden";
+    inspectorProject.findTrack(track)->inserts.push_back(changedSlot);
+    inspector.setTrack(QString::fromStdString(track));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    inspectorStrip = visibleInspectorStrip();
+    check(!hiddenStrip && inspectorStrip &&
+          inspectorStrip->findChild<QToolButton*>(QStringLiteral("SlotButton")),
+          "structural changes replace a retained channel before showing it");
+    hiddenStrip = inspectorStrip;
+    // Seed a long rack before it becomes the oldest cached shell. Recycling
+    // it onto an empty channel must not retain a tall, empty insert area.
+    for (int i = 0; i < 7; ++i) {
+        daw::InsertModel slot;
+        slot.id = "inspector-long-chain-" + std::to_string(i);
+        slot.name = "Long chain " + std::to_string(i);
+        inspectorProject.findTrack(track)->inserts.push_back(std::move(slot));
+    }
+    inspectorProject.miniModuleProjectId += "-another-project";
+    inspector.rebuildForTrack(QString::fromStdString(track));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    check(!hiddenStrip && !masterInspectorStrip && visibleInspectorStrip(),
+          "changing project identity discards retained channels");
+    QPointer<ChannelStrip> recycledStrip = visibleInspectorStrip();
+    auto* recycledFader = recycledStrip ? recycledStrip->m_fader : nullptr;
+    const int recycledSlots = recycledStrip ? recycledStrip->insertSlotCount() : 0;
+    const float originalRecycledVolume = inspectorProject.findTrack(track)->volume;
+    bool recycledShell = false;
+    QString lastCachedTrack;
+    for (int i = 0; i < 13; ++i) {
+        lastCachedTrack = QString::fromStdString(controller.addTrack(
+            daw::TrackKind::Audio, "Retained inspector " + std::to_string(i)));
+        inspector.setTrack(lastCachedTrack);
+        if (visibleInspectorStrip() == recycledStrip && recycledStrip) {
+            recycledShell = true;
+            check(recycledStrip->m_fader == recycledFader,
+                  "a recycled inspector shell preserves its fader");
+            check(recycledStrip->trackId() == lastCachedTrack,
+                  "a recycled inspector shell follows the newly selected channel");
+            ChannelStrip freshTarget(&controller, lastCachedTrack, false);
+            check(recycledStrip->insertSlotCount() == freshTarget.insertSlotCount() &&
+                  recycledStrip->insertSlotCount() < recycledSlots,
+                  "recycling a long rack to an empty channel uses the fresh target's insert height");
+            check(recycledStrip->m_inspectorCompact &&
+                  recycledStrip->width() == InspectorWidget::kChannelWidth,
+                  "a recycled inspector shell preserves compact presentation and width");
+            emit recycledFader->gainChanged(.27);
+            emit recycledFader->editFinished();
+            check(std::abs(inspectorProject.findTrack(lastCachedTrack.toStdString())->volume - .27f) < 1e-5 &&
+                  inspectorProject.findTrack(track)->volume == originalRecycledVolume,
+                  "a recycled inspector fader edits its new channel only");
+        }
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    check(recycledShell, "selecting beyond the cache capacity preserves a compatible fader");
+    check(inspector.findChildren<ChannelStrip*>().size() <= 12,
+          "retained inspector channels have a fixed memory bound");
+    hiddenStrip = visibleInspectorStrip();
+    controller.removeTrack(lastCachedTrack.toStdString());
+    inspector.setTrack(QString::fromStdString(track));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    check(!hiddenStrip && visibleInspectorStrip(),
+          "deleted channels are evicted before selecting another track");
     ChannelStrip ordinary(&controller, QString::fromStdString(track), false);
     std::unique_ptr<QMenu> channelMenu(ordinary.buildContextMenu(nullptr));
     auto* create = channelMenu->findChild<QMenu*>(QStringLiteral("channel.createTrack"));
@@ -3592,6 +3780,17 @@ void ChannelStrip::paintEvent(QPaintEvent*) {
         material.setColorAt(0, mixColors(fill, Qt::white, t.dark ? 0.015 : 0.12));
         material.setColorAt(1, fill);
         p.setBrush(material);
+    }
+    if (property("vlt.flushChannelStrip").toBool()) {
+        p.setPen(Qt::NoPen);
+        p.drawRect(QRectF(rect()));
+        p.fillRect(QRect(width() - 1, 0, 1, height()), t.sectionDivider());
+        if (m_dropHighlight || (m_selected && m_presentation == Presentation::Compact)) {
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(m_dropHighlight ? t.accent : selectionColor, border));
+            p.drawRect(face);
+        }
+        return;
     }
     QLinearGradient rim(face.topLeft(), face.bottomLeft());
     rim.setColorAt(0, t.edgeLight(fill));
@@ -3904,6 +4103,8 @@ void ChannelStrip::finishInsertBypassPaint() {
 }
 
 void ChannelStrip::dragEnterEvent(QDragEnterEvent* ev) {
+    const auto sourceDocument = ev->mimeData()->data("application/x-vlt-source-document");
+    if (!sourceDocument.isEmpty() && sourceDocument.toStdString() != m_controller->documentIdentity()) return;
     if (ui::rack::decode(ev->mimeData()).valid) {
         m_dropHighlight = true; update(); ev->acceptProposedAction(); return;
     }
@@ -3939,6 +4140,10 @@ void ChannelStrip::dragLeaveEvent(QDragLeaveEvent*) {
 }
 
 void ChannelStrip::dropEvent(QDropEvent* ev) {
+    const auto sourceDocument = ev->mimeData()->data("application/x-vlt-source-document");
+    if (!sourceDocument.isEmpty() && sourceDocument.toStdString() != m_controller->documentIdentity()) {
+        m_dropHighlight = false; update(); ev->ignore(); return;
+    }
     if (ui::rack::decode(ev->mimeData()).valid) {
         const auto* chain = m_controller->channelInserts(channelId().toStdString());
         dropInsertAt(channelId(), payloadOf(ev->mimeData(), kInsertMime), chain ? chain->size() : 0, ev->modifiers());
@@ -4012,6 +4217,7 @@ QLabel { color: %TEXT2%; font-size: 9px; }
 #RoutingButton::menu-indicator { image: none; width: 0; }
 #SlotWell { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %RECESS%,stop:1 %WELL_BOTTOM%);
     border: 1px solid %SEP%; border-top-color: %WELL_EDGE%; border-bottom-color: %LIGHT%; border-radius: %RADIUS%px; }
+#SlotWell[rackSlots="true"] { background: %WELL%; border: none; border-radius: 3px; }
 #SlotWell #ColorControls {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 %FACE_TOP%,stop:0.55 %FACE_MID%,stop:1 %FACE_BOTTOM%);
     border: 1px solid %FACE_EDGE%; border-top-color: %FACE_LIP%; border-radius: 4px;

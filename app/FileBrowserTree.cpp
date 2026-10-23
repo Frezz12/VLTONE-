@@ -1,4 +1,5 @@
 #include "FileBrowserTree.hpp"
+#include "ScriptContextMenu.hpp"
 #include "MenuActions.hpp"
 
 #include "ChannelStripPresets.hpp"
@@ -318,13 +319,15 @@ void FileBrowserTree::setCollectionFilter(const QString& collectionId) {
 }
 
 QTreeWidgetItem* FileBrowserTree::buildPluginRoot(const QString& query) {
-    if (m_plugins.isEmpty()) return nullptr;
+    if (m_plugins.isEmpty() || !ui::browserprefs::isDeviceTab(m_collectionFilter)) return nullptr;
+    const bool instruments = m_collectionFilter == ui::browserprefs::kInstrumentsTab;
 
     // Grouped by format, in the order the formats first appear, so the folders
     // do not reshuffle when a rescan finds one more plugin.
     QStringList order;
     QHash<QString, QList<const PluginEntry*>> byFormat;
     for (const PluginEntry& entry : m_plugins) {
+        if (entry.instrument != instruments) continue;
         if (!query.isEmpty() && !FileSearchWorker::matches(entry.name, query) &&
             !entry.vendor.contains(query, Qt::CaseInsensitive)) continue;
         if (!byFormat.contains(entry.formatName)) order << entry.formatName;
@@ -332,7 +335,7 @@ QTreeWidgetItem* FileBrowserTree::buildPluginRoot(const QString& query) {
     }
 
     auto* root = new QTreeWidgetItem;
-    root->setText(0, tr("Plugins"));
+    root->setText(0, instruments ? tr("Instruments") : tr("Plugins"));
     // A synthetic path, so every "find the row for this path" walk still works
     // and can never collide with a real folder.
     root->setData(0, kPathRole, QStringLiteral("daw://plugins"));
@@ -437,7 +440,22 @@ void FileBrowserTree::rebuildRoots() {
     clear();
 
     const auto collections = ui::browserprefs::collections();
-    if (!m_collectionFilter.isEmpty()) {
+    if (ui::browserprefs::isDeviceTab(m_collectionFilter)) {
+        if (auto* root = buildPluginRoot()) {
+            const auto groups = root->takeChildren();
+            delete root;
+            addTopLevelItems(groups);
+            for (auto* group : groups) group->setExpanded(true);
+            restoreExpanded(open);
+        } else {
+            auto* empty = new QTreeWidgetItem(QStringList(tr("No plugins in this category")));
+            empty->setFlags(Qt::NoItemFlags);
+            addTopLevelItem(empty);
+        }
+        return;
+    }
+    const bool presets = m_collectionFilter == ui::browserprefs::kPresetsTab;
+    if (!m_collectionFilter.isEmpty() && !presets) {
         const auto* collection = findCollection(collections, m_collectionFilter);
         if (!collection) {
             m_collectionFilter.clear();
@@ -467,13 +485,13 @@ void FileBrowserTree::rebuildRoots() {
 
     // Virtual collections are the first, stable destinations in the main tab.
     // Favorites is always present; custom collections follow in creation order.
-    for (const auto& collection : collections)
-        addTopLevelItem(buildCollectionRoot(collection));
+    if (!presets) {
+        for (const auto& collection : collections)
+            if (collection.id != ui::browserprefs::favoritesId())
+                addTopLevelItem(buildCollectionRoot(collection));
+    }
 
-    // Plugins and presets are permanent destinations, so both stay above the
-    // user's potentially long list of sample folders.
-    if (QTreeWidgetItem* plugins = buildPluginRoot()) addTopLevelItem(plugins);
-    if (!m_presetRoot.isEmpty()) {
+    if (presets && !m_presetRoot.isEmpty()) {
         const QFileInfo info(m_presetRoot);
         if (info.isDir()) {
             QTreeWidgetItem* item = makeItem(info.absoluteFilePath(), true);
@@ -482,10 +500,11 @@ void FileBrowserTree::rebuildRoots() {
                                    "and other presets\n%1")
                                     .arg(info.absoluteFilePath()));
             addTopLevelItem(item);
+            item->setExpanded(true);
         }
     }
 
-    for (const QString& folder : m_roots) {
+    for (const QString& folder : presets ? QStringList{} : m_roots) {
         const QFileInfo info(folder);
         if (!info.isDir()) continue;
         QTreeWidgetItem* item = makeItem(info.absoluteFilePath(), true);
@@ -496,7 +515,13 @@ void FileBrowserTree::rebuildRoots() {
         item->setToolTip(0, info.absoluteFilePath());
         addTopLevelItem(item);
     }
-    if (topLevelItemCount() == 0) return;
+    if (topLevelItemCount() == 0) {
+        auto* empty = new QTreeWidgetItem(QStringList(tr("Add a folder to browse your files")));
+        empty->setFlags(Qt::NoItemFlags);
+        empty->setForeground(0, th().textSecondary);
+        addTopLevelItem(empty);
+        return;
+    }
 
     restoreExpanded(open);
     if (!selected.isEmpty()) {
@@ -592,6 +617,21 @@ QTreeWidgetItem* FileBrowserTree::makeItem(const QString& path, bool isDirectory
     return item;
 }
 
+bool FileBrowserTree::event(QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        const auto* item = currentItem();
+        const Kind kind = item ? Kind(item->data(0, kKindRole).toInt()) : Kind::Other;
+        if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+            (kind == Kind::Audio || kind == Kind::ProjectTemplate)) {
+            // The selected row owns Enter before the transport's shortcut.
+            event->accept();
+            return true;
+        }
+    }
+    return QTreeWidget::event(event);
+}
+
 void FileBrowserTree::keyPressEvent(QKeyEvent* event) {
     if (event && (event->key() == Qt::Key_Return ||
                   event->key() == Qt::Key_Enter)) {
@@ -638,6 +678,7 @@ void FileBrowserTree::populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item
     const Kind kind = hasKind ? Kind(item->data(0, kKindRole).toInt())
                               : Kind::Other;
     const QString path = item ? item->data(0, kPathRole).toString() : QString{};
+    if(!path.isEmpty())ui::scripts::appendContextMenu(&menu,nullptr,{{"type","file"},{"target",{{"path",path.toStdString()}}}});
     const QString collectionId = item
         ? item->data(0, kCollectionRole).toString()
         : QString{};
@@ -716,8 +757,8 @@ void FileBrowserTree::populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item
                                             return tab.collectionId == collectionId;
                                         });
         menu.addSeparator();
-        if (pinned) removeTab = menu.addAction(tr("Remove Icon Tab"));
-        else pinTab = menu.addAction(tr("Show as Icon Tab…"));
+        if (pinned) removeTab = menu.addAction(tr("Remove tab"));
+        else pinTab = menu.addAction(tr("Show as tab…"));
         if (collectionId != ui::browserprefs::favoritesId()) {
             renameCollection = menu.addAction(tr("Rename Folder…"));
             deleteCollection = menu.addAction(tr("Delete Collection Folder"));
@@ -725,7 +766,7 @@ void FileBrowserTree::populateItemActionsMenu(QMenu& menu, QTreeWidgetItem* item
     }
     if (kind == Kind::Folder) {
         menu.addSeparator();
-        folderTab = menu.addAction(tr("Open Folder as Icon Tab…"));
+        folderTab = menu.addAction(tr("Folder as tab…"));
     }
 
     if (!menu.isEmpty()) menu.addSeparator();
@@ -987,7 +1028,7 @@ int FileBrowserTree::showResults(const QStringList& paths, bool truncated,
         m_resultQuery = query;
         m_resultPaths.clear();
         m_resultPluginCount = 0;
-        if (!query.isEmpty() && m_collectionFilter.isEmpty()) {
+        if (!query.isEmpty() && ui::browserprefs::isDeviceTab(m_collectionFilter)) {
             if (auto* plugins = buildPluginRoot(query)) {
                 addTopLevelItem(plugins);
                 plugins->setExpanded(true);
@@ -1016,7 +1057,8 @@ int FileBrowserTree::showResults(const QStringList& paths, bool truncated,
         const QString& path = paths[i];
         QTreeWidgetItem* item = makeItem(path, QFileInfo(path).isDir(), -1,
                                          collectionTint);
-        if (!m_collectionFilter.isEmpty())
+        if (!m_collectionFilter.isEmpty() && m_collectionFilter != ui::browserprefs::kPresetsTab &&
+            !ui::browserprefs::isDeviceTab(m_collectionFilter))
             item->setData(0, kCollectionMemberRole, m_collectionFilter);
         // In a flat list the name alone is ambiguous, so each row says which
         // folder it came from.

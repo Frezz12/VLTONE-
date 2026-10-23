@@ -20,6 +20,10 @@ template<class F> audio::Result guarded(F&& operation) {
 }
 AudioRuntimeOwner::AudioRuntimeOwner() : m_runtime(std::make_shared<AudioRuntime>()) {}
 AudioRuntimeOwner::~AudioRuntimeOwner() = default;
+void AudioRuntimeOwner::reset() {
+    m_runtime = std::make_shared<AudioRuntime>();
+    m_imported.clear();
+}
 
 audio::Result AudioRuntimeOwner::applySession(AudioSessionSpec session, bool reconfigure,
     std::span<const AudioPluginStateEdit> restores, std::span<const AudioPluginCheckpoint> checkpoints,

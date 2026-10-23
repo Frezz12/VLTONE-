@@ -8,6 +8,7 @@
 #include "recovery/SessionFile.hpp"
 
 #include <QString>
+#include <functional>
 
 class QWidget;
 class QMessageBox;
@@ -29,6 +30,7 @@ QString guardPath();
 /// What the user chose in the recovery prompt.
 struct Choice {
     bool restored = false;
+    bool workspace = false;
     /// Where the recovered project belongs, empty if it was never saved. The
     /// caller adopts it as the project path so Ctrl+S goes where expected.
     QString projectPath;
@@ -51,7 +53,8 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
 /// recording sidecar; that sidecar and its WAV are preserved until the future
 /// upload/commit recovery workflow owns their explicit cleanup. Sessions left
 /// unanswered (the dialog was dismissed) are kept for next time.
-Choice offerRecovery(QWidget* parent, daw::EngineController& controller);
+using WorkspaceRestore = std::function<bool(const daw::recovery::SessionInfo&, QString*)>;
+Choice offerRecovery(QWidget* parent, daw::EngineController& controller, WorkspaceRestore restoreWorkspace = {});
 
 /// A one-line description of how a session ended, for the prompt.
 QString describeSession(const daw::recovery::SessionInfo& info);

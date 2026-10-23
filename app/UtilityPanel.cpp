@@ -377,7 +377,7 @@ UtilityPanel::UtilityPanel(RackParameterBinding* binding, QString uid, QWidget* 
     setObjectName("UtilityPanel");
     if (!embedded) setMinimumSize(minimumSizeHint());
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(embedded ? 8 : 16, embedded ? 4 : 14, embedded ? 8 : 16, embedded ? 4 : 14);
+    root->setContentsMargins(embedded ? 8 : 16, embedded ? 0 : 14, embedded ? 8 : 16, embedded ? 0 : 14);
     root->setSpacing(embedded ? 2 : 10);
     const auto label = [&](const QString& text) {
         auto* result = new QLabel(text, this);

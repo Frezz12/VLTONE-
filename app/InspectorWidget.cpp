@@ -17,14 +17,17 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QShowEvent>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -331,9 +334,19 @@ InspectorWidget::InspectorWidget(daw::EngineController* controller,
 }
 
 void InspectorWidget::buildUi() {
-    auto* outer = new QVBoxLayout(this);
+    auto* row = new QHBoxLayout(this);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+    auto* outer = new QVBoxLayout;
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
+    row->addLayout(outer, 1);
+    auto* divider = new QWidget(this);
+    divider->setObjectName(QStringLiteral("InspectorDivider"));
+    divider->setFixedWidth(kDividerWidth);
+    divider->setAttribute(Qt::WA_StyledBackground, true);
+    divider->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    row->addWidget(divider);
 
     // ── Header with the collapse toggle ──
     m_header = new QWidget(this);
@@ -671,6 +684,17 @@ bool InspectorWidget::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 
+void InspectorWidget::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    syncFromModel();
+}
+
+void InspectorWidget::hideEvent(QHideEvent* event) {
+    finishClipEdits();
+    if (m_strip) m_strip->finishEdits();
+    QWidget::hideEvent(event);
+}
+
 void InspectorWidget::setHeaderHeight(int height) {
     height = std::max(ui::kRulerHeight, height);
     m_header->setFixedHeight(height);
@@ -679,12 +703,17 @@ void InspectorWidget::setHeaderHeight(int height) {
 
 void InspectorWidget::setCollapsed(bool collapsed) {
     if (m_collapsed == collapsed) return;
+    if (collapsed) {
+        finishClipEdits();
+        if (m_strip) m_strip->finishEdits();
+    }
     m_collapsed = collapsed;
 
     m_header->setVisible(!collapsed);
     if (auto* scroll = findChild<QScrollArea*>()) scroll->setVisible(!collapsed);
     m_rail->setVisible(collapsed);
     setFixedWidth(collapsed ? kRailWidth : kExpandedWidth);
+    if (!collapsed) syncFromModel();
     emit collapsedChanged(collapsed);
 }
 
@@ -693,7 +722,7 @@ void InspectorWidget::setTrack(const QString& trackId) {
     finishClipEdits();
     m_trackId = trackId;
     m_clipId.clear();
-    rebuild();
+    updateStrip();
 }
 
 void InspectorWidget::finishClipEdits() {
@@ -715,18 +744,19 @@ void InspectorWidget::setSelection(const QString& trackId,
     finishClipEdits();
     m_trackId = trackId;
     m_clipId = clipId;
-    if (trackChanged || !m_strip) rebuild();
+    if (trackChanged || !m_strip) updateStrip();
     else loadProperties();
 }
 
 void InspectorWidget::rebuildForTrack(const QString& trackId) {
-    if (m_strip && m_trackId == trackId &&
+    if (!m_rebuildPending && m_strip && m_trackId == trackId &&
+        m_stripProjectId == QString::fromStdString(m_controller->project().miniModuleProjectId) &&
         m_strip->property("channelViewState").toByteArray() ==
             ui::channelViewState(m_controller->project(), trackId.toStdString())) {
         syncFromModel();
         return;
     }
-    if (m_strip && m_trackId == trackId && m_strip->hasActiveGesture()) {
+    if (!m_rebuildPending && m_strip && m_trackId == trackId && m_strip->hasActiveGesture()) {
         if (!m_rackRefreshPending) {
             m_rackRefreshPending = true;
             auto* retry = new ui::FrameTimer(this);
@@ -745,13 +775,50 @@ void InspectorWidget::rebuildForTrack(const QString& trackId) {
         m_clipId.clear();
     }
     m_trackId = trackId;
-    rebuild();
+    updateStrip();
 }
 
 void InspectorWidget::rebuild() {
-    if (m_strip) {
+    updateStrip(true);
+}
+
+void InspectorWidget::discardStrip(QString trackId) {
+    auto* strip = m_strips.take(trackId);
+    m_recentStrips.removeAll(trackId);
+    if (!strip) return;
+    strip->finishEdits();
+    m_stripSlot->removeWidget(strip);
+    strip->hide();
+    if (m_strip == strip) m_strip = nullptr;
+    strip->deleteLater();
+}
+
+void InspectorWidget::updateStrip(bool forceRebuild) {
+    if (forceRebuild) {
+        if (auto* strip = m_strips.value(m_trackId))
+            strip->setProperty("channelViewState", QByteArray{});
+    }
+    // A collapsed rail and an unexposed inspector only follow identity.
+    // Build the latest channel once, synchronously when it becomes visible.
+    if (m_collapsed || !isVisible()) {
+        m_rebuildPending = true;
+        return;
+    }
+    m_rebuildPending = false;
+    const auto& project = m_controller->project();
+    const auto projectId = QString::fromStdString(project.miniModuleProjectId);
+    if (m_stripProjectId != projectId) {
+        for (const auto& id : m_strips.keys()) discardStrip(id);
+        m_stripProjectId = projectId;
+    } else {
+        for (const auto& id : m_strips.keys())
+            if (id != daw::EngineController::kMasterChannelId &&
+                !project.findTrack(id.toStdString())) discardStrip(id);
+    }
+    if (m_strip && m_strip->trackId() != m_trackId) {
+        m_strip->finishEdits();
         m_stripSlot->removeWidget(m_strip);
-        m_strip->deleteLater();
+        m_strip->hide();
         m_strip = nullptr;
     }
     const daw::TrackModel* selected =
@@ -764,45 +831,88 @@ void InspectorWidget::rebuild() {
     const bool master = m_trackId == daw::EngineController::kMasterChannelId || (selected && selected->kind == daw::TrackKind::Master);
     const bool valid = master || (selected && daw::carriesAudio(*selected));
     if (valid) {
-        m_strip = new ChannelStrip(m_controller, m_trackId, master,
-                                   m_content);
-        // The inspector shows the whole console for the selected track and
-        // scrolls if it does not fit, rather than folding sections away.
-        m_strip->setProperty("channelViewState", ui::channelViewState(
-            m_controller->project(), m_trackId.toStdString()));
-        m_strip->setStretchable(false);
-        m_strip->setInspectorCompact(true);
-        m_strip->setFixedWidth(kChannelWidth);
-        connect(m_strip, &ChannelStrip::edited, this, &InspectorWidget::edited);
-        connect(m_strip, &ChannelStrip::trackRoutingEdited, this,
-                [this](const QString&) { emit edited(); });
-        connect(m_strip, &ChannelStrip::editorRequested, this,
-                &InspectorWidget::pluginEditorRequested);
-        connect(m_strip, &ChannelStrip::automateControlRequested, this,
-                &InspectorWidget::automateControlRequested);
-        connect(m_strip, &ChannelStrip::automateMuteRequested, this,
-                &InspectorWidget::automateMuteRequested);
-        connect(m_strip, &ChannelStrip::automateSendRequested, this,
-                &InspectorWidget::automateSendRequested);
-        connect(m_strip, &ChannelStrip::automatePluginRequested, this, &InspectorWidget::automatePluginRequested);
-        connect(m_strip, &ChannelStrip::structureChanged, this, [this] {
-            emit structureChanged();
-            rebuild();
-        }, Qt::QueuedConnection);
-        connect(m_strip, &ChannelStrip::trackCreated, this,
-                &InspectorWidget::trackCreated, Qt::QueuedConnection);
-        connect(m_strip, &ChannelStrip::timelineRequested, this,
-                &InspectorWidget::timelineRequested);
-        connect(m_strip, &ChannelStrip::createTracksRequested, this,
-                &InspectorWidget::createTracksRequested);
-        connect(m_strip, &ChannelStrip::removeRequested, this,
-                &InspectorWidget::trackRemoved);
-        m_stripSlot->addWidget(m_strip, 0, Qt::AlignHCenter);
+        const auto state = ui::channelViewState(project, m_trackId.toStdString());
+        auto* retained = m_strips.value(m_trackId);
+        if (retained && retained->property("channelViewState").toByteArray() != state) {
+            discardStrip(m_trackId);
+            retained = nullptr;
+        }
+        if (!retained && !master && m_recentStrips.size() >= 12) {
+            // A cold selection beyond the cache budget can reuse the oldest
+            // compatible shell. Its rack is rebuilt with the new captured ids;
+            // fader/pan/header and their existing signal connections survive.
+            const QString oldest = m_recentStrips.front();
+            auto* candidate = m_strips.value(oldest);
+            // Inspector rows size to their own channel, so recalculate the
+            // insert count instead of retaining the previous channel's height.
+            if (candidate && candidate->rebindChannel(m_trackId, 0)) {
+                m_strips.remove(oldest);
+                m_recentStrips.removeAll(oldest);
+                candidate->setProperty("channelViewState", state);
+                m_strips.insert(m_trackId, candidate);
+                retained = candidate;
+            }
+        }
+        if (retained) {
+            m_strip = retained;
+            m_strip->syncFromModel();
+        } else {
+            m_strip = new ChannelStrip(m_controller, m_trackId, master, m_content);
+            // The inspector shows the whole console for the selected track and
+            // scrolls if it does not fit, rather than folding sections away.
+            m_strip->setProperty("channelViewState", state);
+            m_strip->setStretchable(false);
+            m_strip->setInspectorCompact(true);
+            m_strip->setFixedWidth(kChannelWidth);
+            connect(m_strip, &ChannelStrip::edited, this, &InspectorWidget::edited);
+            connect(m_strip, &ChannelStrip::trackRoutingEdited, this,
+                    [this](const QString&) { emit edited(); });
+            connect(m_strip, &ChannelStrip::editorRequested, this,
+                    &InspectorWidget::pluginEditorRequested);
+            connect(m_strip, &ChannelStrip::automateControlRequested, this,
+                    &InspectorWidget::automateControlRequested);
+            connect(m_strip, &ChannelStrip::automateMuteRequested, this,
+                    &InspectorWidget::automateMuteRequested);
+            connect(m_strip, &ChannelStrip::automateSendRequested, this,
+                    &InspectorWidget::automateSendRequested);
+            connect(m_strip, &ChannelStrip::automatePluginRequested, this,
+                    &InspectorWidget::automatePluginRequested);
+            connect(m_strip, &ChannelStrip::structureChanged, this,
+                    [this, strip = QPointer<ChannelStrip>(m_strip)] {
+                if (!strip) return;
+                strip->setProperty("channelViewState", QByteArray{});
+                emit structureChanged();
+                if (m_strip == strip) rebuild();
+            }, Qt::QueuedConnection);
+            connect(m_strip, &ChannelStrip::trackCreated, this,
+                    &InspectorWidget::trackCreated, Qt::QueuedConnection);
+            connect(m_strip, &ChannelStrip::timelineRequested, this,
+                    &InspectorWidget::timelineRequested);
+            connect(m_strip, &ChannelStrip::createTracksRequested, this,
+                    &InspectorWidget::createTracksRequested);
+            connect(m_strip, &ChannelStrip::removeRequested, this,
+                    &InspectorWidget::trackRemoved);
+            m_strips.insert(m_trackId, m_strip);
+        }
+        // Repeated track choices keep their controls.
+        // Bound memory, and validate structural state before reusing any channel.
+        m_recentStrips.removeAll(m_trackId);
+        m_recentStrips.push_back(m_trackId);
+        while (m_recentStrips.size() > 12) discardStrip(m_recentStrips.front());
+        if (m_stripSlot->indexOf(m_strip) < 0)
+            m_stripSlot->addWidget(m_strip, 0, Qt::AlignHCenter);
+        // QLayout normally queues showing a newly inserted child. Selection
+        // needs its current controls in the same frame, including send actions.
+        m_strip->show();
+    } else if (m_strip) {
+        discardStrip(m_trackId);
     }
     loadProperties();
 }
 
 void InspectorWidget::syncFromModel() {
+    if (m_collapsed || !isVisible()) return;
+    if (m_rebuildPending) { updateStrip(); return; }
     if (m_strip) m_strip->syncFromModel();
     loadProperties();
 }
@@ -812,6 +922,7 @@ void InspectorWidget::refreshAutomationValues() {
 }
 
 void InspectorWidget::loadProperties() {
+    if (m_collapsed || !isVisible()) return;
     const auto* track =
         m_trackId.isEmpty()
             ? nullptr
@@ -930,7 +1041,9 @@ void InspectorWidget::refreshMeters() {
 void InspectorWidget::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
-#InspectorPanel { background: %SURFACE%; border-right: 1px solid %SECTION%; }
+#InspectorPanel { background: %SURFACE%; border: none; }
+#InspectorDivider { background: %WELL%; border-left: 1px solid %SECTION%;
+                    border-right: 1px solid %LIGHT%; }
 #InspectorHeader { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                               stop:0 %LIGHT%, stop:0.04 %PANEL_TOP%, stop:1 %PANEL_BOTTOM%);
                    border-bottom: 1px solid %SEP%; }

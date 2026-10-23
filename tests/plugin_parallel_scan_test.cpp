@@ -183,9 +183,9 @@ static int childMain(int argc, char** argv) {
         if (descriptor.uid == "wrong-path") descriptor.path += ".other";
         if (descriptor.uid == "wrong-format") descriptor.format = Format::AudioUnit;
         if (descriptor.uid == "mutate") std::ofstream(path, std::ios::app) << " ";
-        descriptor.parameterSchema = json{{"version", 2}, {"parameters", json::array()},
-            {"inputs", {2}}, {"outputs", {2}}, {"wantsMidi", false}, {"producesMidi", false}}.dump();
-        if (descriptor.uid == "bad-schema") descriptor.parameterSchema = "{}";
+        descriptor.setParameterSchema(json{{"version", 2}, {"parameters", json::array()},
+            {"inputs", {2}}, {"outputs", {2}}, {"wantsMidi", false}, {"producesMidi", false}}.dump());
+        if (descriptor.uid == "bad-schema") descriptor.setParameterSchema("{}");
         output(plugins::scan::encodeResult({descriptor}));
         if (descriptor.uid == "exit-after-output") return 9;
     }
@@ -462,7 +462,7 @@ int main(int argc, char** argv) {
                 std::vector<plugins::PluginDescriptor> result;
                 check(validation.succeeded() && plugins::scan::decodeResult(validation.output, result) &&
                       result.size() == 1 && result[0].uid == descriptor.uid && result[0].format == format &&
-                      !result[0].parameterSchema.empty(), "real UID validates directly without factory enumeration");
+                      !result[0].parameterSchemaText().empty(), "real UID validates directly without factory enumeration");
                 setEnvironment("DAW_TEST_FORBID_ENUMERATION", "");
                 const auto legacy = ScanProcess::run(DAW_SCAN_PATH,
                     {"--validate", "--format=" + std::string(plugins::toString(format)),

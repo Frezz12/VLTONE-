@@ -24,6 +24,7 @@ namespace ui { class IconButton; class ThemeMediaBackground; }
 class TransportBar : public QWidget , public ui::graphics::ScenePaintSource {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller) { m_controller = controller; syncTempo(); refresh(); }
     explicit TransportBar(daw::EngineController* controller,
                           QWidget* parent = nullptr);
 

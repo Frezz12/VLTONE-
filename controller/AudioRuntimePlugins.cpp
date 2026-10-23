@@ -118,16 +118,19 @@ std::shared_ptr<AudioRuntime::StagedPluginPreparation> AudioRuntime::stageSessio
                 [&](const auto& id) { return descriptions.contains(id); });
         return false;
     };
+    std::size_t preparedCount = 0;
     for (const auto& chain : session.pluginChains) {
         for (const auto& spec : chain.slots) {
             const auto* existing = existingSlot(chain, spec);
             for (bool right : {false, true}) {
                 if (right && spec.channelMode != PluginChannelMode::DualMono) continue;
+                const auto progressIndex = preparedCount++;
                 const Key key{chain.channelId, spec.id, right};
                 const auto old = existing ? (right ? existing->rightNode : existing->node) : nullptr;
                 const auto imported = staged->imports.find(key);
                 if (!needsPluginReplacement(existing, spec, right) &&
                     (imported == staged->imports.end() || !imported->second.replaceExisting)) continue;
+                if (session.pluginLoadProgress) session.pluginLoadProgress(spec.name, progressIndex, targets.size());
                 if (existing && old && !old->instance()) {
                     if (!staged->imports.contains(key) && existing->unavailableEdits[right ? 1 : 0])
                         staged->imports.emplace(key, *existing->unavailableEdits[right ? 1 : 0]);

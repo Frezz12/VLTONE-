@@ -20,6 +20,9 @@ public:
     using Handle = std::shared_ptr<Task>;
     static BackgroundExecutor& instance();
     Handle submit(std::function<void()> work);
+    // Nonblocking cancellation for tasks owning their inputs/results. A
+    // running task may finish; its owner must invalidate/discard the result.
+    void cancel(const Handle& task);
     void cancelAndWait(const Handle& task);
     void addPlayback() noexcept { m_playbacks.fetch_add(1, std::memory_order_relaxed); }
     void removePlayback() noexcept { m_playbacks.fetch_sub(1, std::memory_order_relaxed); }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Common/Types.hpp"
+#include "Graph/NodeDiagnostics.hpp"
 #include "Midi/MidiEvent.hpp"
 
 #include <span>
@@ -134,6 +135,9 @@ struct ProcessContext {
 class Node {
 public:
     virtual ~Node() = default;
+
+    NodeDiagnostics diagnostics;
+    virtual bool alwaysMeasureProcessing() const noexcept { return false; }
 
     virtual std::string_view name() const noexcept = 0;
 

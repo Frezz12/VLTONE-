@@ -1,0 +1,13 @@
+{
+  "format": "vltscript",
+  "sdk": 1,
+  "id": "studio.vltone.arrangement-lab",
+  "name": "Arrangement Lab",
+  "version": "1.0.0",
+  "description": "A complete arrangement workbench: deterministic MIDI composition, interactive drum grid, six synthesized stems, mixer, cancellable PCM rendering and diagnostics.",
+  "permissions": ["project.read", "project.write", "files.read", "files.write"],
+  "commands": [
+    {"id": "open", "label": "Arrangement Lab — открыть", "entry": "main.lua", "contexts": ["global"]},
+    {"id": "verify", "label": "Arrangement Lab — проверить генератор", "entry": "verify.lua", "contexts": ["global"]}
+  ]
+}

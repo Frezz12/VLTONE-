@@ -41,6 +41,7 @@ set(DAW_PLUGINHOST_SOURCES
     Creator/CreatorCompilerClient.cpp
     Creator/WasmProgram.cpp
     Internal/MiniModuleInstance.cpp
+    Internal/MiniEffectInstance.cpp
     Internal/DelayInstance.cpp
     Internal/UtilityInstance.cpp
     Internal/PitchCorrectorInstance.cpp
@@ -53,6 +54,10 @@ set(DAW_PLUGINHOST_SOURCES
     Internal/FluxPresets.cpp
     Internal/FluxDsp.cpp
     Internal/FluxInstance.cpp
+    Internal/WavetableProgram.cpp
+    Internal/WavetablePresets.cpp
+    Internal/WavetableDsp.cpp
+    Internal/WavetableInstance.cpp
     Internal/GraphitInstance.cpp
     Internal/GravityInstance.cpp
     Internal/InternalFactory.cpp
@@ -106,7 +111,7 @@ target_compile_definitions(daw_pluginhost PUBLIC DAW_ENABLE_REVERB=$<BOOL:${DAW_
 target_include_directories(daw_pluginhost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(daw_pluginhost SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/signalsmith)
 target_compile_features(daw_pluginhost PUBLIC cxx_std_23)
-target_link_libraries(daw_pluginhost PUBLIC daw_engine daw_platform_paths daw_json daw_creator_model daw_creator_wamr)
+target_link_libraries(daw_pluginhost PUBLIC daw_engine daw_platform_paths daw_json daw_creator_model daw_creator_wamr VltSpectre::Core)
 
 if(DAW_ENABLE_CLAP)
     target_link_libraries(daw_pluginhost PUBLIC daw_clap_headers)

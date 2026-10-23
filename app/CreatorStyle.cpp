@@ -22,7 +22,10 @@ CreatorColors creatorColors() {
 }
 
 void styleCreator(QWidget *widget) {
-  const auto c = creatorColors();
+  styleCreator(widget, creatorColors());
+}
+
+void styleCreator(QWidget *widget, const CreatorColors &c) {
   auto palette = widget->palette();
   palette.setColor(QPalette::Window, c.panel);
   palette.setColor(QPalette::Base, c.field);
@@ -36,7 +39,6 @@ void styleCreator(QWidget *widget) {
   palette.setColor(QPalette::PlaceholderText, c.muted);
   palette.setColor(QPalette::Disabled, QPalette::Text, c.muted);
   palette.setColor(QPalette::Disabled, QPalette::ButtonText, c.muted);
-  widget->setPalette(palette);
   // Token replacement keeps the QSS readable and independent of DAW chrome.
   QString css = QStringLiteral(R"(
     QWidget { color: $text; font-size: 12px; }
@@ -115,7 +117,7 @@ void styleCreator(QWidget *widget) {
     QMenu::separator { height: 1px; background: $border; margin: 5px 6px; }
     QToolTip { background: $card; color: $text; border: 1px solid $border; padding: 6px; }
   )");
-  css.replace("$appearance", th().dark ? "dark" : "light");
+  css.replace("$appearance", c.panel.lightnessF() < .5 ? "dark" : "light");
   const std::pair<const char *, QColor> tokens[] = {
       {"onAccent", c.onAccent}, {"accentFill", c.accentFill},
       {"accent", c.accent}, {"text", c.text}, {"muted", c.muted},
@@ -123,7 +125,10 @@ void styleCreator(QWidget *widget) {
       {"hover", c.hover}, {"border", c.border}};
   for (const auto &[name, color] : tokens)
     css.replace("$" + QString::fromLatin1(name), color.name());
-  widget->setStyleSheet(css);
+  if (widget->styleSheet() != css)
+    widget->setStyleSheet(css);
+  // Replacing QSS restores Qt's cached palette during unpolish.
+  widget->setPalette(palette);
 }
 
 void creatorIcon(QAction *action, icons::Glyph glyph, bool primary) {

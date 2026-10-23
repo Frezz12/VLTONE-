@@ -51,10 +51,10 @@ void groupSharedClips(std::vector<SceneMesh>& meshes, qreal dpr) {
     // stencil/scissor changes. Consecutive primitives with the same mask can
     // share one parent clip without reordering or combining their opacity.
     const auto compatible = [](const SceneMesh& mesh) {
-        // Waveform tiles own shared vertex buffers and move by their own
-        // matrix. Keep their identity separate from freshly emitted cells.
-        return mesh.clip && !mesh.group && !mesh.visualId && mesh.transform.isIdentity() &&
-               mesh.vertices.isDetached();
+        // The mask lives before each mesh transform. Sharing it also works
+        // for moving retained tiles: their groups, matrices and shared vertex
+        // buffers remain unchanged children of the common clip.
+        return mesh.clip && !mesh.visualId;
     };
     std::size_t write = 0;
     for (std::size_t first = 0; first < meshes.size();) {
@@ -70,6 +70,7 @@ void groupSharedClips(std::vector<SceneMesh>& meshes, qreal dpr) {
             for (auto i = first; i < end; ++i) {
                 meshes[i].clip.reset();
                 group->bytes += qint64(meshes[i].vertices.size()) * sizeof(SceneVertex);
+                if (meshes[i].group) group->bytes += meshes[i].group->bytes;
                 group->meshes.push_back(std::move(meshes[i]));
             }
             batch.group = std::move(group);

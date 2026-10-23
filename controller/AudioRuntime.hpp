@@ -7,6 +7,7 @@
 #include "AudioRuntimePluginService.hpp"
 #include "AudioRuntimeSession.hpp"
 #include "PluginReadout.hpp"
+#include "AudioPerformance.hpp"
 #include "Engine/RealtimeEngine.hpp"
 #include "Common/RealtimeSnapshot.hpp"
 #include "Device/AudioDeviceManager.hpp"
@@ -83,6 +84,7 @@ public:
     /// updates. A failed compile leaves the published topology untouched.
     void buildGraph(const AudioGraphSpec& spec);
     bool updateModulation(const std::string& channelId, const modulation::Rack& rack);
+    void updateRackLayers(const std::string& channelId, const std::vector<RackGroupModel>& groups);
     float modulationValue(const std::string& channelId, const std::string& sourceId) const;
     float modulationPosition(const std::string& channelId, const std::string& sourceId) const;
     std::string modulationStatus(const std::string& channelId, const std::string& routeId) const;
@@ -124,6 +126,8 @@ public:
         const std::string& clipId = {}, bool sampler = false) const;
     void resetMeterHold(const std::string& channelId);
     AudioRuntimeDiagnostics diagnostics() const;
+    AudioPerformanceSnapshot performanceSnapshot() const;
+    bool hasUnresponsiveProcessing() const;
     AudioDeviceSnapshot deviceSnapshot() const;
     AudioTimingSnapshot timingSnapshot(bool callback, bool drain);
     void setProfiling(bool enabled);
@@ -238,7 +242,7 @@ public:
     AudioPluginServiceResult servicePlugins(bool externallyActive = false);
     std::vector<AudioPluginRuntimeStatus> pluginFaults() const;
     audio::Result recoverPlugin(const AudioPluginAddress& address,
-        const std::function<void()>& beforeRetire = {});
+        const std::function<void()>& beforeRetire = {}, bool restartHealthy = false);
     bool hasPluginFault(const AudioPluginAddress& address) const;
     void sharePluginCheckpoint(const AudioPluginAddress& address,
         std::shared_ptr<const std::vector<std::uint8_t>> bytes);
@@ -318,6 +322,7 @@ private:
         /// Index-parallel with `TrackModel::inserts`, the same discipline
         /// `sends` already follows.
         std::vector<InsertSlot> inserts;
+        std::unordered_map<std::string, std::shared_ptr<engine::GainNode>> layerFaders;
         std::shared_ptr<engine::GainNode> fader;
         std::shared_ptr<engine::MeterNode> meter;
         std::shared_ptr<engine::InputNode> input;
@@ -377,6 +382,9 @@ private:
     static engine::NodeId connectMiniModules(engine::AudioGraph& graph,
         TrackChannel& channel, const std::vector<AudioGraphSpec::MiniModuleRoute>& routes,
         bool postFx, engine::NodeId head, engine::NodeId* first = nullptr);
+    static engine::NodeId connectRackSlots(engine::AudioGraph& graph, TrackChannel& channel,
+        std::span<InsertSlot> slots, const std::vector<RackGroupModel>& groups,
+        engine::NodeId head, engine::NodeId analysisSource = engine::kInvalidNode);
     // Declared first so graph workers and snapshots outlive their node owners.
     engine::RealtimeEngine engine;
     std::unique_ptr<audio::AudioDeviceManager> devices;

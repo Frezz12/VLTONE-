@@ -63,9 +63,9 @@ bool MainWindow::checkInspectorNormalizeForTest() {
     audio::AudioRecorder recorder;
     recorder.initialize(48000, 2);
     if (!recorder.writeWAVFile(path, tone, 48000).isOk()) return false;
-    const auto track = m_controller.addTrack(daw::TrackKind::Audio, "Normalize");
-    const auto clip = m_controller.importAudio(path, track, 0.0);
-    const auto copy = m_controller.duplicateClip(track, clip);
+    const auto track = projectController().addTrack(daw::TrackKind::Audio, "Normalize");
+    const auto clip = projectController().importAudio(path, track, 0.0);
+    const auto copy = projectController().duplicateClip(track, clip);
     const auto id = QString::fromStdString(track);
     syncViews();
     m_selectedTrackId = id;
@@ -95,7 +95,7 @@ bool MainWindow::checkInspectorNormalizeForTest() {
         wait(350);
     };
     const auto envelope = [&](const std::string& clipId) {
-        return m_controller.clipWaveform(*m_controller.audioClip(track, clipId));
+        return projectController().clipWaveform(*projectController().audioClip(track, clipId));
     };
     const auto peak = [](const daw::WaveformPeaks* peaks) {
         float result = 0;
@@ -125,7 +125,7 @@ bool MainWindow::checkInspectorNormalizeForTest() {
     check(peak(envelope(clip).peaks) > .19f && peak(envelope(clip).peaks) < .21f,
           "initial waveform matches the quiet file");
     const auto originalPicture = picture();
-    const auto undoDepth = m_controller.undoDepth();
+    const auto undoDepth = projectController().undoDepth();
     check(save("before"), "before screenshot");
     click(toggle);
     // Wait for the ordinary control-thread tick, without forcing a bake via
@@ -137,8 +137,8 @@ bool MainWindow::checkInspectorNormalizeForTest() {
     const auto normalized = envelope(clip);
     // Keep the editor's sample alive across Undo/Redo to exercise shared-cache
     // reuse even after the last clip drops its processed envelope.
-    const auto samplerAudio = m_controller.clipSampleData(track, clip);
-    check(toggle->isChecked() && m_controller.undoDepth() == undoDepth + 1,
+    const auto samplerAudio = projectController().clipSampleData(track, clip);
+    check(toggle->isChecked() && projectController().undoDepth() == undoDepth + 1,
           "scrolled Inspector click enables Normalize in one undo step");
     check(peak(normalized.peaks) > .99f && normalized.samples && samplerAudio &&
           normalized.samples == samplerAudio->audio.get(),
@@ -146,7 +146,7 @@ bool MainWindow::checkInspectorNormalizeForTest() {
     check(!originalPicture.isNull() && originalPicture != picture(),
           "timeline pixels change without opening Sampler or moving the clip");
     check(peak(envelope(copy).peaks) < .21f &&
-          peak(m_controller.waveforms().cached(path)) < .21f,
+          peak(projectController().waveforms().cached(path)) < .21f,
           "other clips and the source envelope remain unchanged");
     check(save("normalized"), "normalized screenshot");
     onUndo(); wait(350);
@@ -159,7 +159,7 @@ bool MainWindow::checkInspectorNormalizeForTest() {
     check(!toggle->isChecked() && peak(envelope(clip).peaks) < .21f,
           "switching Normalize off restores the source waveform");
     // The editor's other entry point must publish to the arrangement too.
-    SamplerPanel sampler(&m_controller, SamplerPanel::Context::Clip, id, QString::fromStdString(clip));
+    SamplerPanel sampler(&projectController(), SamplerPanel::Context::Clip, id, QString::fromStdString(clip));
     auto* samplerToggle = sampler.findChild<ui::Led*>("SamplerParameter.pre.normalize");
     if (!samplerToggle) return false;
     samplerToggle->click(); wait(350);
@@ -169,7 +169,7 @@ bool MainWindow::checkInspectorNormalizeForTest() {
 }
 
 bool MainWindow::checkPluginSidechainForTest() {
-    auto& controller = m_controller;
+    auto& controller = projectController();
     const auto descriptor = controller.pluginManager().find(daw::plugins::Format::Internal, "daw.compressor");
     if (!descriptor) return false;
     const auto track = controller.addTrack(daw::TrackKind::Audio, "Bass");
@@ -217,7 +217,7 @@ bool MainWindow::checkPluginSidechainForTest() {
             what, selected().size(), menu->isVisible(), wrapper->height());
         ok &= valid;
     };
-    check(wrapper->height() == 28 && !actionFor(track), "thin header and no self route");
+    check(wrapper->height() == 32 && !actionFor(track), "thin header and no self route");
     check(click(actionFor(kick)) && menu->isVisible() && selected() == std::vector<std::string>{kick}, "first mouse selection");
     check(click(actionFor(snare)) && menu->isVisible() && selected() == std::vector<std::string>{kick, snare}, "second mouse selection");
     check(combo->toolTip().contains("Kick") && combo->toolTip().contains("Snare") && combo->currentText().contains("2"), "count and source tooltip");
@@ -263,14 +263,14 @@ bool MainWindow::checkPluginSidechainForTest() {
     check(actionFor(added) != nullptr, "opening picker discovers newly added tracks");
     check(click(actionFor({})) && selected().empty() && menu->isVisible(), "Off clears all sources");
     menu->hide();
-    std::fprintf(stderr, "%s multi-sidechain UI: pointer, persistent popup, keyboard, undo/redo, 28px header\n", ok ? "PASS" : "FAIL");
+    std::fprintf(stderr, "%s multi-sidechain UI: pointer, persistent popup, keyboard, undo/redo, 32px header\n", ok ? "PASS" : "FAIL");
     editor->close(); wait(40);
     for (const auto& id : {track, kick, snare, percussion, added}) controller.removeTrack(id);
     return ok;
 }
 
 bool MainWindow::checkPluginWindowPolicyForTest() {
-    auto descriptor = m_controller.pluginManager().find(
+    auto descriptor = projectController().pluginManager().find(
         daw::plugins::Format::Internal, "daw.graphit");
 #ifdef DAW_ENABLE_VST
     const QString path = qEnvironmentVariable("VLT_TEST_EDITOR_PLUGIN");
@@ -282,8 +282,8 @@ bool MainWindow::checkPluginWindowPolicyForTest() {
     }
 #endif
     if (!descriptor) return false;
-    const auto track = m_controller.addTrack(daw::TrackKind::Audio, "Window policy");
-    const auto slot = m_controller.addInsert(track, *descriptor);
+    const auto track = projectController().addTrack(daw::TrackKind::Audio, "Window policy");
+    const auto slot = projectController().addInsert(track, *descriptor);
     if (slot.empty()) return false;
     const QString channel = QString::fromStdString(track);
     const QString insert = QString::fromStdString(slot);
@@ -322,19 +322,19 @@ bool MainWindow::checkPluginWindowPolicyForTest() {
     const auto exposed = [](InternalEditorFrame* frame) {
         if (!frame || !frame->isVisible()) return false;
 #ifdef Q_OS_WIN
-        if (frame->testAttribute(Qt::WA_NativeWindow)) {
+        if (QApplication::platformName() == "windows") {
             const HWND handle = reinterpret_cast<HWND>(frame->winId());
-            const HWND parent = GetParent(handle);
-            RECT bounds;
-            if (!parent || !GetWindowRect(handle, &bounds)) return false;
-            POINT point{bounds.left + 30, bounds.top + 10};
-            ScreenToClient(parent, &point);
-            const HWND hit = ChildWindowFromPointEx(parent, point, CWP_SKIPINVISIBLE);
-            return hit == handle || IsChild(handle, hit);
+            const HWND owner = GetWindow(handle, GW_OWNER);
+            if (!IsWindowVisible(handle) || !owner) return false;
+            // Other applications may cover this background test. Check the
+            // editor's order relative to its owner, without stealing foreground.
+            for (HWND below = GetWindow(handle, GW_HWNDNEXT); below;
+                 below = GetWindow(below, GW_HWNDNEXT))
+                if (below == owner) return true;
+            return false;
         }
 #endif
-        auto* hit = frame->parentWidget()->childAt(frame->pos() + QPoint(30, 10));
-        return hit == frame || (hit && frame->isAncestorOf(hit));
+        return frame->isWindow();
     };
     bool ok = true;
     const auto check = [&ok](bool passed, const char* message) {
@@ -367,15 +367,13 @@ bool MainWindow::checkPluginWindowPolicyForTest() {
         target.setGeometry(8, 8, 40, 28);
         target.setFocusPolicy(Qt::StrongFocus);
         target.show();
-        if (frame->testAttribute(Qt::WA_NativeWindow) && frame->windowHandle())
-            frame->windowHandle()->lower();
+        activateWindow();
         target.setFocus(Qt::MouseFocusReason);
         click(&target);
         settle(80);
         check(editor && m_pluginEditors.value(key) == editor && !editor->isClosing() &&
                   exposed(frame) && QApplication::focusWidget() == &target,
               "panel clicks preserve the editor without stealing panel focus");
-        check(!m_auxiliaryLowered, "panel clicks do not lower editor windows");
     }
     for (int attempt = 0; attempt < 3; ++attempt) {
         click(m_timeline);
@@ -398,7 +396,7 @@ bool MainWindow::checkPluginWindowPolicyForTest() {
 }
 
 bool MainWindow::checkPluginKeyboardForTest() {
-    auto instrument = m_controller.pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
+    auto instrument = projectController().pluginManager().find(daw::plugins::Format::Internal, "daw.sampler");
     auto nativeEffect = instrument;
 #ifdef DAW_ENABLE_VST
     const QString path = qEnvironmentVariable("VLT_TEST_EDITOR_PLUGIN");
@@ -411,11 +409,11 @@ bool MainWindow::checkPluginKeyboardForTest() {
     }
 #endif
     if (!instrument) return false;
-    const auto other = m_controller.addTrack(daw::TrackKind::Midi, "Other instrument");
-    const auto track = m_controller.addTrack(daw::TrackKind::Midi, "Keyboard instrument");
-    if (!m_controller.setTrackInstrumentPlugin(track, *instrument)) return false;
+    const auto other = projectController().addTrack(daw::TrackKind::Midi, "Other instrument");
+    const auto track = projectController().addTrack(daw::TrackKind::Midi, "Keyboard instrument");
+    if (!projectController().setTrackInstrumentPlugin(track, *instrument)) return false;
     const QString channel = QString::fromStdString(track);
-    const QString insert = QString::fromStdString(m_controller.project().findTrack(track)->instrument.id);
+    const QString insert = QString::fromStdString(projectController().project().findTrack(track)->instrument.id);
     syncViews();
     m_selection.setTracks({QString::fromStdString(other)});
     const auto settle = [](int ms) {
@@ -428,7 +426,7 @@ bool MainWindow::checkPluginKeyboardForTest() {
     auto* editor = m_pluginEditors.value(channel + '/' + insert);
     auto* frame = editor ? m_internalEditorFrames.value(editor) : nullptr;
     if (!editor || !frame) return false;
-    QApplication::setActiveWindow(this);
+    QApplication::setActiveWindow(frame);
     editor->setFocus();
     bool ok = true;
     const auto check = [&ok](bool passed, const char* message) {
@@ -436,16 +434,16 @@ bool MainWindow::checkPluginKeyboardForTest() {
         ok &= passed;
     };
     check(liveInputTarget() == track, "opening the instrument routes notes despite another selected track");
-    check(frame->findChild<QWidget*>("InternalEditorMaximize")->isHidden() &&
-          frame->findChild<QWidget*>("InternalEditorDetach")->isHidden() &&
-          frame->findChild<QWidget*>("InternalEditorClose")->isVisible(), "only Close remains in plugin chrome");
+    check(frame->windowType() == Qt::Tool &&
+          !frame->windowFlags().testFlag(Qt::FramelessWindowHint) &&
+          !frame->findChild<QWidget*>("InternalEditorTitleBar"), "plugin has a system title bar");
+    check(editor->findChild<QWidget*>("PluginWrapper")->isVisible() &&
+          editor->findChild<QAbstractButton*>("PluginPower") &&
+          editor->findChild<QComboBox*>("PluginMode") &&
+          editor->findChild<QComboBox*>("PluginSidechain"), "plugin routing controls survive the frame change");
     frame->setMaximized(true);
-    frame->setDetached(true);
-    auto* title = frame->findChild<QWidget*>("InternalEditorTitleBar");
-    QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(30, 10),
-        title->mapToGlobal(QPoint(30, 10)), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(title, &doubleClick);
-    check(!frame->isMaximized() && !frame->isDetached(), "plugin expansion is disabled for buttons and double-click");
+    check(!frame->isMaximized() && !frame->windowFlags().testFlag(Qt::WindowMaximizeButtonHint),
+          "plugin expansion remains disabled");
     setTypingKeyboardEnabled(true);
     const auto key = [](QWidget* target, int code, QEvent::Type type, bool repeat = false,
                         const QString& text = {}) {
@@ -465,11 +463,11 @@ bool MainWindow::checkPluginKeyboardForTest() {
     check(m_typingKeyboard->heldCount() == 1 && livePitchesForTrack(channel).any(),
           "notes still play after a non-editable plugin combo receives focus");
     key(combo, Qt::Key_Z, QEvent::KeyRelease);
-    m_controller.pause();
+    projectController().pause();
     key(combo, Qt::Key_Space, QEvent::KeyPress);
     key(combo, Qt::Key_Space, QEvent::KeyPress, true);
     key(combo, Qt::Key_Space, QEvent::KeyRelease);
-    check(m_controller.isPlaying() && !QApplication::activePopupWidget(),
+    check(projectController().isPlaying() && !QApplication::activePopupWidget(),
           "Space starts transport once instead of opening a focused combo");
     auto* text = new QLineEdit(editor);
     text->setGeometry(110, 42, 100, 24);
@@ -480,21 +478,21 @@ bool MainWindow::checkPluginKeyboardForTest() {
     check(text->text() == "z" && m_typingKeyboard->heldCount() == 0, "text entry keeps letters instead of playing notes");
     key(text, Qt::Key_Space, QEvent::KeyPress);
     key(text, Qt::Key_Space, QEvent::KeyRelease);
-    check(!m_controller.isPlaying(), "Space pauses the main transport from a plugin text control");
+    check(!projectController().isPlaying(), "Space pauses the main transport from a plugin text control");
     {
         QDialog modal(this);
         modal.setWindowModality(Qt::ApplicationModal);
         modal.show();
         key(text, Qt::Key_Space, QEvent::KeyPress);
         key(text, Qt::Key_Space, QEvent::KeyRelease);
-        check(!m_controller.isPlaying(), "a modal dialog blocks plugin transport input");
+        check(!projectController().isPlaying(), "a modal dialog blocks plugin transport input");
         modal.hide();
     }
     QApplication::setActiveWindow(this);
 #ifdef Q_OS_WIN
     if (QApplication::platformName() != QStringLiteral("offscreen")) {
         if (!nativeEffect || !nativeEffect->hasEditor) return false;
-        const QString effectSlot = QString::fromStdString(m_controller.addInsert(track, *nativeEffect));
+        const QString effectSlot = QString::fromStdString(projectController().addInsert(track, *nativeEffect));
         openPluginEditor(channel, effectSlot);
         settle(1000);
         editor = m_pluginEditors.value(channel + '/' + effectSlot);
@@ -527,10 +525,10 @@ bool MainWindow::checkPluginKeyboardForTest() {
         post(native, WM_KEYDOWN, VK_SPACE, 0x39);
         post(native, WM_KEYDOWN, VK_SPACE, 0x39, true);
         post(native, WM_KEYUP, VK_SPACE, 0x39);
-        check(m_controller.isPlaying() && GetFocus() == native, "native plugin Space starts once and preserves its focus");
+        check(projectController().isPlaying() && GetFocus() == native, "native plugin Space starts once and preserves its focus");
         post(native, WM_KEYDOWN, VK_SPACE, 0x39);
         post(native, WM_KEYUP, VK_SPACE, 0x39);
-        check(!m_controller.isPlaying(), "native plugin Space pauses without reopening");
+        check(!projectController().isPlaying(), "native plugin Space pauses without reopening");
         post(native, WM_KEYDOWN, 'Z', 0x2c);
         post(native, WM_KEYDOWN, 'Z', 0x2c, true);
         check(m_typingKeyboard->heldCount() == 1 && livePitchesForTrack(channel).any(),
@@ -544,13 +542,13 @@ bool MainWindow::checkPluginKeyboardForTest() {
               "native text entry keeps letters");
         post(edit, WM_KEYDOWN, VK_SPACE, 0x39);
         post(edit, WM_KEYUP, VK_SPACE, 0x39);
-        check(m_controller.isPlaying(), "native text control cannot swallow transport Space");
-        m_controller.pause();
+        check(projectController().isPlaying(), "native text control cannot swallow transport Space");
+        projectController().pause();
     }
 #endif
     editor->setFocus();
     key(editor, Qt::Key_Z, QEvent::KeyPress);
-    frame->findChild<QAbstractButton*>("InternalEditorClose")->click();
+    frame->close();
     check(m_typingKeyboard->heldCount() == 0, "closing a playing instrument releases held notes");
     setTypingKeyboardEnabled(false);
     closeInternalWindows();
@@ -619,24 +617,13 @@ bool ui::checkPluginInteractions() {
     };
     auto editor = open();
     auto* openingFrame = qobject_cast<InternalEditorFrame*>(editor->parentWidget());
-    auto* title = openingFrame->findChild<QWidget*>(QStringLiteral("InternalEditorTitleBar"));
-    const QPointF grab = title->mapToGlobal(QPoint(80, 14));
-    const auto titleMouse = [&](QEvent::Type type, QPointF global) {
-        QMouseEvent event(type, title->mapFromGlobal(global), global,
-                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
-                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
-                          Qt::NoModifier);
-        QApplication::sendEvent(title, &event);
-    };
-    titleMouse(QEvent::MouseButtonPress, grab);
-    settle(150); // longer than the initial editor-loading delay
+    QEvent press(QEvent::NonClientAreaMouseButtonPress);
+    QApplication::sendEvent(openingFrame, &press);
+    settle(150);
     check(openingFrame->isInteracting() && !editor->isEditorInitialized(),
-          "opening defers vendor GUI work while the title is held");
-    const QPoint start = openingFrame->pos();
-    titleMouse(QEvent::MouseMove, grab + QPointF(1, 1));
-    check(openingFrame->pos() == start + QPoint(1, 1),
-          "the first movement tracks the pointer while the plugin is loading");
-    titleMouse(QEvent::MouseButtonRelease, grab + QPointF(1, 1));
+          "opening defers vendor GUI work during native title interaction");
+    QEvent release(QEvent::NonClientAreaMouseButtonRelease);
+    QApplication::sendEvent(openingFrame, &release);
     settle(350);
     check(editor && editor->isEmbedded(), "native fixture opens in its final host");
     if (surface) check(gpuFrames > 0 && surface->quickWindow()->isVisible(),

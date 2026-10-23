@@ -1,0 +1,6 @@
+{
+  "format": "vltscript", "sdk": 1, "id": "vlt.example.background-events",
+  "name": "Transport event logger", "version": "1.0.0",
+  "permissions": ["project.read"],
+  "commands": [{"id": "watch", "label": "Watch transport events", "entry": "main.lua", "background": true, "contexts": ["global"]}]
+}

@@ -1,0 +1,25 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>Анализ и нарезка клипов — Lua SDK</title>
+<style>body{font:16px/1.6 system-ui;max-width:900px;margin:40px auto;padding:0 24px}pre{padding:16px;background:#eee;color:#222;white-space:pre-wrap}a{color:#447acc}</style>
+<p><a href="SDK_RU.html">SDK</a> · <a href="API_RU.html">API</a></p><h1>Анализируйте звучание клипа</h1>
+<p>Путь source указывает на исходный файл. Его кадры не совпадают с временем клипа после Warp, растяжения, реверса, обрезки, повторения или компинга. Для анализа и нарезки используйте audio.renderClip. Метод создаёт временный снимок звучания до живых эффектов дорожки и клипа. Существующий офлайн-результат учитывается. Файл проекта и исходные медиа не меняются.</p>
+<pre>local c = vlt.context.get()
+local p = vlt.project.get{track=c.target.track,clip=c.target.clip,includeEvents=false}
+local task = vlt.audio.renderClip{
+  track=c.target.track, clip=c.target.clip, revision=p.revision
+}
+-- Опросите vlt.jobs.get{id=task.id} из таймера либо подпишитесь на событие job.
+-- Не ждите окончания задания в цикле Lua.
+-- После complete=true сначала проверьте error.
+local result = vlt.jobs.get{id=task.id}.result
+local stream = vlt.audio.open{path=result.path}
+-- Нулевая позиция PCM — начало клипа, offset вычитать не нужно.
+local beat = result.start + detectedFrame / stream.sampleRate / result.secondsPerBeat
+local applied = vlt.project.sliceAudio{
+  snapshot=result.snapshot, cuts={beat}, label="Разрезать по атакам"
+}
+vlt.audio.close{id=stream.id}</pre>
+<p>Пример показывает последовательность вызовов; полный работающий инструмент с таймерами, прогрессом, отменой и обработкой ошибок находится в <a href="examples/transient-slicer/main.lua">examples/transient-slicer</a>. Установите пакет примера через менеджер и вызовите его через правую кнопку по клипу.</p>
+<p>Разрешения: project.read для снимка, files.read для PCM и project.write для разрезания. Запись во внешние папки не требуется. Снимок принадлежит текущему запуску и проекту. Изменение проекта, замена или удаление клипа делают его непригодным для применения: начните анализ заново.</p>
+<p>cuts содержит абсолютные позиции в долях таймлайна. Хост сортирует точки, пропускает повторы и фрагменты длиной 20 мс или меньше. Точка за пределами клипа вызывает ошибку без изменений. Результат: cuts — число разрезов, skipped — число пропущенных точек, created — новые ID фрагментов. Изменяется только выбранный клип, даже если источник используется в других местах. Вся нарезка отменяется одним Undo.</p>
+<p>Обычные клипы и растяжение в режиме Resample сохраняют исходные настройки. Для Warp, растяжения с сохранением высоты тона, циклов, компинга и фейдов сохраняется отдельный аудиорезультат: так разрезы не меняют фазу, скорость и огибающую звучания. Warp и эти обработки уже записаны в новые фрагменты; Undo возвращает исходный клип со всеми настройками. Новые файлы живут после закрытия скрипта. Отмена подготовки через jobs.cancel не публикует незавершённый результат.</p>
+<p>Низкоуровневый clip.split принимает абсолютную долю, оставляет старый ID слева и требует более 20 мс с каждой стороны. Для нескольких разрезов одного ID порядок — справа налево. Для анализа произвольного звучащего клипа предпочтительнее описанная выше пара audio.renderClip / project.sliceAudio.</p></html>

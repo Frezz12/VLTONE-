@@ -2495,6 +2495,8 @@ Will be skipped: %3</source>
 </context>
 <context>
     <name>ChannelStrip</name>
+    <message><source>%1 — engine off</source><translation>%1 — движок выключен</translation></message>
+    <message><source>%1 — device unavailable</source><translation>%1 — устройство недоступно</translation></message>
     <message><source>Stereo level · Click to reset peak</source><translation>Стереоуровень · Нажмите для сброса пика</translation></message>
     <message><source>Select an audio channel to see its routing, plugins and sends.</source><translation>Выберите аудиоканал, чтобы увидеть маршрутизацию, плагины и посылы.</translation></message>
     <message><source>
@@ -5273,6 +5275,82 @@ Release to keep this clip in the project</source><translation>Сохранить
         <source>Name:</source>
         <translation>Название:</translation>
     </message>
+    <message>
+        <source>Collapse categories</source>
+        <translation>Свернуть разделы</translation>
+    </message>
+    <message>
+        <source>Expand categories</source>
+        <translation>Развернуть разделы</translation>
+    </message>
+    <message>
+        <source>Browser categories</source>
+        <translation>Разделы браузера</translation>
+    </message>
+    <message>
+        <source>Files</source>
+        <translation>Файлы</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>Плагины</translation>
+    </message>
+    <message>
+        <source>Instruments</source>
+        <translation>Инструменты</translation>
+    </message>
+    <message>
+        <source>Presets</source>
+        <translation>Пресеты</translation>
+    </message>
+    <message>
+        <source>Favorites</source>
+        <translation>Избранное</translation>
+    </message>
+    <message>
+        <source>Collections</source>
+        <translation>Коллекции</translation>
+    </message>
+    <message>
+        <source>New tab</source>
+        <translation>Новая вкладка</translation>
+    </message>
+    <message>
+        <source>Folder as tab…</source>
+        <translation>Папка как вкладка…</translation>
+    </message>
+    <message>
+        <source>Folder as tab</source>
+        <translation>Папка как вкладка</translation>
+    </message>
+    <message>
+        <source>Remove tab</source>
+        <translation>Убрать вкладку</translation>
+    </message>
+    <message>
+        <source>Search files…</source>
+        <translation>Поиск файлов…</translation>
+    </message>
+    <message>
+        <source>Search plugins…</source>
+        <translation>Поиск плагинов…</translation>
+    </message>
+    <message>
+        <source>Search instruments…</source>
+        <translation>Поиск инструментов…</translation>
+    </message>
+    <message>
+        <source>Search presets…</source>
+        <translation>Поиск пресетов…</translation>
+    </message>
+    <message>
+        <source>Search this collection…</source>
+        <translation>Поиск в коллекции…</translation>
+    </message>
+    <message>
+        <source>Up to %1 custom tabs</source>
+        <translation>До %1 пользовательских вкладок</translation>
+    </message>
 </context>
 <context>
     <name>FileBrowserTree</name>
@@ -5408,6 +5486,30 @@ Release to keep this clip in the project</source><translation>Сохранить
     <message>
         <source>Name for the sample shortcuts:</source>
         <translation>Название папки для ссылок на сэмплы:</translation>
+    </message>
+    <message>
+        <source>Instruments</source>
+        <translation>Инструменты</translation>
+    </message>
+    <message>
+        <source>No plugins in this category</source>
+        <translation>В этом разделе пока нет плагинов</translation>
+    </message>
+    <message>
+        <source>Add a folder to browse your files</source>
+        <translation>Добавьте папку с файлами</translation>
+    </message>
+    <message>
+        <source>Remove tab</source>
+        <translation>Убрать вкладку</translation>
+    </message>
+    <message>
+        <source>Show as tab…</source>
+        <translation>Показать как вкладку…</translation>
+    </message>
+    <message>
+        <source>Folder as tab…</source>
+        <translation>Папка как вкладка…</translation>
     </message>
 </context>
 <context>
@@ -6455,6 +6557,18 @@ Release to keep this clip in the project</source><translation>Сохранить
 </context>
 <context>
     <name>MainWindow</name>
+    <message><source>Use project tabs</source><translation>Использовать вкладки проектов</translation></message>
+    <message><source>Save project</source><translation>Сохранить проект</translation></message>
+    <message><source>Save project as…</source><translation>Сохранить проект как…</translation></message>
+    <message><source>Project tabs were enabled to restore all recovered projects.</source><translation>Вкладки включены, чтобы восстановить все проекты.</translation></message>
+    <message>
+        <source>Finish rendering before closing this project.</source>
+        <translation>Дождитесь завершения рендера перед закрытием проекта.</translation>
+    </message>
+    <message>
+        <source>The clip changed during analysis. Analyze it again.</source>
+        <translation>Клип изменился во время анализа. Выполните анализ ещё раз.</translation>
+    </message>
     <message>
         <source>Random Color</source>
         <translation>Случайные цвета</translation>
@@ -9327,9 +9441,151 @@ Retry in session details to continue this publication.</source>
         <source>Resize track overview</source>
         <translation>Изменить ширину панели дорожек</translation>
     </message>
+    <message>
+        <source>Performance &amp; diagnostics…</source>
+        <translation>Нагрузка и диагностика…</translation>
+    </message>
+    <message>
+        <source>Audio DSP load · Click for performance and diagnostics</source>
+        <translation>Нагрузка аудио · Нажмите, чтобы открыть нагрузку и диагностику</translation>
+    </message>
+    <message>
+        <source>A processor has been running for over 2 seconds. Open diagnostics to identify it. Recovery actions become available when the call returns.</source>
+        <translation>Вызов процессора не завершился за 2 секунды. Откройте диагностику, чтобы найти его. Восстановление станет доступно после завершения вызова.</translation>
+    </message>
+    <message>
+        <source>Audio processing is not responding</source>
+        <translation>Обработка аудио не отвечает</translation>
+    </message>
+    <message>
+        <source>Finish recording before restarting or removing plugins.</source>
+        <translation>Завершите запись перед перезапуском или удалением плагинов.</translation>
+    </message>
+    <message>
+        <source>Open diagnostics</source>
+        <translation>Открыть диагностику</translation>
+    </message>
+    <message>
+        <source>Plugin could not be restarted</source>
+        <translation>Не удалось перезапустить плагин</translation>
+    </message>
+    <message>
+        <source>Recording in progress</source>
+        <translation>Идёт запись</translation>
+    </message>
+    <message>
+        <source>Remove plugin</source>
+        <translation>Удаление плагина</translation>
+    </message>
+    <message>
+        <source>Remove “%1” from this project? This can be undone.</source>
+        <translation>Удалить «%1» из проекта? Это действие можно отменить.</translation>
+    </message>
+    <message>
+        <source>Plugin bypass changed: %1</source>
+        <translation>Изменён обход плагина: %1</translation>
+    </message>
+    <message>
+        <source>Plugin restarted with settings: %1</source>
+        <translation>Плагин перезапущен с настройками: %1</translation>
+    </message>
+    <message>
+        <source>Plugin restart failed: %1</source>
+        <translation>Ошибка перезапуска плагина: %1</translation>
+    </message>
+    <message>
+        <source>Plugin removal requested: %1</source>
+        <translation>Запрошено удаление плагина: %1</translation>
+    </message>
+    <message>
+        <source>Projects</source>
+        <translation>Проекты</translation>
+    </message>
+    <message>
+        <source>All projects</source>
+        <translation>Все проекты</translation>
+    </message>
+    <message>
+        <source>Close tab</source>
+        <translation>Закрыть вкладку</translation>
+    </message>
+    <message>
+        <source>Close other tabs</source>
+        <translation>Закрыть остальные вкладки</translation>
+    </message>
+    <message>
+        <source>Close all tabs</source>
+        <translation>Закрыть все вкладки</translation>
+    </message>
+    <message>
+        <source>Save all</source>
+        <translation>Сохранить все</translation>
+    </message>
+    <message>
+        <source>Next project</source>
+        <translation>Следующий проект</translation>
+    </message>
+    <message>
+        <source>Previous project</source>
+        <translation>Предыдущий проект</translation>
+    </message>
+    <message>
+        <source>Engine on</source>
+        <translation>Движок включён</translation>
+    </message>
+    <message>
+        <source>Engine off</source>
+        <translation>Движок выключен</translation>
+    </message>
+    <message>
+        <source>Enable engine</source>
+        <translation>Включить движок</translation>
+    </message>
+    <message>
+        <source>Disable engine</source>
+        <translation>Выключить движок</translation>
+    </message>
+    <message>
+        <source>Engine: %1</source>
+        <translation>Движок: %1</translation>
+    </message>
+    <message>
+        <source>Unsaved changes</source>
+        <translation>Есть несохранённые изменения</translation>
+    </message>
+    <message>
+        <source>Audio engine</source>
+        <translation>Аудиодвижок</translation>
+    </message>
+    <message>
+        <source>Switching engine…</source>
+        <translation>Переключение движка…</translation>
+    </message>
+    <message>
+        <source>Enable this project's engine to play, record or process audio.</source>
+        <translation>Для воспроизведения, записи и обработки включите движок этого проекта.</translation>
+    </message>
+    <message>
+        <source>This file is open in another tab. Choose a different path.</source>
+        <translation>Этот файл открыт в другой вкладке. Выберите другой путь.</translation>
+    </message>
+    <message>
+        <source>Unsupported workspace recovery format.</source>
+        <translation>Формат восстановления вкладок не поддерживается.</translation>
+    </message>
+    <message>
+        <source>Invalid workspace recovery manifest.</source>
+        <translation>Повреждён список вкладок для восстановления.</translation>
+    </message>
+    <message>
+        <source>Invalid project identity in recovery.</source>
+        <translation>Повреждён идентификатор проекта для восстановления.</translation>
+    </message>
 </context>
 <context>
     <name>MixerWidget</name>
+    <message><source>Mixer</source><translation>Микшер</translation></message>
+    <message><source>Rack</source><translation>Рэк</translation></message>
     <message><source>Show Master on Timeline</source><translation>Показать мастер на таймлайне</translation></message>
     <message><source>Create Tracks…</source><translation>Создать дорожки…</translation></message>
     <message>
@@ -9856,6 +10112,106 @@ Retry in session details to continue this publication.</source>
 <context>
     <name>OfflineRenderDialog</name>
     <message>
+        <source>Applying results…</source>
+        <translation>Применение результатов…</translation>
+    </message>
+    <message>
+        <source>Done — clip rendered</source>
+        <translation>Рендер клипа завершён</translation>
+    </message>
+    <message>
+        <source>Apply one effect chain to each clip independently. Original audio stays in History.</source>
+        <translation>Одна цепочка эффектов для каждого клипа. Исходное аудио сохраняется в истории.</translation>
+    </message>
+    <message>
+        <source>Select or deselect all clips</source>
+        <translation>Выбрать все клипы или снять выделение</translation>
+    </message>
+    <message>
+        <source>Include effect tails</source>
+        <translation>Сохранить хвосты эффектов</translation>
+    </message>
+    <message>
+        <source>Keep the decay of reverb and delay after each clip (up to 30 seconds).</source>
+        <translation>Сохранить затухание реверберации и задержки после каждого клипа (до 30 секунд).</translation>
+    </message>
+    <message>
+        <source>Auto render</source>
+        <translation>Авто-рендер</translation>
+    </message>
+    <message>
+        <source>Independent clips render in parallel when available.</source>
+        <translation>Клипы обрабатываются параллельно, если позволяет процессор.</translation>
+    </message>
+    <message>
+        <source>Render clips</source>
+        <translation>Рендер клипов</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Отмена…</translation>
+    </message>
+    <message>
+        <source>Queued</source>
+        <translation>В очереди</translation>
+    </message>
+    <message>
+        <source>Skipped</source>
+        <translation>Пропущен</translation>
+    </message>
+    <message>
+        <source>Preparing…</source>
+        <translation>Подготовка…</translation>
+    </message>
+    <message>
+        <source>Rendering · %1%</source>
+        <translation>Рендер · %1%</translation>
+    </message>
+    <message>
+        <source>Rendered</source>
+        <translation>Обработан</translation>
+    </message>
+    <message>
+        <source>Failed</source>
+        <translation>Ошибка</translation>
+    </message>
+    <message>
+        <source>%1 / %2 complete</source>
+        <translation>Готово: %1 / %2</translation>
+    </message>
+    <message>
+        <source>Preparing audio and effects…</source>
+        <translation>Подготовка аудио и эффектов…</translation>
+    </message>
+    <message>
+        <source>Rendering clips…</source>
+        <translation>Рендер клипов…</translation>
+    </message>
+    <message>
+        <source>%1 elapsed · Up to %2 clips at once</source>
+        <translation>Прошло %1 · До %2 клипов одновременно</translation>
+    </message>
+    <message>
+        <source>%1 elapsed</source>
+        <translation>Прошло %1</translation>
+    </message>
+    <message>
+        <source>Done</source>
+        <translation>Готово</translation>
+    </message>
+    <message>
+        <source>Not applied</source>
+        <translation>Не применён</translation>
+    </message>
+    <message>
+        <source>Done — %1 clips rendered</source>
+        <translation>Рендер завершён · Клипов: %1</translation>
+    </message>
+    <message>
+        <source>%1 elapsed · Original audio is available in History</source>
+        <translation>Прошло %1 · Исходное аудио доступно в истории</translation>
+    </message>
+    <message>
         <source>Offline Render</source>
         <translation>Offline Render</translation>
     </message>
@@ -9919,7 +10275,7 @@ Clip: %2</source>
     </message>
     <message>
         <source>Ready</source>
-        <translation>Готово</translation>
+        <translation>К рендеру</translation>
     </message>
     <message>
         <source>Offline render status</source>
@@ -10021,7 +10377,7 @@ Clip: %2</source>
     </message>
     <message>
         <source>Ready — a new version will be saved</source>
-        <translation>Готово — будет сохранена новая версия</translation>
+        <translation>Готово к рендеру — будет сохранена новая версия</translation>
     </message>
     <message>
         <source>Add or enable an effect to render</source>
@@ -10094,6 +10450,66 @@ Click to load. Drag onto Audio FX.</source>
     <message>
         <source>This preset has no plugins to load.</source>
         <translation>В этом пресете нет плагинов.</translation>
+    </message>
+    <message>
+        <source>One effect chain. A separate result for every clip.</source>
+        <translation>Одна цепочка эффектов. Отдельный результат для каждого клипа.</translation>
+    </message>
+    <message>
+        <source>Audio clips</source>
+        <translation>Аудиоклипы</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>Выбрать все</translation>
+    </message>
+    <message>
+        <source>Clip / Track</source>
+        <translation>Клип / Дорожка</translation>
+    </message>
+    <message>
+        <source>Length</source>
+        <translation>Длительность</translation>
+    </message>
+    <message>
+        <source>Status</source>
+        <translation>Состояние</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 с</translation>
+    </message>
+    <message>
+        <source>Effect chain</source>
+        <translation>Цепочка эффектов</translation>
+    </message>
+    <message>
+        <source>Applied to every checked clip</source>
+        <translation>Для всех отмеченных клипов</translation>
+    </message>
+    <message>
+        <source>Render options</source>
+        <translation>Параметры рендера</translation>
+    </message>
+    <message>
+        <source>Auto render on changes</source>
+        <translation>Авто-рендер при изменениях</translation>
+    </message>
+    <message>
+        <source>Original audio stays in History.</source>
+        <translation>Исходное аудио сохраняется в истории.</translation>
+    </message>
+    <message>
+        <source>%1 s selected</source>
+        <translation>Итого: %1 с</translation>
+    </message>
+    <message>
+        <source>Render clips (%1)</source>
+        <translation>Рендер клипов (%1)</translation>
+    </message>
+    <message>
+        <source>Ready to render</source>
+        <translation>Готово к рендеру</translation>
     </message>
 </context>
 <context>
@@ -12533,6 +12949,18 @@ This session also contains a finished cloud recording awaiting upload. Restore a
         <source>This plugin cannot use the selected channel mode</source>
         <translation>Этот плагин не поддерживает выбранный режим каналов</translation>
     </message>
+    <message>
+        <source>%1 open projects</source>
+        <translation>%1 открытыми проектами</translation>
+    </message>
+    <message>
+        <source>
+
+All project tabs will be restored with their audio engines off.</source>
+        <translation>
+
+Все вкладки проектов будут восстановлены с выключенными аудиодвижками.</translation>
+    </message>
 </context>
 <context>
     <name>QuantizeDialog</name>
@@ -12953,6 +13381,26 @@ Shift+L toggles layer recording. Holding Ctrl+Shift+L while a recording runs inv
 </context>
 <context>
     <name>SamplerPanel</name>
+    <message>
+        <source>Fades</source>
+        <translation>Фейды</translation>
+    </message>
+    <message>
+        <source>Trim</source>
+        <translation>Trim</translation>
+    </message>
+    <message>
+        <source>Trim silence from both ends by threshold. Internal pauses stay intact. Off restores the full source; Start and End set the edges manually.</source>
+        <translation>Убирает тишину по порогу с начала и конца, сохраняя паузы внутри. Выкл. восстанавливает источник; Start и End задают края вручную.</translation>
+    </message>
+    <message>
+        <source>Threshold in dB for trimming silence at the start and end. Double click to turn off.</source>
+        <translation>Порог в dB для обрезки тишины по краям. Двойной щелчок — выключить.</translation>
+    </message>
+    <message>
+        <source>Analyzing the sample for silence.</source>
+        <translation>Анализ тишины в семпле.</translation>
+    </message>
     <message><source>Note &amp; tuning</source><translation>Нота и строй</translation></message>
     <message><source>Detect note</source><translation>Определить ноту</translation></message>
     <message><source>Analyzing…</source><translation>Анализ…</translation></message>
@@ -13936,6 +14384,11 @@ Legato связывает перекрывающиеся ноты. Диапаз�
 </context>
 <context>
     <name>SettingsWindow</name>
+    <message><source>External agents / MCP</source><translation>Внешние агенты / MCP</translation></message>
+    <message><source>Local AI agent connections, access and activity.</source><translation>Подключение локальных AI-агентов, доступ и журнал действий.</translation></message>
+    <message><source>Projects</source><translation>Проекты</translation></message>
+    <message><source>Use project tabs</source><translation>Использовать вкладки проектов</translation></message>
+    <message><source>Open several projects in one window. When disabled, only the selected project stays open and the tab bar is hidden. Unsaved changes are checked before closing other projects.</source><translation>Открывать несколько проектов в одном окне. При отключении остаётся только выбранный проект, а панель вкладок скрывается. Перед закрытием остальных проектов программа предложит сохранить изменения.</translation></message>
     <message><source>Mixer view</source><translation>Вид микшера</translation></message>
     <message><source>Classic</source><comment>mixer view</comment><translation>Классический</translation></message>
     <message><source>Compact</source><translation>Компактный</translation></message>
@@ -21728,6 +22181,27 @@ I измеряется при воспроизведении. Нажмите д�
 
 <context>
 <name>MiniModuleRack</name>
+<message><source>Off</source><translation>Выкл.</translation></message>
+<message><source>Depth</source><translation>Глубина</translation></message>
+<message><source>Safe</source><translation>Защита</translation></message>
+<message><source>Presence</source><translation>Ясность</translation></message>
+<message><source>Air</source><translation>Воздух</translation></message>
+<message><source>Pitch</source><translation>Тон</translation></message>
+<message><source>Formant</source><translation>Форманта</translation></message>
+<message><source>Low Cut</source><translation>Срез НЧ</translation></message>
+<message><source>High Cut</source><translation>Срез ВЧ</translation></message>
+<message><source>Threshold</source><translation>Порог</translation></message>
+<message><source>Post</source><translation>Выход</translation></message>
+<message><source>Sine</source><translation>Синус</translation></message>
+<message><source>Triangle</source><translation>Треугольник</translation></message>
+<message><source>Pulse</source><translation>Пульс</translation></message>
+<message><source>Live</source><translation>Live</translation></message>
+<message><source>Pro</source><translation>Pro</translation></message>
+<message><source>6 dB/oct</source><translation>6 дБ/окт</translation></message>
+<message><source>12 dB/oct</source><translation>12 дБ/окт</translation></message>
+<message><source>24 dB/oct</source><translation>24 дБ/окт</translation></message>
+<message><source>48 dB/oct</source><translation>48 дБ/окт</translation></message>
+<message><source>Live: lower latency. Pro: smoother processing with more latency. Both modes use delay compensation.</source><translation>Live: меньше задержка. Pro: более плавная обработка с большей задержкой. В обоих режимах работает компенсация задержки.</translation></message>
 <message><source>Analog</source><translation>Аналог</translation></message>
 <message><source>Tape</source><translation>Лента</translation></message>
 <message><source>Tube</source><translation>Лампа</translation></message>
@@ -21816,6 +22290,10 @@ I измеряется при воспроизведении. Нажмите д�
 </context>
 <context>
 <name>ui::CreatorWindow</name>
+<message><source>Mini-module</source><translation>Мини-модуль</translation></message>
+<message><source>Lua script</source><translation>Lua-скрипт</translation></message>
+<message><source>Project type</source><translation>Тип проекта</translation></message>
+<message><source>Create a mini module or Lua script, or continue an existing project.</source><translation>Создайте мини-модуль или Lua-скрипт либо продолжите существующий проект.</translation></message>
 <message><source>Creator assistant</source><translation>Помощник Creator</translation></message>
 <message><source>Parameters</source><translation>Параметры</translation></message>
 <message><source>Close chat</source><translation>Закрыть чат</translation></message>
@@ -22568,6 +23046,41 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>RackBuiltinView</name>
+    <message><source>Mix</source><translation>Микс</translation></message>
+    <message><source>Feedback</source><translation>Возврат</translation></message>
+    <message><source>Speed</source><translation>Скорость</translation></message>
+    <message><source>Output</source><translation>Выход</translation></message>
+    <message><source>Mode</source><translation>Режим</translation></message>
+    <message><source>Pitch</source><translation>Тон</translation></message>
+    <message><source>Root</source><translation>Нота</translation></message>
+    <message><source>Volume</source><translation>Громкость</translation></message>
+    <message><source>Pan</source><translation>Панорама</translation></message>
+    <message><source>Gate</source><translation>Гейт</translation></message>
+    <message><source>Decay</source><translation>Спад</translation></message>
+    <message><source>Sustain</source><translation>Сустейн</translation></message>
+    <message><source>Priority</source><translation>Приоритет</translation></message>
+    <message><source>Delay</source><translation>Задержка</translation></message>
+    <message><source>Detune</source><translation>Детюн</translation></message>
+    <message><source>Body</source><translation>Плотность</translation></message>
+    <message><source>Auto</source><translation>Авто</translation></message>
+    <message><source>Automatic makeup gain</source><translation>Автокомпенсация громкости</translation></message>
+    <message><source>Threshold</source><translation>Порог</translation></message>
+    <message><source>Ratio</source><translation>Степень</translation></message>
+    <message><source>Knee</source><translation>Колено</translation></message>
+    <message><source>Attack</source><translation>Атака</translation></message>
+    <message><source>Release</source><translation>Релиз</translation></message>
+    <message><source>Makeup</source><translation>Усиление</translation></message>
+    <message><source>Solo selected band</source><translation>Прослушать выбранную полосу</translation></message>
+    <message><source>Enable selected band</source><translation>Включить выбранную полосу</translation></message>
+    <message><source>Filter type</source><translation>Тип фильтра</translation></message>
+    <message><source>EQ spectrum and frequency response</source><translation>Спектр и частотная характеристика EQ</translation></message>
+    <message><source>%1 Hz</source><translation>%1 Гц</translation></message>
+    <message><source>%1 dB/oct</source><translation>%1 дБ/окт</translation></message>
+    <message><source>Remove band</source><translation>Удалить полосу</translation></message>
+    <message><source>Click empty space to add a band.</source><translation>Нажмите на свободное место, чтобы добавить полосу.</translation></message>
+    <message><source>Wheel: slope · Shift+wheel: resonance · Right-click: filter type</source><translation>Колесо: крутизна · Shift + колесо: резонанс · Правая кнопка: тип фильтра</translation></message>
+    <message><source>Wheel: bandwidth · Right-click: filter type</source><translation>Колесо: ширина полосы · Правая кнопка: тип фильтра</translation></message>
+    <message><source>Drag a point to edit; click empty space to add a band. Right-click a point to change filter type. Wheel changes slope for cuts, bandwidth for other filters; Shift+wheel adjusts cut resonance. Left/Right select a band; Up/Down adjust it.</source><translation>Перетаскивайте точку для настройки; нажмите на свободное место для новой полосы. Правая кнопка на точке — тип фильтра. Колесо меняет крутизну среза или ширину полосы; Shift + колесо — резонанс среза. Влево/вправо — выбор полосы; вверх/вниз — настройка.</translation></message>
     <message><source>Each colored bar is a repeat. Spacing is delay time; height is relative to the first repeat. Feedback sets the decay.</source><translation>Каждый цветной столбец — повтор. Расстояние показывает время задержки, высота — уровень относительно первого повтора. Обратная связь задаёт затухание.</translation></message>
     <message><source>4 voices</source><translation>4 голоса</translation></message>
     <message><source> dotted</source><translation> с точкой</translation></message>
@@ -22650,6 +23163,8 @@ Select Interface to design the card and its two controls. Compile to audition it
 </context>
 <context>
     <name>RackDeviceCard</name>
+    <message><source>Engine off</source><translation>Движок выключен</translation></message>
+    <message><source>Enable this project's engine to use this device.</source><translation>Включите движок этого проекта, чтобы использовать устройство.</translation></message>
     <message><source>Collapse device</source><translation>Свернуть устройство</translation></message>
     <message><source>Expand device</source><translation>Развернуть устройство</translation></message>
     <message><source>Double-click to collapse device</source><translation>Двойной щелчок — свернуть устройство</translation></message>
@@ -22683,6 +23198,42 @@ Select Interface to design the card and its two controls. Compile to audition it
     <message><source>Sidechain sources</source><translation>Источники сайдчейна</translation></message>
     <message><source>Stereo</source><translation>Стерео</translation></message>
     <message><source>This device has no sidechain input</source><translation>Устройство не поддерживает сайдчейн</translation></message>
+    <message>
+        <source>Plugin</source>
+        <translation>Плагин</translation>
+    </message>
+    <message>
+        <source>Parameters</source>
+        <translation>Параметры</translation>
+    </message>
+    <message>
+        <source>Modulation</source>
+        <translation>Модуляция</translation>
+    </message>
+    <message>
+        <source>Open plugin</source>
+        <translation>Открыть плагин</translation>
+    </message>
+    <message>
+        <source>Close plugin</source>
+        <translation>Закрыть плагин</translation>
+    </message>
+    <message>
+        <source>Plugin is open</source>
+        <translation>Плагин открыт</translation>
+    </message>
+    <message>
+        <source>Click to close</source>
+        <translation>Нажмите, чтобы закрыть</translation>
+    </message>
+    <message>
+        <source>Show the full interface</source>
+        <translation>Открыть полный интерфейс</translation>
+    </message>
+    <message>
+        <source>Last touched</source>
+        <translation>Последний изменённый</translation>
+    </message>
 </context>
 <context>
     <name>RackWidget</name>
@@ -22733,6 +23284,64 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
     <message>
         <source>Back to Pattern</source>
         <translation>К паттерну</translation>
+    </message>
+    <message>
+        <source>LAYERS</source>
+        <translation>СЛОИ</translation>
+    </message>
+    <message>
+        <source>GROUP</source>
+        <translation>ГРУППА</translation>
+    </message>
+    <message>
+        <source>+ Layer</source>
+        <translation>+ Слой</translation>
+    </message>
+    <message>
+        <source>Layers</source>
+        <translation>Слои</translation>
+    </message>
+    <message>
+        <source>Enable layer</source>
+        <translation>Включить слой</translation>
+    </message>
+    <message>
+        <source>Solo layer</source>
+        <translation>Соло слоя</translation>
+    </message>
+    <message>
+        <source>Layer level</source>
+        <translation>Уровень слоя</translation>
+    </message>
+    <message>
+        <source>Rename layer…</source>
+        <translation>Переименовать слой…</translation>
+    </message>
+    <message>
+        <source>Delete layer and devices</source>
+        <translation>Удалить слой и его устройства</translation>
+    </message>
+    <message>
+        <source>Layer name</source>
+        <translation>Название слоя</translation>
+    </message>
+    <message>
+        <source>Create parallel layers</source>
+        <translation>Создать параллельные слои</translation>
+    </message>
+    <message>
+        <source>Add device to this chain</source>
+        <translation>Добавить устройство в цепочку</translation>
+    </message>
+    <message>
+        <source>Dry signal
+Add an effect to process this layer</source>
+        <translation>Прямой сигнал
+Добавьте эффект для обработки слоя</translation>
+    </message>
+    <message>
+        <source>Select adjacent effects in one chain.</source>
+        <translation>Выберите соседние эффекты в одной цепочке.</translation>
     </message>
 </context>
 <context>
@@ -23859,6 +24468,42 @@ Select an audio, instrument, bus or master channel.</source><translation>У эт
         <source>Two-sided movement</source>
         <translation>Движение в обе стороны</translation>
     </message>
+    <message>
+        <source>Enable source</source>
+        <translation>Включить источник</translation>
+    </message>
+    <message>
+        <source>Assign modulation</source>
+        <translation>Назначить модуляцию</translation>
+    </message>
+    <message>
+        <source>Click a parameter · Esc cancels</source>
+        <translation>Выберите параметр · Esc — отмена</translation>
+    </message>
+    <message>
+        <source>Add modulation</source>
+        <translation>Добавить модуляцию</translation>
+    </message>
+    <message>
+        <source>Tempo sync</source>
+        <translation>Синхронизация с темпом</translation>
+    </message>
+    <message>
+        <source>Phase</source>
+        <translation>Фаза</translation>
+    </message>
+    <message>
+        <source>Smoothing</source>
+        <translation>Сглаживание</translation>
+    </message>
+    <message>
+        <source>Depth %1%</source>
+        <translation>Глубина %1%</translation>
+    </message>
+    <message>
+        <source>Remove assignment</source>
+        <translation>Удалить назначение</translation>
+    </message>
 </context>
 <context>
     <name>RackSamplerView</name>
@@ -24183,8 +24828,8 @@ Editing locked</source>
         <translation>Сначала разблокируйте родительскую папку</translation>
     </message>
     <message>
-        <source>Protect clips and track order. Mute and Solo remain available.</source>
-        <translation>Защита клипов и порядка дорожек. Mute и Solo остаются доступны.</translation>
+        <source>Lock track editing, including volume, pan, plugins, Mute and Solo.</source>
+        <translation>Блокировка редактирования дорожки, включая громкость, панораму, плагины, Mute и Solo.</translation>
     </message>
     <message>
         <source>Mute</source>
@@ -24322,5 +24967,824 @@ Editing locked</source>
     <message><source>Find a destination track</source><translation>Поиск дорожки для переноса</translation></message>
     <message><source>Compatible destination tracks</source><translation>Доступные дорожки для переноса</translation></message>
     <message><source>No matching tracks</source><translation>Дорожки не найдены</translation></message>
+</context>
+<context>
+    <name>PerformanceWindow</name>
+    <message>
+        <source> · Right</source>
+        <translation> · Правый</translation>
+    </message>
+    <message>
+        <source>%1 problems</source>
+        <translation>Проблем: %1</translation>
+    </message>
+    <message>
+        <source>%1 processors need attention. Select a row for details and recovery actions.</source>
+        <translation>Процессоров, требующих внимания: %1. Выберите строку, чтобы посмотреть подробности и восстановить плагин.</translation>
+    </message>
+    <message>
+        <source>%1 samples</source>
+        <translation>%1 сэмплов</translation>
+    </message>
+    <message>
+        <source>%1 samples / %2</source>
+        <translation>%1 сэмплов / %2</translation>
+    </message>
+    <message>
+        <source>%1 · %2
+Delay: %3 samples. Processed blocks: %4. %5</source>
+        <translation>%1 · %2
+Задержка: %3 сэмплов. Обработано блоков: %4. %5</translation>
+    </message>
+    <message>
+        <source>500 ms; detailed engine timing stops when this window is hidden.</source>
+        <translation>500 мс; подробные измерения узлов движка прекращаются при скрытии окна.</translation>
+    </message>
+    <message>
+        <source>A processor has not returned for over 2 seconds. Restart and removal are unavailable while its call is still running. Native plugins share the app process; a permanent hang requires reopening the app from recovery.</source>
+        <translation>Процессор не отвечает более 2 секунд. Перезапуск и удаление недоступны, пока его вызов не завершится. Плагины работают внутри процесса приложения; при полном зависании потребуется перезапуск приложения с восстановлением проекта.</translation>
+    </message>
+    <message>
+        <source>Algorithmic latency reported by the plugin. Bypass retains delay compensation.</source>
+        <translation>Алгоритмическая задержка, заявленная плагином. При обходе компенсация задержки сохраняется.</translation>
+    </message>
+    <message>
+        <source>Audio &amp; system</source>
+        <translation>Аудио и система</translation>
+    </message>
+    <message>
+        <source>Audio DSP history</source>
+        <translation>История нагрузки аудио</translation>
+    </message>
+    <message>
+        <source>Audio DSP · last 60 seconds</source>
+        <translation>Нагрузка аудио · последние 60 секунд</translation>
+    </message>
+    <message>
+        <source>Audio DSP
+%1%  ·  %2 / block</source>
+        <translation>Нагрузка аудио
+%1%  ·  %2 / блок</translation>
+    </message>
+    <message>
+        <source>Audio device</source>
+        <translation>Аудиоустройство</translation>
+    </message>
+    <message>
+        <source>Audio device is stopped. Start audio to collect live measurements; unavailable values are shown as —.</source>
+        <translation>Аудиоустройство остановлено. Для измерений включите аудио; недоступные значения обозначены знаком —.</translation>
+    </message>
+    <message>
+        <source>Audio dropouts
+%1  ·  %2 late blocks</source>
+        <translation>Сбои аудио
+%1  ·  опоздавших блоков: %2</translation>
+    </message>
+    <message>
+        <source>Audio engine and process statistics</source>
+        <translation>Статистика аудиодвижка и процесса</translation>
+    </message>
+    <message>
+        <source>Audio problems and recovery actions appear here. The log is kept for this project while the app is open.</source>
+        <translation>Здесь отображаются проблемы аудио и действия по восстановлению. Журнал текущего проекта хранится до закрытия приложения.</translation>
+    </message>
+    <message>
+        <source>Audio settings…</source>
+        <translation>Настройки аудио…</translation>
+    </message>
+    <message>
+        <source>Audio workers / realtime workers</source>
+        <translation>Аудиопотоки / потоки реального времени</translation>
+    </message>
+    <message>
+        <source>Buffer / deadline</source>
+        <translation>Буфер / время на обработку</translation>
+    </message>
+    <message>
+        <source>Bypass</source>
+        <translation>Обход</translation>
+    </message>
+    <message>
+        <source>Bypassed</source>
+        <translation>Обход</translation>
+    </message>
+    <message>
+        <source>Callback peak / late blocks</source>
+        <translation>Пик аудиовызова / опоздавшие блоки</translation>
+    </message>
+    <message>
+        <source>Channel total</source>
+        <translation>Весь канал</translation>
+    </message>
+    <message>
+        <source>Clip FX</source>
+        <translation>Эффект клипа</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Copy report</source>
+        <translation>Копировать отчёт</translation>
+    </message>
+    <message>
+        <source>Cumulative latency arriving at this output, including upstream buses and delay compensation. Parallel paths are not added together.</source>
+        <translation>Накопленная задержка на этом выходе, включая предыдущие шины и компенсацию. Параллельные пути не суммируются.</translation>
+    </message>
+    <message>
+        <source>Current value</source>
+        <translation>Текущее значение</translation>
+    </message>
+    <message>
+        <source>DSP %</source>
+        <translation>DSP %</translation>
+    </message>
+    <message>
+        <source>DSP is processing time, not signal delay. Track totals include engine nodes. Click a heading to sort; rows stay in place during updates.</source>
+        <translation>DSP — время обработки; задержка — сдвиг сигнала. Итоги дорожек включают узлы движка. Нажмите заголовок для сортировки; при обновлении порядок строк сохраняется.</translation>
+    </message>
+    <message>
+        <source>Delay</source>
+        <translation>Задержка</translation>
+    </message>
+    <message>
+        <source>Device callbacks / render calls</source>
+        <translation>Вызовы устройства / рендера</translation>
+    </message>
+    <message>
+        <source>Device dropouts: +%1</source>
+        <translation>Сбои устройства: +%1</translation>
+    </message>
+    <message>
+        <source>Diagnostics event log</source>
+        <translation>Журнал событий диагностики</translation>
+    </message>
+    <message>
+        <source>Driver input latency</source>
+        <translation>Задержка входа по данным драйвера</translation>
+    </message>
+    <message>
+        <source>Driver output latency</source>
+        <translation>Задержка выхода по данным драйвера</translation>
+    </message>
+    <message>
+        <source>Driver reports + graph PDC; not a measured physical round trip.</source>
+        <translation>Данные драйвера + компенсация графа. Физический путь вход–выход не измерялся.</translation>
+    </message>
+    <message>
+        <source>Dropped profiling events</source>
+        <translation>Потерянные события профилирования</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>Включить</translation>
+    </message>
+    <message>
+        <source>Engine / preview</source>
+        <translation>Движок / прослушивание</translation>
+    </message>
+    <message>
+        <source>Engine node</source>
+        <translation>Узел движка</translation>
+    </message>
+    <message>
+        <source>Engine nodes</source>
+        <translation>Узлы движка</translation>
+    </message>
+    <message>
+        <source>Estimated monitoring latency</source>
+        <translation>Расчётная задержка мониторинга</translation>
+    </message>
+    <message>
+        <source>Events</source>
+        <translation>События</translation>
+    </message>
+    <message>
+        <source>Failed / gated blocks</source>
+        <translation>Ошибки / приостановленные блоки</translation>
+    </message>
+    <message>
+        <source>Find a track or plugin</source>
+        <translation>Найти дорожку или плагин</translation>
+    </message>
+    <message>
+        <source>Find:</source>
+        <translation>Поиск:</translation>
+    </message>
+    <message>
+        <source>Freezes these readings. Audio continues playing.</source>
+        <translation>Приостанавливает обновление показателей. Аудио продолжает звучать.</translation>
+    </message>
+    <message>
+        <source>Graph compensation</source>
+        <translation>Компенсация задержки графа</translation>
+    </message>
+    <message>
+        <source>Graph delay (PDC)
+%1  ·  %2 samples</source>
+        <translation>Задержка графа (PDC)
+%1  ·  %2 сэмплов</translation>
+    </message>
+    <message>
+        <source>Graph generation</source>
+        <translation>Версия графа</translation>
+    </message>
+    <message>
+        <source>Graph nodes / edges</source>
+        <translation>Узлы / связи графа</translation>
+    </message>
+    <message>
+        <source>Graph peak / late blocks</source>
+        <translation>Пик графа / опоздавшие блоки</translation>
+    </message>
+    <message>
+        <source>Inactive / frozen</source>
+        <translation>Неактивен / заморожен</translation>
+    </message>
+    <message>
+        <source>Input underflow / overflow</source>
+        <translation>Нехватка / избыток данных входа</translation>
+    </message>
+    <message>
+        <source>Insert FX</source>
+        <translation>Эффект канала</translation>
+    </message>
+    <message>
+        <source>Instrument</source>
+        <translation>Инструмент</translation>
+    </message>
+    <message>
+        <source>Last render error</source>
+        <translation>Последний код ошибки рендера</translation>
+    </message>
+    <message>
+        <source>Late audio blocks: +%1</source>
+        <translation>Опоздавшие аудиоблоки: +%1</translation>
+    </message>
+    <message>
+        <source>Latency measurement</source>
+        <translation>Источник данных о задержке</translation>
+    </message>
+    <message>
+        <source>Live · updated every 500 ms · %1 plugins</source>
+        <translation>Прямой мониторинг · обновление каждые 500 мс · плагинов: %1</translation>
+    </message>
+    <message>
+        <source>Master</source>
+        <translation>Мастер</translation>
+    </message>
+    <message>
+        <source>Maximum observed block time since this processor instance was created. Track peaks are sums of individual maxima, not simultaneous peaks.</source>
+        <translation>Максимальное время блока с момента создания экземпляра. Пик дорожки — сумма максимумов её узлов, которые могли происходить в разное время.</translation>
+    </message>
+    <message>
+        <source>Mean / block</source>
+        <translation>Среднее / блок</translation>
+    </message>
+    <message>
+        <source>Measurement</source>
+        <translation>Показатель</translation>
+    </message>
+    <message>
+        <source>Module</source>
+        <translation>Модуль</translation>
+    </message>
+    <message>
+        <source>No recent blocks</source>
+        <translation>Нет новых блоков</translation>
+    </message>
+    <message>
+        <source>Not responding (&gt;2 s)</source>
+        <translation>Не отвечает (&gt;2 с)</translation>
+    </message>
+    <message>
+        <source>Number of calls that exceeded an entire audio block's budget. This is separate from device underruns.</source>
+        <translation>Число вызовов, превысивших время целого аудиоблока. Это отдельный показатель, не счётчик сбоев устройства.</translation>
+    </message>
+    <message>
+        <source>OK</source>
+        <translation>В норме</translation>
+    </message>
+    <message>
+        <source>Output underflow / overflow</source>
+        <translation>Нехватка / избыток данных выхода</translation>
+    </message>
+    <message>
+        <source>Over budget</source>
+        <translation>Превышения</translation>
+    </message>
+    <message>
+        <source>Path delay</source>
+        <translation>Весь путь</translation>
+    </message>
+    <message>
+        <source>Pause display</source>
+        <translation>Пауза показаний</translation>
+    </message>
+    <message>
+        <source>Peak / block</source>
+        <translation>Пик / блок</translation>
+    </message>
+    <message>
+        <source>Per-plugin memory</source>
+        <translation>Память каждого плагина</translation>
+    </message>
+    <message>
+        <source>Performance &amp; diagnostics</source>
+        <translation>Нагрузка и диагностика</translation>
+    </message>
+    <message>
+        <source>Playing</source>
+        <translation>Воспроизведение</translation>
+    </message>
+    <message>
+        <source>Problems only</source>
+        <translation>Только проблемы</translation>
+    </message>
+    <message>
+        <source>Process CPU (100% = one core)</source>
+        <translation>CPU процесса (100% = одно ядро)</translation>
+    </message>
+    <message>
+        <source>Process memory
+%1 MiB</source>
+        <translation>Память процесса
+%1 МиБ</translation>
+    </message>
+    <message>
+        <source>Processing failed</source>
+        <translation>Ошибка обработки</translation>
+    </message>
+    <message>
+        <source>Processing time divided by one audio block's time budget. Parallel tracks can sum to more than 100%. This is not total system CPU.</source>
+        <translation>Время обработки относительно времени аудиоблока. Сумма параллельных дорожек может превышать 100%. Это не общая загрузка CPU компьютера.</translation>
+    </message>
+    <message>
+        <source>Recording</source>
+        <translation>Запись</translation>
+    </message>
+    <message>
+        <source>Recovered</source>
+        <translation>Восстановлен</translation>
+    </message>
+    <message>
+        <source>Remove plugin…</source>
+        <translation>Удалить плагин…</translation>
+    </message>
+    <message>
+        <source>Resident memory</source>
+        <translation>Используемая физическая память</translation>
+    </message>
+    <message>
+        <source>Restart with settings</source>
+        <translation>Перезапустить с настройками</translation>
+    </message>
+    <message>
+        <source>Restores the last successfully saved state; changes after that checkpoint may be lost.</source>
+        <translation>Восстанавливает последнее сохранённое состояние. Более поздние изменения могут быть потеряны.</translation>
+    </message>
+    <message>
+        <source>Resume display</source>
+        <translation>Продолжить обновление</translation>
+    </message>
+    <message>
+        <source>Running</source>
+        <translation>Работает</translation>
+    </message>
+    <message>
+        <source>Sample rate</source>
+        <translation>Частота дискретизации</translation>
+    </message>
+    <message>
+        <source>Sampler FX</source>
+        <translation>Эффект сэмплера</translation>
+    </message>
+    <message>
+        <source>Select a plugin to inspect it or change its state.</source>
+        <translation>Выберите плагин, чтобы посмотреть подробности или изменить его состояние.</translation>
+    </message>
+    <message>
+        <source>Stage</source>
+        <translation>Этап</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>Состояние</translation>
+    </message>
+    <message>
+        <source>Stopped</source>
+        <translation>Остановлен</translation>
+    </message>
+    <message>
+        <source>Stopped / unavailable</source>
+        <translation>Остановлено / недоступно</translation>
+    </message>
+    <message>
+        <source>Stops playback and recreates the plugin with its current state. Recording must finish first.</source>
+        <translation>Останавливает воспроизведение и пересоздаёт плагин с текущими настройками. Сначала завершите запись.</translation>
+    </message>
+    <message>
+        <source>System CPU</source>
+        <translation>Общая загрузка CPU</translation>
+    </message>
+    <message>
+        <source>Track / plugin</source>
+        <translation>Дорожка / плагин</translation>
+    </message>
+    <message>
+        <source>Track and plugin measurements</source>
+        <translation>Показатели дорожек и плагинов</translation>
+    </message>
+    <message>
+        <source>Track, plugin or clip</source>
+        <translation>Дорожка, плагин или клип</translation>
+    </message>
+    <message>
+        <source>Tracks &amp; plugins</source>
+        <translation>Дорожки и плагины</translation>
+    </message>
+    <message>
+        <source>Tracks / clips / plugins</source>
+        <translation>Дорожки / клипы / плагины</translation>
+    </message>
+    <message>
+        <source>Transport</source>
+        <translation>Транспорт</translation>
+    </message>
+    <message>
+        <source>UI polling delay</source>
+        <translation>Опоздание обновления интерфейса</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>Недоступен</translation>
+    </message>
+    <message>
+        <source>Unavailable: plugins share the process address space.</source>
+        <translation>Недоступно: плагины используют общую память процесса.</translation>
+    </message>
+    <message>
+        <source>Update period</source>
+        <translation>Период обновления</translation>
+    </message>
+    <message>
+        <source>Longest compensated path within this channel, including its upstream routing.</source>
+        <translation>Самый длинный путь с компенсацией задержки в этом канале, включая входящую маршрутизацию.</translation>
+    </message>
+    <message>
+        <source>Recently rendering windows</source>
+        <translation>Окна с недавней отрисовкой</translation>
+    </message>
+    <message>
+        <source>UI frame work / GPU frame</source>
+        <translation>Работа интерфейса / кадр GPU</translation>
+    </message>
+    <message>
+        <source>Presentation interval / rate</source>
+        <translation>Интервал показа / частота кадров</translation>
+    </message>
+    <message>
+        <source>Graphics timing scope</source>
+        <translation>Как измеряется графика</translation>
+    </message>
+    <message>
+        <source>Latest frame from each active window; largest value. Idle windows and unavailable GPU timestamps show —.</source>
+        <translation>Последний кадр каждого активного окна; показано наибольшее значение. Для неактивных окон и недоступных измерений GPU — прочерк.</translation>
+    </message>
+    <message>
+        <source>Effective graphics quality</source>
+        <translation>Текущее качество графики</translation>
+    </message>
+    <message>
+        <source>Maximum</source>
+        <translation>Максимальное</translation>
+    </message>
+    <message>
+        <source>Medium</source>
+        <translation>Среднее</translation>
+    </message>
+    <message>
+        <source>Low</source>
+        <translation>Низкое</translation>
+    </message>
+    <message>
+        <source>Offline rendering is in progress. Processor timings below cover live audio only; editing is temporarily unavailable.</source>
+        <translation>Идёт офлайн-рендер. Показатели процессоров ниже относятся только к обработке аудио в реальном времени; редактирование временно недоступно.</translation>
+    </message>
+    <message>
+        <source>Offline rendering</source>
+        <translation>Офлайн-рендер</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>Неактивен</translation>
+    </message>
+</context>
+<context>
+<name>ui::ScriptService</name>
+<message><source>Run</source><translation>Запустить</translation></message>
+<message><source>Installed commands</source><translation>Установленные команды</translation></message>
+<message><source>No commands found. Install or enable an extension in the script manager.</source><translation>Команды не найдены. Установите или включите расширение в менеджере скриптов.</translation></message>
+<message><source>Extension launch</source><translation>Запуск расширения</translation></message>
+<message><source>Creator</source><translation>Creator</translation></message>
+<message><source>Read project</source><translation>Чтение проекта</translation></message>
+<message><source>Edit project and transport</source><translation>Изменение проекта и управление транспортом</translation></message>
+<message><source>Read chosen files</source><translation>Чтение выбранных файлов</translation></message>
+<message><source>Write chosen files</source><translation>Запись выбранных файлов</translation></message>
+<message><source>Access the network</source><translation>Доступ к сети</translation></message>
+<message><source>Launch granted programs</source><translation>Запуск разрешённых программ</translation></message>
+<message><source>Lua handler exceeded its execution limit</source><translation>Обработчик Lua превысил допустимое время выполнения</translation></message>
+<message><source> — request a smaller result using SDK filters</source><translation> — запросите меньший объём данных с помощью фильтров SDK</translation></message>
+<message><source>Scripts</source><translation>Скрипты</translation></message>
+<message><source>&amp;Scripts</source><translation>&amp;Скрипты</translation></message>
+<message><source>Run file…</source><translation>Запустить файл…</translation></message>
+<message><source>Choose command…</source><translation>Выбрать команду…</translation></message>
+<message><source>Script manager…</source><translation>Менеджер скриптов…</translation></message>
+<message><source>Create in Creator…</source><translation>Создать в Creator…</translation></message>
+<message><source>Configure toolbar…</source><translation>Настроить панель…</translation></message>
+<message><source>Stop all</source><translation>Остановить все</translation></message>
+<message><source>SDK reference</source><translation>Справочник SDK</translation></message>
+<message><source>Toolbar position</source><translation>Положение панели</translation></message>
+<message><source>Top</source><translation>Сверху</translation></message>
+<message><source>Bottom</source><translation>Снизу</translation></message>
+<message><source>Left</source><translation>Слева</translation></message>
+<message><source>Right</source><translation>Справа</translation></message>
+<message><source>Floating window</source><translation>Отдельное окно</translation></message>
+<message><source>Choose script command</source><translation>Выбрать команду скрипта</translation></message>
+<message><source>Search installed commands</source><translation>Поиск установленных команд</translation></message>
+<message><source>Run Lua file</source><translation>Запустить Lua-файл</translation></message>
+<message><source>Script toolbar</source><translation>Панель скриптов</translation></message>
+<message><source>Add…</source><translation>Добавить…</translation></message>
+<message><source>Add button</source><translation>Добавить кнопку</translation></message>
+<message><source>Command</source><translation>Команда</translation></message>
+<message><source>Separator</source><translation>Разделитель</translation></message>
+<message><source>Up</source><translation>Выше</translation></message>
+<message><source>Down</source><translation>Ниже</translation></message>
+<message><source>Remove</source><translation>Удалить</translation></message>
+<message><source>Custom button label</source><translation>Своя подпись кнопки</translation></message>
+<message><source>Icon file path (optional)</source><translation>Путь к значку (необязательно)</translation></message>
+<message><source>Fixed arguments as a JSON object</source><translation>Фиксированные аргументы — объект JSON</translation></message>
+<message><source>Apply button properties</source><translation>Применить свойства кнопки</translation></message>
+<message><source>Arguments</source><translation>Аргументы</translation></message>
+<message><source>Extension permissions</source><translation>Разрешения расширения</translation></message>
+<message><source>Install extension</source><translation>Установить расширение</translation></message>
+<message><source>Extension updated</source><translation>Расширение обновлено</translation></message>
+<message><source>Extension disabled</source><translation>Расширение отключено</translation></message>
+<message><source>Permissions revoked</source><translation>Разрешения отозваны</translation></message>
+<message><source>Lua worker stopped unexpectedly</source><translation>Процесс Lua неожиданно завершился</translation></message>
+<message><source>Stopped</source><translation>Остановлено</translation></message>
+<message><source>Project closed</source><translation>Проект закрыт</translation></message>
+<message><source>Project closed or replaced</source><translation>Проект закрыт или заменён</translation></message>
+<message><source>Choose folder</source><translation>Выбрать папку</translation></message>
+<message><source>Choose output file</source><translation>Выбрать выходной файл</translation></message>
+<message><source>Choose input file</source><translation>Выбрать входной файл</translation></message>
+<message><source> (Preview)</source><translation> (Предпросмотр)</translation></message>
+<message><source>%1 requests:
+%2
+
+Files are limited to resources you choose and folders you grant.</source><translation>%1 запрашивает:
+%2
+
+Доступны только выбранные вами файлы и разрешённые папки.</translation></message>
+<message><source>
+External programs run with your operating-system account's permissions. Each executable must also be granted in the manager.</source><translation>
+Внешние программы работают с правами вашей учётной записи ОС. Каждую программу нужно отдельно разрешить в менеджере.</translation></message>
+    <message><source>Arguments: %1</source><translation>Аргументы: %1</translation></message>
+    <message><source>Choose icon…</source><translation>Выбрать значок…</translation></message>
+    <message><source>Toolbar buttons</source><translation>Кнопки панели</translation></message>
+    <message><source>Read project and chosen files</source><translation>Читать файлы проекта и выбранные файлы</translation></message>
+    <message><source>%1 requests:
+%2
+
+Linked project files are available automatically for reading. Other files require a selection or a folder grant.</source><translation>%1 запрашивает:
+%2
+
+Файлы проекта доступны для чтения автоматически. Для остальных файлов выберите файл или разрешите папку.</translation></message>
+    <message><source>Text</source><translation>Текст</translation></message>
+    <message><source>Image only</source><translation>Только изображение</translation></message>
+    <message><source>Image and text</source><translation>Изображение и текст</translation></message>
+    <message><source>Button appearance</source><translation>Вид кнопки</translation></message>
+    <message><source>Choose image…</source><translation>Выбрать изображение…</translation></message>
+    <message><source>Remove image</source><translation>Удалить изображение</translation></message>
+    <message><source>Image or icon</source><translation>Изображение или значок</translation></message>
+    <message><source>Button preview</source><translation>Предпросмотр кнопки</translation></message>
+    <message><source>Preview</source><translation>Предпросмотр</translation></message>
+    <message><source>Button</source><translation>Кнопка</translation></message>
+    <message><source>Image: %1</source><translation>Изображение: %1</translation></message>
+    <message><source>Add a label or choose an image for the button.</source><translation>Добавьте подпись или выберите изображение кнопки.</translation></message>
+<message><source>A toolbar supports up to 256 entries.</source><translation>На панели может быть не более 256 элементов.</translation></message>
+<message><source>Add a command, then choose its label and image. Changes are applied when you save.</source><translation>Добавьте команду, затем выберите подпись и изображение. Изменения применятся при сохранении.</translation></message>
+<message><source>Appearance</source><translation>Вид</translation></message>
+<message><source>Arrange commands on the left. Style each button on the right.</source><translation>Слева — порядок команд. Справа — вид выбранной кнопки.</translation></message>
+<message><source>Install an extension with commands first.</source><translation>Сначала установите расширение с командами.</translation></message>
+<message><source>Make the toolbar yours</source><translation>Своя панель команд</translation></message>
+<message><source>Optional values passed to this button's command. Leave {} if the script does not require arguments.</source><translation>Необязательные значения, передаваемые команде этой кнопки. Оставьте {}, если скрипту не нужны аргументы.</translation></message>
+<message><source>Save your toolbar changes before closing?</source><translation>Сохранить настройки панели перед закрытием?</translation></message>
+<message><source>This separator creates space between groups of buttons.</source><translation>Этот разделитель отделяет одну группу кнопок от другой.</translation></message>
+<message><source>Toolbar settings exceed 4 MiB. Reduce fixed arguments.</source><translation>Настройки панели превышают 4 МиБ. Уменьшите объём аргументов.</translation></message>
+<message><source>Unsaved toolbar changes</source><translation>Несохранённые настройки панели</translation></message>
+<message><source>User guide</source><translation>Руководство пользователя</translation></message>
+<message><source>Command is not installed</source><translation>Команда не установлена</translation></message>
+</context>
+<context>
+<name>ui::ScriptManagerWindow</name>
+<message><source>Command</source><translation>Команда</translation></message>
+<message><source>Select a run to view its log</source><translation>Выберите запуск, чтобы открыть его журнал</translation></message>
+<message><source>Review requested permissions…</source><translation>Рассмотреть запрошенные разрешения…</translation></message>
+<message><source>Requested: %1
+Granted: %2</source><translation>Запрошено: %1
+Разрешено: %2</translation></message>
+<message><source>Autostart is paused after a failure. Enable it again to retry.</source><translation>Автозапуск приостановлен после сбоя. Включите его снова для повторной попытки.</translation></message>
+<message><source>None</source><translation>Нет</translation></message>
+<message><source>Clips</source><translation>Клипы</translation></message>
+<message><source>Tracks</source><translation>Дорожки</translation></message>
+<message><source>Arrangement</source><translation>Аранжировка</translation></message>
+<message><source>MIDI notes</source><translation>MIDI-ноты</translation></message>
+<message><source>Automation</source><translation>Автоматизация</translation></message>
+<message><source>Mixer channels</source><translation>Каналы микшера</translation></message>
+<message><source>Devices</source><translation>Устройства</translation></message>
+<message><source>Parameters</source><translation>Параметры</translation></message>
+<message><source>Browser files</source><translation>Файлы браузера</translation></message>
+<message><source>Script manager</source><translation>Менеджер скриптов</translation></message>
+<message><source>Install…</source><translation>Установить…</translation></message>
+<message><source>Install extension</source><translation>Установить расширение</translation></message>
+<message><source>Update from file…</source><translation>Обновить из файла…</translation></message>
+<message><source>Update extension</source><translation>Обновить расширение</translation></message>
+<message><source>Export…</source><translation>Экспортировать…</translation></message>
+<message><source>Export extension</source><translation>Экспортировать расширение</translation></message>
+<message><source>Export</source><translation>Экспорт</translation></message>
+<message><source>Open in Creator</source><translation>Открыть в Creator</translation></message>
+<message><source>Remove</source><translation>Удалить</translation></message>
+<message><source>Remove extension</source><translation>Удалить расширение</translation></message>
+<message><source>Remove this extension from the local library?</source><translation>Удалить расширение из локальной библиотеки?</translation></message>
+<message><source>Extension / command</source><translation>Расширение / команда</translation></message>
+<message><source>Version</source><translation>Версия</translation></message>
+<message><source>Enabled</source><translation>Включено</translation></message>
+<message><source>Start automatically</source><translation>Запускать автоматически</translation></message>
+<message><source>Pin directly in context menus</source><translation>Закрепить отдельным пунктом контекстного меню</translation></message>
+<message><source>Shortcut</source><translation>Горячая клавиша</translation></message>
+<message><source>Permissions</source><translation>Разрешения</translation></message>
+<message><source>Context menus</source><translation>Контекстные меню</translation></message>
+<message><source>Grant folder…</source><translation>Разрешить папку…</translation></message>
+<message><source>Grant folder</source><translation>Разрешить папку</translation></message>
+<message><source>Folder access</source><translation>Доступ к папке</translation></message>
+<message><source>Allow writing new files in this folder as well as reading?</source><translation>Разрешить создание новых файлов в этой папке, помимо чтения?</translation></message>
+<message><source>Grant external program…</source><translation>Разрешить внешнюю программу…</translation></message>
+<message><source>Grant executable</source><translation>Выбрать программу</translation></message>
+<message><source>External program</source><translation>Внешняя программа</translation></message>
+<message><source>This program will run with your operating-system account's permissions. Allow this extension to launch it?</source><translation>Программа будет работать с правами вашей учётной записи ОС. Разрешить расширению запускать её?</translation></message>
+<message><source>Revoke permissions</source><translation>Отозвать разрешения</translation></message>
+<message><source>Run command</source><translation>Запустить команду</translation></message>
+<message><source>Configure script toolbar…</source><translation>Настроить панель скриптов…</translation></message>
+<message><source>Run</source><translation>Запуск</translation></message>
+<message><source>Project</source><translation>Проект</translation></message>
+<message><source>Status</source><translation>Состояние</translation></message>
+<message><source>Stop selected</source><translation>Остановить выбранный</translation></message>
+<message><source>Go to error in Creator</source><translation>Перейти к ошибке в Creator</translation></message>
+<message><source>Shortcut conflict</source><translation>Конфликт горячих клавиш</translation></message>
+<message><source>Finished</source><translation>Завершено</translation></message>
+<message><source>Running</source><translation>Выполняется</translation></message>
+    <message><source>%1 — %2</source><translation>%1 — %2</translation></message>
+    <message><source>Installed extensions</source><translation>Установленные расширения</translation></message>
+    <message><source>Program: %1</source><translation>Программа: %1</translation></message>
+    <message><source>Read and write</source><translation>Чтение и запись</translation></message>
+    <message><source>Read only</source><translation>Только чтение</translation></message>
+    <message><source>Runs and log</source><translation>Запуски и журнал</translation></message>
+    <message><source>Script log</source><translation>Журнал скрипта</translation></message>
+    <message><source>Script runs</source><translation>Запуски скриптов</translation></message>
+    <message><source>Search extensions and commands</source><translation>Поиск расширений и команд</translation></message>
+    <message><source>
+Project media is available for reading automatically. Original files are preserved; new results can use the script's temporary folder.</source><translation>
+Аудиофайлы проекта доступны для чтения автоматически. Исходники сохраняются; новые результаты можно создавать во временной папке скрипта.</translation></message>
+<message><source>Activity</source><translation>Активность</translation></message>
+<message><source>Autostart is optional. If a tool fails during startup, it is suspended until you enable it again.</source><translation>Автозапуск необязателен. После ошибки при запуске инструмент будет приостановлен до повторного включения.</translation></message>
+<message><source>Create in Creator…</source><translation>Создать в Creator…</translation></message>
+<message><source>Error</source><translation>Ошибка</translation></message>
+<message><source>Extension</source><translation>Расширение</translation></message>
+<message><source>Getting started
+
+1. Install a .lua file or a .vltscript package.
+2. Select a command in the library.
+3. Assign a shortcut, context menu or toolbar button.
+
+Project media is available for reading automatically. Review editing and external access in Permissions. Activity shows running tools, errors and logs.</source><translation>Начало работы
+
+1. Установите файл .lua или пакет .vltscript.
+2. Выберите команду в библиотеке.
+3. Назначьте горячую клавишу, контекстное меню или кнопку панели.
+
+Медиафайлы проекта доступны для чтения автоматически. Изменение проекта и внешний доступ настраиваются в «Разрешениях». В «Активности» находятся работающие инструменты, ошибки и журналы.</translation></message>
+<message><source>Help</source><translation>Справка</translation></message>
+<message><source>Install tools, assign commands and check their activity.</source><translation>Устанавливайте инструменты, назначайте команды и следите за их работой.</translation></message>
+<message><source>Library</source><translation>Библиотека</translation></message>
+<message><source>Resource access</source><translation>Доступ к ресурсам</translation></message>
+<message><source>Run this command directly or assign it to your workflow.</source><translation>Запустите команду или назначьте удобный способ вызова.</translation></message>
+<message><source>SDK reference</source><translation>Справочник SDK</translation></message>
+<message><source>Select a command below an extension to assign its shortcut and menus.</source><translation>Выберите команду внутри расширения, чтобы настроить горячую клавишу и меню.</translation></message>
+<message><source>Select an extension</source><translation>Выберите расширение</translation></message>
+<message><source>User guide</source><translation>Руководство пользователя</translation></message>
+<message><source>Your extensions</source><translation>Ваши расширения</translation></message>
+<message><source>
+Automatic project access was revoked. Review requested permissions to grant access again.</source><translation>
+Автоматический доступ к проекту отозван. Пересмотрите запрошенные разрешения, чтобы вернуть доступ.</translation></message>
+</context>
+<context>
+<name>ui::LuaCreatorWindow</name>
+<message><source>Lua script</source><translation>Lua-скрипт</translation></message>
+<message><source>Mini-module</source><translation>Мини-модуль</translation></message>
+<message><source>New project</source><translation>Новый проект</translation></message>
+<message><source>Project type</source><translation>Тип проекта</translation></message>
+<message><source>Lua source</source><translation>Исходник Lua</translation></message>
+<message><source>Script log</source><translation>Журнал скрипта</translation></message>
+<message><source>Diagnostics and script output</source><translation>Диагностика и сообщения скрипта</translation></message>
+<message><source>Creator — Lua script</source><translation>Creator — Lua-скрипт</translation></message>
+<message><source>Lua project</source><translation>Проект Lua</translation></message>
+<message><source>New</source><translation>Создать</translation></message>
+<message><source>Open…</source><translation>Открыть…</translation></message>
+<message><source>Save</source><translation>Сохранить</translation></message>
+<message><source>Undo</source><translation>Отменить</translation></message>
+<message><source>Redo</source><translation>Повторить</translation></message>
+<message><source>Check</source><translation>Проверить</translation></message>
+<message><source>Validation passed</source><translation>Проверка пройдена</translation></message>
+<message><source>Preview copy</source><translation>Предпросмотр копии</translation></message>
+<message><source>Run in real project</source><translation>Запустить в настоящем проекте</translation></message>
+<message><source>Stop</source><translation>Остановить</translation></message>
+<message><source>Install</source><translation>Установить</translation></message>
+<message><source>Installed</source><translation>Установлено</translation></message>
+<message><source>Export…</source><translation>Экспортировать…</translation></message>
+<message><source>Export script</source><translation>Экспортировать скрипт</translation></message>
+<message><source>Files and resources</source><translation>Файлы и ресурсы</translation></message>
+<message><source>Add Lua file…</source><translation>Добавить Lua-файл…</translation></message>
+<message><source>New source</source><translation>Новый исходник</translation></message>
+<message><source>Relative Lua path</source><translation>Относительный путь Lua-файла</translation></message>
+<message><source>Add source</source><translation>Добавить исходник</translation></message>
+<message><source>Add resource…</source><translation>Добавить ресурс…</translation></message>
+<message><source>Add resource</source><translation>Добавить ресурс</translation></message>
+<message><source>Find in source — Enter for next result</source><translation>Поиск в исходнике — Enter для следующего результата</translation></message>
+<message><source>Ask AI to create or improve this Lua extension</source><translation>Попросите AI создать или улучшить расширение Lua</translation></message>
+<message><source>Send to AI</source><translation>Отправить AI</translation></message>
+<message><source>%1 — line %2, column %3 — Ctrl+Space: completion</source><translation>%1 — строка %2, столбец %3 — Ctrl+Space: дополнение</translation></message>
+<message><source>My Lua script</source><translation>Мой Lua-скрипт</translation></message>
+<message><source>Save Lua project?</source><translation>Сохранить проект Lua?</translation></message>
+<message><source>Save your changes before continuing?</source><translation>Сохранить изменения перед продолжением?</translation></message>
+<message><source>Edit Lua source</source><translation>Изменить исходник Lua</translation></message>
+<message><source>Save Lua Creator project</source><translation>Сохранить Lua-проект Creator</translation></message>
+<message><source>Open Lua Creator project</source><translation>Открыть Lua-проект Creator</translation></message>
+<message><source>New Lua script</source><translation>Новый Lua-скрипт</translation></message>
+<message><source>Configure an AI model in Settings.</source><translation>Настройте модель AI в настройках.</translation></message>
+    <message><source>AI model</source><translation>Модель AI</translation></message>
+    <message><source>Command</source><translation>Команда</translation></message>
+    <message><source>Command to run</source><translation>Команда для запуска</translation></message>
+    <message><source>Conversation with AI</source><translation>Разговор с AI</translation></message>
+    <message><source>Creator assistant</source><translation>Ассистент Creator</translation></message>
+    <message><source>Find in source</source><translation>Поиск в исходнике</translation></message>
+    <message><source>Message to AI</source><translation>Сообщение AI</translation></message>
+    <message><source>Cannot read resource, or it exceeds 16 MiB.</source><translation>Не удалось прочитать ресурс, или его размер превышает 16 МиБ.</translation></message>
+    <message><source>Enter a relative path ending in .lua.</source><translation>Укажите относительный путь с расширением .lua.</translation></message>
+    <message><source>Replace resource</source><translation>Заменить ресурс</translation></message>
+    <message><source>Replace the existing resource with this file?</source><translation>Заменить существующий ресурс этим файлом?</translation></message>
+    <message><source>Save as…</source><translation>Сохранить как…</translation></message>
+    <message><source>The command could not start. Check the selected command, project and permissions.</source><translation>Не удалось запустить команду. Проверьте выбранную команду, проект и разрешения.</translation></message>
+    <message><source>This source already exists. Its contents were kept.</source><translation>Этот исходник уже существует. Его содержимое сохранено.</translation></message>
+<message><source>SDK reference</source><translation>Справочник SDK</translation></message>
+</context>
+<context>
+    <name>ProjectLoadDialog</name>
+    <message><source>Opening project</source><translation>Открытие проекта</translation></message>
+    <message><source>Cancel</source><translation>Отмена</translation></message>
+    <message><source>Reading project and audio…</source><translation>Чтение проекта и аудиофайлов…</translation></message>
+    <message><source>Preparing project…</source><translation>Подготовка проекта…</translation></message>
+    <message><source>Preparing audio engine…</source><translation>Подготовка аудиодвижка…</translation></message>
+    <message><source>Saving plugin states…</source><translation>Сохранение состояния плагинов…</translation></message>
+    <message><source>Loading plugin %1 of %2: %3</source><translation>Загрузка плагина %1 из %2: %3</translation></message>
+</context>
+<context>
+    <name>ui::McpSettingsPage</name>
+    <message><source>Connect an external AI agent to VLTONE on this computer. It can edit projects, write music and code, install local modules and run checks. Changes appear in the shared editors and can be undone.</source><translation>Подключите внешнего AI-агента к VLTONE на этом компьютере. Он сможет редактировать проекты, писать музыку и код, устанавливать локальные модули и выполнять проверки. Изменения отображаются в общих редакторах и поддерживают отмену.</translation></message>
+    <message><source>Enable MCP server</source><translation>Включить MCP-сервер</translation></message>
+    <message><source>Access is limited to your OS account. Keep VLTONE running while the agent is connected. Lua does not receive permission to start system processes or use the network.</source><translation>Доступ ограничен вашей учётной записью ОС. VLTONE должен работать, пока подключён агент. Lua не получает разрешения на запуск системных процессов или работу с сетью.</translation></message>
+    <message><source>Copy configuration for Codex</source><translation>Копировать конфигурацию для Codex</translation></message>
+    <message><source>Copy configuration for other clients</source><translation>Копировать конфигурацию для других клиентов</translation></message>
+    <message><source>Configuration includes a private connection token. Paste it into your MCP client's settings.</source><translation>Конфигурация содержит личный токен подключения. Вставьте её в настройки MCP-клиента.</translation></message>
+    <message><source>Cancel active tasks</source><translation>Отменить активные задачи</translation></message>
+    <message><source>Revoke access</source><translation>Отозвать доступ</translation></message>
+    <message><source>Activity log</source><translation>Журнал действий</translation></message>
+    <message><source>MCP service is unavailable</source><translation>Служба MCP недоступна</translation></message>
+    <message><source>Codex configuration copied</source><translation>Конфигурация Codex скопирована</translation></message>
+    <message><source>MCP configuration copied</source><translation>Конфигурация MCP скопирована</translation></message>
+</context>
+<context>
+    <name>ui::McpService</name>
+    <message><source>Disabled</source><translation>Выключен</translation></message>
+    <message><source>Cannot start: %1</source><translation>Не удалось запустить: %1</translation></message>
+    <message><source>Listening · %1 connected clients</source><translation>Сервер работает · подключено клиентов: %1</translation></message>
+    <message><source>Another VLTONE instance owns the MCP endpoint</source><translation>MCP уже запущен в другом экземпляре VLTONE</translation></message>
+    <message><source>Access revoked; connection token replaced</source><translation>Доступ отозван; токен подключения заменён</translation></message>
+    <message><source>Client connected</source><translation>Клиент подключён</translation></message>
+    <message><source>Client disconnected; unfinished operations cancelled</source><translation>Клиент отключён; незавершённые операции отменены</translation></message>
+    <message><source>Cancelled</source><translation>Отменено</translation></message>
+    <message><source>Completed</source><translation>Завершено</translation></message>
+    <message><source>Failed</source><translation>Ошибка</translation></message>
 </context>
 </TS>

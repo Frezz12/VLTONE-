@@ -80,6 +80,10 @@ double offsetFromNormalized(double normalized) { return normalized * 2.0 - 1.0; 
 
 // ── Processor ──────────────────────────────────────────────────────────────
 
+// Factories and module-owned helpers may retain the application after every
+// processor has gone. Keep a real reference until this module is unloaded.
+IPtr<IHostApplication> g_retainedHost;
+
 class TestProcessor : public U::Implements<U::Directly<IComponent, IAudioProcessor,
                                                        IConnectionPoint>,
                                            U::Indirectly<IPluginBase>> {
@@ -90,7 +94,14 @@ public:
     tresult PLUGIN_API initialize(FUnknown* context) override {
         if (std::getenv("DAW_TEST_VST3_FAIL_INITIALIZE")) return kResultFalse;
         m_initialized = true;
-        if (std::getenv("DAW_TEST_VST3_RELEASE_HOST")) m_host = FUnknownPtr<IHostApplication>(context);
+        if (std::getenv("DAW_TEST_VST3_RELEASE_HOST")) {
+            m_host = FUnknownPtr<IHostApplication>(context);
+            if (g_retainedHost && g_retainedHost != m_host) return kResultFalse;
+            g_retainedHost = m_host;
+            String128 name{};
+            if (!g_retainedHost || g_retainedHost->getName(name) != kResultOk || name[0] != 'V')
+                return kResultFalse;
+        }
         return kResultOk;
     }
     tresult PLUGIN_API terminate() override {

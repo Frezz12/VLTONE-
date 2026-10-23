@@ -13,6 +13,7 @@ class QPainter;
 namespace icons {
 
 enum class Glyph {
+    RackFace, RackControls, RackModulation, RackExpand, RackLayers, RackAssign,
     Play, Pause, Stop, Record, Loop, ClipLoop, Metronome,
     SkipStart, SkipEnd, Rewind, Forward, Restart,
     Magnet, Grid, TimeFormat, GridDivision, Undo, Redo,
@@ -63,6 +64,9 @@ enum class Glyph {
     WarpQuantize, WarpAlign,
     /// Multi-place effects: one distinct mark per action in the batch editor.
     BatchSource, BatchAdd, BatchBypass, BatchEdit, BatchRemove, BatchApply, BatchCancel,
+    /// Panel destinations and editing actions with distinct visual identities.
+    Rack, TrackOverview, ClipLibrary, PresetList, Pattern,
+    TypingKeyboard, FollowPlayhead, Mute, NoteSlide, WindowRestore,
     /// An open arc, meant to be rotated by the caller to indicate work in
     /// flight. It carries no animation of its own.
     Spinner

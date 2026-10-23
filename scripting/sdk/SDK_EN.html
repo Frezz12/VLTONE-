@@ -1,0 +1,141 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>VLTONE Lua SDK 1</title>
+<style>body{font:16px/1.6 system-ui;max-width:1020px;margin:40px auto;padding:0 24px}code,pre{background:#eee;color:#222}pre{padding:16px;overflow:auto}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #aaa;text-align:left}a{color:#447acc}</style>
+<h1>VLTONE user extensions · SDK 1</h1>
+<p><a href="AUDIO_EN.html">Analyze and slice audible clips</a></p>
+<p><a href="STYLE_EN.html">Custom design: palettes, cards and buttons</a></p>
+<p><a href="SDK_RU.html">Русский</a> · <a href="API.html">API reference</a> · <a href="api.json">Machine-readable catalog</a> · <a href="vlt.lua">Editor annotations</a> · <a href="AI_GUIDE.md">AI guide</a></p>
+<p><a href="USER_EN.html">User guide</a> · <a href="UI_EN.html">Windows, widgets and the VLTONE workspace</a></p>
+<h2>Install and run</h2>
+<p>Use Scripts → Script manager to install a .lua file, a .vltscript archive or a Lua .vltcreator project.
+Installation and package inspection never execute code. The manager lists commands and running instances,
+lets you enable extensions, opt into autostart, assign shortcuts and context placement, and inspect errors.
+Updates preserve assignments through stable extension/action IDs. New edit, write, network and process permissions require approval.</p>
+<p>The Scripts menu includes a searchable command picker, Run file, Creator, toolbar, Stop all and this reference.
+The optional toolbar starts hidden. Its menu docks it to any edge or floats it. Configure labels, icons,
+fixed argument objects, separators and order; arrow controls are available alongside dragging.
+Extension windows use the project's theme and remain attached to their original project.</p>
+<p>In the piano roll use Alt+right-click, the context-menu key or the editor action menu.
+The ordinary right-button gesture continues to erase notes.</p>
+<h2>First command</h2>
+<pre>local context = vlt.context.get()
+local snapshot = vlt.project.get()
+return vlt.project.apply{
+  revision=snapshot.revision, label="Rename clicked track",
+  operations={{op="track.rename", track=context.target.track, name="Verse"}}
+}</pre>
+<p>Declare project.read and project.write. An explicit context target takes precedence over global selection.
+Right-click contexts include type, target, selection, range and sometimes notes. Notes are stable IDs.
+All launch surfaces call the same action with fixed arguments in context.arguments.
+The context also supplies project, preview, resourceDirectory and temporaryDirectory.</p>
+<h2>Packages and Creator</h2>
+<p>project.get defaults to 128 tracks, 256 clips per track and 4096 notes/points per clip.
+Use track/clip filters, includeEvents=false, trackOffset/trackLimit, clipOffset/clipLimit and
+eventOffset/eventLimit for larger projects. Count fields report the full totals; compare revision between pages.
+notes.update upserts complete note records by id and optionally removes IDs in remove, retaining other notes;
+notes.set replaces every note in the clip. Preview parameter panels use copied metadata and plain values without loading the user's live plugins.</p>
+<pre>{
+  "format":"vltscript", "sdk":1, "id":"example.my-tool",
+  "name":"My tool", "version":"1.0.0",
+  "permissions":["project.read","project.write"],
+  "commands":[{"id":"run","label":"My tool","entry":"main.lua",
+               "contexts":["global","clip","track"]}]
+}</pre>
+<p>A package is a ZIP with manifest.json at its root, Lua sources and resources/ files. Native modules,
+absolute paths, traversal and symlinks are rejected. An action may declare background:true.
+Local modules load with require("module.name"), resolved to module/name.lua within the package.
+Lua sources total at most 1 MiB. Embedded resources total at most 64 MiB.
+Library location: Documents/VLTONE/Scripts. Package IDs and action IDs must be 3–96 lowercase
+letters, digits, dots, underscores or hyphens, starting with a letter or digit.</p>
+<p>Creator offers Mini-module or Lua script. Lua projects have files/resources, syntax highlighting,
+Ctrl+Space completion, search, diagnostics, history and AI. Check compiles without executing.
+Preview copy uses a separate project and temporary files; Run in real project is an explicit separate action.
+Save writes .vltcreator version 4 with kind=lua. Versions 1–3 and v4 kind=mini retain the mini-module editor.
+The .vltmini format is unchanged. Export produces .vltscript without an external compiler.</p>
+<h2>Data and editing</h2>
+<p>Musical positions use quarter-note beats. PCM positions use integer frames plus sampleRate.
+Use time.convert with value/from/to (beats, seconds, frames). Parameter values use the device's
+native min/max/unit, not normalized percentages. Stepped parameter choices contain value/label.
+Device addresses include identity, which changes when a device is replaced.</p>
+<p>project.get returns revision, generation, tempo, sampleRate, readOnly and tracks. Each track has
+id/name/kind/volume/pan/muted/solo/parent/output, clips, devices and sends. Clip notes contain
+id/pitch/start/length/velocity and optional pan/channel/muted/color/releaseVelocity.
+Automation point values use native units. Device descriptors come from devices.list.</p>
+<p>Project snapshots default to 128 tracks, 256 clips per track and 4096 events per clip.
+Use track/clip filters, includeEvents=false, trackOffset/trackLimit, clipOffset/clipLimit and
+eventOffset/eventLimit for larger projects; trackCount, clipCount, noteCount and pointCount contain
+the full counts. Responses are bounded to 1.5 MiB; request smaller pages if this limit is reached.
+Check revision between pages. devices.list and parameters.list accept offset and limit
+(default 256, maximum 4096); parameters.list also accepts a parameter ID filter.</p>
+<p>Automation points preserve shape (linear, hold or scurve), curve and eventOrder.
+Keep these fields when editing a snapshot to preserve the existing interpolation.</p>
+<p>project.apply validates the expected revision and commits one Undo entry. Failure restores the
+whole batch and existing history. For asynchronous work retain the original revision; a mismatch
+requires refreshing and recalculating. Never reuse stale IDs or bypass a conflict. No Undo group spans callbacks.</p>
+<table><tr><th>Operation</th><th>Fields beyond op and track</th></tr>
+<tr><td>track.add / remove / rename</td><td>kind,name / — / name</td></tr>
+<tr><td>track.mix / move</td><td>volume,pan,muted,solo,output / index,parent</td></tr>
+<tr><td>send.add / remove / set</td><td>destination / send / send,level,enabled,preFader</td></tr>
+<tr><td>clip.addMidi / importAudio</td><td>start,length / path,start (requires files.read and a granted path)</td></tr>
+<tr><td>clip.remove / rename / move</td><td>clip / clip,name / clip,start</td></tr>
+<tr><td>clip.trim / gain / fade / mute</td><td>clip,start,offset,length / clip,gain / clip,in,out / clip,muted</td></tr>
+<tr><td>clip.copy / split</td><td>clip,start / clip,at</td></tr>
+<tr><td>notes.set / automation.set</td><td>clip,notes / clip,points (id,beat,value,curve,shape,eventOrder)</td></tr>
+<tr><td>device.add / instrument / replace</td><td>format,uid,index / format,uid / device,identity,format,uid</td></tr>
+<tr><td>device.remove / bypass / move</td><td>device,identity / device,identity,bypassed / device,identity,index</td></tr></table>
+<p>Use vlt.array({}) for an empty array; ordinary empty tables encode objects. Returned arrays retain their
+array identity. APIs raise Lua errors; use pcall for recoverable errors and show the error to the user.</p>
+<h2>Windows</h2>
+<pre>vlt.ui.window{id="main", title="Tool", width=520, height=360, children={
+  {type="label", id="status", text="Ready"},
+  {type="button", text="Run", onClick=function(event)
+    vlt.ui.set{id="status", text="Done"}
+  end}
+}}</pre>
+<p>Supported widgets: column, row, group, tabs, button, menu, field, toggle, list, choice, knob,
+slider, number, progress, canvas, waveform and label. Common keys: id, text, label, tooltip.
+Layouts and tabs have children; tab children have title. A field returns text onChange; list/choice
+returns a one-based index. Numeric controls use min/max/value/unit and onChange. Progress uses 0..1.
+Controls bind to parameters with bind={track,device,parameter,identity}; one native gesture is one Undo.
+ui.set updates text/value/visible/enabled or drawing. ui.close closes by window id.</p>
+<p>A canvas drawing is an array of line, rect, ellipse or text shapes, with x,y,w,h,x2,y2,color,width,fill,text.
+A waveform drawing is an array of finite peaks from 0 to 1. At most 10,000 drawing items, 512 widgets
+and 16 windows per instance. Closing the last window ends a non-background tool.</p>
+<h2>Audio, files and events</h2>
+<p>ui.chooseFile uses mode=open/save/folder, optional filter and write=true for writable folders.
+Granted paths are checked at each use. files.list returns path/name/directory/bytes.
+files.read/write handle bounded UTF-8 text. Outputs are staged and existing files preserved.</p>
+<p>audio.process accepts operation=analyze/trim/copy/reverse/gain/fade/split, path and output.
+trim uses thresholdDb; split extracts startFrame..endFrame to a separate file; gain uses linear gain;
+fade uses inFrames/outFrames. audio.render accepts path and optional musical start/end.
+Jobs return an id, jobs.get returns progress/complete/result/error, jobs.cancel cancels publication.</p>
+<pre>local source=vlt.audio.open{path=inputPath}
+local destination=vlt.audio.create{path=outputPath, channels=source.channels, sampleRate=source.sampleRate}
+local meta, pcm=vlt.audio.read{id=source.id, frame=0, frames=2048}
+for i=1,#pcm do pcm[i]=pcm[i]*0.5 end
+vlt.audio.write({id=destination.id}, pcm)
+vlt.audio.close{id=source.id}
+vlt.audio.close{id=destination.id, publish=true}</pre>
+<p>For entire files repeat bounded blocks with timers as in pcm-analysis. Buffers use interleaved float32,
+one-based indexing, at most 65,536 frames and 1 MiB per transfer. Lua never runs on the audio thread.</p>
+<p>events.on accepts event=project/selection/transport/parameter/job and a callback; parameter events also
+need the parameter address. events.off uses the subscription id. timers.start accepts milliseconds and callback;
+timers.stop uses its id. Notifications coalesce outside the audio callback. storage.get/set manages extension-local
+settings. network.request is a bounded HTTPS GET. process.start accepts an explicitly granted absolute executable
+and arguments array, never a shell. External programs have the user's OS rights.</p>
+<h2>Runtime and validation</h2>
+<p>Each active instance has its own helper process and Lua state. A clean helper is reset for reuse, with one spare
+kept ready. Lua allocation is limited to 64 MiB; callbacks have a two second execution budget excluding broker waits.
+Stop terminates an unresponsive helper. Project closure cancels jobs and subscriptions. Shared project edits are
+blocked by the host on every path, including AI and native parameter bindings. Permission grants and AI modes
+are checked at actual calls, not trusted from manifest labels.</p>
+<pre>vlt_script_tool --check examples/midi-transpose
+vlt_script_tool --pack examples/midi-transpose transpose.vltscript
+vlt_script_tool --check transpose.vltscript
+vlt_script_worker --sdk</pre>
+<p>The tool uses QCoreApplication and does not require a display. Checks and exports never execute Lua.
+Examples: midi-transpose, sample-folder, pcm-analysis, device-console, background-events, canvas-window.</p>
+<h2>Project files and slicing</h2><p>Launching a script automatically grants declared project.read/files.read. Edits, writes, network and external programs still require approval. Revoke permissions disables automatic read grants for that extension until manually reviewed.</p>
+<p>With project.read and files.read, linked media in the pinned project is automatically readable. project.files{offset=0,limit=256} returns {files={path,name,bytes}[],total,offset,revision}. Increase offset by the returned count and compare revision between pages. Removed media loses this implicit access. Source files are read-only; unrelated neighboring files are not granted. Every run can use context.temporaryDirectory for separate results with the corresponding file permissions, or choose a destination. Importing a scratch result through clip.importAudio preserves a durable copy for the project and Undo. Preview cannot read real project files.</p>
+<p>project.get clip.source is the source path; start, length and offset are beats. Inspect reversed, looped, stretched and composite before assuming direct source-to-timeline mapping. clip.split takes absolute at beats: the left part retains the original id, created contains the right part's id. Submit multiple cuts of one original clip right-to-left in one project.apply. See examples/transient-slicer.</p>
+<p>Toolbar buttons support text, an image, or both. Images are stored with the script library and survive moving the original. Widget label is visible beside number, field, list, choice and slider controls; number also accepts step and decimals.</p>
+</html>

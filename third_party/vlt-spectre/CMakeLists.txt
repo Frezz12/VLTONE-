@@ -1,0 +1,86 @@
+cmake_minimum_required(VERSION 3.20)
+project(VltSpectre VERSION 0.1.0 DESCRIPTION "Embeddable audio spectrum analyzer" LANGUAGES CXX)
+
+# Adding Spectre to another project never enables demos/tests or Qt implicitly.
+set(spectre_standalone OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(spectre_standalone ON)
+endif()
+option(VLT_SPECTRE_BUILD_TESTS "Build the DSP and threading checks" ${spectre_standalone})
+option(VLT_SPECTRE_BUILD_EXAMPLES "Build the console example and optional Qt demo" ${spectre_standalone})
+option(VLT_SPECTRE_BUILD_WIDGETS "Build the optional Qt 6 spectrum widget" OFF)
+
+add_library(vlt_spectre STATIC src/Analyzer.cpp src/DisplaySmoothing.cpp)
+add_library(VltSpectre::Core ALIAS vlt_spectre)
+set_target_properties(vlt_spectre PROPERTIES EXPORT_NAME Core POSITION_INDEPENDENT_CODE ON)
+target_compile_features(vlt_spectre PUBLIC cxx_std_17)
+target_include_directories(vlt_spectre PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+if(MSVC)
+    target_compile_options(vlt_spectre PRIVATE /W4 /permissive- /utf-8)
+else()
+    target_compile_options(vlt_spectre PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(VLT_SPECTRE_BUILD_WIDGETS)
+    find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
+    add_library(vlt_spectre_widgets STATIC qt/src/SpectrumWidget.cpp)
+    add_library(VltSpectre::Widgets ALIAS vlt_spectre_widgets)
+    set_target_properties(vlt_spectre_widgets PROPERTIES EXPORT_NAME Widgets POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(vlt_spectre_widgets PUBLIC VltSpectre::Core Qt6::Widgets)
+    target_include_directories(vlt_spectre_widgets PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/qt/include>
+        $<INSTALL_INTERFACE:include>)
+    if(MSVC)
+        target_compile_options(vlt_spectre_widgets PRIVATE /W4 /utf-8)
+    else()
+        target_compile_options(vlt_spectre_widgets PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+if(VLT_SPECTRE_BUILD_EXAMPLES)
+    add_executable(spectre_console examples/console.cpp)
+    target_link_libraries(spectre_console PRIVATE VltSpectre::Core)
+    if(VLT_SPECTRE_BUILD_WIDGETS)
+        add_executable(spectre_demo examples/demo.cpp)
+        target_link_libraries(spectre_demo PRIVATE VltSpectre::Widgets)
+        if(MSVC)
+            target_compile_options(spectre_demo PRIVATE /utf-8)
+        endif()
+    endif()
+endif()
+
+if(VLT_SPECTRE_BUILD_TESTS)
+    enable_testing()
+    find_package(Threads REQUIRED)
+    add_executable(spectre_tests tests/analyzer_test.cpp)
+    target_link_libraries(spectre_tests PRIVATE VltSpectre::Core Threads::Threads)
+    add_test(NAME spectre_dsp COMMAND spectre_tests)
+    if(VLT_SPECTRE_BUILD_WIDGETS)
+        add_executable(spectre_widget_tests tests/widget_test.cpp)
+        target_link_libraries(spectre_widget_tests PRIVATE VltSpectre::Widgets)
+        add_test(NAME spectre_widget COMMAND spectre_widget_tests)
+        set_tests_properties(spectre_widget PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+endif()
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+install(TARGETS vlt_spectre EXPORT VltSpectreCoreTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT VltSpectreCoreTargets NAMESPACE VltSpectre:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/VltSpectre)
+if(VLT_SPECTRE_BUILD_WIDGETS)
+    install(TARGETS vlt_spectre_widgets EXPORT VltSpectreWidgetTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(DIRECTORY qt/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(EXPORT VltSpectreWidgetTargets NAMESPACE VltSpectre:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/VltSpectre)
+endif()
+configure_package_config_file(cmake/VltSpectreConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/VltSpectreConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/VltSpectre)
+write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/VltSpectreConfigVersion.cmake
+    COMPATIBILITY SameMajorVersion)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/VltSpectreConfig.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/VltSpectreConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/VltSpectre)
+install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/VltSpectre)

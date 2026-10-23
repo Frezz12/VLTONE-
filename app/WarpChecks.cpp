@@ -31,7 +31,7 @@
 bool MainWindow::checkWarpForTest() {
     bool ok = true;
     const auto check = [&](bool pass, const char* label) { std::fprintf(stderr, "%s %s\n", pass ? "PASS" : "FAIL", label); ok &= pass; };
-    const auto original = m_controller.project();
+    const auto original = projectController().project();
     QTemporaryDir directory;
     audio::AudioBuffer audio(2, 96000);
     for (int i = 0; i < 96000; ++i) {
@@ -47,16 +47,16 @@ bool MainWindow::checkWarpForTest() {
     first.name = "Acoustic loop"; first.filePath = file; first.durationSeconds = 2; first.channels = 2;
     auto second = first; second.id = daw::newUuid(); second.name = "Second take"; second.startSeconds = 3;
     track.clips = {first, second}; project.tracks = {track};
-    m_controller.restoreProject(project, "Warp panel test"); syncViews();
+    projectController().restoreProject(project, "Warp panel test"); syncViews();
     const auto trackId = QString::fromStdString(track.id), clipId = QString::fromStdString(first.id);
     setMixerVisible(false);
     const QString key = trackId + '/' + clipId;
-    const auto unopenedDepth = m_controller.undoDepth();
+    const auto unopenedDepth = projectController().undoDepth();
     openSampleEditor(trackId, clipId);
     auto* sampleWindow = m_sampleEditors.value(key);
     auto* tabs = sampleWindow->findChild<QTabWidget*>("SamplerTabs");
     check(tabs && tabs->count() == 3 && tabs->currentIndex() == 0 &&
-          m_controller.audioClip(track.id, first.id)->warp.empty() && m_controller.undoDepth() == unopenedDepth,
+          projectController().audioClip(track.id, first.id)->warp.empty() && projectController().undoDepth() == unopenedDepth,
           "Sampler hosts three pages without initializing Warp or changing history");
     m_timeline->selectClips({{trackId, QString::fromStdString(second.id)}, {trackId, clipId}});
     bool choseWarp = false;
@@ -83,19 +83,19 @@ bool MainWindow::checkWarpForTest() {
           "context-menu Warp reuses the sampler window and leaves the arrangement uncovered");
     selectTrackFromHeader(trackId);
     check(m_warpEditor->clipId() == clipId, "ordinary selection does not switch Warp clip");
-    auto map = m_controller.audioClip(track.id, first.id)->warp;
+    auto map = projectController().audioClip(track.id, first.id)->warp;
     map.markers.insert(map.markers.begin() + 1, {daw::newUuid(), .5, 1.5, false});
-    m_controller.setClipWarp(track.id, first.id, map); m_warpEditor->refresh();
+    projectController().setClipWarp(track.id, first.id, map); m_warpEditor->refresh();
     m_showMixerAction->trigger(); QApplication::processEvents();
     const int mixerInset = m_timeline->bottomInsetForTest();
     check(m_bottomPanel->isVisible() && m_warpEditor->isVisible() && tabs->currentWidget() == m_warpEditor && mixerInset > 0,
           "mixer and the sampler Warp tab stay open independently");
     m_timeline->selectClips({{trackId, clipId}});
-    const auto reopenDepth = m_controller.undoDepth();
+    const auto reopenDepth = projectController().undoDepth();
     m_showWarpAction->trigger(); QApplication::processEvents();
     check(m_sampleEditors.value(key) == sampleWindow && tabs->currentWidget() == m_warpEditor &&
           m_bottomPanel->isVisible() && m_timeline->bottomInsetForTest() == mixerInset &&
-          m_controller.undoDepth() == reopenDepth,
+          projectController().undoDepth() == reopenDepth,
           "W focuses the existing Warp tab without hiding Mixer or creating history");
     check(m_showWarpAction->shortcut() == QKeySequence(Qt::Key_W) &&
           m_showMixerAction->shortcut() == QKeySequence(Qt::Key_X) && !m_showWarpAction->isCheckable(),
@@ -109,13 +109,13 @@ bool MainWindow::checkWarpForTest() {
     check(warpButton && !warpButton->isCheckable() && tabs->currentWidget() == m_warpEditor &&
           m_warpEditor->ownsEditingFocus(), "transport Warp command opens the tab and focuses its canvas");
     m_warpEditor->previewAlignment();
-    check(m_controller.warpPreviewActive(), "embedded Warp can audition timing");
+    check(projectController().warpPreviewActive(), "embedded Warp can audition timing");
     tabs->setCurrentIndex(1); QApplication::processEvents();
-    check(!m_controller.warpPreviewActive() && m_controller.audioClip(track.id, first.id)->warp == map,
+    check(!projectController().warpPreviewActive() && projectController().audioClip(track.id, first.id)->warp == map,
           "switching to the audio Editor cancels uncommitted Warp audition");
     openWarpEditor(trackId, QString::fromStdString(second.id));
     check(m_warpEditor->clipId() == QString::fromStdString(second.id) && m_sampleEditors.size() == 2 &&
-          m_controller.audioClip(track.id, first.id)->warp == map,
+          projectController().audioClip(track.id, first.id)->warp == map,
           "each clip has its own sampler window and Warp map");
     openWarpEditor(trackId, clipId);
     QEventLoop wait; QTimer::singleShot(500, &wait, &QEventLoop::quit); wait.exec();
@@ -128,8 +128,8 @@ bool MainWindow::checkWarpForTest() {
         ThemeManager::instance().setThemeId(previous, false);
         sampleWindow->grab().save(path);
     }
-    m_controller.removeClip(track.id, first.id); syncViews(); closeOrphanedPluginEditors(); QApplication::processEvents();
-    check(!m_sampleEditors.contains(key) && !m_controller.audioClip(track.id, first.id),
+    projectController().removeClip(track.id, first.id); syncViews(); closeOrphanedPluginEditors(); QApplication::processEvents();
+    check(!m_sampleEditors.contains(key) && !projectController().audioClip(track.id, first.id),
           "deleting the edited clip closes its unified window safely");
 
     // Import must leave timing untouched; only the explicit context-menu
@@ -145,7 +145,7 @@ bool MainWindow::checkWarpForTest() {
     }
     const auto loopFile = directory.filePath("steady-loop.wav");
     recorder.writeWAVFile(loopFile.toStdString(), loop, 48000);
-    m_controller.setTempo(150); syncViews();
+    projectController().setTempo(150); syncViews();
     QMimeData mime; mime.setUrls({QUrl::fromLocalFile(loopFile)});
     const QPoint dropAt(int((1 - m_timeline->horizontalScrollForTest()) * m_timeline->pixelsPerSecondForTest()),
                         m_timeline->laneCentreForTest(0));
@@ -160,18 +160,18 @@ bool MainWindow::checkWarpForTest() {
         }
     });
     QApplication::sendEvent(m_timeline, &drop);
-    const auto* importedTrack = m_controller.project().findTrack(track.id);
+    const auto* importedTrack = projectController().project().findTrack(track.id);
     check(drop.isAccepted() && importedTrack && importedTrack->clips.size() == 2,
           "dropping an audio file imports it through background preparation");
     if (importedTrack && importedTrack->clips.size() == 2) {
         const auto imported = importedTrack->clips.back();
         check(imported.warp.empty() && imported.musicalAnalysis.empty() &&
-              std::abs(imported.durationSeconds - 12) < .001 && m_controller.tempo() == 150,
+              std::abs(imported.durationSeconds - 12) < .001 && projectController().tempo() == 150,
               "a dropped 120 BPM loop keeps its original duration in a 150 BPM project");
         const auto importedId = QString::fromStdString(imported.id);
-        const auto sibling = *m_controller.audioClip(track.id, second.id);
+        const auto sibling = *projectController().audioClip(track.id, second.id);
         m_timeline->selectClips({{trackId, importedId}, {trackId, QString::fromStdString(second.id)}});
-        const auto beforeAutoWarp = m_controller.undoDepth();
+        const auto beforeAutoWarp = projectController().undoDepth();
         bool choseAutoWarp = false;
         QTimer::singleShot(0, this, [&] {
             if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
@@ -190,26 +190,26 @@ bool MainWindow::checkWarpForTest() {
                                      m_timeline->pixelsPerSecondForTest()), m_timeline->laneCentreForTest(0));
         QContextMenuEvent autoWarpMenu(QContextMenuEvent::Mouse, autoWarpAt, m_timeline->mapToGlobal(autoWarpAt));
         QApplication::sendEvent(m_timeline, &autoWarpMenu);
-        const auto* fitted = m_controller.audioClip(track.id, imported.id);
+        const auto* fitted = projectController().audioClip(track.id, imported.id);
         check(choseAutoWarp && fitted && fitted->warp.enabled &&
               std::abs(fitted->durationSeconds - 9.6) < .001 &&
               std::abs(fitted->warp.baselineDurationSeconds - 12) < .001 &&
-              fitted->startSeconds == imported.startSeconds && m_controller.tempo() == 150,
+              fitted->startSeconds == imported.startSeconds && projectController().tempo() == 150,
               "context-menu Auto Warp fits the clicked clip to the project tempo without moving it");
-        const auto* other = m_controller.audioClip(track.id, second.id);
+        const auto* other = projectController().audioClip(track.id, second.id);
         check(other && other->warp == sibling.warp && other->durationSeconds == sibling.durationSeconds &&
               !m_sampleEditors.contains(trackId + '/' + importedId),
               "Auto Warp leaves other selected clips and the closed Warp Editor untouched");
-        check(m_controller.undoDepth() == beforeAutoWarp + 1, "context-menu Auto Warp creates one Undo entry");
-        m_controller.undo();
-        const auto* undone = m_controller.audioClip(track.id, imported.id);
+        check(projectController().undoDepth() == beforeAutoWarp + 1, "context-menu Auto Warp creates one Undo entry");
+        projectController().undo();
+        const auto* undone = projectController().audioClip(track.id, imported.id);
         check(undone && undone->warp.empty() && undone->durationSeconds == imported.durationSeconds,
               "Undo reverses Auto Warp while retaining the imported clip");
-        m_controller.redo();
+        projectController().redo();
         openWarpEditor(trackId, importedId);
         auto* enabled = m_warpEditor->findChild<QToolButton*>("WarpEnabled");
         if (enabled) enabled->click();
-        const auto* disabled = m_controller.audioClip(track.id, imported.id);
+        const auto* disabled = projectController().audioClip(track.id, imported.id);
         check(disabled && !disabled->warp.enabled && std::abs(disabled->durationSeconds - 12) < .001 &&
               disabled->startSeconds == imported.startSeconds,
               "switching Warp off in its editor restores original duration at the same position");
@@ -232,6 +232,6 @@ bool MainWindow::checkWarpForTest() {
     }
     const auto windows = m_sampleEditors.values();
     for (auto* window : windows) window->close();
-    m_controller.restoreProject(original, "Restore after Warp test"); syncViews(); setMixerVisible(true);
+    projectController().restoreProject(original, "Restore after Warp test"); syncViews(); setMixerVisible(true);
     return ok;
 }

@@ -333,7 +333,7 @@ QWidget* NoteContextPanel::buildNotes(bool multiple) {
         // here and one opened from the menu are the same window with the same
         // settings.
         const std::tuple<icons::Glyph, Tool, QString> tools[] = {
-            {icons::Glyph::Grid, Tool::Quantize, tr("Quantize…")},
+            {icons::Glyph::WarpQuantize, Tool::Quantize, tr("Quantize…")},
             {icons::Glyph::Arpeggio, Tool::Arpeggiator, tr("Arpeggiator…")},
             {icons::Glyph::Strum, Tool::Strum, tr("Strum…")},
             {icons::Glyph::Glue, Tool::Glue, tr("Glue and legato…")},

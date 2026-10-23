@@ -34,7 +34,7 @@ int main() {
         if (!validation.succeeded() || !scan::decodeResult(validation.output, result) ||
             result.size() != 1 || result[0].format != Format::AudioUnit ||
             result[0].uid != descriptor.uid || result[0].path != path ||
-            result[0].parameterSchema.empty()) {
+            result[0].parameterSchemaText().empty()) {
             std::fprintf(stderr, "AU validation failed: %s\n%s\n",
                          validation.failureReason.c_str(), validation.diagnostics.c_str());
             return 1;

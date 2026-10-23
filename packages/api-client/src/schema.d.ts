@@ -4335,6 +4335,8 @@ export interface components {
         };
         optionalAssetRef: null | components["schemas"]["assetRef"];
         sampleEdit: {
+            /** @description Silence Trim threshold in dB. Omitted or -96 means Off. */
+            trimThresholdDb?: number;
             loopMode: number;
             loopStart: number;
             loopEnd: number;
@@ -5593,6 +5595,8 @@ export interface components {
                     asset: components["schemas"]["optionalAssetRef"];
                 };
                 sampleEdit: {
+                    /** @description Silence Trim threshold in dB. Omitted or -96 means Off. */
+                    trimThresholdDb?: number;
                     loopMode: number;
                     loopStart: number;
                     loopEnd: number;

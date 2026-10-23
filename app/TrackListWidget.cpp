@@ -3,6 +3,7 @@
 #include "UiPerformance.hpp"
 #include "UiFrameClock.hpp"
 #include "TrackListWidget.hpp"
+#include "ScriptContextMenu.hpp"
 #include "RackDrag.hpp"
 #include "TrackIcons.hpp"
 #include "TrackIconPicker.hpp"
@@ -370,7 +371,7 @@ icons::Glyph glyphForTrack(const daw::TrackModel& track) {
         case daw::TrackKind::Audio:      return icons::Glyph::Waveform;
         case daw::TrackKind::Midi:       return icons::Glyph::MidiKeys;
         case daw::TrackKind::Instrument: return icons::Glyph::MidiKeys;
-        case daw::TrackKind::Pattern:    return icons::Glyph::Grid;
+        case daw::TrackKind::Pattern:    return icons::Glyph::Pattern;
         case daw::TrackKind::Automation: return icons::Glyph::Automation;
         case daw::TrackKind::Bus:
         case daw::TrackKind::Group:      return icons::Glyph::Mixer;
@@ -795,6 +796,12 @@ void TrackListWidget::syncTrackValues(const QStringList& trackIds) {
             !trackIds.contains(QString::fromStdString(row.id)))) continue;
         const daw::TrackModel* t = m_controller->project().findTrack(row.id);
         if (!t) continue;
+        const bool editable = !m_controller->isTrackEditLocked(row.id);
+        for (QWidget* control : {static_cast<QWidget*>(row.fader), static_cast<QWidget*>(row.pan),
+                 static_cast<QWidget*>(row.mute), static_cast<QWidget*>(row.solo),
+                 static_cast<QWidget*>(row.monitor), static_cast<QWidget*>(row.record), row.icon})
+            if (control) control->setEnabled(editable);
+        if (auto* name = qobject_cast<QLineEdit*>(row.nameEdit)) name->setReadOnly(!editable);
         const QColor color = colorFromRgb(t->color);
         static_cast<TrackRowSurface*>(row.container)->setTrackColor(color);
         static_cast<TrackColorRail*>(row.colorRail)->setTrackColor(color);
@@ -2509,6 +2516,7 @@ bool TrackListWidget::populateSelectedTrackActionsMenu(QMenu& menu) {
 }
 
 void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","track"},{"target",{{"track",id.toStdString()}}}});
     const auto* track = m_controller->project().findTrack(id.toStdString());
     if (!track) return;
     const bool isFolder = daw::isFolder(*track);
@@ -2535,7 +2543,8 @@ void TrackListWidget::populateTrackActionsMenu(QMenu& menu, const QString& id) {
     connect(renameAction, &QAction::triggered, this, [this, id] {
         // QMenu restores the previous focus after its action fires. Begin the
         // edit after that restoration, otherwise focusOut commits it at once.
-        QTimer::singleShot(0, this, [this, id] {
+        QTimer::singleShot(0, this, [this, id, document = m_controller->documentIdentity()] {
+            if (m_controller->documentIdentity() != document) return;
             const int index = rowIndexOf(id);
             if (index >= 0)
                 if (auto* name = qobject_cast<ui::InlineNameEdit*>(m_rows[std::size_t(index)].nameEdit))

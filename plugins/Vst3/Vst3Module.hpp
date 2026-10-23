@@ -24,6 +24,11 @@ public:
     /// not a VST3 module or its entry point refused.
     static std::shared_ptr<Vst3Module> open(const std::string& path);
 
+    /// Host shutdown only, on the control thread, after destroying processors
+    /// but before tearing down the UI/COM environment. Live modules are retained.
+    /// macOS/Linux keep their resident-module policy.
+    static void releaseUnusedModules();
+
     Steinberg::IPluginFactory* factory() const noexcept { return m_factory; }
     const std::string& path() const noexcept { return m_path; }
 

@@ -1,0 +1,6 @@
+{
+  "format": "vltscript", "sdk": 1, "id": "vlt.example.midi-transpose",
+  "name": "Transpose selected notes", "version": "1.0.0",
+  "permissions": ["project.read", "project.write"],
+  "commands": [{"id": "transpose", "label": "Transpose notes up", "entry": "main.lua", "contexts": ["notes", "clip", "global"]}]
+}

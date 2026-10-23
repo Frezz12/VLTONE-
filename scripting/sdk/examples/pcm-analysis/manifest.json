@@ -1,0 +1,6 @@
+{
+  "format": "vltscript", "sdk": 1, "id": "vlt.example.pcm-analysis",
+  "name": "Custom PCM analysis", "version": "1.0.0",
+  "permissions": ["files.read"],
+  "commands": [{"id": "analyze", "label": "Analyze zero crossings…", "entry": "main.lua", "contexts": ["global", "file"]}]
+}

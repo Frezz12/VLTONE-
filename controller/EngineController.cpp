@@ -311,7 +311,7 @@ void remapTemplateTrackIds(ProjectModel& project) {
 
 /// Shortest a clip may be trimmed or split to, so an edge drag can never
 /// collapse a clip to nothing.
-constexpr double kMinClipSeconds = 0.02;
+constexpr double kMinClipSeconds = EngineController::minimumClipDurationSeconds;
 
 /// The same idea for notes: a thirty-second note is the shortest a resize drag
 /// can produce, so a note can never become invisible and unselectable.
@@ -864,11 +864,14 @@ std::vector<TrackModel> mintConnectedTrackCopies(
         remap(copy.outputBusId, trackIds);
         remap(copy.samplerFx.ownerInstrumentId, slotIds);
         remapInsert(copy.instrument);
+        if (copy.channelColor) remapInsert(*copy.channelColor);
+        for (InsertModel& insert : copy.miniModules) remapInsert(insert);
         for (InsertModel& insert : copy.samplerFx.inserts)
             remapInsert(insert);
         for (InsertModel& insert : copy.inserts) remapInsert(insert);
         for (SendModel& send : copy.sends)
             remap(send.destinationTrackId, trackIds);
+        for (auto& source : copy.modulation.sources) remap(source.audioChannelId, trackIds);
 
         for (ClipModel& clip : copy.clips) {
             remap(clip.patternClipId, clipIds);
@@ -878,6 +881,7 @@ std::vector<TrackModel> mintConnectedTrackCopies(
                 remapInsert(insert);
             for (ControllerLane& lane : clip.lanes)
                 remap(lane.slotId, slotIds);
+            for (auto& take : clip.takes) for (auto& lane : take.lanes) remap(lane.slotId, slotIds);
             remap(clip.automation.target.channelId, trackIds);
             remap(clip.automation.target.slotId, slotIds);
             remap(clip.automation.target.sendId, sendIds);
@@ -1179,6 +1183,7 @@ bool EngineController::processDeviceBlockForTest(const audio::AudioBuffer& input
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 EngineController::EngineController() {
+    m_documentIdentity = newUuid();
     m_project.miniModuleProjectId = newUuid();
 }
 EngineController::EngineController(WorkerRuntime) : EngineController() { m_isRenderClone = true; }
@@ -1840,6 +1845,7 @@ audio::Result EngineController::initialize(double sampleRate,
 
 audio::Result EngineController::initialize(
     const audio::AudioDeviceConfig& config, bool openDevice) {
+    m_documentOnly = false;
     if (auto ready = m_runtime->prepare(config.sampleRate, config.bufferSize, m_isRenderClone); !ready)
         return ready;
     m_liveDeviceAllowed = openDevice;
@@ -1852,7 +1858,7 @@ audio::Result EngineController::initialize(
     // that only wants the document model never touches the user's cache file.
     // Without this the plugin browser is empty until the first scan of the
     // session, and a project's inserts fail to resolve their descriptors.
-    if (!m_isRenderClone) m_pluginManager.load();
+    if (!m_isRenderClone) pluginManager().load();
     auto session = prepareAudioSession(AudioPluginLoadPolicy::Required);
     const std::array<AudioTransportCommand, 2> transport{{
         {.action = AudioTransportCommand::Action::Tempo, .value = m_project.tempo},
@@ -2817,6 +2823,10 @@ EngineController::PlacementSpan EngineController::emitClipPlacements(
 
 void EngineController::syncTrackNotes(const TrackModel& track, bool geometryChanged) {
     syncLinkedNoteTracks(track, geometryChanged);
+    if (m_documentOnly) {
+        if (geometryChanged) { ++m_clipGeometryRevision; bumpMidiNotesRevision(track.id); }
+        return;
+    }
     if (invalidateTrackFreeze(track) || !(m_runtime->trackNodes(track.id) != nullptr)) return;
     if (!trackAccepts(track.kind, ClipKind::Midi)) return;
     AudioContentSpec content;
@@ -3421,7 +3431,9 @@ void EngineController::deferClipSync(const std::string& trackId) {
 void EngineController::cancelClipSampleBake() {
     m_clipSampleGeneration->fetch_add(1, std::memory_order_release);
     if (m_clipSampleBakeTask)
-        engine::BackgroundExecutor::instance().cancelAndWait(m_clipSampleBakeTask);
+        // The worker owns its sample/result and shared generation, never this
+        // controller. Let cancelled decoding finish away from the UI thread.
+        engine::BackgroundExecutor::instance().cancel(m_clipSampleBakeTask);
     m_clipSampleBakeTask.reset();
     m_clipSampleBake.reset();
 }
@@ -3648,7 +3660,7 @@ void EngineController::clearAllSolos() {
     if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return;
     bool changed = false;
     for (TrackModel& t : m_project.tracks) {
-        if (!t.soloed) continue;
+        if (!t.soloed || (!m_undo.isApplying() && isTrackEditLocked(t.id))) continue;
         t.soloed = false;
         changed = true;
     }
@@ -3662,7 +3674,7 @@ collab::SharedMutationResult EngineController::clearAllMutes() {
         std::vector<std::string> mutedTrackIds;
         mutedTrackIds.reserve(m_project.tracks.size());
         for (const TrackModel& track : m_project.tracks) {
-            if (track.muted) mutedTrackIds.push_back(track.id);
+            if (track.muted && (m_undo.isApplying() || !isTrackEditLocked(track.id))) mutedTrackIds.push_back(track.id);
         }
         if (mutedTrackIds.empty())
             return collab::SharedMutationResult::LocalFallback;
@@ -3674,7 +3686,7 @@ collab::SharedMutationResult EngineController::clearAllMutes() {
 
     bool changed = false;
     for (TrackModel& t : m_project.tracks) {
-        if (!t.muted) continue;
+        if (!t.muted || (!m_undo.isApplying() && isTrackEditLocked(t.id))) continue;
         t.muted = false;
         changed = true;
     }
@@ -3735,7 +3747,7 @@ AudioPluginChainSpec EngineController::preparePluginChain(const std::string& cha
             requirement.instrument = owner && owner->instrument.id == slot.id;
             requirement.channelMode = slot.channelMode;
             requirement.parameterFingerprint = slot.parameterFingerprint;
-            const auto installed = m_pluginManager.plugins();
+            const auto installed = pluginManager().plugins();
             const auto found = std::find_if(installed.begin(), installed.end(),
                 [&](const auto& candidate) { return collab::pluginSatisfiesRequirement(candidate, requirement); });
             spec.descriptor = found == installed.end() ? plugins::PluginDescriptor{} : *found;
@@ -3743,7 +3755,7 @@ AudioPluginChainSpec EngineController::preparePluginChain(const std::string& cha
                 spec.loadPolicy = AudioPluginLoadPolicy::PlaceholderOnly;
                 spec.unavailableReason = "The exact plugin required by the shared project is not installed.";
             }
-        } else if (const auto known = m_pluginManager.find(spec.requiredFormat, slot.uid)) {
+        } else if (const auto known = pluginManager().find(spec.requiredFormat, slot.uid)) {
             spec.descriptor = *known;
         }
         // Direct descriptor loads are valid before a catalog scan has run.
@@ -3883,16 +3895,20 @@ audio::Result EngineController::newProject(bool createDefaultAudioTrack) {
         return failure;
     }
     // Retire document history/resources only after the replacement is accepted.
+    m_documentPosition = 0.;
+    m_documentPackageDir.clear();
     stopPluginAudition();
     ++m_projectGeneration;
     m_lastTouchedAutomation.clear();
+    m_recentRackParameters.clear();
     m_parameterTouchByChannel.clear();
     m_pendingAutomationTouches.clear();
     m_warpPreview.reset();
     m_warpEdit.reset();
-    m_sampleWarpOrigins.clear();
+    m_sampleRegionOrigins.clear();
     m_exclusiveAuditionTrackId.clear();
     m_undo.clear();
+    m_transferResources.clear();
     m_midiNotesRevisions.clear();
     m_samples.clear();
     m_sourceSamples.clear();
@@ -4053,7 +4069,8 @@ audio::Result EngineController::writePreparedProject(
     return result;
 }
 
-void EngineController::acceptPreparedProjectSave(const ProjectModel& saved) {
+void EngineController::acceptPreparedProjectSave(const ProjectModel& saved, const std::string& packageDir) {
+    if (!packageDir.empty()) m_documentPackageDir = packageDir;
     std::unordered_map<std::string, const InsertModel*> slots;
     const auto collect = [&](const std::vector<InsertModel>& list) {
         for (const auto& slot : list) slots.emplace(slot.id, &slot);
@@ -4085,7 +4102,7 @@ void EngineController::acceptPreparedProjectSave(const ProjectModel& saved) {
 audio::Result EngineController::saveProject(const std::string& packageDir) {
     auto prepared = prepareProjectSave();
     const auto result = writePreparedProject(prepared, packageDir);
-    if (result) acceptPreparedProjectSave(prepared.project);
+    if (result) acceptPreparedProjectSave(prepared.project, packageDir);
     return result;
 }
 
@@ -4174,7 +4191,7 @@ cloud::CloudPublicationCapture EngineController::captureCloudPublicationV1(
         }
         slot.pluginVersion = descriptor.version;
         slot.stateSchemaVersion = descriptor.stateSchemaVersion;
-        if (const auto known = m_pluginManager.find(descriptor.format, descriptor.uid);
+        if (const auto known = pluginManager().find(descriptor.format, descriptor.uid);
             known && known->version == descriptor.version) slot.parameterFingerprint = known->parameterFingerprint;
         if (!internal && slot.parameterFingerprint.size() != 64) {
             issueForSlot(cloud::PublicationCaptureIssueKind::PluginStateCaptureFailed, slot, location,
@@ -4574,6 +4591,7 @@ recovery::RecoverySnapshot EngineController::captureRecoverySnapshot(
     };
     for (TrackModel& track : snapshot.project.tracks) {
         if (track.instrument.isLoaded()) collectSlot(track.id, track.instrument);
+        if (track.channelColor) collectSlot(track.id, *track.channelColor);
         for(auto& module:track.miniModules) collectSlot(track.id,module);
         collectChannel(track.id, track.samplerFx.inserts);
         for (ClipModel& clip : track.clips)
@@ -4645,6 +4663,7 @@ recovery::RecoverySnapshot EngineController::captureIncrementalRecoverySnapshot(
         if (!cached || allChanged || patternChanged || changedTracks.contains(track.id)) {
             auto copy = std::make_shared<TrackModel>(track);
             if (copy->instrument.isLoaded()) captureSlot(copy->id, copy->instrument);
+            if (copy->channelColor) captureSlot(copy->id, *copy->channelColor);
             for(auto& module:copy->miniModules) captureSlot(copy->id,module);
             captureSlots(copy->id, copy->samplerFx.inserts); captureSlots(copy->id, copy->inserts);
             for (auto& clip : copy->clips) captureSlots(copy->id, clip.inserts);
@@ -4673,6 +4692,7 @@ recovery::RecoverySnapshot EngineController::captureIncrementalRecoverySnapshot(
     const auto references = [&](const std::vector<InsertModel>& slots) { for (const auto& slot : slots) reference(slot); };
     for (const auto& track : snapshot.trackParts) {
         reference(track->instrument); references(track->inserts); references(track->samplerFx.inserts);
+        if (track->channelColor) reference(*track->channelColor);
         for(auto& module:track->miniModules) reference(module);
         for (const auto& clip : track->clips) { references(clip.inserts); references(clip.offlineProcess.chain); }
     }
@@ -4801,7 +4821,7 @@ audio::Result EngineController::collectProjectPluginStateEdits(
     const std::string& packageDir,
     const std::unordered_set<std::string>* channelFilter,
     bool includeMaster, const std::string& fallbackPackageDir,
-    bool tolerateStateErrors) {
+    bool tolerateStateErrors, const std::unordered_set<std::string>* slotFilter) {
     output = {};
     // Dormant document slots still own their serialized state for Save As,
     // but cannot be targets of a transaction on the projected audio graph.
@@ -4828,6 +4848,7 @@ audio::Result EngineController::collectProjectPluginStateEdits(
     auto restore = [&](const std::string& channelId,
                        std::span<InsertModel> slots) {
         for (InsertModel& slot : slots) {
+            if (slotFilter && !slotFilter->contains(slot.id)) continue;
             if (!result) return;
             auto restoreOne = [&](const AudioPluginAddress& address,
                                   const std::string& stateFile,
@@ -4836,7 +4857,15 @@ audio::Result EngineController::collectProjectPluginStateEdits(
                 restore.stateFile = stateFile;
                 restore.tolerateErrors = tolerateStateErrors;
                 restore.contentDirectory = ProjectSerializer::mediaPath(packageDir);
-                if (!stateFile.empty()) {
+                const auto* cached = cachedPluginState(slot.id + (address.right ? "-right" : ""), slot);
+                if (cached) {
+                    restore.state = cached->bytes;
+                    // The opaque checkpoint owns the preset. Only parameters
+                    // explicitly edited since that checkpoint override it;
+                    // replaying every controller readback can overflow the
+                    // event queue and overwrite native preset-only state.
+                    attachPluginStateSample(slot.uid, restore);
+                } else if (!stateFile.empty()) {
                     if (platform::pathFromUtf8(stateFile).filename() != platform::pathFromUtf8(stateFile)) {
                         result = audio::Result::fail(audio::EngineError::InvalidArgument,
                             "Plugin state reference must be a filename: " + slot.id);
@@ -4875,7 +4904,7 @@ audio::Result EngineController::collectProjectPluginStateEdits(
                     }
                     attachPluginStateSample(slot.uid, restore);
                 }
-                if (slot.uid == "daw.sampler" && slot.audioEdit.initialized) {
+                if (!m_documentOnly && slot.uid == "daw.sampler" && slot.audioEdit.initialized) {
                     restore.source = resolveEditedAudio(slot.audioEdit);
                     if (!restore.source || slot.audioEdit.sources.empty()) {
                         result = audio::Result::fail(audio::EngineError::FileNotFound,
@@ -5084,9 +5113,14 @@ audio::Result EngineController::prepareProjectOpen(const std::string& packageDir
     return audio::Result::ok();
 }
 
-audio::Result EngineController::openPreparedProject(PreparedProject prepared) {
+audio::Result EngineController::openPreparedProject(PreparedProject prepared, bool fromTemplate) {
     if (std::abs(prepared.rate - m_sampleRate) > 0.01)
         return audio::Result::fail(audio::EngineError::Unknown, "The audio device changed. Please reopen the project.");
+    if (fromTemplate) {
+        stripTemplateArrangement(prepared.document);
+        remapTemplateTrackIds(prepared.document);
+        prepared.document.miniModuleProjectId = newUuid();
+    }
     return activateProject(std::move(prepared.document), prepared.path, {}, false, &prepared);
 }
 
@@ -5682,7 +5716,7 @@ audio::Result EngineController::activateProject(
     const auto previousSharedSampleCache = m_sharedClipSampleCache;
     const auto previousDisplayPaths = m_clipDisplayPaths;
     const auto previousAudioEditAudio = m_audioEditAudio;
-    const auto previousSampleOrigins = m_sampleWarpOrigins;
+    const auto previousSampleOrigins = m_sampleRegionOrigins;
     const auto previousRecoveryCursor = m_recoveryPluginCaptureCursor;
     bool committed = false;
 
@@ -5702,7 +5736,7 @@ audio::Result EngineController::activateProject(
         m_sharedClipSampleCache = previousSharedSampleCache;
         m_clipDisplayPaths = previousDisplayPaths;
         m_audioEditAudio = previousAudioEditAudio;
-        m_sampleWarpOrigins = previousSampleOrigins;
+        m_sampleRegionOrigins = previousSampleOrigins;
         m_recoveryPluginCaptureCursor = previousRecoveryCursor;
 
         // replaceSession leaves the acknowledged generation and transport
@@ -5712,7 +5746,7 @@ audio::Result EngineController::activateProject(
     };
 
     try {
-    m_sampleWarpOrigins.clear();
+    m_sampleRegionOrigins.clear();
     m_exclusiveAuditionTrackId.clear();
     m_project = std::move(loaded);
     repairPatternClips();
@@ -5759,13 +5793,17 @@ audio::Result EngineController::activateProject(
         {.action = Action::Seek},
         {.action = Action::Duration, .position = toSamples(maxEnd)}
     }};
-    const auto result = m_runtime.replaceSession(std::move(session), restores.imports, {}, transport, [this] { announceAllRetiring(); });
+    const auto result = m_documentOnly
+        ? publishAudioSession(std::move(session), false, restores.imports)
+        : m_runtime.replaceSession(std::move(session), restores.imports, {}, transport, [this] { announceAllRetiring(); });
     if (!result) return restorePreviousProject(result);
     committed = true;
+    m_documentPackageDir = packageDir;
+    m_documentPosition = 0.0;
     ++m_projectGeneration;
     stopPluginAudition();
     m_warpEdit.reset(); m_warpPreview.reset(); m_audioEditGesture.reset();
-    m_lastTouchedAutomation.clear(); m_parameterTouchByChannel.clear(); m_pendingAutomationTouches.clear();
+    m_lastTouchedAutomation.clear(); m_recentRackParameters.clear(); m_parameterTouchByChannel.clear(); m_pendingAutomationTouches.clear();
     m_recoveryTrackParts.clear(); m_recoveryOfflineStateParts.clear();
     m_liveMidiKeys.clear(); m_lastLiveMidiNs = 0;
     // These owned readouts are part of the acknowledgment, captured on the
@@ -5775,6 +5813,7 @@ audio::Result EngineController::activateProject(
     acceptPluginStateEdits(restores.retained, {});
     if (!m_liveDeviceAllowed) m_previewParameterEditsPending = true;
     m_undo.clear();
+    m_transferResources.clear();
     return result;
     } catch (const std::exception& error) {
         if (committed) {
@@ -6053,6 +6092,7 @@ void EngineController::applyTransportStartPolicy() {
 }
 
 void EngineController::play() {
+    if (m_documentOnly) return;
     if (m_sessionTransportHandler) { m_sessionTransportHandler("play", positionSeconds(), loopEndSeconds(), isLoopEnabled()); return; }
     for (const auto& track : m_project.tracks) (void)invalidateTrackFreeze(track);
     // An audition is a thing you do *instead* of playing; letting it run into
@@ -6081,18 +6121,22 @@ void EngineController::seekSeconds(double seconds) {
     if (isRecording()) return;
     if (m_sessionTransportHandler) { m_sessionTransportHandler("seek", seconds, loopEndSeconds(), isLoopEnabled()); return; }
     const double s = std::max(0.0, seconds);
+    if (m_documentOnly) { m_documentPosition = m_playAnchorSeconds = s; return; }
     // Any repositioning while stopped/paused is the start of the next run, so
     // Restart mode can return there. Seeks during playback don't move it.
     if (!m_runtime->transportSnapshot().playing) m_playAnchorSeconds = s;
     m_runtime->transportCommand({.action = AudioTransportCommand::Action::SeekSeconds, .value = s, .prepare = true});
 }
 double EngineController::positionSeconds() const {
+    if (m_documentOnly) return m_documentPosition;
     return m_runtime->transportSnapshot().positionSeconds;
 }
 double EngineController::presentationPositionSeconds() const {
+    if (m_documentOnly) return m_documentPosition;
     return m_runtime->engine.transport().presentationPositionSeconds();
 }
 bool EngineController::isPlaying() const {
+    if (m_documentOnly) return false;
     return m_runtime->transportSnapshot().playing;
 }
 double EngineController::durationSeconds() const {
@@ -6348,6 +6392,7 @@ void EngineController::setLoopEnabled(bool enabled) {
     m_project.loopEnabled = enabled;
 }
 bool EngineController::isLoopEnabled() const {
+    if (m_documentOnly) return m_project.loopEnabled;
     return m_runtime->transportSnapshot().loopEnabled;
 }
 void EngineController::setLoopRangeSeconds(double startSeconds, double endSeconds) {
@@ -6358,9 +6403,11 @@ void EngineController::setLoopRangeSeconds(double startSeconds, double endSecond
     m_project.loopEndSeconds = std::max(0.0, endSeconds);
 }
 double EngineController::loopStartSeconds() const {
+    if (m_documentOnly) return m_project.loopStartSeconds;
     return toSeconds(m_runtime->transportSnapshot().loopStart);
 }
 double EngineController::loopEndSeconds() const {
+    if (m_documentOnly) return m_project.loopEndSeconds;
     return toSeconds(m_runtime->transportSnapshot().loopEnd);
 }
 
@@ -6653,7 +6700,7 @@ std::string EngineController::addPatternSample(const std::string& patternId,
 
     if (cloudProjectBound()) {
         const auto sampler =
-            m_pluginManager.find(plugins::Format::Internal, "daw.sampler");
+            pluginManager().find(plugins::Format::Internal, "daw.sampler");
         auto request = sharedAudioRequest(filePath);
         if (!sampler || !request) return {};
 
@@ -7232,6 +7279,7 @@ collab::SharedMutationResult EngineController::renameTrack(
 }
 
 void EngineController::setTrackVolume(const std::string& trackId, float volume) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float previous = track->volume;
@@ -7256,6 +7304,7 @@ void EngineController::setTrackVolume(const std::string& trackId, float volume) 
 }
 
 void EngineController::setTrackPan(const std::string& trackId, float pan) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     const float previous = track->pan;
@@ -7277,6 +7326,7 @@ void EngineController::setTrackPan(const std::string& trackId, float pan) {
 
 void EngineController::setTrackVolumeLive(const std::string& trackId,
                                           float volume) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("track:" + trackId + ":volume")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -7290,6 +7340,7 @@ void EngineController::setTrackVolumeLive(const std::string& trackId,
 }
 
 void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("track:" + trackId + ":pan")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -7304,6 +7355,7 @@ void EngineController::setTrackPanLive(const std::string& trackId, float pan) {
 
 void EngineController::setTrackVolumeGestureSample(
     const std::string& trackId, float volume) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("track:" + trackId + ":volume")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -7317,6 +7369,7 @@ void EngineController::setTrackVolumeGestureSample(
 
 void EngineController::setTrackPanGestureSample(const std::string& trackId,
                                                  float pan) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("track:" + trackId + ":pan")) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
@@ -7412,6 +7465,7 @@ void EngineController::commitTrackPanEdit(
 }
 
 void EngineController::setTrackMono(const std::string& trackId, bool mono) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track || track->mono == mono) return;
     const auto shared = submitSharedMutation(
@@ -7441,6 +7495,7 @@ void EngineController::setTrackMono(const std::string& trackId, bool mono) {
 
 collab::SharedMutationResult EngineController::setTrackMuted(
     const std::string& trackId, bool muted) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return collab::SharedMutationResult::Blocked;
     if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return collab::SharedMutationResult::Blocked;
     const TrackModel* current = m_project.findTrack(trackId);
     if (!current || current->muted == muted)
@@ -7465,6 +7520,7 @@ collab::SharedMutationResult EngineController::setTracksMuted(
     std::vector<std::string> targets;
     std::unordered_set<std::string> seen;
     const auto appendIfChanged = [&](const std::string& id) {
+        if (!m_undo.isApplying() && isTrackEditLocked(id)) return;
         const TrackModel* track = m_project.findTrack(id);
         if (!track || track->muted == muted || !seen.insert(id).second) return;
         targets.push_back(id);
@@ -7500,6 +7556,7 @@ collab::SharedMutationResult EngineController::setTracksMuted(
 }
 
 void EngineController::setTrackSoloed(const std::string& trackId, bool soloed) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (m_sessionAuditionEnabled && !m_sessionAuditionWritable) return;
     if (auto* t = m_project.findTrack(trackId)) {
         if (t->soloed == soloed) return;
@@ -7517,6 +7574,7 @@ void EngineController::setExclusiveAuditionTrack(const std::string& trackId) {
 }
 
 void EngineController::setTrackArmed(const std::string& trackId, bool armed) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track || !acceptsRecording(*track) || track->armed == armed) return;
     track->armed = armed;
@@ -7524,6 +7582,7 @@ void EngineController::setTrackArmed(const std::string& trackId, bool armed) {
 }
 
 void EngineController::setTrackMonitor(const std::string& trackId, bool monitor) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track || !acceptsRecording(*track)) return;
     // A deliberate click outranks smart monitoring: from here on this track's
@@ -7575,6 +7634,7 @@ collab::SharedMutationResult EngineController::setTrackIcons(
     for (const auto& id : trackIds) {
         const auto* track = m_project.findTrack(id);
         if (!track || track->iconId == iconId || !seen.insert(id).second) continue;
+        if (!m_undo.isApplying() && isTrackEditLocked(id)) continue;
         before.emplace_back(id, track->iconId);
         after.emplace_back(id, iconId);
         appendCommand(batch, collab::SetTrackProperty{id, collab::TrackProperty::IconId, iconId});
@@ -7593,6 +7653,7 @@ collab::SharedMutationResult EngineController::setTrackIcons(
 }
 
 void EngineController::setTrackColor(const std::string& trackId, uint32_t color) {
+    if (!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     if (cloudProjectBound()) {
@@ -7655,6 +7716,9 @@ void EngineController::setTrackColor(const std::string& trackId, uint32_t color)
 collab::SharedMutationResult EngineController::setTrackColors(
     const std::vector<std::pair<std::string, uint32_t>>& colors) {
     const std::unordered_map<std::string, uint32_t> requested(colors.begin(), colors.end());
+    if (!m_undo.isApplying())
+        for (const auto& [id, color] : colors)
+            if (isTrackTreeEditLocked(id)) return collab::SharedMutationResult::Blocked;
     struct Colors {
         std::string id;
         uint32_t track;
@@ -8064,6 +8128,7 @@ void EngineController::setTrackInputChannelCount(const std::string& id, uint32_t
 
 void EngineController::setTrackInputRouting(const std::string& id, uint32_t first,
                                             uint32_t count, bool enabled) {
+    if (!m_undo.isApplying() && isTrackEditLocked(id)) return;
     auto* track = m_project.findTrack(id);
     count = std::clamp(count, 1u, 2u);
     if (!track || !acceptsRecording(*track) || first >= engine::kMaxChannels) return;
@@ -8531,6 +8596,7 @@ std::string EngineController::packIntoFolder(
 
 std::string EngineController::addSend(const std::string& trackId,
                                       const std::string& destinationTrackId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return {};
     auto* track = m_project.findTrack(trackId);
     if (!track || trackId == destinationTrackId) return {};
     SendModel send;
@@ -8561,6 +8627,7 @@ std::string EngineController::addSend(const std::string& trackId,
 
 void EngineController::removeSend(const std::string& trackId,
                                   const std::string& sendId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track) return;
     if (std::none_of(track->sends.begin(), track->sends.end(),
@@ -8593,6 +8660,7 @@ SendModel* findSend(TrackModel* track, const std::string& sendId) {
 
 void EngineController::setSendLevel(const std::string& trackId,
                                     const std::string& sendId, float level) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("send:" + sendId + ":level")) return;
     auto* track = m_project.findTrack(trackId);
     auto* send = findSend(track, sendId);
@@ -8637,6 +8705,7 @@ void EngineController::commitSendLevelEdit(const std::string& trackId,
 
 bool EngineController::setSendDestination(const std::string& trackId,
     const std::string& sendId, const std::string& destination) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     auto* send = findSend(m_project.findTrack(trackId), sendId);
     const auto* target = m_project.findTrack(destination);
     if (!send || !target || !carriesAudio(*target) || trackId == destination) return false;
@@ -8659,6 +8728,7 @@ bool EngineController::setSendDestination(const std::string& trackId,
 
 void EngineController::setSendPreFader(const std::string& trackId,
                                        const std::string& sendId, bool preFader) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* send = findSend(m_project.findTrack(trackId), sendId);
     if (!send || send->preFader == preFader) return;
     const auto shared = submitSharedMutation(
@@ -8676,6 +8746,7 @@ void EngineController::setSendPreFader(const std::string& trackId,
 
 void EngineController::setSendEnabled(const std::string& trackId,
                                       const std::string& sendId, bool enabled) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     auto* send = findSend(track, sendId);
     if (!send || send->enabled == enabled) return;
@@ -8694,6 +8765,7 @@ void EngineController::setSendEnabled(const std::string& trackId,
 
 bool EngineController::setTrackOutputBus(const std::string& trackId,
                                          const std::string& busTrackId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     auto* track = m_project.findTrack(trackId);
     if (!track || trackId == busTrackId) return false;
     if (track->outputBusId == busTrackId) return true;
@@ -8718,6 +8790,7 @@ bool EngineController::setTrackOutputBus(const std::string& trackId,
 }
 
 void EngineController::setTrackInputEnabled(const std::string& id, bool enabled) {
+    if (!m_undo.isApplying() && isTrackEditLocked(id)) return;
     if (const auto* t = m_project.findTrack(id))
         setTrackInputRouting(id, t->inputChannel, t->inputChannelCount, enabled);
 }
@@ -8754,6 +8827,7 @@ void EngineController::ensureMasterInsertSlots(size_t count) {
 std::string EngineController::addInsert(const std::string& channelId,
                                         const plugins::PluginDescriptor& descriptor,
                                         size_t index, bool analysisOnly) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return {};
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return {};
@@ -8781,7 +8855,7 @@ std::string EngineController::addInsert(const std::string& channelId,
 
     // The plugin may have failed to load — a stale cache entry, a plugin
     // deleted since the scan. Do not leave a slot the user cannot use.
-    if (!inserted || !m_runtime->hasPlugin({channelId, slot.id})) {
+    if (!inserted || (!m_documentOnly && !m_runtime->hasPlugin({channelId, slot.id}))) {
         slots = mutableChannelInserts(channelId);
         if (slots) std::erase_if(*slots, [&](const InsertModel& s) { return s.id == slot.id; });
         if (inserted && !rebuildGraph()) m_runtime->stopForFailedRollback();
@@ -8807,6 +8881,7 @@ std::string EngineController::addInsert(const std::string& channelId,
 
 void EngineController::removeInsert(const std::string& channelId,
                                     const std::string& insertId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     if (!cloudProjectBound()) { (void)removeRackSelection(channelId, {insertId}); return; }
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return;
@@ -8850,6 +8925,7 @@ void EngineController::removeInsert(const std::string& channelId,
 void EngineController::moveInsert(const std::string& channelId,
                                   const std::string& insertId,
                                   size_t targetIndex) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return;
     auto found = std::find_if(slots->begin(), slots->end(),
@@ -8894,6 +8970,7 @@ void EngineController::moveInsert(const std::string& channelId,
 bool EngineController::replaceInsert(const std::string& channelId,
                                      const std::string& insertId,
                                      const plugins::PluginDescriptor& descriptor) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return false;
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return false;
@@ -8923,7 +9000,7 @@ bool EngineController::replaceInsert(const std::string& channelId,
     // here — a licence that lapsed, a module that no longer advertises the
     // class, a plugin deleted since the scan. Keeping the plugin that was
     // working beats leaving a slot that names one and has none.
-    if (!replaced || !m_runtime->hasPlugin({channelId, insertId}, descriptor.uid)) {
+    if (!replaced || (!m_documentOnly && !m_runtime->hasPlugin({channelId, insertId}, descriptor.uid))) {
         slots = mutableChannelInserts(channelId);
         if (slots) {
             for (InsertModel& slot : *slots)
@@ -8958,6 +9035,7 @@ bool EngineController::replaceInsert(const std::string& channelId,
 void EngineController::setInsertBypassed(const std::string& channelId,
                                          const std::string& insertId,
                                          bool bypassed) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     InsertModel* slot = mutableInsertSlot(channelId, insertId);
     if(slot && slot->uid=="daw.channel-color") { setChannelColorEnabled(channelId,!bypassed); return; }
     if (!slot || slot->bypassed == bypassed) return;
@@ -8986,6 +9064,7 @@ void EngineController::setInsertBypassed(const std::string& channelId,
 
 void EngineController::setAllInsertsBypassed(const std::string& channelId,
                                              bool bypassed) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     std::vector<InsertModel>* slots = mutableChannelInserts(channelId);
     if (!slots) return;
 
@@ -9030,6 +9109,7 @@ void EngineController::setAllInsertsBypassed(const std::string& channelId,
 
 void EngineController::setInsertMix(const std::string& channelId,
                                     const std::string& insertId, float mix) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     if (!sharedGestureAllowed("plugin:" + insertId)) return;
     InsertModel* slot = mutableInsertSlot(channelId, insertId);
     if (!slot) return;
@@ -9070,6 +9150,7 @@ void EngineController::commitInsertMixEdit(const std::string& channelId,
 bool EngineController::setInsertChannelMode(const std::string& channelId,
                                             const std::string& insertId,
                                             PluginChannelMode mode) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return false;
     InsertModel* slot = mutableInsertSlot(channelId, insertId);
     if (!slot || slot->channelMode == mode) return slot != nullptr;
     if (mode == PluginChannelMode::DualMono &&
@@ -9086,7 +9167,7 @@ bool EngineController::setInsertChannelMode(const std::string& channelId,
         return shared == collab::SharedMutationResult::Submitted;
     slot->channelMode = mode;
     const bool rebuilt = bool(rebuildGraph(/*reconfigurePlugins=*/true));
-    if (!rebuilt || (mode == PluginChannelMode::DualMono &&
+    if (!rebuilt || (!m_documentOnly && mode == PluginChannelMode::DualMono &&
                      !m_runtime->hasPlugin({channelId, insertId, true}))) {
         slot = mutableInsertSlot(channelId, insertId);
         if (slot) slot->channelMode = before;
@@ -9106,7 +9187,10 @@ bool EngineController::setInsertChannelMode(const std::string& channelId,
 void EngineController::setInsertEditorChannel(
     const std::string& channelId, const std::string& insertId,
     PluginEditorChannel channel) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     if (InsertModel* slot = mutableInsertSlot(channelId, insertId)) {
+        if (slot->editorChannel != channel && slot->uid == "daw.equalizer")
+            auditionEqualizerBand(channelId, insertId, -1);
         slot->editorChannel = channel;
     }
 }
@@ -9142,6 +9226,7 @@ bool EngineController::setInsertSidechainSource(
 bool EngineController::setInsertSidechainSources(
     const std::string& channelId, const std::string& insertId,
     const std::vector<std::string>& sourceTrackIds) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return false;
     InsertModel* slot = mutableInsertSlot(channelId, insertId);
     if (!slot || slot->sidechainTrackIds == sourceTrackIds) return slot != nullptr;
     if (sourceTrackIds.size() > kMaxPluginSidechainSources) return false;
@@ -9208,6 +9293,7 @@ const SamplerFxModel* EngineController::samplerFx(
 std::string EngineController::addSamplerFxInsert(
     const std::string& trackId, const std::string& samplerSlotId,
     const plugins::PluginDescriptor& descriptor, size_t index) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return {};
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     std::vector<InsertModel>* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
     if (!slots || slots->size() >= kSamplerFxSlots || descriptor.isInstrument) return {};
@@ -9230,7 +9316,7 @@ std::string EngineController::addSamplerFxInsert(
     slots->insert(slots->begin() + std::ptrdiff_t(at), slot);
     rebuildGraph();
 
-    if (!m_runtime->hasPlugin({trackId, slot.id})) {
+    if (!m_documentOnly && !m_runtime->hasPlugin({trackId, slot.id})) {
         slots = mutableSamplerFxInserts(trackId, samplerSlotId);
         if (slots) {
             std::erase_if(*slots, [&](const InsertModel& value) {
@@ -9260,6 +9346,7 @@ std::string EngineController::addSamplerFxInsert(
 void EngineController::removeSamplerFxInsert(const std::string& trackId,
                                               const std::string& samplerSlotId,
                                               const std::string& insertId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
     if (!slots) return;
     const auto found = std::find_if(slots->begin(), slots->end(),
@@ -9297,6 +9384,7 @@ void EngineController::moveSamplerFxInsert(const std::string& trackId,
                                             const std::string& samplerSlotId,
                                             const std::string& insertId,
                                             size_t targetIndex) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
     if (!slots || slots->empty()) return;
     const auto found = std::find_if(slots->begin(), slots->end(),
@@ -9336,6 +9424,7 @@ void EngineController::moveSamplerFxInsert(const std::string& trackId,
 bool EngineController::replaceSamplerFxInsert(
     const std::string& trackId, const std::string& samplerSlotId,
     const std::string& insertId, const plugins::PluginDescriptor& descriptor) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     if (descriptor.isInstrument) return false;
     auto* slots = mutableSamplerFxInserts(trackId, samplerSlotId);
@@ -9360,7 +9449,7 @@ bool EngineController::replaceSamplerFxInsert(
     }
     *found = replacement;
     rebuildGraph();
-    if (!m_runtime->hasPlugin({trackId, insertId})) {
+    if (!m_documentOnly && !m_runtime->hasPlugin({trackId, insertId})) {
         slots = mutableSamplerFxInserts(trackId, samplerSlotId);
         if (slots) {
             for (InsertModel& value : *slots) {
@@ -9429,6 +9518,7 @@ void EngineController::setAllSamplerFxBypassed(const std::string& trackId,
 void EngineController::setSamplerFxVolume(const std::string& trackId,
                                            const std::string& samplerSlotId,
                                            float volume) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("samplerFx:" + samplerSlotId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     if (!track || track->instrument.id != samplerSlotId ||
@@ -9440,6 +9530,7 @@ void EngineController::setSamplerFxVolume(const std::string& trackId,
 void EngineController::setSamplerFxPan(const std::string& trackId,
                                         const std::string& samplerSlotId,
                                         float pan) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("samplerFx:" + samplerSlotId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     if (!track || track->instrument.id != samplerSlotId ||
@@ -9486,6 +9577,7 @@ const std::vector<InsertModel>* EngineController::clipFx(
 std::string EngineController::addClipFxInsert(
     const std::string& trackId, const std::string& clipId,
     const plugins::PluginDescriptor& descriptor, size_t index) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return {};
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return {};
     auto* slots = mutableClipFxInserts(trackId, clipId);
     if (!slots || slots->size() >= kSamplerFxSlots || descriptor.isInstrument) return {};
@@ -9506,7 +9598,7 @@ std::string EngineController::addClipFxInsert(
     }
     slots->insert(slots->begin() + std::ptrdiff_t(at), slot);
     rebuildGraph();
-    if (!m_runtime->hasPlugin({trackId, slot.id})) {
+    if (!m_documentOnly && !m_runtime->hasPlugin({trackId, slot.id})) {
         if (auto* current = mutableClipFxInserts(trackId, clipId)) {
             std::erase_if(*current, [&](const InsertModel& value) {
                 return value.id == slot.id;
@@ -9533,6 +9625,7 @@ std::string EngineController::addClipFxInsert(
 void EngineController::removeClipFxInsert(const std::string& trackId,
                                            const std::string& clipId,
                                            const std::string& insertId) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* slots = mutableClipFxInserts(trackId, clipId);
     if (!slots) return;
     const auto found = std::find_if(slots->begin(), slots->end(),
@@ -9568,6 +9661,7 @@ void EngineController::moveClipFxInsert(const std::string& trackId,
                                          const std::string& clipId,
                                          const std::string& insertId,
                                          size_t targetIndex) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* slots = mutableClipFxInserts(trackId, clipId);
     if (!slots || slots->empty()) return;
     const auto found = std::find_if(slots->begin(), slots->end(),
@@ -9606,6 +9700,7 @@ void EngineController::moveClipFxInsert(const std::string& trackId,
 bool EngineController::replaceClipFxInsert(
     const std::string& trackId, const std::string& clipId,
     const std::string& insertId, const plugins::PluginDescriptor& descriptor) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     if (descriptor.isInstrument) return false;
     auto* slots = mutableClipFxInserts(trackId, clipId);
@@ -9630,7 +9725,7 @@ bool EngineController::replaceClipFxInsert(
     }
     *found = replacement;
     rebuildGraph();
-    if (!m_runtime->hasPlugin({trackId, insertId})) {
+    if (!m_documentOnly && !m_runtime->hasPlugin({trackId, insertId})) {
         if (auto* current = mutableClipFxInserts(trackId, clipId)) {
             for (InsertModel& value : *current) {
                 if (value.id == insertId) value = before;
@@ -9697,6 +9792,7 @@ void EngineController::setAllClipFxBypassed(const std::string& trackId,
 
 void EngineController::setClipFxVolume(const std::string& trackId,
                                         const std::string& clipId, float volume) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
@@ -9713,6 +9809,7 @@ void EngineController::setClipFxVolume(const std::string& trackId,
 
 void EngineController::setClipFxPan(const std::string& trackId,
                                      const std::string& clipId, float pan) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (!sharedGestureAllowed("clip:" + clipId)) return;
     TrackModel* track = m_project.findTrack(trackId);
     ClipModel* clip = findClip(trackId, clipId);
@@ -9764,6 +9861,13 @@ std::vector<plugins::ParameterInfo> EngineController::insertParameters(
 double EngineController::insertParameter(const std::string& channelId,
                                          const std::string& insertId,
                                          const std::string& parameterId) const {
+    if (m_documentOnly) {
+        if (const auto* slot = insertModel(channelId, insertId)) {
+            const auto& values = slot->editorChannel == PluginEditorChannel::Right ? slot->rightParameters : slot->parameters;
+            for (const auto& value : values) if (value.id == parameterId) return value.value;
+        }
+        return 0.0;
+    }
     return m_runtime->pluginParameter(pluginAddress(channelId, insertId), parameterId);
 }
 
@@ -9771,13 +9875,14 @@ void EngineController::setInsertParameter(const std::string& channelId,
                                           const std::string& insertId,
                                           const std::string& parameterId,
                                           double plainValue) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return;
     if(auto* track=m_project.findTrack(channelId);track && supportsChannelColor(track->kind) && !insertModel(channelId,insertId) && insertId==channelColorSlotId(channelId)) {
         setChannelColorParameter(channelId,parameterId,plainValue); return;
     }
     if (!sharedGestureAllowed("plugin:" + insertId)) return;
     if (!sharedEditingAllowed()) return;
     unfreezeTrack(channelId, false);
-    if (!m_runtime->setPluginParameter(pluginAddress(channelId, insertId), parameterId, plainValue)) return;
+    if (!m_documentOnly && !m_runtime->setPluginParameter(pluginAddress(channelId, insertId), parameterId, plainValue)) return;
     if (!m_applyingMidiLearn && isRecording())
         captureMidiParameter(channelId, insertId, parameterId, plainValue, midiInputStamp(), false);
     if (!m_liveDeviceAllowed) m_previewParameterEditsPending = true;
@@ -9795,9 +9900,10 @@ void EngineController::setInsertParameter(const std::string& channelId,
         for (InsertParameter& parameter : stored) {
             if (parameter.id != parameterId) continue;
             parameter.value = plainValue;
+            if (m_documentOnly) parameter.restoreAfterState = true;
             found = true;
         }
-        if (!found) stored.push_back(InsertParameter{parameterId, plainValue});
+        if (!found) stored.push_back(InsertParameter{parameterId, plainValue, m_documentOnly});
     }
     touchInsertParameter(channelId, insertId, parameterId);
 }
@@ -9811,7 +9917,8 @@ void EngineController::commitInsertParameterEdit(const std::string& channelId,
         if(track && track->instrument.id==insertId && std::any_of(m_captures.begin(),m_captures.end(),[&](const auto& c){return c.midi && c.trackId==channelId;}))return;
     }
 
-    const double after = m_runtime->pluginParameterIncludingPending(pluginAddress(channelId, insertId), parameterId);
+    const double after = m_documentOnly ? insertParameter(channelId, insertId, parameterId)
+        : m_runtime->pluginParameterIncludingPending(pluginAddress(channelId, insertId), parameterId);
     if (after == beforeValue) return;
     const InsertModel* slot = insertModel(channelId, insertId);
     const bool right = slot && slot->channelMode == PluginChannelMode::DualMono &&
@@ -9858,6 +9965,7 @@ audio::Result EngineController::restoreInsertState(const std::string& channelId,
     const ChainSlotSnapshot& slot, bool applyAllParameters) {
     std::vector<AudioPluginStateEdit> edits;
     appendInsertStateEdits(edits, channelId, slot, applyAllParameters);
+    if (m_documentOnly) { acceptPluginStateEdits(edits, {}); return audio::Result::ok(); }
     for (auto& edit : edits) {
         edit.address.instance = m_runtime->pluginInstanceId(edit.address);
         if (!edit.address.instance) return audio::Result::fail(audio::EngineError::PluginLoadFailed,
@@ -9881,6 +9989,7 @@ audio::Result EngineController::restoreInsertState(const std::string& channelId,
 EngineController::ChannelSnapshot EngineController::copyChannelStrip(
     const std::string& channelId, bool withSettings) {
     ChannelSnapshot snapshot;
+    snapshot.sourceDocument = m_documentIdentity;
     const std::vector<InsertModel>* slots = channelInserts(channelId);
     if (!slots) return snapshot;
 
@@ -9894,7 +10003,7 @@ EngineController::ChannelSnapshot EngineController::copyChannelStrip(
 
     for (const InsertModel& slot : *slots) {
         ChainSlotSnapshot copied;
-        (void)captureInsertState(channelId, slot, copied);
+        if (!captureInsertState(channelId, slot, copied)) return {};
         snapshot.inserts.push_back(std::move(copied));
     }
 
@@ -9913,6 +10022,23 @@ EngineController::ChannelSnapshot EngineController::copyChannelStrip(
     snapshot.mono = track->mono;
     snapshot.outputBusId = track->outputBusId;
     snapshot.sends = track->sends;
+    if (track->instrument.isLoaded()) {
+        ChainSlotSnapshot instrument;
+        if (!captureInsertState(channelId, track->instrument, instrument)) return {};
+        snapshot.instrument = std::move(instrument);
+        snapshot.instrumentFxVolume = track->samplerFx.volume;
+        snapshot.instrumentFxPan = track->samplerFx.pan;
+        for (const auto& slot : track->samplerFx.inserts) {
+            ChainSlotSnapshot fx;
+            if (!captureInsertState(channelId, slot, fx)) return {};
+            snapshot.instrumentFx.push_back(std::move(fx));
+        }
+    }
+    if (track->channelColor) {
+        ChainSlotSnapshot color;
+        if (!captureInsertState(channelId, *track->channelColor, color)) return {};
+        snapshot.channelColor = std::move(color);
+    }
     return snapshot;
 }
 
@@ -10006,6 +10132,14 @@ bool EngineController::applyChains(std::span<const ChainReplacement> replacement
 }
 
 namespace {
+bool retainAppliedTransferResources(bool applied,
+    std::vector<std::shared_ptr<ProjectTransferResources>>& retained,
+    const std::shared_ptr<ProjectTransferResources>& resources) {
+    if (applied && resources && std::find(retained.begin(), retained.end(), resources) == retained.end())
+        retained.push_back(resources);
+    return applied;
+}
+
 /// A chain copied onto a channel: the same plugins and state, but slot ids of
 /// its own. Ids are minted once, at the paste, so undo and redo keep putting
 /// back the *same* slots instead of new ones each time.
@@ -10019,6 +10153,9 @@ std::vector<EngineController::ChainSlotSnapshot> mintChain(
 
 bool EngineController::pasteChannelInserts(const std::string& channelId,
                                            const ChannelSnapshot& what) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return false;
+    if (!what.sourceDocument.empty() && what.sourceDocument != m_documentIdentity)
+        return pasteChannelInserts(channelId, prepareChannelTransfer(what));
     if (cloudProjectBound() && (!what.modulation.sources.empty() || !what.modulation.routes.empty())) return false;
     const std::vector<InsertModel>* current = channelInserts(channelId);
     if (!current) return false;
@@ -10032,7 +10169,8 @@ bool EngineController::pasteChannelInserts(const std::string& channelId,
             !sharedBatchApplies(m_project, batch)) {
             return false;
         }
-        return submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Paste Plugins");
+        return retainAppliedTransferResources(
+            submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Paste Plugins"), m_transferResources, what.resources);
     }
     const std::vector<ChainSlotSnapshot> next = mintChain(what.inserts);
     if (before.inserts.empty() && next.empty()) return false;
@@ -10043,11 +10181,15 @@ bool EngineController::pasteChannelInserts(const std::string& channelId,
     after.rackGroups = copyRackGroups(what.rackGroups, mapping);
     after.modulation = copyModulation(what.modulation, mapping, true, &mapping, true);
     after.modulationAutomation = copyModulationAutomation(what.modulationAutomation, mapping, channelId, true);
-    return commitRackEdit({{{channelId, before}}, {}}, {{{channelId, after}}, {}}, "Paste Plugins");
+    return retainAppliedTransferResources(
+        commitRackEdit({{{channelId, before}}, {}}, {{{channelId, after}}, {}}, "Paste Plugins"), m_transferResources, what.resources);
 }
 
 bool EngineController::pasteChannelStrip(const std::string& channelId,
                                          const ChannelSnapshot& what) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return false;
+    if (!what.sourceDocument.empty() && what.sourceDocument != m_documentIdentity)
+        return pasteChannelStrip(channelId, prepareChannelTransfer(what));
     if (cloudProjectBound() && (!what.modulation.sources.empty() || !what.modulation.routes.empty())) return false;
     if (!what.hasSettings) return pasteChannelInserts(channelId, what);
     const std::vector<InsertModel>* current = channelInserts(channelId);
@@ -10105,7 +10247,8 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
             }
         }
         if (!sharedBatchApplies(m_project, batch)) return false;
-        return submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Paste Channel Strip");
+        return retainAppliedTransferResources(
+            submitSharedPluginSnapshotBatch(std::move(batch), what.inserts, "Paste Channel Strip"), m_transferResources, what.resources);
     }
 
     ChannelSnapshot before = copyChannelStrip(channelId, /*withSettings=*/true);
@@ -10117,6 +10260,18 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
     applied.miniModules=mintChain(what.miniModules);
     applied.inserts = next;
     std::unordered_map<std::string, std::string> rackIds;
+    if (applied.instrument) {
+        const auto previous = applied.instrument->model.id;
+        applied.instrument->model.id = newUuid();
+        rackIds[previous] = applied.instrument->model.id;
+    }
+    applied.instrumentFx = mintChain(what.instrumentFx);
+    for (std::size_t i=0; i<applied.instrumentFx.size(); ++i) rackIds[what.instrumentFx[i].model.id]=applied.instrumentFx[i].model.id;
+    if (applied.channelColor) {
+        const auto previous = applied.channelColor->model.id;
+        applied.channelColor->model.id = channelColorSlotId(channelId);
+        rackIds[previous] = applied.channelColor->model.id;
+    }
     for (std::size_t i = 0; i < applied.inserts.size(); ++i) rackIds[what.inserts[i].model.id] = applied.inserts[i].model.id;
     applied.rackGroups = copyRackGroups(what.rackGroups, rackIds);
     for (std::size_t i = 0; i < applied.miniModules.size(); ++i) rackIds[what.miniModules[i].model.id] = applied.miniModules[i].model.id;
@@ -10132,11 +10287,12 @@ bool EngineController::pasteChannelStrip(const std::string& channelId,
     m_undo.push("Paste Channel Strip",
                 [put, before] { put(before); },
                 [put, applied] { put(applied); });
-    return true;
+    return retainAppliedTransferResources(true, m_transferResources, what.resources);
 }
 
 bool EngineController::pasteChannelStripPreset(const std::string& channelId,
                                                const ChannelSnapshot& what) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channelId)) return false;
     if (cloudProjectBound() && (!what.modulation.sources.empty() || !what.modulation.routes.empty())) return false;
     const std::vector<InsertModel>* current = channelInserts(channelId);
     if (!what.hasSettings || !current) return false;
@@ -10316,6 +10472,7 @@ bool EngineController::moveInsertBetweenChannels(const std::string& fromChannel,
                                                  const std::string& insertId,
                                                  const std::string& toChannel,
                                                  size_t index, bool copy) {
+    if (!m_undo.isApplying() && (isTrackEditLocked(toChannel) || (!copy && isTrackEditLocked(fromChannel)))) return false;
     if (!cloudProjectBound())
         return transferRackSelection(fromChannel, {insertId}, toChannel, index, copy).isOk();
     if (fromChannel == toChannel) return false;
@@ -10379,6 +10536,7 @@ bool EngineController::moveInsertBetweenChannels(const std::string& fromChannel,
 
 bool EngineController::copySendsTo(const std::string& fromTrackId,
                                    const std::string& toTrackId, bool move) {
+    if (!m_undo.isApplying() && (isTrackEditLocked(toTrackId) || (move && isTrackEditLocked(fromTrackId)))) return false;
     TrackModel* from = m_project.findTrack(fromTrackId);
     TrackModel* to = m_project.findTrack(toTrackId);
     if (!from || !to || from == to) return false;
@@ -10480,6 +10638,33 @@ bool EngineController::loadSamplerSample(const std::string& channelId,
                                           std::move(pending)) ==
                collab::SharedMutationResult::Submitted;
     }
+    if (m_documentOnly) {
+        const auto* model = insertModel(channelId, slotId);
+        std::error_code error;
+        if (!model || model->uid != "daw.sampler" ||
+            !fs::is_regular_file(platform::pathFromUtf8(filePath), error) || error) return false;
+        ChainSlotSnapshot before;
+        if (!captureInsertState(channelId, *model, before)) return false;
+        if (before.state.empty()) {
+            const auto empty = nlohmann::json{{"version", 1}, {"sample", ""}, {"params", nlohmann::json::object()}}.dump();
+            before.state.assign(empty.begin(), empty.end());
+        }
+        auto after = before;
+        auto state = nlohmann::json::parse(after.state.begin(), after.state.end(), nullptr, false);
+        if (!state.is_object()) state = {{"version", 1}, {"params", nlohmann::json::object()}};
+        state["sample"] = filePath;
+        const auto text = state.dump(); after.state.assign(text.begin(), text.end());
+        after.model.audioEdit = {};
+        const auto apply = [this, channelId](const ChainSlotSnapshot& snapshot) {
+            if (auto* slot = mutableInsertSlot(channelId, snapshot.model.id)) {
+                *slot = snapshot.model;
+                (void)restoreInsertState(channelId, snapshot);
+            }
+        };
+        apply(after);
+        m_undo.push("Load Sample", [apply, before] { apply(before); }, [apply, after] { apply(after); });
+        return true;
+    }
     const auto sampler = m_runtime->samplerSnapshot(pluginAddress(channelId, slotId));
     if (!sampler.available) return false;
     const std::string previous = sampler.path;
@@ -10514,11 +10699,12 @@ bool EngineController::loadSamplerSample(const std::string& channelId,
 
 bool EngineController::loadInstrumentSampler(const std::string& trackId,
                                              const std::string& filePath) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     const TrackModel* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return false;
 
     const auto sampler =
-        m_pluginManager.find(plugins::Format::Internal, "daw.sampler");
+        pluginManager().find(plugins::Format::Internal, "daw.sampler");
     if (!sampler) return false;
 
     if (cloudProjectBound()) {
@@ -10633,6 +10819,11 @@ bool EngineController::loadInstrumentSampler(const std::string& trackId,
 void EngineController::loadSamplerSampleSilently(const std::string& channelId,
                                                  const std::string& slotId,
                                                  const std::string& filePath) {
+    if (m_documentOnly) {
+        UndoStack::Suspend quiet(m_undo);
+        (void)loadSamplerSample(channelId, slotId, filePath);
+        return;
+    }
     if (auto* track = m_project.findTrack(channelId); track && track->instrument.id == slotId) track->instrument.audioEdit = {};
     const auto address = pluginAddress(channelId, slotId);
     if (!m_runtime->hasPlugin(address, "daw.sampler")) return;
@@ -10643,6 +10834,17 @@ void EngineController::loadSamplerSampleSilently(const std::string& channelId,
 
 void EngineController::clearSamplerSampleSilently(
     const std::string& channelId, const std::string& slotId) {
+    if (m_documentOnly) {
+        const auto* model = insertModel(channelId, slotId);
+        if (!model || model->uid != "daw.sampler") return;
+        ChainSlotSnapshot state;
+        if (!captureInsertState(channelId, *model, state)) return;
+        auto json = nlohmann::json::parse(state.state.begin(), state.state.end(), nullptr, false);
+        if (!json.is_object()) json = {{"version", 1}, {"params", nlohmann::json::object()}};
+        json["sample"] = "";
+        const auto text = json.dump(); state.state.assign(text.begin(), text.end());
+        (void)restoreInsertState(channelId, state);
+    }
     if (auto* track = m_project.findTrack(channelId); track && track->instrument.id == slotId) track->instrument.audioEdit = {};
     const auto address = pluginAddress(channelId, slotId);
     if (m_runtime->hasPlugin(address, "daw.sampler")) (void)m_runtime->clearInstrumentSample(address);
@@ -10670,10 +10872,11 @@ void EngineController::clearSamplerSample(const std::string& channelId,
             "Clear Sample");
         return;
     }
-    const auto sampler = m_runtime->samplerSnapshot(pluginAddress(channelId, slotId));
+    const auto sampler = samplerSnapshot(channelId, slotId);
     if (!sampler.available || sampler.path.empty()) return;
     const auto previous = sampler.path;
-    if (!m_runtime->clearInstrumentSample(pluginAddress(channelId, slotId))) return;
+    if (m_documentOnly) clearSamplerSampleSilently(channelId, slotId);
+    else if (!m_runtime->clearInstrumentSample(pluginAddress(channelId, slotId))) return;
 
     m_undo.push("Clear Sample",
                 [this, channelId, slotId, previous] {
@@ -10954,7 +11157,7 @@ bool EngineController::pumpPluginEvents() {
 std::string EngineController::importSampleToMidiTrack(
     const std::string& filePath, double startSeconds) {
     if (!std::isfinite(startSeconds)) return {};
-    const auto sampler = m_pluginManager.find(plugins::Format::Internal, "daw.sampler");
+    const auto sampler = pluginManager().find(plugins::Format::Internal, "daw.sampler");
     if (!sampler) return {};
     std::string name = platform::pathToUtf8(platform::pathFromUtf8(filePath).stem());
     if (name.empty()) name = "Sample";
@@ -11806,6 +12009,7 @@ double EngineController::clipSampleParameter(const std::string& trackId,
     const ClipModel* clip = audioClip(trackId, clipId);
     if (!clip) return 0.0;
     const ClipSampleEditModel& s = clip->sampleEdit;
+    if (id == "trim") return s.trimThresholdDb;
     double sourceDuration = 0.0;
     if (auto audio = loadSamples(clip->filePath); audio && audio->sampleRate() > 0.0)
         sourceDuration = double(audio->frames()) / audio->sampleRate();
@@ -11856,6 +12060,98 @@ double EngineController::clipSampleParameter(const std::string& trackId,
     return 0.0;
 }
 
+EngineController::SampleRegionState EngineController::sampleRegionState(const ClipModel& clip) {
+    return {clip.startSeconds, clip.offsetSeconds, clip.durationSeconds,
+        clip.fadeInSeconds, clip.fadeOutSeconds, clip.sampleEdit.trimThresholdDb,
+        clip.warp, clip.musicalAnalysis};
+}
+
+void EngineController::applySampleRegionState(const std::string& trackId,
+    const std::string& clipId, const SampleRegionState& state) {
+    auto* track = m_project.findTrack(trackId);
+    auto* clip = findClip(trackId, clipId);
+    if (!track || !clip) return;
+    clip->startSeconds = state.start;
+    clip->offsetSeconds = state.offset;
+    clip->durationSeconds = state.duration;
+    clip->fadeInSeconds = state.fadeIn;
+    clip->fadeOutSeconds = state.fadeOut;
+    clip->sampleEdit.trimThresholdDb = state.trimThresholdDb;
+    clip->warp = state.warp;
+    clip->musicalAnalysis = state.analysis;
+    ++m_clipGeometryRevision;
+    syncTrackClips(*track);
+    updateTimelineDuration();
+}
+
+void EngineController::setSampleRegion(const std::string& trackId, const std::string& clipId,
+    const std::string& parameterId, double begin, double end, double thresholdDb) {
+    const auto* clip = audioClip(trackId, clipId);
+    if (!clip) return;
+    cancelWarpPreview();
+    const auto key = trackId + ":" + clipId + ":" + parameterId;
+    const auto [origin, inserted] = m_sampleRegionOrigins.try_emplace(key);
+    if (inserted) origin->second = sampleRegionState(*clip);
+    const auto& base = origin->second;
+    if (!(end > begin)) {
+        // Nothing exceeds the threshold. Retain the last valid region rather
+        // than deleting the clip, but keep the chosen threshold and its Undo.
+        auto unchanged = sampleRegionState(*clip);
+        unchanged.trimThresholdDb = thresholdDb;
+        applySampleRegionState(trackId, clipId, unchanged);
+        return;
+    }
+    SampleRegionState next{base.start, base.offset, base.duration, base.fadeIn, base.fadeOut,
+        thresholdDb, {}, {}};
+    const double stretch = std::max(clip->sampleEdit.stretchTime, 0.001);
+    if (!base.warp.empty()) {
+        const double sourceSpan = base.warp.markers.back().sourceSeconds - base.offset;
+        const double baselineRate = base.warp.baselineDurationSeconds / sourceSpan;
+        const double earliest = base.warp.enabled
+            ? warpSourceAt(base.warp, secondsToBeats(-base.start, tempo()))
+            : base.offset - base.start / baselineRate;
+        begin = std::max(begin, std::max(0., earliest));
+        if (!(end > begin)) return;
+        const double firstBeat = warpBeatAt(base.warp, begin);
+        next.start = std::max(0., base.start + (base.warp.enabled
+            ? beatsToSeconds(firstBeat, tempo()) : (begin - base.offset) * baselineRate));
+        next.warp = sliceWarp(base.warp, firstBeat, warpBeatAt(base.warp, end));
+        if (!validWarp(next.warp)) return;
+        next.offset = next.warp.markers.front().sourceSeconds;
+        next.duration = next.warp.enabled
+            ? beatsToSeconds(next.warp.markers.back().targetBeats, tempo())
+            : next.warp.baselineDurationSeconds;
+    } else {
+        begin = std::max(begin, std::max(0., base.offset - base.start / stretch));
+        if (!(end > begin)) return;
+        next.start = std::max(0., base.start + (begin - base.offset) * stretch);
+        next.offset = begin;
+        next.duration = (end - begin) * stretch;
+    }
+    next.fadeIn = std::min(base.fadeIn, next.duration);
+    next.fadeOut = std::min(base.fadeOut, next.duration);
+    next.trimThresholdDb = thresholdDb;
+    next.analysis = {};
+    applySampleRegionState(trackId, clipId, next);
+}
+
+void EngineController::setClipSampleTrim(const std::string& trackId, const std::string& clipId,
+    double thresholdDb, double sourceBegin, double sourceEnd) {
+    if ((!m_undo.isApplying() && isTrackTreeEditLocked(trackId)) ||
+        !sharedGestureAllowed("clip:" + clipId) || !std::isfinite(thresholdDb) ||
+        !std::isfinite(sourceBegin) || !std::isfinite(sourceEnd)) return;
+    const auto* clip = audioClip(trackId, clipId);
+    if (!clip) return;
+    double duration = 0;
+    if (clip->audioEdit.initialized) duration = double(clip->audioEdit.frames) / clip->audioEdit.sampleRate;
+    else if (const auto audio = loadSamples(clip->filePath); audio && audio->sampleRate() > 0)
+        duration = double(audio->frames()) / audio->sampleRate();
+    sourceBegin = std::clamp(sourceBegin, 0., duration);
+    sourceEnd = std::clamp(sourceEnd, sourceBegin, duration);
+    setSampleRegion(trackId, clipId, "trim", sourceBegin, sourceEnd,
+        std::clamp(std::round(thresholdDb), -96., 0.));
+}
+
 void EngineController::setClipSampleParameter(const std::string& trackId,
                                               const std::string& clipId,
                                               const std::string& id,
@@ -11882,31 +12178,17 @@ void EngineController::setClipSampleParameter(const std::string& trackId,
     const double sourceEnd = clip->offsetSeconds +
         outputDuration / std::max(s.stretchTime, 0.001);
 
-    if (!clip->warp.empty() && (id == "startoffset" || id == "endoffset") && sourceDuration > 0) {
-        const auto key = trackId + ":" + clipId + ":" + id;
-        const auto [origin, inserted] = m_sampleWarpOrigins.try_emplace(key, clip->warp);
-        const auto& base = origin->second;
-        double begin = base.markers.front().sourceSeconds;
-        double end = base.markers.back().sourceSeconds;
-        if (id == "startoffset") begin = std::clamp(value * sourceDuration, 0., end - kMinClipSeconds);
-        else end = std::clamp(value * sourceDuration, begin + kMinClipSeconds, sourceDuration);
-        clip->warp = sliceWarp(base, warpBeatAt(base, begin), warpBeatAt(base, end));
-        clip->offsetSeconds = begin;
-        clip->durationSeconds = clip->warp.enabled ? beatsToSeconds(clip->warp.markers.back().targetBeats, tempo()) :
-            clip->warp.baselineDurationSeconds;
-        syncTrackClips(*track); updateTimelineDuration(); return;
+    if ((id == "startoffset" || id == "endoffset") && sourceDuration > 0.0 && std::isfinite(value)) {
+        const double end = clip->warp.empty() ? sourceEnd : clip->warp.markers.back().sourceSeconds;
+        const double minimumSpan = std::min(kMinClipSeconds, sourceDuration);
+        const double next = std::clamp(value, 0.0, 1.0) * sourceDuration;
+        setSampleRegion(trackId, clipId, id,
+            id == "startoffset" ? std::clamp(next, 0., std::max(0., end - minimumSpan)) : clip->offsetSeconds,
+            id == "endoffset" ? std::clamp(next, std::min(sourceDuration, clip->offsetSeconds + minimumSpan), sourceDuration) : end,
+            -96.0);
+        return;
     }
-
-    if (id == "startoffset" && sourceDuration > 0.0) {
-        const double next = std::clamp(value, 0.0, 1.0) * sourceDuration;
-        clip->offsetSeconds = std::min(next, sourceEnd - kMinClipSeconds);
-        clip->durationSeconds =
-            std::max(kMinClipSeconds, sourceEnd - clip->offsetSeconds) * s.stretchTime;
-    } else if (id == "endoffset" && sourceDuration > 0.0) {
-        const double next = std::clamp(value, 0.0, 1.0) * sourceDuration;
-        const double end = std::max(clip->offsetSeconds + kMinClipSeconds, next);
-        clip->durationSeconds = (end - clip->offsetSeconds) * s.stretchTime;
-    } else if (id == "fadein") {
+    if (id == "fadein") {
         clip->fadeInSeconds = std::clamp(value, 0.0, 1.0) * outputDuration;
     } else if (id == "fadeout") {
         clip->fadeOutSeconds = std::clamp(value, 0.0, 1.0) * outputDuration;
@@ -12005,13 +12287,26 @@ void EngineController::commitClipSampleParameterEdit(
     const std::string& parameterId, double before, const std::string& label) {
     const double after = clipSampleParameter(trackId, clipId, parameterId);
     const auto key = trackId + ":" + clipId + ":" + parameterId;
-    if (auto origin = m_sampleWarpOrigins.find(key); origin != m_sampleWarpOrigins.end()) {
-        const auto prior = std::move(origin->second); m_sampleWarpOrigins.erase(origin);
+    if (auto origin = m_sampleRegionOrigins.find(key); origin != m_sampleRegionOrigins.end()) {
+        const auto prior = std::move(origin->second); m_sampleRegionOrigins.erase(origin);
         const auto* clip = audioClip(trackId, clipId);
         if (!clip) return;
-        const auto next = clip->warp;
-        const auto apply = [this, trackId, clipId](const ClipWarpModel& warp) { applyClipWarpState(trackId, clipId, warp, 0); };
-        if (std::abs(after - before) < 1e-9) { apply(prior); return; }
+        const auto next = sampleRegionState(*clip);
+        const auto apply = [this, trackId, clipId](const SampleRegionState& state) {
+            applySampleRegionState(trackId, clipId, state);
+        };
+        if (next.start == prior.start && next.offset == prior.offset && next.duration == prior.duration &&
+            next.fadeIn == prior.fadeIn && next.fadeOut == prior.fadeOut &&
+            next.trimThresholdDb == prior.trimThresholdDb && next.warp == prior.warp) { apply(prior); return; }
+        if (cloudProjectBound()) {
+            auto batch = std::make_shared<collab::BatchCommand>();
+            appendCommand(batch, collab::sharedRenderState(trackId, *clip));
+            appendCommand(batch, collab::SetClipProperty{trackId, clipId, collab::ClipProperty::StartSeconds, next.start});
+            apply(prior);
+            const auto result = submitSharedMutation(collab::CommandBody{std::move(batch)}, label);
+            if (result != collab::SharedMutationResult::LocalFallback) return;
+            apply(next);
+        }
         m_undo.push(label, [apply, prior] { apply(prior); }, [apply, next] { apply(next); });
         return;
     }
@@ -14865,6 +15160,7 @@ std::string EngineController::insertPatternClipCopyImpl(
 
 bool EngineController::setTrackInstrumentPlugin(
     const std::string& trackId, const plugins::PluginDescriptor& descriptor) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return false;
     if (!descriptor.uid.empty() && !sharedPluginAllowed(descriptor)) return false;
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return false;
@@ -14919,7 +15215,7 @@ bool EngineController::setTrackInstrumentPlugin(
         }
     };
     apply(after, afterFx);
-    if (after.isLoaded() && !m_runtime->hasPlugin({trackId, after.id})) {
+    if (!m_documentOnly && after.isLoaded() && !m_runtime->hasPlugin({trackId, after.id})) {
         // Do not leave a convincing but silent instrument slot in the model.
         // Restore the previous working instrument when initialize/activate
         // failed; the scanner's validation catches most cases, but not license
@@ -14935,6 +15231,7 @@ bool EngineController::setTrackInstrumentPlugin(
 
 void EngineController::setTrackInstrument(const std::string& trackId,
                                            const std::string& name) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     if (cloudProjectBound()) return;
     auto* track = m_project.findTrack(trackId);
     if (!track || !trackAccepts(track->kind, ClipKind::Midi)) return;
@@ -15953,6 +16250,7 @@ bool EngineController::previewFile(const std::string& filePath, bool loop,
 bool EngineController::previewBuffer(
     std::shared_ptr<const engine::SampleBuffer> audio,
     const std::string& sourcePath, bool loop, double pitchSemitones) {
+    if (m_documentOnly) return false;
     if (!audio || audio->frames() == 0) return false;
     const double duration = audio->sampleRate() > 0.0
         ? double(audio->frames()) / audio->sampleRate() : 0.0;
@@ -16831,7 +17129,8 @@ double EngineController::defaultAutomationValue(
     const std::string slotId =
         target.slotId.empty() && channel ? channel->instrument.id : target.slotId;
     return plainToAutomation(
-        target, m_runtime->pluginParameterIncludingPending(pluginAddress(target.channelId, slotId), target.parameterId));
+        target, m_documentOnly ? insertParameter(target.channelId, slotId, target.parameterId) :
+            m_runtime->pluginParameterIncludingPending(pluginAddress(target.channelId, slotId), target.parameterId));
 }
 
 double EngineController::automationResetValue(const AutomationTarget& target) const {
@@ -17037,6 +17336,12 @@ void EngineController::touchInsertParameter(const std::string& channelId,
     // Automation currently addresses the left instance of a dual-mono slot.
     // A touch on the right must not silently create a curve for the left.
     const auto* slot = insertModel(channelId, insertId);
+    if (slot) {
+        auto& recent = m_recentRackParameters[insertId];
+        std::erase(recent, parameterId);
+        recent.insert(recent.begin(), parameterId);
+        if (recent.size() > 8) recent.resize(8);
+    }
     if (slot && slot->channelMode == PluginChannelMode::DualMono &&
         slot->editorChannel == PluginEditorChannel::Right) return;
     AutomationTarget target;
@@ -17972,6 +18277,7 @@ void EngineController::setRecordingPrefs(const RecordingPrefs& prefs) {
 
 void EngineController::setTrackRecordMode(const std::string& trackId,
                                           TrackRecordMode mode) {
+    if (!m_undo.isApplying() && isTrackEditLocked(trackId)) return;
     auto* track = m_project.findTrack(trackId);
     if (!track || track->recordMode == mode) return;
     const TrackRecordMode previous = track->recordMode;
@@ -18153,6 +18459,7 @@ audio::Result EngineController::validateRecordingInputs(
 
 bool EngineController::startRecordingTracksImpl(
     const std::vector<std::string>& trackIds, bool requireEveryTarget) {
+    if (m_documentOnly) return false;
     if (m_runtime->audioSafetyStopped()) return false;
     if (isRecording() || trackIds.empty()) return false;
     if (const auto input = validateRecordingInputs(trackIds); !input) {
@@ -20536,6 +20843,7 @@ audio::DeviceInfo EngineController::currentInputDeviceInfo() const {
     return m_runtime->currentDevice(true);
 }
 audio::AudioDeviceConfig EngineController::audioConfiguration() const {
+    if (m_documentOnly && m_documentAudioConfig) return *m_documentAudioConfig;
     auto config = m_runtime->deviceConfiguration();
     if (!m_deviceOpen) {
         config.sampleRate = m_sampleRate;
@@ -20562,6 +20870,11 @@ audio::Result EngineController::applyAudioConfiguration(const audio::AudioDevice
     if (!std::isfinite(config.sampleRate) || config.sampleRate < audio::kMinSampleRate ||
         config.sampleRate > audio::kMaxSampleRate || config.bufferSize == 0 || config.bufferSize > 8192)
         return audio::Result::fail(audio::EngineError::InvalidArgument, "Invalid sample rate or buffer size.");
+    if (m_documentOnly) {
+        m_documentAudioConfig = config;
+        m_sampleRate = config.sampleRate; m_bufferSize = config.bufferSize;
+        return audio::Result::ok();
+    }
     if (m_liveDeviceAllowed && m_runtime->matchesDeviceConfiguration(config))
         return audio::Result::ok();
     if (isRecording() || isCountingIn())
@@ -20979,7 +21292,7 @@ audio::Result EngineController::restoreLibraryPluginStates(const std::vector<Tra
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         const auto& track = tracks[i];
         const auto restore = [&](const InsertModel& slot) {
-            if (!result || !m_runtime->hasPlugin({track.id, slot.id})) return;
+            if (!result || (!m_documentOnly && !m_runtime->hasPlugin({track.id, slot.id}))) return;
             ChainSlotSnapshot captured;
             captured.model = slot;
             if (const auto found = m_clipLibraryStates.find(slot.stateFile); found != m_clipLibraryStates.end())
@@ -21004,7 +21317,7 @@ audio::Result EngineController::restoreLibraryClip(const std::string& id, const 
         bool compatible = true;
         for (const auto& track : saved->tracks) visitStoredPlugins(track, [&](const InsertModel& slot) {
             if (!slot.isLoaded()) return;
-            const auto descriptor = m_pluginManager.find(toHostFormat(slot.format), slot.uid);
+            const auto descriptor = pluginManager().find(toHostFormat(slot.format), slot.uid);
             if (!descriptor || !sharedPluginAllowed(*descriptor) ||
                 (slot.format != PluginFormat::Internal && descriptor->version != slot.pluginVersion)) compatible = false;
         });
@@ -21014,7 +21327,7 @@ audio::Result EngineController::restoreLibraryClip(const std::string& id, const 
         const auto before = m_project;
         EngineController draft;
         if (const auto ready = draft.initialize(m_sampleRate, m_bufferSize, false); !ready) return ready;
-        draft.m_pluginManager.copyCatalogFrom(m_pluginManager);
+        draft.m_pluginManager.copyCatalogFrom(pluginManager());
         draft.m_recordDir = m_recordDir;
         draft.m_clipLibraryStates = m_clipLibraryStates;
         draft.m_project = before;
@@ -21218,6 +21531,306 @@ audio::Result EngineController::restoreLibraryClip(const std::string& id, const 
     m_undo.push("Restore Library Clip", [apply, before] { apply(before, false); },
         [apply, after] { apply(after, true); }, estimatedProjectBytes(before) + estimatedProjectBytes(after));
     ++m_clipGeometryRevision;
+    return audio::Result::ok();
+}
+
+audio::Result EngineController::copyProjectObjects(
+    const std::vector<std::string>& trackSelection,
+    const std::vector<std::pair<std::string, std::string>>& clipSelection,
+    ProjectTransferBundle& out) {
+    namespace fs = std::filesystem;
+    if (trackSelection.empty() && clipSelection.empty())
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "Select tracks or clips to copy.");
+    recovery::RecoverySnapshot snapshot;
+    const auto& source = m_project;
+    std::unordered_set<std::string> tracks(trackSelection.begin(), trackSelection.end()), clips, patterns;
+    for (const auto& [track, clip] : clipSelection) {
+        clips.insert(clip);
+        if (const auto* model = source.findTrack(track)) for (const auto& item : model->clips)
+            if (item.id == clip && item.kind == ClipKind::Pattern) patterns.insert(clip);
+    }
+    // Selecting a folder owns its complete subtree, in arrangement order.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& track : source.tracks)
+            if (tracks.contains(track.parentId) && tracks.insert(track.id).second) changed = true;
+    }
+    ProjectModel payload;
+    payload.tempo = source.tempo; payload.sampleRate = source.sampleRate;
+    payload.timeSigNumerator = source.timeSigNumerator; payload.timeSigDenominator = source.timeSigDenominator;
+    double origin = std::numeric_limits<double>::max();
+    for (const auto& original : source.tracks) {
+        if (trackSelection.empty() && std::none_of(original.clips.begin(), original.clips.end(),
+                [&](const auto& clip) { return clips.contains(clip.id) || patterns.contains(clip.patternClipId); })) continue;
+        if (!trackSelection.empty() && !tracks.contains(original.id)) continue;
+        TrackModel track = original;
+        if (trackSelection.empty()) {
+            std::erase_if(track.clips, [&](const auto& clip) { return !clips.contains(clip.id) && !patterns.contains(clip.patternClipId); });
+            if (track.clips.empty()) continue;
+            const bool ownedByPattern = std::any_of(track.clips.begin(), track.clips.end(), [&](const auto& clip) {
+                return clip.kind == ClipKind::Pattern || patterns.contains(clip.patternClipId);
+            });
+            if (!ownedByPattern) {
+                track.instrument = {}; track.inserts.clear(); track.miniModules.clear();
+                track.samplerFx = {}; track.modulation = {}; track.rackGroups.clear(); track.sends.clear();
+                track.channelColor.reset(); track.parentId.clear(); track.outputBusId.clear();
+                if (track.kind == TrackKind::Instrument) track.kind = TrackKind::Midi;
+                for (auto& clip : track.clips) {
+                    clip.patternClipId.clear();
+                    // Device automation is not MIDI expression and cannot bind
+                    // to an unrelated destination instrument by a coincident ID.
+                    std::erase_if(clip.lanes, [](const auto& lane) { return lane.cc == -1; });
+                    for (auto& take : clip.takes)
+                        std::erase_if(take.lanes, [](const auto& lane) { return lane.cc == -1; });
+                }
+            }
+        } else if (!tracks.contains(track.id)) continue;
+        track.armed = track.monitor = track.monitorAuto = track.inputEnabled = false;
+        for (const auto& clip : track.clips) origin = std::min(origin, clip.startSeconds);
+        payload.tracks.push_back(std::move(track));
+    }
+    if (payload.tracks.empty()) return audio::Result::fail(audio::EngineError::InvalidArgument, "The selection no longer exists.");
+    ProjectTransferBundle candidate;
+    for (const auto& track : payload.tracks) for (const auto& clip : track.clips) {
+        if (clip.kind != ClipKind::Automation || clip.automation.target.kind != AutomationTargetKind::PluginParameter) continue;
+        const auto& target = clip.automation.target;
+        const auto* owner = source.findTrack(target.channelId);
+        const auto* slot = insertModel(target.channelId, target.slotId.empty() && owner ? owner->instrument.id : target.slotId);
+        if (slot) candidate.automationPlugins.emplace(clip.id, std::make_pair(slot->format, slot->uid));
+    }
+    payload.resolveClipContents();
+    // Only devices owned by the selection need an opaque checkpoint. An
+    // unrelated plugin must not block copying a plain MIDI or audio phrase.
+    std::unordered_set<std::string> previousLibraryStates;
+    for (const auto& [name, bytes] : m_clipLibraryStates) previousLibraryStates.insert(name);
+    struct TemporaryStates {
+        decltype(m_clipLibraryStates)& states;
+        const std::unordered_set<std::string>& previous;
+        ~TemporaryStates() { std::erase_if(states, [&](const auto& entry) { return !previous.contains(entry.first); }); }
+    } temporaryStates{m_clipLibraryStates, previousLibraryStates};
+    if (const auto captured = captureLibraryPlugins(payload.tracks); !captured) return captured;
+    snapshot.project = std::move(payload);
+    std::unordered_set<std::string> stateFiles;
+    const auto states = [&](const InsertModel& slot) { stateFiles.insert(slot.stateFile); stateFiles.insert(slot.rightStateFile); };
+    for (const auto& track : snapshot.project.tracks) {
+        visitStoredPlugins(track, states);
+        for (const auto& clip : track.clips) for (const auto& slot : clip.offlineProcess.chain) states(slot);
+    }
+    std::erase_if(snapshot.pluginStates, [&](const auto& state) { return !stateFiles.contains(state.fileName); });
+    for (const auto& file : stateFiles) {
+        if (file.empty() || std::any_of(snapshot.pluginStates.begin(), snapshot.pluginStates.end(), [&](const auto& state) { return state.fileName == file; })) continue;
+        if (const auto state = m_clipLibraryStates.find(file); state != m_clipLibraryStates.end())
+            snapshot.pluginStates.push_back({file, state->second});
+        else if (const auto state = m_offlinePluginStateCache.find(file); state != m_offlinePluginStateCache.end())
+            snapshot.pluginStates.push_back({file, state->second});
+    }
+    candidate.resources = std::make_shared<ProjectTransferResources>(fs::temp_directory_path() / ("vlt-clipboard-" + newUuid()));
+    if (const auto owned = prepareProjectTransferResources(snapshot, *candidate.resources, true); !owned) return owned;
+    candidate.snapshot = std::move(snapshot);
+    candidate.wholeTracks = !trackSelection.empty();
+    candidate.sourceDocument = m_documentIdentity;
+    candidate.originSeconds = origin == std::numeric_limits<double>::max() ? 0. : origin;
+    out = std::move(candidate);
+    return audio::Result::ok();
+}
+
+audio::Result EngineController::pasteProjectObjects(const ProjectTransferBundle& bundle,
+    const std::string& targetTrackId, double atSeconds,
+    std::vector<std::pair<std::string, std::string>>& inserted,
+    std::string& notice, const AutomationTarget* explicitTarget) {
+    namespace fs = std::filesystem;
+    inserted.clear(); notice.clear();
+    if (bundle.empty() || !std::isfinite(atSeconds))
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "The project clipboard is empty.");
+    // A recipient owns its media independently, including after the clipboard
+    // is replaced. Prepare files and validate links before touching the model.
+    auto resources = bundle.resources;
+    if (!resources) return audio::Result::fail(audio::EngineError::InvalidArgument, "Clipboard resources are unavailable.");
+    auto prepared = bundle.snapshot;
+    const auto package = platform::pathToUtf8(resources->root);
+    // Immutable clipboard media is reference-counted by the recipient and its
+    // undo records. Replacing the clipboard or closing its source cannot remove
+    // these files; Save packages them into the recipient's own Content folder.
+    if (const auto valid = prepareProjectTransferResources(prepared, *resources, false); !valid) return valid;
+    std::vector<std::string> sourceIds;
+    for (const auto& track : prepared.project.tracks) sourceIds.push_back(track.id);
+    auto tracks = mintConnectedTrackCopies(prepared.project, sourceIds, true, true);
+    if (tracks.empty()) return audio::Result::fail(audio::EngineError::InvalidArgument, "The transfer contains no tracks.");
+    std::vector<std::pair<std::string, std::string>> pendingInserted;
+    const auto mintAudioEdit = [](AudioEditDocument& edit) {
+        std::unordered_map<std::string, std::string> sources;
+        for (auto& source : edit.sources) {
+            const auto old = source.id; source.id = newUuid(); sources.emplace(old, source.id);
+        }
+        for (auto& region : edit.regions) {
+            region.id = newUuid();
+            if (const auto found = sources.find(region.sourceId); found != sources.end()) region.sourceId = found->second;
+        }
+        if (edit.initialized) edit.revision = newUuid();
+    };
+    const auto mintAudioVersion = [&](ClipAudioVersionSource& version) {
+        mintAudioEdit(version.audioEdit);
+        for (auto& marker : version.warp.markers) marker.id = newUuid();
+        std::unordered_map<std::string, std::string> takes;
+        for (auto& take : version.takes) {
+            const auto old = take.id; take.id = newUuid(); takes.emplace(old, take.id);
+        }
+        for (auto& comp : version.comp) {
+            comp.id = newUuid();
+            if (const auto found = takes.find(comp.takeId); found != takes.end()) comp.takeId = found->second;
+        }
+    };
+    const auto compatibleTarget = [&](const ClipModel& original) {
+        if (!explicitTarget || explicitTarget->kind != original.automation.target.kind) return false;
+        const auto& target = *explicitTarget;
+        const auto* owner = m_project.findTrack(target.channelId);
+        if (!owner && target.channelId != kMasterChannelId) return false;
+        switch (target.kind) {
+        case AutomationTargetKind::TrackVolume:
+        case AutomationTargetKind::TrackPan: return !owner || owner->kind != TrackKind::Automation;
+        case AutomationTargetKind::TrackMute: return owner && owner->kind != TrackKind::Automation;
+        case AutomationTargetKind::SendLevel:
+            return owner && std::any_of(owner->sends.begin(), owner->sends.end(), [&](const auto& send) { return send.id == target.sendId; });
+        case AutomationTargetKind::ModulatorRate:
+        case AutomationTargetKind::ModulationDepth: return automationParameterInfo(target).has_value();
+        case AutomationTargetKind::PluginParameter: {
+            const auto* slot = insertModel(target.channelId, target.slotId.empty() && owner ? owner->instrument.id : target.slotId);
+            const auto identity = bundle.automationPlugins.find(original.id);
+            return slot && identity != bundle.automationPlugins.end() && slot->isLoaded() &&
+                identity->second == std::make_pair(slot->format, slot->uid) &&
+                target.parameterId == original.automation.target.parameterId;
+        }
+        }
+        return false;
+    };
+    std::unordered_set<std::string> internal;
+    for (const auto& track : tracks) internal.insert(track.id);
+    auto* target = m_project.findTrack(targetTrackId);
+    const bool reuse = !bundle.wholeTracks && target && !tracks.front().clips.empty() &&
+        tracks.front().kind != TrackKind::Pattern &&
+        std::all_of(tracks.front().clips.begin(), tracks.front().clips.end(), [&](const auto& clip) { return trackAccepts(target->kind, clip.kind); });
+    const auto firstId = tracks.front().id;
+    if (reuse) { tracks.front().id = target->id; internal.erase(firstId); internal.insert(target->id); }
+    const auto remapFirst = [&](std::string& id) { if (reuse && id == firstId) id = target->id; };
+    const auto ownsTarget = [&](const AutomationTarget& automation) {
+        const auto owner = std::find_if(tracks.begin(), tracks.end(), [&](const auto& track) { return track.id == automation.channelId; });
+        if (owner == tracks.end()) return false;
+        switch (automation.kind) {
+        case AutomationTargetKind::PluginParameter:
+            if (automation.slotId.empty()) return owner->instrument.isLoaded();
+            { bool found = false;
+              visitStoredPlugins(*owner, [&](const InsertModel& slot) { found |= slot.id == automation.slotId && slot.isLoaded(); });
+              return found; }
+        case AutomationTargetKind::SendLevel:
+            return std::any_of(owner->sends.begin(), owner->sends.end(), [&](const auto& send) { return send.id == automation.sendId && internal.contains(send.destinationTrackId); });
+        case AutomationTargetKind::ModulatorRate:
+            return std::any_of(owner->modulation.sources.begin(), owner->modulation.sources.end(), [&](const auto& source) { return source.id == automation.slotId; });
+        case AutomationTargetKind::ModulationDepth:
+            return std::any_of(owner->modulation.routes.begin(), owner->modulation.routes.end(), [&](const auto& route) { return route.id == automation.slotId; });
+        default: return owner->kind != TrackKind::Automation;
+        }
+    };
+    unsigned removedRoutes = 0;
+    std::unordered_set<std::string> newSlots;
+    const double ratio = prepared.project.tempo / std::max(1., m_project.tempo);
+    for (std::size_t t=0; t<tracks.size(); ++t) {
+        auto& track = tracks[t];
+        remapFirst(track.parentId); remapFirst(track.outputBusId);
+        for (auto& source : track.modulation.sources) {
+            remapFirst(source.audioChannelId);
+            if (!source.audioChannelId.empty() && !internal.contains(source.audioChannelId)) {
+                source.enabled = false; source.audioChannelId.clear(); ++removedRoutes;
+            }
+        }
+        if (!internal.contains(track.parentId)) track.parentId.clear();
+        if (!track.outputBusId.empty() && !internal.contains(track.outputBusId)) { track.outputBusId.clear(); ++removedRoutes; }
+        std::erase_if(track.sends, [&](auto& send) {
+            remapFirst(send.destinationTrackId);
+            if (internal.contains(send.destinationTrackId)) return false;
+            ++removedRoutes; return true;
+        });
+        visitStoredPlugins(track, [&](InsertModel& slot) {
+            if (slot.isLoaded()) newSlots.insert(slot.id);
+            mintAudioEdit(slot.audioEdit);
+            std::erase_if(slot.sidechainTrackIds, [&](auto& id) {
+                remapFirst(id);
+                if (internal.contains(id)) return false;
+                ++removedRoutes; return true;
+            });
+        });
+        for (std::size_t c=0; c<track.clips.size(); ++c) {
+            auto& clip = track.clips[c];
+            const auto& original = prepared.project.tracks[t].clips[c];
+            mintAudioEdit(clip.audioEdit);
+            for (auto& marker : clip.warp.markers) marker.id = newUuid();
+            std::unordered_map<std::string, std::string> versions;
+            for (auto& version : clip.offlineHistory) {
+                const auto old = version.id; version.id = newUuid(); versions.emplace(old, version.id);
+                mintAudioVersion(version.source);
+            }
+            const auto remapVersion = [&](std::string& id) {
+                if (const auto found = versions.find(id); found != versions.end()) id = found->second;
+            };
+            for (auto& version : clip.offlineHistory) remapVersion(version.parentId);
+            remapVersion(clip.offlineVersionId);
+            for (auto& slot : clip.offlineProcess.chain) {
+                slot.id = newUuid(); mintAudioEdit(slot.audioEdit);
+                std::erase_if(slot.sidechainTrackIds, [&](const auto& id) { return !internal.contains(id); });
+            }
+            for (std::size_t take=0; take<clip.takes.size(); ++take) clip.takes[take].filePath=original.takes[take].filePath;
+            retimeClipToTempo(clip, ratio);
+            if (clip.kind == ClipKind::Automation) clip.durationSeconds *= ratio;
+            clip.startSeconds += std::max(0., atSeconds) - bundle.originSeconds * ratio;
+            remapFirst(clip.automation.target.channelId); remapFirst(clip.playbackInjection.anchorChannelId);
+            if (clip.kind == ClipKind::Automation && !ownsTarget(clip.automation.target)) {
+                if (!compatibleTarget(original))
+                    return audio::Result::fail(audio::EngineError::InvalidArgument,
+                        "Select a compatible automation target before pasting this curve. The clipboard has been kept.");
+                clip.automation.target = *explicitTarget;
+            }
+            if (!clip.playbackInjection.anchorChannelId.empty() && !internal.contains(clip.playbackInjection.anchorChannelId)) clip.playbackInjection = {};
+            pendingInserted.emplace_back(track.id, clip.id);
+        }
+    }
+    // Keep links within the copied set while detaching all content from both
+    // the source document and the immutable clipboard.
+    std::unordered_map<std::string, std::pair<std::string, std::shared_ptr<ClipContent>>> contents;
+    for (std::size_t t = 0; t < tracks.size(); ++t) for (std::size_t c = 0; c < tracks[t].clips.size(); ++c) {
+        auto& clip = tracks[t].clips[c];
+        const auto& sourceId = prepared.project.tracks[t].clips[c].contentId;
+        if (sourceId.empty()) continue;
+        const auto [found, fresh] = contents.emplace(sourceId, std::make_pair(clip.contentId, clip.contentStorage()));
+        if (!fresh) { clip.contentId = found->second.first; clip.bindContent(found->second.second); }
+    }
+    const auto before = std::make_shared<const ProjectModel>(m_project);
+    if (reuse) target->clips.insert(target->clips.end(), tracks.front().clips.begin(), tracks.front().clips.end());
+    const auto insertAt = target ? m_project.indexOf(targetTrackId) + 1 : m_project.tracks.size();
+    m_project.tracks.insert(m_project.tracks.begin() + std::ptrdiff_t(insertAt), tracks.begin() + (reuse ? 1 : 0), tracks.end());
+    m_project.invalidateTrackIndex(); m_project.resolveClipContents();
+    PreparedPluginStateEdits states;
+    audio::Result result = audio::Result::ok();
+    try {
+        auto session = prepareAudioSession(AudioPluginLoadPolicy::Required);
+        result = collectProjectPluginStateEdits(states, session, package, nullptr, false, {}, false, &newSlots);
+        if (result) result = publishAudioSession(std::move(session), false, states.imports);
+    } catch (const std::exception& error) { result = audio::Result::fail(audio::EngineError::Unknown, error.what()); }
+    if (!result) { m_project = *before; inserted.clear(); return result; }
+    acceptPluginStateEdits(states.imports, m_runtime.lastImportedPluginStates());
+    acceptPluginStateEdits(states.retained, {});
+    for (const auto& state : prepared.pluginStates) m_offlinePluginStateCache[state.fileName] = state.bytes;
+    retainAppliedTransferResources(true, m_transferResources, resources);
+    updateTimelineDuration();
+    const auto after = std::make_shared<const ProjectModel>(m_project);
+    const auto apply = [this, resources, states](const ProjectModel& model, bool restore) {
+        m_project = model; m_deferredClipSync.clear();
+        const auto restored = rebuildGraph(false, AudioPluginLoadPolicy::Required, restore ? std::span<const AudioPluginStateEdit>(states.imports) : std::span<const AudioPluginStateEdit>{});
+        if (restore && restored) { acceptPluginStateEdits(states.imports, m_runtime.lastImportedPluginStates()); acceptPluginStateEdits(states.retained, {}); }
+        updateTimelineDuration();
+    };
+    m_undo.push(bundle.wholeTracks ? "Paste Tracks" : "Paste Clips", [apply, before] { apply(*before, false); },
+        [apply, after] { apply(*after, true); }, estimatedProjectBytes(*before) + estimatedProjectBytes(*after));
+    if (removedRoutes) notice = "External sends, sidechains or outputs were disconnected; unconnected outputs use Master.";
+    inserted = std::move(pendingInserted);
     return audio::Result::ok();
 }
 

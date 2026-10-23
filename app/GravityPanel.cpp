@@ -562,7 +562,7 @@ GravityPanel::GravityPanel(daw::EngineController* controller, QString channelId,
                                     tr("Next Gravity preset"), stage);
     next->setAccessibleName(tr("Next preset"));
     next->setButtonSize(30, 30);
-    auto* list = new ui::IconButton(icons::Glyph::Layers,
+    auto* list = new ui::IconButton(icons::Glyph::PresetList,
                                     tr("Choose Gravity preset"), stage);
     list->setAccessibleName(tr("Preset list"));
     list->setButtonSize(30, 30);

@@ -8,7 +8,6 @@ namespace account { class Service; }
 namespace daw { struct ScanSnapshot; }
 class QFrame;
 class QEvent;
-class QMouseEvent;
 class QPaintEvent;
 class QLabel;
 class QLineEdit;
@@ -46,7 +45,6 @@ public slots:
 protected:
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
 
 private:
     enum class Stage {

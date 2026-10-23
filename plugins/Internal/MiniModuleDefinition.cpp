@@ -1,6 +1,7 @@
 #include "MiniModuleDefinition.hpp"
 #include "ChannelColorInstance.hpp"
 #include "MiniNodeRegistry.hpp"
+#include "MiniEffectInstance.hpp"
 #include "ModulationInstance.hpp"
 #include <algorithm>
 #include <cmath>
@@ -14,7 +15,9 @@ using json = nlohmann::json;
 const std::vector<NodeType> &nodeTypes() {
   static const std::vector<NodeType> types{
       {"input", 1}, {"output", 1},  {"gain", 1},  {"mix", 1},
-      {"color", 1}, {"doubler", 1}, {"chorus", 1}};
+      {"color", 1}, {"doubler", 1}, {"chorus", 1},
+      {"tremolo", 1}, {"stereo", 1}, {"air", 1},
+      {"pitch-formant", 1}, {"filter", 1}, {"soft-clip", 1}};
   return types;
 }
 namespace {
@@ -32,6 +35,8 @@ bool parameter(const NodeDefinition &n, std::string_view id, double lo,
     table = modulation::parameterTable(modulation::Kind::Doubler);
   if (n.type == "chorus")
     table = modulation::parameterTable(modulation::Kind::Chorus);
+  for (const auto& type : effectTypes())
+    if (n.type == type.id) table = effectParameters(type.kind);
   for (const auto &p : table)
     if (p.id == id)
       return lo >= p.minValue && hi <= p.maxValue;
@@ -229,11 +234,16 @@ bool sameAudioGraph(const MiniModuleDefinition &a, std::string_view am,
   };
   return normalized(a, am) == normalized(b, bm);
 }
+std::span<const std::string_view> builtinIds() noexcept {
+  static constexpr std::string_view ids[]{"color", "doubler", "chorus",
+      "tremolo", "stereo", "air", "pitch-formant", "filter", "soft-clip"};
+  return ids;
+}
 MiniModuleDefinition builtin(std::string_view id) {
   MiniModuleDefinition d;
   d.version = 2;
   d.id = std::string(id);
-  if (id != "color" && id != "doubler" && id != "chorus")
+  if (std::find(builtinIds().begin(), builtinIds().end(), id) == builtinIds().end())
     return d;
   d.name = id == "color" ? "Color" : id == "doubler" ? "Doubler" : "Chorus";
   d.nodes = {{"in", "input"}, {"fx", std::string(id)}, {"out", "output"}};
@@ -262,6 +272,28 @@ MiniModuleDefinition builtin(std::string_view id) {
         {std::move(key), std::move(name), d.nodes, d.connections, d.controls});
     return d.modes.back();
   };
+  for (const auto& type : effectTypes()) if (id == type.id) {
+    d.name = type.name;
+    for (const auto& p : effectParameters(type.kind))
+      if (p.index < 2) add(p.id, p.name, p.unit, p.minValue, p.maxValue, p.defaultValue, p.isLogarithmic);
+    if (type.kind == EffectKind::Tremolo) {
+      d.defaultMode = "sine";
+      addMode("sine", "Sine").nodes[1].parameters = {{"shape", 0}};
+      addMode("triangle", "Triangle").nodes[1].parameters = {{"shape", 1}};
+      addMode("pulse", "Pulse").nodes[1].parameters = {{"shape", 2}};
+    } else if (type.kind == EffectKind::Pitch) {
+      d.defaultMode = "live";
+      addMode("live", "Live").nodes[1].parameters = {{"quality", 0}};
+      addMode("pro", "Pro").nodes[1].parameters = {{"quality", 1}};
+    } else if (type.kind == EffectKind::Filter) {
+      d.defaultMode = "24db";
+      addMode("6db", "6 dB/oct").nodes[1].parameters = {{"slope", 0}};
+      addMode("12db", "12 dB/oct").nodes[1].parameters = {{"slope", 1}};
+      addMode("24db", "24 dB/oct").nodes[1].parameters = {{"slope", 2}};
+      addMode("48db", "48 dB/oct").nodes[1].parameters = {{"slope", 3}};
+    }
+    return d;
+  }
   if (id == "color") {
     d.defaultMode = "analog";
     addMode("analog", "Analog");

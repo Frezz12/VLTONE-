@@ -2,6 +2,7 @@
 #include <QHash>
 
 class QMenu;
+class QPolygonF;
 #include "UiFrameClock.hpp"
 #include "TimelineRuler.hpp"
 #include "graphics/ScenePaintSource.hpp"
@@ -82,6 +83,10 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     explicit TimelineWidget(daw::EngineController* controller,
                             QWidget* parent = nullptr);
     ~TimelineWidget() override;
+    void setProjectController(daw::EngineController* controller);
+    void finishProjectEdits() { finishInterruptedPointerGesture(); finishProjectGesture(); }
+    void restoreProjectSelection(const QVector<ui::ClipSel>& clips);
+    bool pasteProjectTransfer(const QString& track, double seconds);
     static bool checkMidiClipOpeningForTest();
     static bool checkMidiSequenceForTest(const QString& images = {});
     /// Place the shared view controls directly above the right scroll rail.
@@ -248,6 +253,7 @@ enum class Tool { Select, Knife, Eraser, SelectRegion, Mute, Draw, Stretch, Glue
     double regionEndSeconds() const { return m_regionEnd; }
     /// Unique track ids covered by the committed region, in lane order.
     QStringList regionTrackIds() const;
+    void restoreProjectRegion(double start, double end, const QStringList& tracks);
     void setLocalProcessingEnabled(bool enabled) {
         m_localProcessingEnabled = enabled;
     }
@@ -360,6 +366,7 @@ signals:
     void arrangementRowsChanged();
     void timeRowVisibilityRequested(bool visible);
     void projectEdited();
+    void backgroundProjectEdited(const QString& documentIdentity);
     /// Short, non-modal feedback for an arrangement action that cannot run.
     void operationStatus(const QString& message);
     /// The arrangement sought the shared transport. Editors repaint their
@@ -421,6 +428,7 @@ protected:
     void dropEvent(class QDropEvent*) override;
 
 private:
+    void invalidateTrackSelection(const QStringList& ids);
     bool hasActivePointerGesture() const;
     void finishInterruptedPointerGesture();
     const std::vector<daw::TrackRow>& visibleRows() const;
@@ -747,6 +755,7 @@ private:
     double automationValueAtY(const QRectF& body, double y) const;
     /// The clip-relative beat at a timeline x, for a clip that starts there.
     double automationBeatsAtX(const daw::ClipModel& clip, int x) const;
+    static void appendAutomationCurvePoint(QPolygonF& line, const QPointF& point);
 
     void drawPatternClips(QPainter& p, const daw::TrackModel& pattern,
                           int laneTop, int bodyHeight);

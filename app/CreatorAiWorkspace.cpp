@@ -105,6 +105,7 @@ const std::vector<ai::ToolSpec> &registry() {
   return specs;
 }
 } // namespace
+const std::vector<ai::ToolSpec>& CreatorAiWorkspace::toolSpecs() { return registry(); }
 CreatorAiWorkspace::CreatorAiWorkspace(CreatorWindow &w)
     : QObject(&w), m_window(w) {
   m_timer.setInterval(25);

@@ -16,6 +16,7 @@
 #include "Internal/ModulationRackInstance.hpp"
 #include "Internal/MorphInstance.hpp"
 #include "Internal/FluxInstance.hpp"
+#include "Internal/WavetableInstance.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "Internal/PitchCorrectorInstance.hpp"
 #include "Internal/SampleDecoder.hpp"
@@ -107,6 +108,7 @@ std::unique_ptr<PluginInstance> InternalFactory::create(const PluginDescriptor& 
     if (descriptor.uid == "daw.modulation") return std::make_unique<modulation::ModulationRackInstance>();
     if (descriptor.uid == "daw.morph") return std::make_unique<morph::MorphInstance>();
     if (descriptor.uid == "daw.flux") return std::make_unique<flux::FluxInstance>();
+    if (descriptor.uid == wavetable::uid) return std::make_unique<wavetable::WavetableInstance>();
     if (descriptor.uid == "daw.doubler") return std::make_unique<modulation::DoublerInstance>();
     if (descriptor.uid == "daw.doubler-pro") return std::make_unique<modulation::DoublerProInstance>();
     if (descriptor.uid == "daw.chorus") return std::make_unique<modulation::ChorusInstance>();
@@ -126,6 +128,7 @@ std::vector<PluginDescriptor> builtinPlugins() {
             utility::descriptorFor(utility::Kind::Stereo),
             utility::descriptorFor(utility::Kind::Reverse),
             sampler::SamplerInstance::staticDescriptor(),
+            wavetable::WavetableInstance::staticDescriptor(),
             slicer::SlicerInstance::staticDescriptor(),
             delay::DelayInstance::staticDescriptor(),
 #if DAW_ENABLE_REVERB

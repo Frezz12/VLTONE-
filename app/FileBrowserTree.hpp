@@ -75,8 +75,8 @@ public:
     /// single "Plugins" root, which is dropped entirely when the list is empty
     /// — an empty folder that can never fill up is worse than no folder.
     void setPlugins(const QVector<PluginEntry>& plugins);
-    /// Empty selects the permanent all-folders view; otherwise show one
-    /// virtual collection as an icon-tab destination.
+    /// Empty selects Files; built-in IDs select devices/presets, and a
+    /// collection ID selects that collection's shortcuts.
     void setCollectionFilter(const QString& collectionId);
     QString collectionFilter() const { return m_collectionFilter; }
     /// Re-read every open folder from disk.
@@ -140,6 +140,7 @@ signals:
     void statusMessage(const QString& text);
 
 protected:
+    bool event(QEvent* event) override;
     /// Drags carry file URLs, which is exactly what the sampler, the timeline
     /// and the instrument slot already accept from the desktop — so the browser
     /// needs no private drag format and those targets need no new code.

@@ -18,30 +18,43 @@ std::vector<InsertModel> models(const EngineController::ChannelSnapshot& snapsho
 void normalize(EngineController::ChannelSnapshot& snapshot) {
     normalizeRackGroups(snapshot.rackGroups, models(snapshot));
 }
-void lift(EngineController::ChannelSnapshot& snapshot, const std::unordered_set<std::string>& ids) {
+void lift(EngineController::ChannelSnapshot& snapshot, const std::unordered_set<std::string>& ids, bool normalizeResult = true) {
     if (snapshot.instrument && ids.contains(snapshot.instrument->model.id)) {
         snapshot.instrument.reset();
         snapshot.instrumentFx.clear();
     }
     std::erase_if(snapshot.inserts, [&](const auto& s) { return ids.contains(s.model.id); });
-    for (auto& group : snapshot.rackGroups)
+    for (auto& group : snapshot.rackGroups) {
         std::erase_if(group.insertIds, [&](const auto& id) { return ids.contains(id); });
+        for (auto& layer : group.layers)
+            std::erase_if(layer.insertIds, [&](const auto& id) { return ids.contains(id); });
+    }
     std::erase_if(snapshot.modulation.routes, [&](const auto& route) { return ids.contains(route.slotId); });
+    // Keep shared sources alive when their presentation owner leaves this channel.
+    for (auto& source : snapshot.modulation.sources)
+        if (ids.contains(source.ownerSlotId) &&
+            std::any_of(snapshot.modulation.routes.begin(), snapshot.modulation.routes.end(),
+                [&](const auto& route) { return route.sourceId == source.id; }))
+            source.ownerSlotId.clear();
+    std::erase_if(snapshot.modulation.sources, [&](const auto& source) { return ids.contains(source.ownerSlotId); });
     std::unordered_set<std::string> remaining;
     for (const auto& s : snapshot.modulation.sources) remaining.insert(s.id);
     for (const auto& r : snapshot.modulation.routes) remaining.insert(r.id);
     for (auto& lane : snapshot.modulationAutomation)
         std::erase_if(lane.clips, [&](const auto& c) { return !remaining.contains(c.automation.target.slotId); });
     std::erase_if(snapshot.modulationAutomation, [](const auto& t) { return t.clips.empty(); });
-    normalize(snapshot);
+    if (normalizeResult) normalize(snapshot);
 }
 bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelSnapshot source,
            std::size_t index, const std::string& groupId, bool copy, std::vector<std::string>& landed, const std::string& channel, bool copySources = false) {
     if (source.instrument && !groupId.empty())
         return false;
-    auto group = std::find_if(target.rackGroups.begin(), target.rackGroups.end(),
-                              [&](const auto& g) { return g.id == groupId; });
-    if (!groupId.empty() && (group == target.rackGroups.end() || !source.rackGroups.empty()))
+    RackLayerModel* branch = nullptr;
+    auto group = std::find_if(target.rackGroups.begin(), target.rackGroups.end(), [&](auto& g) {
+        for (auto& layer : g.layers) if (layer.id == groupId) { branch = &layer; return true; }
+        return g.id == groupId;
+    });
+    if (!groupId.empty() && group == target.rackGroups.end())
         return false;
     index = std::min(index, target.inserts.size());
     // Dropping between two members means insertion into that group, never
@@ -52,10 +65,7 @@ bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelS
                 return std::find(it->insertIds.begin(), it->insertIds.end(), id) != it->insertIds.end();
             };
             if (contains(target.inserts[index - 1].model.id) && contains(target.inserts[index].model.id)) {
-                if (!source.rackGroups.empty())
-                    return false;
-                group = it;
-                break;
+                if (group == target.rackGroups.end() || it->insertIds.size() < group->insertIds.size()) group = it;
             }
         }
     }
@@ -87,7 +97,14 @@ bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelS
         mapping[old] = slot.model.id;
         landed.push_back(slot.model.id);
     }
+    std::string parent;
     if (group != target.rackGroups.end()) {
+        parent = group->id;
+        if (!branch && !group->layers.empty()) {
+            branch = &group->layers.front();
+            if (index && index <= target.inserts.size())
+                for (auto& layer : group->layers) if (rackContains(layer.insertIds, target.inserts[index - 1].model.id)) branch = &layer;
+        }
         // Explicit group targets may only extend their existing range.
         std::size_t first = target.inserts.size(), last = 0;
         for (std::size_t i = 0; i < target.inserts.size(); ++i)
@@ -96,13 +113,33 @@ bool place(EngineController::ChannelSnapshot& target, EngineController::ChannelS
                 first = std::min(first, i);
                 last = i;
             }
-        index = std::clamp(index, first, last + 1);
+        if (first < target.inserts.size()) index = std::clamp(index, first, last + 1);
+        if (branch) {
+            if (branch->insertIds.empty()) branch->muted = false;
+            // Keep branch members adjacent in the flat storage order.
+            if (!branch->insertIds.empty()) {
+                std::size_t begin = target.inserts.size(), end = 0;
+                for (std::size_t i = 0; i < target.inserts.size(); ++i) if (rackContains(branch->insertIds, target.inserts[i].model.id)) { begin = std::min(begin, i); end = i + 1; }
+                if (begin < target.inserts.size()) index = std::clamp(index, begin, end);
+            } else if (first < target.inserts.size()) index = last + 1;
+            branch->insertIds.insert(branch->insertIds.end(), landed.begin() + std::ptrdiff_t(effectStart), landed.end());
+        }
         group->insertIds.insert(group->insertIds.end(), landed.begin() + std::ptrdiff_t(effectStart),
                                 landed.end());
+        auto ancestor = group->parentId;
+        for (int depth = 0; !ancestor.empty() && depth < 9; ++depth) {
+            auto found = std::find_if(target.rackGroups.begin(), target.rackGroups.end(), [&](const auto& g) { return g.id == ancestor; });
+            if (found == target.rackGroups.end()) break;
+            for (auto& layer : found->layers) if (rackContains(layer.insertIds, group->insertIds.front()))
+                layer.insertIds.insert(layer.insertIds.end(), landed.begin() + std::ptrdiff_t(effectStart), landed.end());
+            found->insertIds.insert(found->insertIds.end(), landed.begin() + std::ptrdiff_t(effectStart), landed.end());
+            ancestor = found->parentId;
+        }
     }
     target.inserts.insert(target.inserts.begin() + std::ptrdiff_t(index), source.inserts.begin(),
                           source.inserts.end());
-    const auto groups = copyRackGroups(source.rackGroups, mapping, copy);
+    auto groups = copyRackGroups(source.rackGroups, mapping, copy);
+    for (auto& g : groups) if (g.parentId.empty()) g.parentId = parent;
     target.rackGroups.insert(target.rackGroups.end(), groups.begin(), groups.end());
     auto moved = copyModulation(source.modulation, mapping, copy || copySources, &mapping);
     for (const auto& source : moved.sources)
@@ -143,83 +180,144 @@ bool EngineController::insertSupportsChannelMode(const std::string& channel, con
     return capabilities.available && (mode != PluginChannelMode::DualMono || capabilities.dualMono);
 }
 
-bool EngineController::createRackGroup(const std::string& channel, const std::vector<std::string>& ids,
-                                       const std::string& name, std::string* result) {
-    if (cloudProjectBound() || ids.size() < 2)
-        return false;
+bool EngineController::replaceRackGroups(const std::string& channel, std::vector<RackGroupModel> next, const std::string& label) {
+    if (cloudProjectBound() || (!m_undo.isApplying() && isTrackEditLocked(channel))) return false;
     auto* groups = mutableRackGroups(channel);
     const auto* chain = channelInserts(channel);
-    if (!groups || !chain)
-        return false;
-    const std::unordered_set<std::string> selected(ids.begin(), ids.end());
+    if (!groups || !chain) return false;
+    normalizeRackGroups(next, *chain);
+    const auto before = *groups;
+    if (before == next) return true;
+    const auto parallel = [](const auto& state) { return std::any_of(state.begin(), state.end(), [](const auto& g) { return !g.layers.empty(); }); };
+    *groups = next;
+    if ((parallel(before) || parallel(next)) && !rebuildGraph()) {
+        *mutableRackGroups(channel) = before; rebuildGraph(); return false;
+    }
+    m_undo.push(label, [this, channel, before, label] { replaceRackGroups(channel, before, label); },
+        [this, channel, next, label] { replaceRackGroups(channel, next, label); });
+    return true;
+}
+bool EngineController::createRackGroup(const std::string& channel, const std::vector<std::string>& ids,
+    const std::string& name, std::string* result, bool parallel) {
+    if (cloudProjectBound() || ids.empty() || (!parallel && ids.size() < 2) || (!m_undo.isApplying() && isTrackEditLocked(channel))) return false;
+    const auto* chain = channelInserts(channel); if (!chain) return false;
     std::vector<std::string> ordered;
     std::size_t first = chain->size(), last = 0;
-    for (std::size_t i = 0; i < chain->size(); ++i)
-        if (selected.contains((*chain)[i].id) && (*chain)[i].isLoaded()) {
-            first = std::min(first, i);
-            last = i;
-            ordered.push_back((*chain)[i].id);
-        }
-    if (ordered.size() != ids.size() || last - first + 1 != ids.size())
-        return false;
-    for (const auto& group : *groups)
-        for (const auto& id : group.insertIds)
-            if (selected.contains(id))
-                return false;
-    const auto before = *groups;
+    for (std::size_t i = 0; i < chain->size(); ++i) if (rackContains(ids, (*chain)[i].id) && (*chain)[i].isLoaded()) {
+        if (const auto* instance = m_runtime->pluginInstance({channel, (*chain)[i].id}); instance && instance->descriptor().isInstrument) return false;
+        first = std::min(first, i); last = i; ordered.push_back((*chain)[i].id);
+    }
+    if (ordered.size() != ids.size() || last - first + 1 != ordered.size()) return false;
+    auto groups = rackGroups(channel);
+    std::string parent;
+    std::size_t parentSize = chain->size() + 1;
+    for (const auto& g : groups) {
+        const bool intersects = std::any_of(ordered.begin(), ordered.end(), [&](const auto& id) { return rackContains(g.insertIds, id); });
+        if (!intersects) continue;
+        const bool contains = std::all_of(ordered.begin(), ordered.end(), [&](const auto& id) { return rackContains(g.insertIds, id); });
+        const bool wrapped = std::all_of(g.insertIds.begin(), g.insertIds.end(), [&](const auto& id) { return rackContains(ordered, id); });
+        if (!contains && !wrapped) return false;
+        if (contains && !wrapped && g.insertIds.size() < parentSize) { parent = g.id; parentSize = g.insertIds.size(); }
+    }
+    for (const auto& g : groups) if (g.id == parent && !g.layers.empty()) {
+        if (std::none_of(g.layers.begin(), g.layers.end(), [&](const auto& layer) {
+            return std::all_of(ordered.begin(), ordered.end(), [&](const auto& id) { return rackContains(layer.insertIds, id); });
+        })) return false;
+    }
     const auto id = newUuid();
-    groups->push_back({id, name.empty() ? "Group" : name, ordered});
-    normalizeRackGroups(*groups, *chain);
-    const auto after = *groups;
-    const auto put = [this, channel](const auto& state) {
-        if (auto* g = mutableRackGroups(channel))
-            *g = state;
-    };
-    m_undo.push("Group Plugins", [put, before] { put(before); }, [put, after] { put(after); });
-    if (result)
-        *result = id;
+    RackGroupModel created{id, name.empty() ? (parallel ? "Layers" : "Group") : name, ordered, parent, {}};
+    for (auto& g : groups) if (g.parentId == parent &&
+        std::all_of(g.insertIds.begin(), g.insertIds.end(), [&](const auto& member) { return rackContains(ordered, member); })) g.parentId = id;
+    if (parallel) {
+        for (std::size_t i = 0; i < ordered.size();) {
+            RackLayerModel layer{newUuid(), {}, {ordered[i]}};
+            for (const auto& g : groups) if (g.parentId == id && g.insertIds.front() == ordered[i]) { layer.insertIds = g.insertIds; layer.name = g.name; break; }
+            if (layer.name.empty()) if (const auto* slot = insertModel(channel, ordered[i])) layer.name = slot->name;
+            i += layer.insertIds.size(); created.layers.push_back(std::move(layer));
+        }
+        if (created.layers.size() == 1) created.layers.push_back({newUuid(), "Dry", {}, 1.f, true, false});
+    }
+    groups.push_back(std::move(created));
+    for (const auto& g : groups) {
+        auto parent = g.parentId;
+        for (int depth = 0; !parent.empty(); ++depth) {
+            if (depth >= 8) return false;
+            const auto found = std::find_if(groups.begin(), groups.end(), [&](const auto& candidate) { return candidate.id == parent; });
+            if (found == groups.end()) break;
+            parent = found->parentId;
+        }
+    }
+    if (!replaceRackGroups(channel, std::move(groups), parallel ? "Create Parallel Layers" : "Group Plugins")) return false;
+    if (std::none_of(rackGroups(channel).begin(), rackGroups(channel).end(), [&](const auto& g) { return g.id == id; })) return false;
+    if (result) *result = id;
     return true;
 }
 bool EngineController::removeRackGroup(const std::string& channel, const std::string& id) {
-    if (cloudProjectBound())
-        return false;
-    auto* groups = mutableRackGroups(channel);
-    if (!groups)
-        return false;
-    const auto before = *groups;
-    if (!std::erase_if(*groups, [&](const auto& g) { return g.id == id; }))
-        return false;
-    const auto after = *groups;
-    const auto put = [this, channel](const auto& state) {
-        if (auto* g = mutableRackGroups(channel))
-            *g = state;
-    };
-    m_undo.push("Ungroup Plugins", [put, before] { put(before); }, [put, after] { put(after); });
-    return true;
+    auto groups = rackGroups(channel);
+    const auto found = std::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.id == id; });
+    if (found == groups.end()) return false;
+    const auto parent = found->parentId;
+    for (auto& g : groups) if (g.parentId == id) g.parentId = parent;
+    std::erase_if(groups, [&](const auto& g) { return g.id == id; });
+    return replaceRackGroups(channel, std::move(groups), "Ungroup Plugins");
 }
-bool EngineController::renameRackGroup(const std::string& channel, const std::string& id,
-                                       const std::string& name) {
-    if (cloudProjectBound() || name.empty())
-        return false;
-    auto* groups = mutableRackGroups(channel);
-    if (!groups)
-        return false;
-    auto it = std::find_if(groups->begin(), groups->end(), [&](const auto& g) { return g.id == id; });
-    if (it == groups->end() || it->name == name)
-        return false;
-    const auto before = it->name;
-    it->name = name;
-    const auto put = [this, channel, id](const auto& text) {
-        if (auto* list = mutableRackGroups(channel))
-            for (auto& group : *list)
-                if (group.id == id)
-                    group.name = text;
-    };
-    m_undo.push("Rename Plugin Group", [put, before] { put(before); }, [put, name] { put(name); });
-    return true;
+bool EngineController::renameRackGroup(const std::string& channel, const std::string& id, const std::string& name) {
+    if (name.empty()) return false;
+    auto groups = rackGroups(channel);
+    for (auto& g : groups) if (g.id == id) { g.name = name; return replaceRackGroups(channel, std::move(groups), "Rename Plugin Group"); }
+    return false;
+}
+bool EngineController::addRackLayer(const std::string& channel, const std::string& id) {
+    auto groups = rackGroups(channel);
+    for (auto& g : groups) if (g.id == id && !g.layers.empty() && g.layers.size() < 32) {
+        g.layers.push_back({newUuid(), "Layer " + std::to_string(g.layers.size() + 1), {}, 1.f, true, false});
+        return replaceRackGroups(channel, std::move(groups), "Add Layer");
+    }
+    return false;
+}
+bool EngineController::removeRackLayer(const std::string& channel, const std::string& id, const std::string& layerId) {
+    if (cloudProjectBound() || (!m_undo.isApplying() && isTrackEditLocked(channel))) return false;
+    RackChannelState captured;
+    if (!captureRackChannel(channel, false, captured)) return false;
+    RackEditState before{{std::move(captured)}, {}}, after = before;
+    auto& snapshot = after.channels.front().snapshot;
+    std::vector<std::string> members;
+    bool found = false;
+    for (auto& g : snapshot.rackGroups) if (g.id == id && g.layers.size() > 1)
+        for (const auto& layer : g.layers) if (layer.id == layerId) { members = layer.insertIds; found = true; }
+    if (!found) return false;
+    lift(snapshot, std::unordered_set<std::string>(members.begin(), members.end()));
+    for (auto& g : snapshot.rackGroups) if (g.id == id)
+        std::erase_if(g.layers, [&](const auto& layer) { return layer.id == layerId; });
+    return bool(commitRackEdit(before, after, "Remove Layer"));
+}
+bool EngineController::setRackLayerState(const std::string& channel, const std::string& id, const std::string& layerId,
+    float gain, bool muted, bool solo) {
+    if (cloudProjectBound() || !std::isfinite(gain) || (!m_undo.isApplying() && isTrackEditLocked(channel))) return false;
+    auto* groups = mutableRackGroups(channel); if (!groups) return false;
+    for (auto& g : *groups) if (g.id == id) for (auto& layer : g.layers) if (layer.id == layerId) {
+        const auto before = layer; layer.gain = std::clamp(gain, 0.f, 2.f); layer.muted = muted; layer.solo = solo;
+        const auto after = layer; if (before == after) return true;
+        if (auto* track = m_project.findTrack(channel); track && track->freeze.active()) { track->freeze = {}; rebuildGraph(); }
+        else m_runtime->updateRackLayers(channel, *groups);
+        m_undo.push("Change Layer Mix",
+            [this, channel, id, layerId, before] { setRackLayerState(channel, id, layerId, before.gain, before.muted, before.solo); },
+            [this, channel, id, layerId, after] { setRackLayerState(channel, id, layerId, after.gain, after.muted, after.solo); });
+        return true;
+    }
+    return false;
+}
+bool EngineController::renameRackLayer(const std::string& channel, const std::string& id, const std::string& layerId, const std::string& name) {
+    if (name.empty()) return false;
+    auto groups = rackGroups(channel);
+    for (auto& g : groups) if (g.id == id) for (auto& layer : g.layers) if (layer.id == layerId) {
+        layer.name = name; return replaceRackGroups(channel, std::move(groups), "Rename Layer");
+    }
+    return false;
 }
 bool EngineController::setRackParameters(const std::string& channel, const std::string& id,
                                          const std::vector<std::string>& parameters) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channel)) return false;
     if (cloudProjectBound() || parameters.size() > 8)
         return false;
     auto* slot = mutableInsertSlot(channel, id);
@@ -250,7 +348,7 @@ audio::Result EngineController::captureRackSelection(const std::string& channel,
     if (track && track->instrument.isLoaded() && selected.contains(track->instrument.id)) {
         ChainSlotSnapshot instrument;
         if (const auto result = captureInsertState(channel, track->instrument, instrument);
-            !result && hasInsert(channel, track->instrument.id))
+            !result)
             return result;
         snapshot.instrument = std::move(instrument);
         if (track->samplerFx.isOwnedBy(track->instrument)) {
@@ -259,7 +357,7 @@ audio::Result EngineController::captureRackSelection(const std::string& channel,
             for (const auto& fx : track->samplerFx.inserts) {
                 ChainSlotSnapshot captured;
                 if (const auto result = captureInsertState(channel, fx, captured);
-                    !result && hasInsert(channel, fx.id))
+                    !result)
                     return result;
                 snapshot.instrumentFx.push_back(std::move(captured));
             }
@@ -269,7 +367,7 @@ audio::Result EngineController::captureRackSelection(const std::string& channel,
         if (selected.contains(model.id)) {
             ChainSlotSnapshot captured;
             const auto result = captureInsertState(channel, model, captured);
-            if (!result && hasInsert(channel, model.id))
+            if (!result)
                 return result;
             snapshot.inserts.push_back(std::move(captured));
             mapping[model.id] = model.id;
@@ -313,6 +411,7 @@ audio::Result EngineController::captureRackChannel(const std::string& channel, b
 bool EngineController::applyRackEdit(const RackEditState& state) {
     std::vector<ChainReplacement> replacements;
     for (const auto& channel : state.channels) {
+        if (!m_undo.isApplying() && isTrackEditLocked(channel.channelId)) return false;
         if (!mutableRackGroups(channel.channelId))
             return false;
         replacements.push_back({channel.channelId, channel.snapshot.inserts,
@@ -322,6 +421,8 @@ bool EngineController::applyRackEdit(const RackEditState& state) {
     for (const auto& channel : state.channels) {
         auto* rack = mutableRackModulation(channel.channelId);
         *rack = channel.snapshot.modulation;
+        // Publish routing and device changes in the same audio session.
+        *mutableRackGroups(channel.channelId) = channel.snapshot.rackGroups;
     }
     for (const auto& channel : state.channels)
         replaceModulationAutomation(m_project, channel.channelId, channel.snapshot.modulationAutomation);
@@ -341,8 +442,6 @@ bool EngineController::applyRackEdit(const RackEditState& state) {
                 clip->automation.target = address.target;
         return false;
     }
-    for (const auto& channel : state.channels)
-        *mutableRackGroups(channel.channelId) = channel.snapshot.rackGroups;
     return true;
 }
 bool EngineController::commitRackEdit(const RackEditState& before, const RackEditState& after,
@@ -371,9 +470,13 @@ bool EngineController::commitRackEdit(const RackEditState& before, const RackEdi
             for (const auto& slot : channel.snapshot.instrumentFx)
                 bytes += slotBytes(slot);
             for (const auto& group : channel.snapshot.rackGroups) {
-                bytes += sizeof(group) + group.id.size() + group.name.size();
+                bytes += sizeof(group) + group.id.size() + group.name.size() + group.parentId.size();
                 for (const auto& id : group.insertIds)
                     bytes += sizeof(id) + id.size();
+                for (const auto& layer : group.layers) {
+                    bytes += sizeof(layer) + layer.id.size() + layer.name.size();
+                    for (const auto& id : layer.insertIds) bytes += sizeof(id) + id.size();
+                }
             }
         }
         return bytes;
@@ -387,6 +490,10 @@ bool EngineController::commitRackEdit(const RackEditState& before, const RackEdi
 audio::Result EngineController::pasteRackSelection(const std::string& channel, const ChannelSnapshot& source,
                                                    std::size_t index, const std::string& groupId,
                                                    std::vector<std::string>* added) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channel)) return rackError("Track editing is locked.");
+    if (!source.sourceDocument.empty() && source.sourceDocument != m_documentIdentity)
+        return pasteRackSelection(channel, prepareChannelTransfer(source), index, groupId, added);
+    if (source.resources) m_transferResources.push_back(source.resources);
     if (added)
         added->clear();
     if (!mutableRackGroups(channel) || (source.inserts.empty() && !source.instrument))
@@ -403,7 +510,7 @@ audio::Result EngineController::pasteRackSelection(const std::string& channel, c
         const auto result = submitSharedRackTransfer(cut ? source.rackCutSource : std::string{}, source,
                                                      channel, index, !cut, added);
         if (result && cut)
-            m_channelClipboard.rackCutSource.clear();
+            sharedChannelClipboard().rackCutSource.clear();
         return result;
     }
     RackChannelState captured;
@@ -446,13 +553,13 @@ audio::Result EngineController::pasteRackSelection(const std::string& channel, c
     }
     std::vector<std::string> landed;
     if (!place(after.channels[0].snapshot, source, index, groupId, !cut, landed, channel, cut && source.rackCutSource != channel))
-        return rackError("Groups cannot be nested.");
+        return rackError("The destination group is unavailable.");
     if (!commitRackEdit(before, after, "Paste Rack Devices"))
         return rackError("Could not restore plugin settings. The chain was left unchanged.");
     if (added)
         *added = std::move(landed);
     if (cut)
-        m_channelClipboard.rackCutSource.clear();
+        sharedChannelClipboard().rackCutSource.clear();
     return audio::Result::ok();
 }
 audio::Result EngineController::transferRackSelection(const std::string& from,
@@ -460,6 +567,8 @@ audio::Result EngineController::transferRackSelection(const std::string& from,
                                                       const std::string& to, std::size_t index, bool copy,
                                                       const std::string& groupId,
                                                       std::vector<std::string>* landed) {
+    if (!m_undo.isApplying() && (isTrackEditLocked(to) || (!copy && isTrackEditLocked(from))))
+        return rackError("Track editing is locked.");
     if (landed)
         landed->clear();
     if (ids.empty() || !mutableRackGroups(from) || !mutableRackGroups(to))
@@ -474,6 +583,19 @@ audio::Result EngineController::transferRackSelection(const std::string& from,
     }
     if (copy)
         return pasteRackSelection(to, source, index, groupId, landed);
+    if (from == to && !groupId.empty()) {
+        std::string container;
+        for (const auto& g : rackGroups(from))
+            if (g.id == groupId || std::any_of(g.layers.begin(), g.layers.end(), [&](const auto& layer) { return layer.id == groupId; })) container = g.id;
+        // Moving devices between branches does not move their enclosing rack into itself.
+        for (int depth = 0; !container.empty() && depth < 9; ++depth) {
+            std::erase_if(source.rackGroups, [&](const auto& g) { return g.id == container; });
+            const auto found = std::find_if(rackGroups(from).begin(), rackGroups(from).end(), [&](const auto& g) { return g.id == container; });
+            container = found == rackGroups(from).end() ? std::string{} : found->parentId;
+        }
+        for (auto& g : source.rackGroups)
+            if (std::none_of(source.rackGroups.begin(), source.rackGroups.end(), [&](const auto& parent) { return parent.id == g.parentId; })) g.parentId.clear();
+    }
     std::unordered_set<std::string> selected(ids.begin(), ids.end());
     for (const auto& fx : source.instrumentFx)
         selected.insert(fx.model.id);
@@ -502,7 +624,10 @@ audio::Result EngineController::transferRackSelection(const std::string& from,
                                                 [&](const auto& s) { return selected.contains(s.model.id); });
         index -= std::size_t(liftedBefore);
     }
-    lift(after.channels[0].snapshot, selected);
+    lift(after.channels[0].snapshot, selected, from != to || groupId.empty());
+    // Fully moved containers travel with the captured subtree, not as empty duplicates.
+    for (const auto& g : source.rackGroups)
+        std::erase_if(after.channels[0].snapshot.rackGroups, [&](const auto& old) { return old.id == g.id; });
     // Moving all members within the same named group retains the container.
     std::string destination = groupId;
     for (const auto& group : source.rackGroups)
@@ -510,7 +635,7 @@ audio::Result EngineController::transferRackSelection(const std::string& from,
             destination.clear();
     std::vector<std::string> newIds;
     if (!place(after.channels.back().snapshot, source, index, destination, false, newIds, to, from != to))
-        return rackError("Groups cannot be nested.");
+        return rackError("The destination group is unavailable.");
     for (auto& address : after.automation)
         address.target.channelId = to;
     if (from == to && before.channels[0].snapshot.rackGroups == after.channels[0].snapshot.rackGroups) {

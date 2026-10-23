@@ -1,4 +1,5 @@
 #include "TimelineWidget.hpp"
+#include "ScriptContextMenu.hpp"
 #include "EngineController.hpp"
 #include "Theme.hpp"
 #include "UiConstants.hpp"
@@ -169,6 +170,7 @@ bool TimelineWidget::showArrangementMenu(QContextMenuEvent* event) {
     QMenu menu(this);
     const auto* label = arrangementLabelAt(row, event->pos().x());
     const QString id = label ? QString::fromStdString(label->id) : QString{};
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","arrangement"},{"target",{{"id",id.toStdString()},{"row",row},{"beat",xToSeconds(event->pos().x())*m_controller->tempo()/60.0}}}});
     QAction* add = nullptr; QAction* edit = nullptr; QAction* remove = nullptr;
     if (row >= 1) {
         add = menu.addAction(row == 1 ? tr("Add chord…") : tr("Add section…"));

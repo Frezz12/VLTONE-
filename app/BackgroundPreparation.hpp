@@ -13,17 +13,21 @@ namespace ui {
 // nested loop early; no worker callback holds a QWidget or a stack reference.
 // Call only before mutating the live model, never from graph reconciliation.
 template<class T, class Work>
-std::optional<T> prepareInBackground(QWidget* parent, const QString& label, Work work, bool canCancel = true) {
+std::optional<T> prepareInBackground(QWidget* parent, const QString& label, Work work, bool canCancel = true,
+                                    QProgressDialog* existingProgress = nullptr) {
     struct State {
         std::atomic_bool cancel{false}, done{false};
         std::optional<T> result;
         std::exception_ptr exception;
     };
     auto state = std::make_shared<State>();
-    QProgressDialog progress(label, QObject::tr("Cancel"), 0, 0, parent);
+    std::unique_ptr<QProgressDialog> ownedProgress;
+    if (!existingProgress) ownedProgress = std::make_unique<QProgressDialog>(label, QObject::tr("Cancel"), 0, 0, parent);
+    auto& progress = existingProgress ? *existingProgress : *ownedProgress;
+    progress.setLabelText(label);
     progress.setWindowModality(Qt::ApplicationModal);
     if (!canCancel) progress.setCancelButton(nullptr);
-    progress.setMinimumDuration(150);
+    if (!existingProgress) progress.setMinimumDuration(150);
     progress.setAutoClose(false); progress.setAutoReset(false);
     QEventLoop loop;
     QTimer poll;

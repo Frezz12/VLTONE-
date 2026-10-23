@@ -8,6 +8,7 @@
 #include "PatternWindow.hpp"
 #include "RackDeviceCard.hpp"
 #include "RackDrag.hpp"
+#include "model/RackGroups.hpp"
 #include "Theme.hpp"
 #include "plugins/PluginManager.hpp"
 #include <QAbstractSpinBox>
@@ -31,14 +32,17 @@
 #include <QRubberBand>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QTextEdit>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 #include <functional>
 
 namespace {
@@ -124,11 +128,10 @@ QString keyCommand(QKeyEvent* e) {
     return {};
 }
 void preserveDeviceHeight(QScrollArea* scroll, const QWidget* chain) {
-    // Vertical scrolling is disabled. Keep every card's controls accessible.
-    // Reserve the horizontal bar too, so
-    // narrowing the rack cannot clip the bottom of a card.
+    // Device bodies scroll internally when needed. Keep the chain compact and
+    // reserve its horizontal bar without growing the workspace panel.
     if (auto* layout = chain->layout()) layout->activate();
-    const int minimum = std::max({0, chain->minimumHeight(), chain->minimumSizeHint().height()}) +
+    const int minimum = std::min(190, std::max({0, chain->minimumHeight(), chain->minimumSizeHint().height()})) +
         scroll->horizontalScrollBar()->sizeHint().height();
     if (scroll->minimumHeight() != minimum) scroll->setMinimumHeight(minimum);
 }
@@ -169,7 +172,14 @@ RackWidget::RackWidget(daw::EngineController* c, QWidget* parent) : QWidget(pare
         setPattern(id, clip);
         emit patternRequested(id, clip);
     });
-    root->addWidget(m_left);
+    m_miniScroll = new QScrollArea(this);
+    m_miniScroll->setObjectName("RackMiniScroll");
+    m_miniScroll->setFrameShape(QFrame::NoFrame);
+    m_miniScroll->setWidgetResizable(true);
+    m_miniScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_miniScroll->setFixedWidth(190);
+    m_miniScroll->setWidget(m_left);
+    root->addWidget(m_miniScroll);
     m_scroll = new QScrollArea(this);
     m_scroll->setObjectName("RackChainScroll");
     m_scroll->setProperty("horizontalWheelScroll", true);
@@ -307,6 +317,7 @@ void RackWidget::setChannel(const QString& channel) {
     const bool audio =
         next == daw::EngineController::kMasterChannelId || (track && daw::carriesAudio(*track));
     m_left->setVisible(audio);
+    m_miniScroll->setVisible(audio);
     m_sends->setVisible(audio && next != daw::EngineController::kMasterChannelId);
     if (audio) {
         m_mini = new ui::MiniModuleRack(m_controller, next, m_left, true);
@@ -343,6 +354,7 @@ QString RackWidget::channelName() const {
     return tr("No channel selected");
 }
 void RackWidget::sync() {
+    if (QApplication::activePopupWidget()) return;
     if (m_rebuilding)
         return;
     const auto* selectedTrack = m_controller->project().findTrack(m_channel.toStdString());
@@ -382,9 +394,13 @@ void RackWidget::sync() {
             for (const auto& model : *chain)
                 slot(model);
         for (const auto& g : m_controller->rackGroups(m_channel.toStdString())) {
-            s << QString::fromStdString(g.id) << QString::fromStdString(g.name);
+            s << QString::fromStdString(g.id) << QString::fromStdString(g.name) << QString::fromStdString(g.parentId);
             for (const auto& id : g.insertIds)
                 s << QString::fromStdString(id);
+            for (const auto& layer : g.layers) {
+                s << QString::fromStdString(layer.id) << QString::fromStdString(layer.name);
+                for (const auto& id : layer.insertIds) s << QString::fromStdString(id);
+            }
         }
         for (const auto& source : m_controller->rackModulation(m_channel.toStdString()).sources) s << QString::fromStdString(source.id);
         if (structure != m_structure) {
@@ -409,6 +425,8 @@ void RackWidget::rebuild() {
     if (m_rebuilding)
         return;
     m_rebuilding = true;
+    for (const auto& finish : m_layerFinishers) finish();
+    m_layerFinishers.clear(); m_layerRefreshers.clear();
     QPointer<QWidget> focused = QApplication::focusWidget();
     const bool hadFocus = focused && (focused == this || isAncestorOf(focused));
     const int scroll = m_scroll->horizontalScrollBar()->value();
@@ -435,6 +453,7 @@ void RackWidget::rebuild() {
         if (!card) {
             card = new RackDeviceCard(m_controller, m_channel, id, m_chain);
             m_cards[id] = card;
+            card->editorIsOpen = [this, id] { return editorIsOpen && editorIsOpen(m_channel, id); };
             connect(card, &RackDeviceCard::selected, this,
                     [this](const QString& id, auto mods) { select(id, mods); });
             connect(card, &RackDeviceCard::clicked, this, [this](const QString& id, auto mods) {
@@ -445,6 +464,7 @@ void RackWidget::rebuild() {
             connect(card, &RackDeviceCard::contextRequested, this,
                     [this](const QString& id, const QPoint& at) { contextMenu(id, at); });
             connect(card, &RackDeviceCard::editorRequested, this, &RackWidget::editorRequested);
+            connect(card, &RackDeviceCard::editorToggleRequested, this, &RackWidget::editorToggleRequested);
             connect(card, &RackDeviceCard::automationRequested, this, &RackWidget::automationRequested);
             connect(card, &RackDeviceCard::edited, this, &RackWidget::changed);
             connect(card, &RackDeviceCard::widthChanged, this, [this] {
@@ -474,101 +494,182 @@ void RackWidget::rebuild() {
         if (track && track->instrument.isLoaded())
             addCard(track->instrument, m_row);
         m_row->addWidget(m_modulation);
-        m_modulation->setVisible(!m_controller->rackModulation(m_channel.toStdString()).sources.empty() && !m_controller->hasCloudProjectBinding());
+        m_modulation->setVisible(m_modulation->width() > 0 && !m_controller->hasCloudProjectBinding());
         const auto* chain = m_controller->channelInserts(m_channel.toStdString());
-        if (chain)
-            for (std::size_t i = 0; i < chain->size();) {
-                const daw::RackGroupModel* group = nullptr;
-                for (const auto& g : m_controller->rackGroups(m_channel.toStdString()))
-                    if (!g.insertIds.empty() && g.insertIds.front() == (*chain)[i].id) {
-                        group = &g;
-                        break;
+        if (chain) {
+            const auto& groups = m_controller->rackGroups(m_channel.toStdString());
+            std::function<void(const std::vector<std::string>&, const std::string&, QHBoxLayout*, int)> contents;
+            contents = [&](const auto& members, const std::string& parent, QHBoxLayout* destination, int depth) {
+                for (std::size_t i = 0; i < members.size();) {
+                    const daw::RackGroupModel* group = nullptr;
+                    if (depth < 9) for (const auto& g : groups)
+                        if (g.parentId == parent && !g.insertIds.empty() && g.insertIds.front() == members[i]) { group = &g; break; }
+                    if (!group) {
+                        if (const auto* slot = m_controller->insertModel(m_channel.toStdString(), members[i])) addCard(*slot, destination);
+                        ++i; continue;
                     }
-                if (!group) {
-                    addCard((*chain)[i++], m_row);
-                    continue;
-                }
-                const auto id = QString::fromStdString(group->id);
-                auto* frame = new QFrame(m_chain);
-                frame->setObjectName("RackGroup");
-                frame->setProperty("groupId", id);
-                frame->setFrameShape(QFrame::StyledPanel);
-                frame->setStyleSheet("#RackGroup{border:1px solid " +
-                                     mixColors(th().accent, th().separator(), .55).name() +
-                                     ";border-radius:8px;background:" + th().well().name() + ";}");
-                m_groups[id] = frame;
-                auto* col = new QVBoxLayout(frame);
-                col->setContentsMargins(3, 1, 3, 3);
-                col->setSpacing(2);
-                auto* bar = new QHBoxLayout;
-                bar->setContentsMargins(0, 0, 0, 0);
-                bar->setSpacing(3);
-                const bool collapsed = QSettings().value(settingsKey("group/" + id), false).toBool();
-                auto* fold =
-                    new ui::IconButton(collapsed ? icons::Glyph::ChevronRight : icons::Glyph::Chevron,
-                                       tr("Expand or collapse group"), frame);
-                fold->setButtonSize(24, 24);
-                fold->setCheckable(true);
-                fold->setChecked(!collapsed);
-                bar->addWidget(fold);
-                auto* title = new GroupHeader(QString::fromStdString(group->name) + " · " +
-                                                  QString::number(group->insertIds.size()),
-                                              frame);
-                title->setToolTip(QString::fromStdString(group->name));
-                bar->addWidget(title, 1);
-                title->select = [this, id](auto mods) { select(id, mods, true); };
-                title->click = [this, id](auto mods) {
-                    if (!(mods & (Qt::ControlModifier | Qt::ShiftModifier))) {
-                        m_selection.clear();
-                        select(id, Qt::NoModifier, true);
+                    i += group->insertIds.size();
+                    for (const auto& member : group->insertIds) keep.insert(QString::fromStdString(member));
+                    const auto id = QString::fromStdString(group->id);
+                    auto* frame = new QFrame(m_chain); frame->setObjectName("RackGroup");
+                    frame->setProperty("groupId", id); frame->setProperty("parallel", !group->layers.empty());
+                    m_groups[id] = frame;
+                    auto* row = new QHBoxLayout(frame); row->setContentsMargins(4, 2, 4, 2); row->setSpacing(6);
+                    auto* rail = new QWidget(frame); rail->setObjectName("RackGroupRail");
+                    const bool parallel = !group->layers.empty();
+                    const bool collapsed = QSettings().value(settingsKey("group/" + id), false).toBool();
+                    rail->setFixedWidth(parallel ? 182 : 116);
+                    auto* col = new QVBoxLayout(rail); col->setContentsMargins(4, 1, 4, 1); col->setSpacing(4);
+                    auto* bar = new QHBoxLayout; bar->setSpacing(2);
+                    auto* fold = new ui::IconButton(icons::Glyph::ChevronRight, tr("Expand or collapse group"), rail);
+                    fold->setButtonSize(22, 24); fold->setCheckable(true); fold->setChecked(!collapsed);
+                    fold->setGlyph(collapsed ? icons::Glyph::ChevronRight : icons::Glyph::Chevron);
+                    bar->addWidget(fold);
+                    auto* kind = new QLabel(parallel ? tr("LAYERS") : tr("GROUP"), rail);
+                    auto labelFont = kind->font(); labelFont.setPixelSize(9); labelFont.setWeight(QFont::DemiBold); kind->setFont(labelFont);
+                    kind->setStyleSheet("color:" + th().textSecondary.name()); bar->addWidget(kind, 1);
+                    if (parallel) {
+                        auto* symbol = new QLabel(rail); symbol->setPixmap(icons::icon(icons::Glyph::RackLayers, th().accent, 18).pixmap(18, 18)); bar->addWidget(symbol);
                     }
-                };
-                title->drag = [this, id] {
-                    select(id, Qt::NoModifier, true);
-                    startDrag({});
-                };
-                title->menu = [this, id](auto at) { contextMenu(id, at, true); };
-                auto* power = new ui::IconButton(icons::Glyph::Power, tr("Enable or bypass group"), frame);
-                power->setButtonSize(24, 24);
-                power->setCheckable(true);
-                power->setObjectName("RackGroupPower");
-                bool active = false;
-                for (const auto& slotId : group->insertIds)
-                    if (const auto* m = m_controller->insertModel(m_channel.toStdString(), slotId))
-                        active |= !m->bypassed;
-                power->setChecked(active);
-                bar->addWidget(power);
-                col->addLayout(bar);
-                const auto ids = group->insertIds;
-                connect(power, &QAbstractButton::clicked, this, [this, ids](bool on) {
-                    finishEdits();
-                    m_controller->bypassRackSelection(m_channel.toStdString(), ids, !on);
-                    changed(false);
-                });
-                connect(fold, &QAbstractButton::clicked, this, [this, id, collapsed] {
-                    QSettings().setValue(settingsKey("group/" + id), !collapsed);
-                    QTimer::singleShot(0, this, &RackWidget::rebuild);
-                });
-                auto* devices = new QHBoxLayout;
-                devices->setContentsMargins(0, 0, 0, 0);
-                devices->setSpacing(4);
-                col->addLayout(devices, 1);
-                for (std::size_t n = 0; n < ids.size() && i < chain->size(); ++n, ++i) {
-                    if (collapsed)
-                        keep.insert(QString::fromStdString((*chain)[i].id));
-                    else
-                        addCard((*chain)[i], devices);
+                    col->addLayout(bar);
+                    auto* title = new GroupHeader(QString::fromStdString(group->name), rail);
+                    title->setWordWrap(true); title->setMaximumHeight(38); title->setToolTip(QString::fromStdString(group->name));
+                    auto font = title->font(); font.setPixelSize(11); font.setWeight(QFont::DemiBold); title->setFont(font);
+                    col->addWidget(title);
+                    title->select = [this, id](auto mods) { m_selectedGroup = id; select(id, mods, true); };
+                    title->click = [this, id](auto mods) { m_selectedGroup = id; select(id, mods, true); };
+                    title->drag = [this, id] { select(id, Qt::NoModifier, true); startDrag({}); };
+                    title->menu = [this, id](auto at) { m_selectedGroup = id; contextMenu(id, at, true); };
+                    connect(fold, &QAbstractButton::clicked, this, [this, id, collapsed] {
+                        QSettings().setValue(settingsKey("group/" + id), !collapsed); QTimer::singleShot(0, this, &RackWidget::rebuild);
+                    });
+                    row->addWidget(rail);
+                    std::string selectedLayer;
+                    if (parallel) {
+                        selectedLayer = QSettings().value(settingsKey("layer/" + id), QString::fromStdString(group->layers.front().id)).toString().toStdString();
+                        if (std::none_of(group->layers.begin(), group->layers.end(), [&](const auto& layer) { return layer.id == selectedLayer; })) selectedLayer = group->layers.front().id;
+                        if (!collapsed) {
+                            auto* scroll = new QScrollArea(rail); scroll->setFrameShape(QFrame::NoFrame); scroll->setWidgetResizable(true);
+                            scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); scroll->setMinimumHeight(0);
+                            auto* list = new QWidget; auto* rows = new QVBoxLayout(list); rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(4);
+                            scroll->setWidget(list); col->addWidget(scroll, 1);
+                            for (const auto& layer : group->layers) {
+                                const auto lid = QString::fromStdString(layer.id);
+                                auto* item = new QWidget(list); item->setObjectName("RackLayerRow"); item->setProperty("layerId", lid);
+                                item->setProperty("groupId", id); item->setAcceptDrops(true); item->installEventFilter(this);
+                                const bool chosen = layer.id == selectedLayer;
+                                item->setStyleSheet(QString("#RackLayerRow{background:%1;border-radius:4px;border:1px solid %2;}")
+                                    .arg(mixColors(th().well(), th().accent, chosen ? .12 : .02).name(),
+                                         (chosen ? mixColors(th().separator(), th().accent, .6) : th().separator()).name()));
+                                auto* column = new QVBoxLayout(item); column->setContentsMargins(3, 2, 3, 2); column->setSpacing(0);
+                                auto* top = new QHBoxLayout; top->setSpacing(2);
+                                auto* on = new ui::IconButton(icons::Glyph::Power, tr("Enable layer"), item);
+                                on->setObjectName("RackLayerPower"); on->setButtonSize(22, 22); on->setCheckable(true);
+                                auto* name = new QToolButton(item); name->setObjectName("RackLayerSelect"); name->setToolTip(QString::fromStdString(layer.name));
+                                name->setText(QString::fromStdString(layer.name)); name->setAccessibleName(name->text()); name->setCheckable(true); name->setChecked(chosen);
+                                name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); name->setMinimumWidth(0); name->setFixedHeight(22);
+                                auto* solo = new QToolButton(item); solo->setObjectName("RackLayerSolo"); solo->setText("S");
+                                solo->setFixedSize(22, 22); solo->setCheckable(true); solo->setToolTip(tr("Solo layer")); solo->setAccessibleName(tr("Solo layer"));
+                                top->addWidget(on); top->addWidget(name, 1); top->addWidget(solo); column->addLayout(top);
+                                auto* level = new ui::GlassSlider(Qt::Horizontal, item); level->setObjectName("RackLayerLevel");
+                                level->setRange(-600, 60); level->setFixedHeight(18); level->setAccessibleName(tr("Layer level"));
+                                column->addWidget(level); rows->addWidget(item);
+                                const auto current = [this, id, lid]() -> std::optional<daw::RackLayerModel> {
+                                    for (const auto& g : m_controller->rackGroups(m_channel.toStdString())) if (g.id == id.toStdString())
+                                        for (const auto& l : g.layers) if (l.id == lid.toStdString()) return l;
+                                    return {};
+                                };
+                                const auto edit = [this, id, lid, current](std::optional<float> gain, std::optional<bool> muted, std::optional<bool> isolated) {
+                                    if (const auto l = current()) {
+                                        m_controller->setRackLayerState(m_channel.toStdString(), id.toStdString(), lid.toStdString(),
+                                            gain.value_or(l->gain), muted.value_or(l->muted), isolated.value_or(l->solo)); changed(false);
+                                    }
+                                };
+                                connect(on, &QAbstractButton::clicked, this, [edit](bool enabled) { edit({}, !enabled, {}); });
+                                connect(solo, &QAbstractButton::clicked, this, [edit](bool enabled) { edit({}, {}, enabled); });
+                                using Gesture = decltype(m_controller->beginUndoGroup());
+                                auto gesture = std::make_shared<Gesture>();
+                                const auto finish = [this, gesture] { if (*gesture) { m_controller->collapseUndo(*gesture, "Change Layer Level"); *gesture = {}; } };
+                                m_layerFinishers.push_back(finish);
+                                connect(level, &QSlider::sliderPressed, this, [this, gesture] { *gesture = m_controller->beginUndoGroup(); });
+                                connect(level, &QSlider::sliderReleased, this, finish);
+                                connect(level, &QSlider::valueChanged, this, [edit, level](int value) {
+                                    const float gain = value <= -600 ? 0.f : std::pow(10.f, value / 200.f);
+                                    level->setToolTip(value <= -600 ? QStringLiteral("−∞ dB") : QString::number(value / 10., 'f', 1) + " dB");
+                                    edit(gain, {}, {});
+                                });
+                                m_layerRefreshers.push_back([current, on, solo, level] {
+                                    if (const auto l = current()) {
+                                        QSignalBlocker a(on), b(solo), c(level); on->setChecked(!l->muted); solo->setChecked(l->solo);
+                                        if (!level->isSliderDown()) level->setValue(l->gain <= .001f ? -600 : int(std::lround(200 * std::log10(l->gain))));
+                                    }
+                                });
+                                connect(name, &QAbstractButton::clicked, this, [this, id, lid] {
+                                    finishEdits(); QSettings().setValue(settingsKey("layer/" + id), lid); QTimer::singleShot(0, this, &RackWidget::rebuild);
+                                });
+                                name->setContextMenuPolicy(Qt::CustomContextMenu);
+                                connect(name, &QWidget::customContextMenuRequested, this, [this, id, lid, current, name](const QPoint& at) {
+                                    QMenu menu(this); auto* rename = menu.addAction(tr("Rename layer…")); auto* remove = menu.addAction(tr("Delete layer and devices"));
+                                    for (const auto& g : m_controller->rackGroups(m_channel.toStdString())) if (g.id == id.toStdString()) remove->setEnabled(g.layers.size() > 1);
+                                    const auto result = menu.exec(name->mapToGlobal(at));
+                                    if (result == rename) {
+                                        const auto l = current(); if (!l) return;
+                                        bool ok = false; const auto text = QInputDialog::getText(this, tr("Layer name"), tr("Name"), QLineEdit::Normal, QString::fromStdString(l->name), &ok);
+                                        if (ok && m_controller->renameRackLayer(m_channel.toStdString(), id.toStdString(), lid.toStdString(), text.trimmed().toStdString())) changed();
+                                    } else if (result == remove && m_controller->removeRackLayer(m_channel.toStdString(), id.toStdString(), lid.toStdString())) changed();
+                                });
+                            }
+                            rows->addStretch();
+                            auto* add = new QToolButton(rail); add->setText(tr("+ Layer")); add->setObjectName("RackAddLayer");
+                            col->addWidget(add);
+                            connect(add, &QAbstractButton::clicked, this, [this, id] {
+                                if (m_controller->addRackLayer(m_channel.toStdString(), id.toStdString())) {
+                                    for (const auto& g : m_controller->rackGroups(m_channel.toStdString())) if (g.id == id.toStdString())
+                                        QSettings().setValue(settingsKey("layer/" + id), QString::fromStdString(g.layers.back().id));
+                                    changed();
+                                }
+                            });
+                        }
+                    } else {
+                        auto* count = new QLabel(tr("%1 effects").arg(group->insertIds.size()), rail);
+                        count->setStyleSheet("color:" + th().textSecondary.name()); col->addWidget(count);
+                        col->addStretch();
+                        auto* power = new ui::IconButton(icons::Glyph::Power, tr("Enable or bypass group"), rail);
+                        power->setButtonSize(24, 24); power->setCheckable(true); power->setObjectName("RackGroupPower");
+                        const auto ids = group->insertIds;
+                        connect(power, &QAbstractButton::clicked, this, [this, ids](bool on) { finishEdits(); m_controller->bypassRackSelection(m_channel.toStdString(), ids, !on); changed(false); });
+                        m_layerRefreshers.push_back([this, ids, power] {
+                            bool on = false;
+                            for (const auto& member : ids) if (const auto* slot = m_controller->insertModel(m_channel.toStdString(), member)) on |= !slot->bypassed;
+                            QSignalBlocker block(power); power->setChecked(on);
+                        });
+                        col->addWidget(power);
+                    }
+                    if (!collapsed) {
+                        auto* devices = new QHBoxLayout; devices->setContentsMargins(0, 0, 0, 0); devices->setSpacing(6);
+                        row->addLayout(devices);
+                        auto visible = group->insertIds;
+                        QString target = id;
+                        if (parallel) for (const auto& layer : group->layers) if (layer.id == selectedLayer) { visible = layer.insertIds; target = QString::fromStdString(layer.id); }
+                        contents(visible, group->id, devices, depth + 1);
+                        auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add device to this chain"), frame);
+                        add->setObjectName("RackChainAddDevice"); add->setProperty("groupId", target);
+                        add->setButtonSize(28, 32); devices->addWidget(add, 0, Qt::AlignVCenter);
+                        connect(add, &QAbstractButton::clicked, this, [this, target, add] {
+                            m_insertAt = -1; m_insertGroup = target; addDevice(add->mapToGlobal(QPoint(0, add->height())));
+                        });
+                        if (visible.empty()) {
+                            auto* dry = new QLabel(tr("Dry signal\nAdd an effect to process this layer"), frame);
+                            dry->setWordWrap(true); dry->setAlignment(Qt::AlignCenter); dry->setFixedWidth(180); devices->insertWidget(0, dry);
+                        }
+                    } else col->addStretch();
+                    destination->addWidget(frame);
                 }
-                if (collapsed) {
-                    frame->setFixedWidth(190);
-                    auto* label = new QLabel(tr("%1 effects").arg(ids.size()), frame);
-                    label->setWordWrap(true);
-                    label->setAlignment(Qt::AlignCenter);
-                    devices->addWidget(label);
-                    title->setContextMenuPolicy(Qt::DefaultContextMenu);
-                }
-                m_row->addWidget(frame);
-            }
+            };
+            std::vector<std::string> members;
+            for (const auto& slot : *chain) if (slot.isLoaded()) members.push_back(slot.id);
+            contents(members, {}, m_row, 0);
+        }
         auto* add = new ui::IconButton(icons::Glyph::Plus, tr("Add device"), m_chain);
         add->setObjectName("RackAddDevice");
         add->setAccessibleName(tr("Add device"));
@@ -579,6 +680,7 @@ void RackWidget::rebuild() {
         m_row->addWidget(add, 0, Qt::AlignVCenter);
         connect(add, &QAbstractButton::clicked, this, [this, add] {
             m_insertAt = -1;
+            m_insertGroup.clear();
             addDevice(add->mapToGlobal(QPoint(0, add->height())));
         });
         m_row->addStretch(1);
@@ -593,6 +695,7 @@ void RackWidget::rebuild() {
     }
     m_row->activate();
     m_scroll->horizontalScrollBar()->setValue(scroll);
+    for (const auto& refresh : m_layerRefreshers) refresh();
     updateSelection();
     if (hadFocus) {
         if (focused && focused->isVisible())
@@ -604,6 +707,8 @@ void RackWidget::rebuild() {
     preserveDeviceHeight(m_scroll, m_chain);
 }
 void RackWidget::finishEdits() {
+    for (const auto& finish : m_layerFinishers) finish();
+    if (m_modulation) m_modulation->finishEdits();
     for (auto card : m_cards)
         if (card)
             card->finishEdits();
@@ -618,6 +723,7 @@ void RackWidget::refresh() {
     if (!isVisible() || m_rebuilding)
         return;
     sync();
+    for (const auto& refresh : m_layerRefreshers) refresh();
     for (auto card : m_cards)
         if (ui::isVisibleInViewport(card))
             card->refresh(false);
@@ -824,8 +930,10 @@ bool RackWidget::report(const audio::Result& result) {
     QToolTip::showText(QCursor::pos(), QString::fromStdString(result.message()), this);
     return false;
 }
-bool RackWidget::insertPlugin(const daw::plugins::PluginDescriptor& descriptor, int index) {
+bool RackWidget::insertPlugin(const daw::plugins::PluginDescriptor& descriptor, int index, const QString& group) {
     finishEdits();
+    const auto undo = m_controller->beginUndoGroup();
+    const auto finishUndo = qScopeGuard([&] { m_controller->collapseUndo(undo, "Add Rack Device"); });
     const auto channel = m_channel.toStdString();
     const auto* track = m_controller->project().findTrack(channel);
     QString slot;
@@ -845,6 +953,11 @@ bool RackWidget::insertPlugin(const daw::plugins::PluginDescriptor& descriptor, 
             channel, descriptor, index >= 0 ? std::size_t(index) : chain->size()));
         if (slot.isEmpty())
             return false;
+        if (!group.isEmpty()) {
+            const auto* updated = m_controller->channelInserts(channel);
+            if (!report(m_controller->transferRackSelection(channel, {slot.toStdString()}, channel,
+                    updated->size(), false, group.toStdString()))) return false;
+        }
     }
     selectDevices({slot});
     ui::rememberRecentPlugin(descriptor);
@@ -874,10 +987,11 @@ void RackWidget::addDevice(const QPoint& at) {
                                            ? std::nullopt : std::optional<bool>(false);
     const auto channel = m_channel;
     const int index = m_insertAt;
+    const auto group = m_insertGroup;
     auto* menu = ui::buildPluginMenu(
-        this, m_controller, filter, [this, channel, index](const daw::plugins::PluginDescriptor& descriptor) {
+        this, m_controller, filter, [this, channel, index, group](const daw::plugins::PluginDescriptor& descriptor) {
             if (m_channel == channel)
-                insertPlugin(descriptor, index);
+                insertPlugin(descriptor, index, group);
         });
     if (!m_controller->hasCloudProjectBinding()) {
         auto* before = menu->actions().isEmpty() ? nullptr : menu->actions().front();
@@ -909,10 +1023,12 @@ QStringList RackWidget::selectedDevices() const {
     return ids;
 }
 void RackWidget::selectDevices(const QStringList& ids) {
+    m_selectedGroup.clear();
     m_selection = QSet<QString>(ids.begin(), ids.end());
     updateSelection();
 }
 void RackWidget::select(const QString& id, Qt::KeyboardModifiers mods, bool group) {
+    m_selectedGroup = group ? id : QString{};
     QStringList chosen{id};
     if (group)
         for (const auto& g : m_controller->rackGroups(m_channel.toStdString()))
@@ -980,10 +1096,11 @@ void RackWidget::updateGroupAppearance() {
             continue;
         const bool target = it.key() == m_dropGroup;
         const bool selected = frame->property("selected").toBool();
-        const auto border = target || selected ? th().accent : mixColors(th().accent, th().separator(), .55);
-        const auto background = target ? mixColors(th().accent, th().well(), .13) : th().well();
+        const auto border = target || selected ? th().accent : mixColors(th().separator(), th().accent, .28);
+        const auto background = mixColors(th().well(), th().accent, target ? .09 : .025);
         const QString style = "#RackGroup{border:1px solid " + border.name() +
-                              ";border-radius:6px;background:" + background.name() + ";}";
+                              ";border-radius:7px;background:" + background.name() + ";}"
+                              "#RackGroupRail{border:0;border-right:1px solid " + border.name() + ";background:transparent;}";
         if (frame->styleSheet() != style)
             frame->setStyleSheet(style);
         frame->setToolTip(target ? tr("Insert into this group") : QString{});
@@ -1008,8 +1125,8 @@ bool RackWidget::command(const QString& action) {
         // Unsupported source commands must not edit a stale device selection.
         return true;
     }
-    if (focus == m_modulation || m_modulation->isAncestorOf(focus))
-        return m_modulation->command(action);
+    for (auto* parent = focus; parent; parent = parent->parentWidget())
+        if (auto* panel = qobject_cast<RackModulationPanel*>(parent)) return panel->command(action);
     finishEdits();
     const auto selected = selectedDevices();
     const auto ids = ui::rack::ids(selected);
@@ -1066,9 +1183,9 @@ bool RackWidget::command(const QString& action) {
             }
         } else {
             if (action == "cut") {
+                snapshot.rackCutSource = channel;
+                if (!m_controller->setChannelClipboard(std::move(snapshot))) return true;
                 if (m_controller->removeRackSelection(channel, ids)) {
-                    snapshot.rackCutSource = channel;
-                    m_controller->setChannelClipboard(std::move(snapshot));
                     selectDevices({});
                     changed();
                 }
@@ -1113,22 +1230,23 @@ void RackWidget::groupSelection(bool ungroup) {
     }
     if (ungroup) {
         const auto groups = m_controller->rackGroups(m_channel.toStdString());
-        const auto undo = m_controller->beginUndoGroup();
         bool edited = false;
+        if (!m_selectedGroup.isEmpty()) edited = m_controller->removeRackGroup(m_channel.toStdString(), m_selectedGroup.toStdString());
         for (const auto& group : groups)
-            if (std::all_of(group.insertIds.begin(), group.insertIds.end(), [this](const auto& id) {
+            if (!edited && std::all_of(group.insertIds.begin(), group.insertIds.end(), [this](const auto& id) {
                     return m_selection.contains(QString::fromStdString(id));
                 }))
                 edited |= m_controller->removeRackGroup(m_channel.toStdString(), group.id);
-        m_controller->collapseUndo(undo, "Ungroup Plugins");
         if (edited)
             changed();
     } else {
+        std::string created;
         if (m_controller->createRackGroup(m_channel.toStdString(), ui::rack::ids(selectedDevices()),
-                                          tr("Group").toStdString()))
+                                          tr("Group").toStdString(), &created)) {
+            m_selectedGroup = QString::fromStdString(created);
             changed();
-        else
-            QToolTip::showText(QCursor::pos(), tr("Select at least two adjacent, ungrouped effects."), this);
+        } else
+            QToolTip::showText(QCursor::pos(), tr("Select adjacent effects in one chain."), this);
     }
 }
 void RackWidget::transferTo(const QString& destination, bool copy) {
@@ -1171,6 +1289,13 @@ void RackWidget::contextMenu(const QString& id, const QPoint& at, bool group) {
                                     m_selection.contains(QString::fromStdString(channelTrack->instrument.id));
     add(tr("Group effects"), "group")
         ->setEnabled(!m_controller->hasCloudProjectBinding() && selectedDevices().size() >= 2);
+    auto* parallel = menu.addAction(icons::icon(icons::Glyph::RackLayers, th().textPrimary, 18), tr("Create parallel layers"));
+    parallel->setObjectName("RackCreateLayers");
+    parallel->setEnabled(!m_controller->hasCloudProjectBinding() && !selectedDevices().isEmpty() && !instrumentSelected);
+    connect(parallel, &QAction::triggered, this, [this] {
+        finishEdits();
+        if (m_controller->createRackGroup(m_channel.toStdString(), ui::rack::ids(selectedDevices()), tr("Layers").toStdString(), nullptr, true)) changed();
+    });
     add(tr("Ungroup"), "ungroup")->setEnabled(!m_controller->hasCloudProjectBinding());
     if (group) {
         auto* rename = menu.addAction(tr("Rename group…"));
@@ -1233,9 +1358,10 @@ void RackWidget::startDrag(const QString& id) {
     const auto ids = selectedDevices();
     if (ids.isEmpty())
         return;
+    auto* data = ui::rack::ownedMime(*m_controller, m_channel, ids);
+    if (!data) return;
+    const ui::rack::DragScope lifetime;
     auto* drag = new QDrag(this);
-    auto* data = new QMimeData;
-    data->setData(ui::rack::mime, ui::rack::encode(m_channel, ids));
     drag->setMimeData(data);
     QPixmap pixmap(160, 32);
     pixmap.fill(th().surface);
@@ -1265,12 +1391,14 @@ void RackWidget::updateDrop(const QPoint& global) {
             const auto id = QString::fromStdString((*chain)[i].id);
             QWidget* widget = m_cards.value(id).data();
             QString groupId;
+            std::size_t groupSize = chain->size() + 1;
             for (const auto& g : m_controller->rackGroups(m_channel.toStdString()))
-                if (std::find(g.insertIds.begin(), g.insertIds.end(), (*chain)[i].id) != g.insertIds.end()) {
+                if (g.insertIds.size() < groupSize && daw::rackContains(g.insertIds, (*chain)[i].id)) {
+                    groupSize = g.insertIds.size();
                     groupId = QString::fromStdString(g.id);
-                    if (!widget || !widget->isVisible())
+                    if ((!widget || !widget->isVisible()) && QSettings().value(settingsKey("group/" + groupId), false).toBool())
                         widget = m_groups.value(groupId);
-                    break;
+                    for (const auto& layer : g.layers) if (daw::rackContains(layer.insertIds, (*chain)[i].id)) groupId = QString::fromStdString(layer.id);
                 }
             if (!widget || !widget->isVisible())
                 continue;
@@ -1294,13 +1422,32 @@ void RackWidget::updateDrop(const QPoint& global) {
     updateGroupAppearance();
 }
 bool RackWidget::eventFilter(QObject* object, QEvent* event) {
+    if (auto* row = qobject_cast<QWidget*>(object); row && row->objectName() == "RackLayerRow") {
+        if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
+            auto* drag = static_cast<QDragMoveEvent*>(event);
+            if (pluginFromMime(drag->mimeData()) || ui::rack::decode(drag->mimeData()).valid) { drag->acceptProposedAction(); return true; }
+        }
+        if (event->type() == QEvent::Drop) {
+            auto* drop = static_cast<QDropEvent*>(event);
+            const auto layerId = row->property("layerId").toString();
+            const auto* chain = m_controller->channelInserts(m_channel.toStdString());
+            bool accepted = false;
+            if (const auto plugin = pluginFromMime(drop->mimeData())) accepted = insertPlugin(*plugin, -1, layerId);
+            else if (const auto data = ui::rack::decode(drop->mimeData()); data.valid && chain) {
+                accepted = report(ui::rack::transfer(*m_controller, data, m_channel.toStdString(), chain->size(),
+                    ui::rack::foreign(data, *m_controller) || drop->modifiers().testFlag(Qt::AltModifier), layerId.toStdString(), nullptr));
+                if (accepted) changed();
+            }
+            if (accepted) { drop->acceptProposedAction(); return true; }
+        }
+    }
     if (object == m_chain && event->type() == QEvent::LayoutRequest && !m_rebuilding)
         preserveDeviceHeight(m_scroll, m_chain);
     const bool keyEvent = event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress;
     auto* receiver = keyEvent ? qobject_cast<QWidget*>(object) : nullptr;
     const bool sourceCommand = receiver && m_pattern && m_pattern->isVisible() &&
         (receiver == m_pattern || m_pattern->isAncestorOf(receiver)) && !textInput(receiver);
-    if (keyEvent && (sourceCommand || ownsFocus())) {
+    if (keyEvent && !QApplication::activePopupWidget() && (sourceCommand || ownsFocus())) {
         auto* key = static_cast<QKeyEvent*>(event);
         const auto action = keyCommand(key);
         if (!action.isEmpty()) {
@@ -1345,7 +1492,7 @@ bool RackWidget::eventFilter(QObject* object, QEvent* event) {
         auto* e = static_cast<QDropEvent*>(event);
         if (const auto plugin = pluginFromMime(e->mimeData())) {
             updateDrop(surface->mapToGlobal(e->position().toPoint()));
-            if (insertPlugin(*plugin, m_dropAt)) {
+            if (insertPlugin(*plugin, m_dropAt, m_dropGroup)) {
                 setFocus();
                 e->setDropAction(Qt::CopyAction);
                 e->accept();
@@ -1357,9 +1504,8 @@ bool RackWidget::eventFilter(QObject* object, QEvent* event) {
         if (drag.valid) {
             updateDrop(surface->mapToGlobal(e->position().toPoint()));
             std::vector<std::string> landed;
-            const bool copy = e->modifiers().testFlag(Qt::AltModifier);
-            if (report(m_controller->transferRackSelection(
-                    drag.channel.toStdString(), ui::rack::ids(drag.ids), m_channel.toStdString(),
+            const bool copy = ui::rack::foreign(drag, *m_controller) || e->modifiers().testFlag(Qt::AltModifier);
+            if (report(ui::rack::transfer(*m_controller, drag, m_channel.toStdString(),
                     std::size_t(std::max(0, m_dropAt)), copy, m_dropGroup.toStdString(), &landed))) {
                 QStringList ids;
                 for (const auto& id : landed)
@@ -1443,6 +1589,7 @@ void RackWidget::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e);
     const bool narrow = width() < 850;
     m_left->setFixedWidth(narrow ? 148 : 176);
+    m_miniScroll->setFixedWidth(m_left->width() + 14);
     if (m_mini)
         m_mini->setStripWidth(m_left->width());
 }

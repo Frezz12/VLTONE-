@@ -356,15 +356,15 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::ZoomFit: {
-        QPen pen(c, 1.9);
-        p.setPen(pen);
-        p.drawLine(QPointF(5, 12), QPointF(19, 12));
+        QPainterPath fit;
+        fit.moveTo(8, 4.5); fit.lineTo(4.5, 4.5); fit.lineTo(4.5, 8);
+        fit.moveTo(16, 4.5); fit.lineTo(19.5, 4.5); fit.lineTo(19.5, 8);
+        fit.moveTo(4.5, 16); fit.lineTo(4.5, 19.5); fit.lineTo(8, 19.5);
+        fit.moveTo(19.5, 16); fit.lineTo(19.5, 19.5); fit.lineTo(16, 19.5);
+        strokePath(p, fit, c, 1.8);
         p.setPen(Qt::NoPen);
         p.setBrush(c);
-        p.drawPolygon(QPolygonF({QPointF(4, 12), QPointF(9, 8.5),
-                                 QPointF(9, 15.5)}));
-        p.drawPolygon(QPolygonF({QPointF(20, 12), QPointF(15, 8.5),
-                                 QPointF(15, 15.5)}));
+        p.drawRoundedRect(QRectF(8.5, 8.5, 7, 7), 1, 1);
         break;
     }
     case Glyph::Save: {
@@ -460,11 +460,23 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Detach: {
-        QPen pen(c, 1.7);
-        p.setPen(pen);
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(QRectF(4, 7.5, 11, 10), 2, 2);
-        p.drawRoundedRect(QRectF(9, 4.5, 11, 10), 2, 2);
+        QPainterPath window;
+        window.moveTo(10, 6); window.lineTo(5, 6);
+        window.quadTo(4, 6, 4, 7); window.lineTo(4, 19);
+        window.quadTo(4, 20, 5, 20); window.lineTo(17, 20);
+        window.quadTo(18, 20, 18, 19); window.lineTo(18, 14);
+        window.moveTo(10, 14); window.lineTo(20, 4);
+        window.moveTo(14, 4); window.lineTo(20, 4); window.lineTo(20, 10);
+        strokePath(p, window, c, 1.8);
+        break;
+    }
+    case Glyph::WindowRestore: {
+        QPainterPath windows;
+        windows.addRoundedRect(QRectF(4.5, 8.5, 11, 11), 1.2, 1.2);
+        windows.moveTo(8.5, 6); windows.lineTo(8.5, 4.5);
+        windows.lineTo(19.5, 4.5); windows.lineTo(19.5, 15.5);
+        windows.lineTo(18, 15.5);
+        strokePath(p, windows, c, 1.7);
         break;
     }
     case Glyph::Plus:
@@ -576,18 +588,17 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         break;
     }
     case Glyph::Reload: {
-        // One clockwise turn is the standard page-reload affordance. It is
-        // intentionally distinct from the two-arrow Loop glyph used for cycle
-        // playback and preview looping.
+        // The arc ends at the arrowhead, tangent to its diagonal. Keeping the
+        // opening on the right makes the direction readable even at 14 px.
+        const QRectF circle(4.5, 4.5, 15.0, 15.0);
         QPainterPath turn;
-        turn.moveTo(18.2, 8.0);
-        turn.arcTo(QRectF(5.0, 5.0, 14.0, 14.0), 35.0, -300.0);
-        strokePath(p, turn, c, 1.9);
-        QPainterPath head;
-        head.moveTo(14.6, 5.1);
-        head.lineTo(18.7, 7.7);
-        head.lineTo(18.0, 2.9);
-        strokePath(p, head, c, 1.9);
+        turn.arcMoveTo(circle, -25.0);
+        turn.arcTo(circle, -25.0, -290.0);
+        turn.lineTo(19.3, 8.7);
+        turn.moveTo(14.7, 8.7);
+        turn.lineTo(19.3, 8.7);
+        turn.lineTo(19.3, 4.1);
+        strokePath(p, turn, c, 2.0);
         break;
     }
     case Glyph::Download: {
@@ -736,6 +747,105 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         p.drawRoundedRect(QRectF(3.5, 4.5, 17, 15), 2, 2);
         p.drawLine(QPointF(9, 4.5), QPointF(9, 19.5));
         p.drawLine(QPointF(9, 14), QPointF(20.5, 14));
+        break;
+    }
+    case Glyph::Rack: {
+        p.setPen(QPen(c, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        for (qreal y : {4.5, 13.5}) {
+            p.drawRoundedRect(QRectF(3.5, y, 17, 6), 1.3, 1.3);
+            p.drawLine(QPointF(6.5, y + 3), QPointF(9, y + 3));
+            p.drawEllipse(QPointF(16.5, y + 3), 1, 1);
+        }
+        break;
+    }
+    case Glyph::TrackOverview: {
+        QPainterPath tree;
+        tree.moveTo(4.5, 5); tree.lineTo(4.5, 18);
+        tree.lineTo(8, 18); tree.moveTo(4.5, 11.5); tree.lineTo(8, 11.5);
+        tree.moveTo(4.5, 5); tree.lineTo(8, 5);
+        tree.moveTo(11.5, 5); tree.lineTo(20, 5);
+        tree.moveTo(11.5, 11.5); tree.lineTo(18, 11.5);
+        tree.moveTo(11.5, 18); tree.lineTo(20, 18);
+        strokePath(p, tree, c, 1.8);
+        break;
+    }
+    case Glyph::ClipLibrary: {
+        // Overlapping audio clips, with a waveform on the front clip.
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        QPainterPath back;
+        back.moveTo(7, 4); back.lineTo(19, 4);
+        back.quadTo(21, 4, 21, 6); back.lineTo(21, 15);
+        p.drawPath(back);
+        p.drawRoundedRect(QRectF(3, 8, 14, 12), 2, 2);
+        p.drawLine(QPointF(6.5, 13), QPointF(6.5, 15));
+        p.drawLine(QPointF(10, 11.5), QPointF(10, 16.5));
+        p.drawLine(QPointF(13.5, 13), QPointF(13.5, 15));
+        break;
+    }
+    case Glyph::PresetList: {
+        // Stored sound settings, represented by three distinct slider values.
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap));
+        for (const QPointF knob : {QPointF(8, 6), QPointF(16, 12), QPointF(10, 18)}) {
+            p.drawLine(QPointF(4, knob.y()), QPointF(knob.x() - 2.5, knob.y()));
+            p.drawLine(QPointF(knob.x() + 2.5, knob.y()), QPointF(20, knob.y()));
+            p.drawLine(knob + QPointF(0, -2), knob + QPointF(0, 2));
+        }
+        break;
+    }
+    case Glyph::Pattern: {
+        p.setPen(QPen(c, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        for (int row = 0; row < 2; ++row) {
+            for (int step = 0; step < 4; ++step) {
+                p.setBrush((row == 0 ? step % 2 == 0 : step == 1 || step == 3)
+                               ? QBrush(c) : QBrush(Qt::NoBrush));
+                p.drawRoundedRect(QRectF(3.5 + step * 4.8, 6 + row * 7, 3.2, 5), .6, .6);
+            }
+        }
+        break;
+    }
+    case Glyph::TypingKeyboard: {
+        p.setPen(QPen(c, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(3, 5.5, 18, 13), 1.8, 1.8);
+        p.drawLine(QPointF(8.5, 15.5), QPointF(15.5, 15.5));
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        for (qreal y : {9.0, 12.0})
+            for (qreal x : {6.5, 10.2, 13.8, 17.5}) p.drawEllipse(QPointF(x, y), .8, .8);
+        break;
+    }
+    case Glyph::FollowPlayhead: {
+        QPainterPath follow;
+        follow.moveTo(15, 8); follow.lineTo(15, 20);
+        follow.moveTo(3.5, 13); follow.lineTo(10.5, 13);
+        follow.moveTo(7.5, 10); follow.lineTo(10.5, 13); follow.lineTo(7.5, 16);
+        strokePath(p, follow, c, 1.7);
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawPolygon(QPolygonF({QPointF(12, 3.5), QPointF(18, 3.5), QPointF(15, 7.5)}));
+        break;
+    }
+    case Glyph::Mute: {
+        QPainterPath speaker;
+        speaker.moveTo(4, 9); speaker.lineTo(7.5, 9);
+        speaker.lineTo(12, 5); speaker.lineTo(12, 19);
+        speaker.lineTo(7.5, 15); speaker.lineTo(4, 15); speaker.closeSubpath();
+        p.drawPath(speaker);
+        QPainterPath cross;
+        cross.moveTo(16, 9.5); cross.lineTo(21, 14.5);
+        cross.moveTo(16, 14.5); cross.lineTo(21, 9.5);
+        strokePath(p, cross, c, 1.8);
+        break;
+    }
+    case Glyph::NoteSlide: {
+        QPainterPath slide;
+        slide.addRoundedRect(QRectF(3.5, 15, 6, 4), .8, .8);
+        slide.addRoundedRect(QRectF(14.5, 5, 6, 4), .8, .8);
+        slide.moveTo(9.5, 16); slide.lineTo(15.5, 10);
+        slide.moveTo(12, 10); slide.lineTo(15.5, 10); slide.lineTo(15.5, 13.5);
+        strokePath(p, slide, c, 1.7);
         break;
     }
     case Glyph::Layers: {
@@ -1137,10 +1247,10 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
     }
     case Glyph::Search: {
         // A magnifier: a ring with a short handle off its lower-right corner.
-        p.setPen(QPen(c, 1.9, Qt::SolidLine, Qt::RoundCap));
+        p.setPen(QPen(c, 2.0, Qt::SolidLine, Qt::RoundCap));
         p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPointF(10.5, 10.5), 5.6, 5.6);
-        p.drawLine(QPointF(14.8, 14.8), QPointF(19.5, 19.5));
+        p.drawEllipse(QPointF(10, 10), 6.5, 6.5);
+        p.drawLine(QPointF(14.6, 14.6), QPointF(20, 20));
         break;
     }
     case Glyph::Star: {
@@ -1200,14 +1310,63 @@ void drawGlyph(QPainter& p, Glyph g, const QColor& c) {
         p.drawRoundedRect(QRectF(4.0, 15.0, 16.0, 5.0), 1.6, 1.6);
         break;
     }
-    case Glyph::Plugin: {
-        // A generic plugin block: a rounded square with a small plug pin.
-        p.setPen(QPen(c, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    case Glyph::RackFace: {
+        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(QRectF(4.5, 4.5, 15.0, 15.0), 3.0, 3.0);
-        p.drawLine(QPointF(12, 8.5), QPointF(12, 12));
-        p.drawLine(QPointF(9.5, 12), QPointF(14.5, 12));
-        p.drawLine(QPointF(12, 12), QPointF(12, 15.5));
+        p.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2);
+        p.drawLine(QPointF(3, 8), QPointF(21, 8));
+        p.drawEllipse(QPointF(9, 14), 2.5, 2.5);
+        p.drawLine(QPointF(15, 12), QPointF(18, 12));
+        p.drawLine(QPointF(15, 16), QPointF(18, 16));
+        break;
+    }
+    case Glyph::RackControls: {
+        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        for (const QPointF at : {QPointF(7, 7), QPointF(17, 7), QPointF(7, 17), QPointF(17, 17)}) {
+            p.drawArc(QRectF(at.x() - 3, at.y() - 3, 6, 6), -45 * 16, 270 * 16);
+            p.drawLine(at, at + QPointF(1, -2));
+        }
+        break;
+    }
+    case Glyph::RackModulation: {
+        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
+        QPainterPath wave; wave.moveTo(3, 13); wave.cubicTo(5, 3, 8, 3, 10, 13);
+        wave.cubicTo(12, 23, 15, 21, 17, 13); wave.lineTo(19, 13); p.drawPath(wave);
+        p.drawEllipse(QPointF(20, 13), 2, 2); break;
+    }
+    case Glyph::RackExpand: {
+        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(3, 4, 11, 16), 2, 2);
+        p.drawLine(QPointF(7, 8), QPointF(10, 8)); p.drawLine(QPointF(7, 12), QPointF(10, 12));
+        p.drawLine(QPointF(7, 16), QPointF(10, 16));
+        QPainterPath arrow; arrow.moveTo(18, 8); arrow.lineTo(22, 12); arrow.lineTo(18, 16); p.drawPath(arrow); break;
+    }
+    case Glyph::RackLayers: {
+        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
+        p.drawLine(QPointF(2, 12), QPointF(5, 12)); p.drawLine(QPointF(19, 12), QPointF(22, 12));
+        for (double y : {6., 18.}) {
+            p.drawLine(QPointF(5, 12), QPointF(5, y)); p.drawLine(QPointF(5, y), QPointF(8, y));
+            p.drawRoundedRect(QRectF(8, y - 2.5, 8, 5), 1, 1);
+            p.drawLine(QPointF(16, y), QPointF(19, y)); p.drawLine(QPointF(19, y), QPointF(19, 12));
+        } break;
+    }
+    case Glyph::RackAssign: {
+        p.setPen(QPen(c, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(5, 17), 2.5, 2.5); p.drawEllipse(QPointF(18, 6), 3, 3);
+        QPainterPath wire; wire.moveTo(7.5, 17); wire.lineTo(12, 17); wire.lineTo(12, 6); wire.lineTo(15, 6); p.drawPath(wire); break;
+    }
+    case Glyph::Plugin: {
+        // A two-pin plug: a recognisable connection instead of an add button.
+        p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawLine(QPointF(9, 3.5), QPointF(9, 8));
+        p.drawLine(QPointF(15, 3.5), QPointF(15, 8));
+        QPainterPath plug;
+        plug.moveTo(6, 8); plug.lineTo(18, 8); plug.lineTo(18, 11);
+        plug.cubicTo(18, 14.5, 15.5, 17, 12, 17);
+        plug.cubicTo(8.5, 17, 6, 14.5, 6, 11); plug.closeSubpath();
+        p.drawPath(plug);
+        p.drawLine(QPointF(12, 17), QPointF(12, 21));
         break;
     }
     case Glyph::Assistant: {

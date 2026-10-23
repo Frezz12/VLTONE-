@@ -282,7 +282,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
             &ToolPanel::automationVisibilityToggled);
 
     m_followPlayhead = new ui::IconButton(
-        icons::Glyph::SkipEnd,
+        icons::Glyph::FollowPlayhead,
         tr("Follow the playhead — P centres it; press again to navigate freely"),
         m_trackActions);
     m_followPlayhead->setObjectName(QStringLiteral("FollowPlayheadButton"));
@@ -337,7 +337,7 @@ ToolPanel::ToolPanel(QWidget* parent) : QWidget(parent) {
 
     const int defaultZoomValue = sliderForTimelineZoom(80.0);
     m_timelineZoomSlider = new ui::ViewScrubSlider(
-        icons::Glyph::ResizeHorizontal, ui::ViewScrubSlider::Axis::Horizontal,
+        icons::Glyph::ZoomIn, ui::ViewScrubSlider::Axis::Horizontal,
         defaultZoomValue, viewControls);
     m_timelineZoomSlider->setObjectName(QStringLiteral("TimelineZoomSlider"));
     m_timelineZoomSlider->setRange(0, kCompactZoomSteps);
@@ -561,8 +561,6 @@ void ToolPanel::applyTheme() {
                                   t.dark ? 0.28 : 0.12);
     if (m_followPlayhead) {
         m_followPlayhead->setActiveColor(t.cursor);
-        m_followPlayhead->setIcon(
-            icons::svgIcon(QStringLiteral("signpost.svg"), t.textPrimary, 18));
     }
     setStyleSheet(QString(R"(
 #ToolPanel { background: %1; border-bottom: 1px solid %2; }

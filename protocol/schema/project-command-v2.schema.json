@@ -340,6 +340,7 @@
       "additionalProperties": false,
       "required": ["loopMode", "loopStart", "loopEnd", "stretchMode", "stretchTime", "stretchPitch", "formant", "rootNote", "boost", "eqLow", "eqMid", "eqHigh", "ringMix", "ringFreq", "cut", "res", "reverbType", "reverb", "stereoDelay", "pogo", "removeDc", "reversePolarity", "normalize", "fadeStereo", "reverse", "swapStereo"],
       "properties": {
+        "trimThresholdDb": { "type": "number", "minimum": -96, "maximum": 0, "description": "Silence Trim threshold in dB. Omitted or -96 means Off." },
         "loopMode": { "type": "integer", "minimum": 0, "maximum": 2 },
         "loopStart": { "type": "number", "minimum": 0, "maximum": 1 },
         "loopEnd": { "type": "number", "minimum": 0, "maximum": 1 },

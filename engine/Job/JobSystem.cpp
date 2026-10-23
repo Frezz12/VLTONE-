@@ -3,6 +3,7 @@
 #include "Job/AudioWorkerRegistration.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 
 #if defined(_MSC_VER)
@@ -66,15 +67,38 @@ JobSystem::JobSystem(unsigned threadCount) {
     m_activeWorkerCount.store(m_workerCount);
 
     m_workers = std::vector<Worker>(m_workerCount);
-    m_profiles = std::make_unique<rt::DiagnosticRing<rt::ProfileEvent, 1024>[]>(m_workerCount);
-
-    // Worker 0 is the calling (audio) thread — it does not get a std::thread.
-    for (unsigned i = 1; i < m_workerCount; ++i) {
-        m_threads.emplace_back([this, i] { workerLoop(i); });
-    }
 }
 
-JobSystem::~JobSystem() {
+JobSystem::~JobSystem() { stopWorkers(); }
+
+void JobSystem::startWorkers() {
+    if (m_started) return;
+    if (!m_profiles)
+        m_profiles = std::make_unique<rt::DiagnosticRing<rt::ProfileEvent, 1024>[]>(m_workerCount);
+    m_threads.reserve(m_workerCount - 1);
+    // Even offline/default preparation must acknowledge worker startup. The
+    // registration constructor allocates; do not let it race the first block.
+    if (m_configurationEpoch.load(std::memory_order_relaxed) == 0)
+        m_configurationEpoch.store(1, std::memory_order_release);
+    m_configurationApplied.store(0, std::memory_order_relaxed);
+    m_realtimeWorkers.store(0); m_workgroupWorkers.store(0);
+    try {
+        // Worker 0 is the caller. Dormant runtimes never reach this control-
+        // thread preparation step, so opening a tab creates no DSP pool.
+        for (unsigned i = 1; i < m_workerCount; ++i)
+            m_threads.emplace_back([this, i] { workerLoop(i); });
+    } catch (...) {
+        // A partially created pool must not terminate in std::thread's
+        // destructor when the OS cannot admit another worker.
+        stopWorkers();
+        m_running.store(true, std::memory_order_relaxed);
+        throw;
+    }
+    m_started = true;
+    waitForConfiguration();
+}
+
+void JobSystem::stopWorkers() noexcept {
     // seq_cst to match the load in park(): the two together decide whether a
     // worker about to sleep notices the shutdown or has to be woken out of it.
     m_running.store(false, std::memory_order_seq_cst);
@@ -89,16 +113,30 @@ JobSystem::~JobSystem() {
     for (auto& thread : m_threads) {
         if (thread.joinable()) thread.join();
     }
+    m_threads.clear();
+    m_started = false;
 }
 
 void JobSystem::prepare(std::size_t itemCapacity) {
-    const std::size_t capacity = std::max<std::size_t>(itemCapacity, 64);
+    const std::size_t capacity = std::bit_ceil(std::max<std::size_t>(itemCapacity, 64));
     // Grow only. `reserve` swaps the slot array out and zeroes top/bottom, so
     // doing it for a graph that already fits would corrupt a pass in flight for
     // no gain — and publishing a new graph happens on every routing edit.
-    if (capacity <= m_itemCapacity) return;
-    for (auto& worker : m_workers) worker.deque.reserve(capacity);
-    m_itemCapacity = capacity;
+    if (capacity > m_itemCapacity) {
+        if (m_started) {
+            // Completion accounts for DSP jobs, not empty-queue probes still
+            // unwinding on helpers. Their configuration acknowledgement is a
+            // control-thread barrier: every helper must leave that loop before
+            // any deque storage is replaced. No new pass may start here.
+            const auto config = m_configuration;
+            configureAudioWorkers(config);
+        }
+        for (auto& worker : m_workers) worker.deque.reserve(capacity);
+        // reserve() rounds to a power of two too. Retain that real capacity so
+        // adding a track inside the spare space needs no gate/reallocation.
+        m_itemCapacity = capacity;
+    }
+    startWorkers();
 }
 
 bool JobSystem::acquireItem(unsigned index, std::uint32_t& item) noexcept {
@@ -292,9 +330,17 @@ void JobSystem::configureAudioWorkers(const rt::AudioWorkerConfig& config) {
     m_configurationApplied.store(0, std::memory_order_relaxed);
     m_realtimeWorkers.store(0); m_workgroupWorkers.store(0);
     m_configurationEpoch.fetch_add(1, std::memory_order_release);
+    if (!m_started) {
+        if (!config.active) return;
+        startWorkers();
+    }
     m_configurationEpoch.notify_all();
     m_generation.fetch_add(1, std::memory_order_seq_cst);
     m_generation.notify_all();
+    waitForConfiguration();
+}
+
+void JobSystem::waitForConfiguration() {
     for (;;) {
         const auto applied = m_configurationApplied.load(std::memory_order_acquire);
         if (applied == m_workerCount - 1) break;

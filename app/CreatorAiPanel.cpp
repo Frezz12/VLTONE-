@@ -289,7 +289,7 @@ bool CreatorAiPanel::sendForTest(const QString &text) {
   return running();
 }
 void CreatorAiPanel::send() {
-  if (running() || m_restoring || m_window.m_build->busy())
+  if (running() || m_restoring || m_window.m_build->busy() || m_window.property("vlt.mcp.busy").toBool())
     return;
   const auto prompt = m_input->toPlainText().trimmed();
   if (prompt.isEmpty())

@@ -42,7 +42,7 @@ bool EngineController::submitSharedPluginSnapshotBatch(std::shared_ptr<collab::B
     const std::vector<ChainSlotSnapshot>& snapshots, std::string label) {
     if (!sharedEditingAllowed() || !m_sharedMutationSink || m_sharedMutationSink->commandSchemaVersion() < 6) return false;
     for (const auto& source : snapshots) {
-        const auto descriptor = m_pluginManager.find(toHostFormat(source.model.format), source.model.uid);
+        const auto descriptor = pluginManager().find(toHostFormat(source.model.format), source.model.uid);
         if (!descriptor || !sharedPluginAllowed(*descriptor) ||
             (source.model.format != PluginFormat::Internal && descriptor->version != source.model.pluginVersion)) return false;
         if ((!source.model.stateFile.empty() && source.state.empty() && source.model.stateAsset.empty()) ||
@@ -115,10 +115,12 @@ audio::Result EngineController::captureInsertState(const std::string& channelId,
     const InsertModel& model, ChainSlotSnapshot& slot) {
     slot = {};
     slot.model = model;
-    slot.preserveUnavailable = !hasInsert(channelId, model.id);
-    if (slot.preserveUnavailable) {
+    slot.preserveUnavailable = !m_documentOnly && !hasInsert(channelId, model.id);
+    if (m_documentOnly || slot.preserveUnavailable) {
         if (const auto* state = cachedPluginState(model.id, model)) slot.state = state->bytes;
         if (const auto* state = cachedPluginState(model.id + "-right", model)) slot.rightState = state->bytes;
+        if ((!model.stateFile.empty() && slot.state.empty()) || (!model.rightStateFile.empty() && slot.rightState.empty()))
+            return batchError("Saved plugin state is unavailable: " + model.name);
         return audio::Result::ok();
     }
     const auto id = channelId.empty() ? kMasterChannelId : channelId;
@@ -135,6 +137,18 @@ audio::Result EngineController::captureInsertState(const std::string& channelId,
 audio::Result EngineController::captureInsertChain(const std::string& channelId,
     const std::vector<std::string>& slotIds, std::vector<ChainSlotSnapshot>& chain) {
     chain.clear();
+    if (m_documentOnly) {
+        std::vector<ChainSlotSnapshot> captured;
+        for (const auto& id : slotIds) {
+            const auto* model = insertModel(channelId, id);
+            if (!model) return batchError("A plugin slot is no longer available.");
+            ChainSlotSnapshot slot;
+            if (auto result = captureInsertState(channelId, *model, slot); !result) return result;
+            captured.push_back(std::move(slot));
+        }
+        chain = std::move(captured);
+        return audio::Result::ok();
+    }
     std::vector<ChainSlotSnapshot> captured;
     std::vector<AudioPluginStateRequest> requests;
     captured.reserve(slotIds.size());
@@ -188,13 +202,13 @@ audio::Result EngineController::appendPluginBatch(
         struct Binding { std::size_t model; bool right; };
         std::vector<Binding> bindings;
         for (const auto& source : chain.inserts) {
-            const auto descriptor = m_pluginManager.find(toHostFormat(source.model.format), source.model.uid);
+            const auto descriptor = pluginManager().find(toHostFormat(source.model.format), source.model.uid);
             if (!descriptor || descriptor->isInstrument || !sharedPluginAllowed(*descriptor) ||
                 (source.model.format != PluginFormat::Internal && source.model.pluginVersion != descriptor->version))
                 return batchError("This effect is not in the session's compatible catalog: " + source.model.name);
         }
         for (const auto& source : chain.inserts) {
-            const auto descriptor = m_pluginManager.find(toHostFormat(source.model.format), source.model.uid);
+            const auto descriptor = pluginManager().find(toHostFormat(source.model.format), source.model.uid);
             if (!descriptor || descriptor->isInstrument || !sharedPluginAllowed(*descriptor))
                 return batchError("This effect is not in the session's compatible catalog: " + source.model.name);
             auto model = source.model;
@@ -251,7 +265,7 @@ audio::Result EngineController::appendPluginBatch(
         addedIds = std::move(ids); return audio::Result::ok();
     }
     for (const auto& slot : chain.inserts) {
-        const auto descriptor = m_pluginManager.find(toHostFormat(slot.model.format), slot.model.uid);
+        const auto descriptor = pluginManager().find(toHostFormat(slot.model.format), slot.model.uid);
         if (!descriptor || descriptor->isInstrument)
             return batchError("This effect is unavailable: " + slot.model.name);
     }
@@ -337,7 +351,7 @@ audio::Result EngineController::createPluginBatchDraft(
     auto snapshot = captureRecoverySnapshot();
     auto draft = std::make_shared<EngineController>();
     if (const auto ready = draft->initialize(m_sampleRate, m_bufferSize, false); !ready) return ready;
-    draft->m_pluginManager.copyCatalogFrom(m_pluginManager);
+    draft->m_pluginManager.copyCatalogFrom(pluginManager());
     draft->m_project = std::move(snapshot.project);
     draft->m_sourceSamples = m_sourceSamples;
     draft->m_samples = m_samples;
@@ -463,6 +477,7 @@ audio::Result EngineController::createPluginBatchDraft(
 }
 
 audio::Result EngineController::startPluginAudition(std::shared_ptr<EngineController> draft, bool followTransport) {
+    if (m_documentOnly) return audio::Result::fail(audio::EngineError::NotSupported, "Enable the audio engine to audition plugins.");
     if (!draft || draft.get() == this || draft->m_liveDeviceAllowed ||
         draft->m_sampleRate != m_sampleRate || draft->m_bufferSize != m_bufferSize ||
         isRecording() || m_exportInProgress || m_pluginAuditionOwner)

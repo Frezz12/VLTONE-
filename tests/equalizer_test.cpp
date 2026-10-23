@@ -87,7 +87,7 @@ PluginProcessDisposition process(EqualizerInstance& instance, Block& block,
 }
 
 double renderTone(EqualizerInstance& instance, double frequency,
-                  int blocks = 30, bool right = false) {
+                  int blocks = 30, bool right = false, int settlingBlocks = 11) {
     double energy = 0.0;
     std::size_t position = 0;
     for (int blockIndex = 0; blockIndex < blocks; ++blockIndex) {
@@ -99,7 +99,7 @@ double renderTone(EqualizerInstance& instance, double frequency,
             block.right[i] = right ? sample : sample;
         }
         process(instance, block);
-        if (blockIndex > 10)
+        if (blockIndex >= settlingBlocks)
             for (float sample : (right ? block.outRight : block.outLeft))
                 energy += double(sample) * sample;
         position += kBlock;
@@ -238,6 +238,37 @@ int main() {
         check(boosted > baseline * 8.0 &&
                   std::abs(bell.responseDb(1000.0) - 12.0) < 0.2,
               "Bell frequency, gain and Q agree with the displayed response");
+
+        for (const auto mode : {ProcessingMode::ZeroLatency, ProcessingMode::AnalogPhase, ProcessingMode::LinearPhase}) {
+            EqualizerInstance solo;
+            set(solo, GlobalParam::ProcessingMode, double(mode));
+            for (std::uint32_t band = 0; band < 2; ++band) {
+                set(solo, band, BandParam::Enabled, 1.0);
+                set(solo, band, BandParam::Type, double(FilterType::Bell));
+                set(solo, band, BandParam::Frequency, band ? 6000. : 1000.);
+                set(solo, band, BandParam::Gain, 12.0);
+                set(solo, band, BandParam::Q, 2.0);
+            }
+            solo.activate({kRate, kBlock, true});
+            // Flush both the input FFT window and the overlap-add output after
+            // changing the tone or audition target; measure equal steady spans.
+            const int settlingBlocks = 11 + int((2 * solo.latencySamples() + kBlock - 1) / kBlock);
+            const auto measure = [&](double frequency) {
+                return renderTone(solo, frequency, settlingBlocks + 19, false, settlingBlocks);
+            };
+            const double together = measure(6000.);
+            solo.setAuditionBand(0);
+            const double otherBand = measure(6000.);
+            const double chosenBand = measure(1000.);
+            solo.setAuditionBand(-1);
+            const double restored = measure(6000.);
+            if (!check(otherBand < together * .3 && chosenBand > baseline * 4. &&
+                  std::abs(restored / together - 1.) < .05 &&
+                  solo.bandState(0).enabled && solo.bandState(1).enabled,
+                  "Solo processes only the chosen band and restores the full EQ in every phase mode"))
+                std::printf("  phase=%u together=%.3f other=%.3f chosen=%.3f restored=%.3f baseline=%.3f\n",
+                            unsigned(mode), together, otherBand, chosenBand, restored, baseline);
+        }
 
         bool shapesFinite = true;
         std::set<long long> shapes;
@@ -462,6 +493,136 @@ int main() {
             }
             check(maximumError<1e-7,"flat Linear Phase has unity gain at every hop phase and upstream delay");
         }
+    }
+
+    {
+        constexpr std::size_t window = 8192;
+        const auto peak = [](const auto& bins) { return *std::max_element(bins.begin(), bins.end()); };
+        const auto silent = [](const auto& bins) {
+            return std::ranges::all_of(bins, [](float value) { return value == -120.0f; });
+        };
+        // Exercise the real EQ taps, including anti-phase stereo and the actual
+        // output gain, at rates both below and above the displayed 20 kHz range.
+        for (double rate : {16000.0, 44100.0, 48000.0, 96000.0, 192000.0}) {
+            EqualizerInstance analyzer;
+            set(analyzer, GlobalParam::OutputGain, -6.0);
+            check(analyzer.activate({rate, kBlock, true}), "Spectre prepares at the host sample rate");
+            analyzer.setAnalyzerConfig({true, true, true, true, false, 1, 0.0});
+            check(silent(analyzer.telemetry().pre), "unfilled analyzer windows start at silence");
+            Block block(kBlock);
+            gAllocations.store(0, std::memory_order_relaxed);
+            gCountAllocations = true;
+            double outputError = 0.0;
+            for (std::size_t at = 0; at < window; at += kBlock) {
+                for (std::size_t i = 0; i < kBlock; ++i) {
+                    block.left[i] = float(0.5 * std::sin(2.0 * std::numbers::pi * 173 * (at + i) / window));
+                    block.right[i] = -block.left[i];
+                    block.sideLeft[i] = float(0.25 * std::sin(2.0 * std::numbers::pi * 349 * (at + i) / window));
+                    block.sideRight[i] = -block.sideLeft[i];
+                }
+                process(analyzer, block, true);
+                for (std::size_t i = 0; i < kBlock; ++i)
+                    outputError = std::max(outputError,
+                        std::abs(block.outLeft[i] - block.left[i] * std::pow(10.0, -6.0 / 20.0)));
+            }
+            const auto measured = analyzer.telemetry();
+            const auto editor = analyzer.consumeTelemetry();
+            const auto rack = analyzer.telemetry();
+            gCountAllocations = false;
+            check(gAllocations.load(std::memory_order_relaxed) == 0 && outputError < 1e-7,
+                  "Spectre capture and telemetry allocate nothing and leave EQ audio unchanged");
+            check(std::abs(peak(measured.pre) + 6.0206f) < 0.2f &&
+                  std::abs(peak(measured.post) + 12.0206f) < 0.2f &&
+                  std::abs(peak(measured.sidechain) + 12.0412f) < 0.2f,
+                  "input/output/sidechain spectra preserve calibrated anti-phase stereo power");
+            check(measured.pre == editor.pre && editor.pre == rack.pre &&
+                  measured.post == rack.post && measured.sidechain == rack.sidechain &&
+                  measured.inputLeft == editor.inputLeft && rack.inputLeft == 0.0f,
+                  "editor and rack share one analyzed frame without consuming each other's spectrum");
+            auto config = analyzer.analyzerConfig();
+            config.tiltDbPerOctave = 6.0;
+            analyzer.setAnalyzerConfig(config);
+            const auto tilted = analyzer.telemetry();
+            bool nyquistSilent = true;
+            for (std::size_t i = 0; i < kSpectrumBinCount; ++i)
+                if (20.0 * std::pow(1000.0, double(i) / (kSpectrumBinCount - 1)) > rate * 0.5)
+                    nyquistSilent &= tilted.pre[i] == -120.0f && tilted.post[i] == -120.0f &&
+                                     tilted.sidechain[i] == -120.0f;
+            check(nyquistSilent, "display tilt never invents content above Nyquist");
+
+            analyzer.reset();
+            check(silent(analyzer.telemetry().pre), "stream reset clears the previous spectrum");
+            std::fill(block.left.begin(), block.left.end(), 0.0f);
+            std::fill(block.right.begin(), block.right.end(), 0.0f);
+            for (std::size_t at = 0; at < window; at += kBlock) process(analyzer, block);
+            const auto empty = analyzer.telemetry();
+            check(silent(empty.pre) && silent(empty.post) && silent(empty.sidechain),
+                  "silence and a disconnected sidechain stay at the floor with display tilt");
+        }
+
+        EqualizerInstance analyzer;
+        analyzer.activate({kRate, kBlock, true});
+        AnalyzerConfig config{true, true, true, true, false, 1, 0.0};
+        analyzer.setAnalyzerConfig(config);
+        Block block(kBlock);
+        const auto feed = [&](std::size_t samples, double amplitude, bool mono = false) {
+            block.channelCount = mono ? 1 : 2;
+            for (std::size_t at = 0; at < samples; at += kBlock) {
+                for (std::size_t i = 0; i < kBlock; ++i) {
+                    block.left[i] = float(amplitude * std::sin(2.0 * std::numbers::pi * 173 * (at + i) / window));
+                    block.right[i] = 0.0f;
+                    block.sideLeft[i] = block.sideRight[i] = block.left[i];
+                }
+                process(analyzer, block, true);
+            }
+        };
+        feed(window, 0.5);
+        check(std::abs(peak(analyzer.telemetry().pre) + 9.0309f) < 0.2f,
+              "one active stereo channel measures half the stereo power");
+        analyzer.reset();
+        feed(window, 0.5, true);
+        const auto before = analyzer.telemetry();
+        check(std::abs(peak(before.pre) + 6.0206f) < 0.2f,
+              "mono input is duplicated without a 3 dB spectrum loss");
+        config.frozen = true;
+        analyzer.setAnalyzerConfig(config);
+        analyzer.telemetry();
+        feed(window * 2, 0.0);
+        const auto frozen = analyzer.telemetry();
+        check(frozen.pre == before.pre && frozen.post == before.post && frozen.sidechain == before.sidechain,
+              "Freeze holds all three traces while audio capture continues");
+        config.frozen = false;
+        analyzer.setAnalyzerConfig(config);
+        const auto live = analyzer.telemetry();
+        check(silent(live.pre) && silent(live.post) && silent(live.sidechain),
+              "unfreeze immediately consumes current audio without a stale window or release tail");
+        feed(window, 0.5, true);
+        analyzer.telemetry();
+        config.pre = config.post = config.sidechain = false;
+        analyzer.setAnalyzerConfig(config);
+        feed(kBlock, 0.0);
+        const auto hidden = analyzer.telemetry();
+        check(silent(hidden.pre) && silent(hidden.post) && silent(hidden.sidechain),
+              "disabled layers clear in both EQ views");
+        config.pre = config.post = config.sidechain = true;
+        analyzer.setAnalyzerConfig(config);
+        feed(kBlock, 0.0);
+        check(silent(analyzer.telemetry().pre), "re-enabled layers wait for fresh audio, not old history");
+        feed(window, 0.5, true);
+        analyzer.telemetry();
+        config.enabled = false;
+        analyzer.setAnalyzerConfig(config);
+        feed(window, 0.0);
+        config.enabled = true;
+        analyzer.setAnalyzerConfig(config);
+        feed(kBlock, 0.0);
+        check(silent(analyzer.telemetry().pre), "reopening an EQ view discards audio from before it was hidden");
+        config.tiltDbPerOctave = std::numeric_limits<double>::quiet_NaN();
+        analyzer.setAnalyzerConfig(config);
+        check(std::isfinite(analyzer.analyzerConfig().tiltDbPerOctave), "invalid display tilt cannot poison the trace");
+        analyzer.deactivate();
+        check(analyzer.activate({96000.0, kBlock, true}) && silent(analyzer.telemetry().pre),
+              "sample-rate reactivation prepares fresh Spectre windows");
     }
 
     {

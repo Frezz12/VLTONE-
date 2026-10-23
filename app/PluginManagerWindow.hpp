@@ -30,6 +30,7 @@ class QTimer;
 class PluginManagerWindow : public QDialog {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller) { m_controller = controller; }
     explicit PluginManagerWindow(daw::EngineController* controller,
                                  QWidget* parent = nullptr);
 

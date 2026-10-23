@@ -1480,7 +1480,7 @@ void PatternWindow::rebuildRows() {
         }
         layout->addWidget(rhythm);
 
-        auto* rack = new ui::IconButton(icons::Glyph::Mixer, tr("Open sound rack"), row);
+        auto* rack = new ui::IconButton(icons::Glyph::Rack, tr("Open sound rack"), row);
         rack->setObjectName(QStringLiteral("PatternSourceRack"));
         rack->setButtonSize(kActionSize, kActionSize);
         rack->setGlyphSize(14);

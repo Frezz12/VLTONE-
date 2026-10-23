@@ -222,7 +222,7 @@ public:
 
 /// Icon-only button. `prominent` gives it the filled accent treatment used for
 /// the play button in the transport pill.
-class IconButton : public QAbstractButton {
+class IconButton : public QAbstractButton, public graphics::ScenePaintSource {
     Q_OBJECT
 public:
     explicit IconButton(icons::Glyph glyph, const QString& tip,
@@ -259,6 +259,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void enterEvent(QEnterEvent*) override;
     void leaveEvent(QEvent*) override;
 
@@ -279,7 +280,7 @@ private:
 
 /// The square M / S / R chips on track headers and channel strips. Off they are
 /// a neutral well; on they light in their signal colour.
-class MsrButton : public QAbstractButton {
+class MsrButton : public QAbstractButton, public graphics::ScenePaintSource {
     Q_OBJECT
 public:
     MsrButton(const QString& letter, const QColor& activeColor,
@@ -306,6 +307,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void paintScene(QPainter&, const QRegion&) override;
     void enterEvent(QEnterEvent*) override;
     void leaveEvent(QEvent*) override;
     void contextMenuEvent(QContextMenuEvent*) override;
@@ -605,6 +607,7 @@ public:
     void setStepped(bool stepped) { m_stepped = stepped; }
     void setFormatter(std::function<QString(double)> formatter);
     void setCaption(const QString& caption);
+    void setContextMenuProvider(std::function<void(QMenu*)> provider) { m_contextMenuProvider=std::move(provider); }
     /// Compact mode: a smaller ring, for the dense INS matrix.
     void setCompact(bool compact);
     /// Just the ring, at an exact diameter and with no caption line under it —
@@ -649,6 +652,9 @@ public:
     /// True while a drag is in flight. A panel that polls its plugin for
     /// automation must not fight the knob the user is holding.
     bool isEditing() const { return m_dragging; }
+private:
+    std::function<void(QMenu*)> m_contextMenuProvider;
+public:
 
 signals:
     void valueChanged(double value);

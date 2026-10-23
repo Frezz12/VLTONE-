@@ -63,13 +63,20 @@ public:
     RealtimeSnapshot& operator=(const RealtimeSnapshot&) = delete;
 
     void publish(std::shared_ptr<const T> snapshot) {
+        std::shared_ptr<const T> previous, retired;
         {
             std::lock_guard lock(m_ownerMutex);
-            if (m_owner) m_retired.push_back(std::move(m_owner));
+            previous = std::move(m_owner);
             m_owner = std::move(snapshot);
             m_raw.store(m_owner.get(), std::memory_order_seq_cst);
+            const T* hazard = m_hazard.load(std::memory_order_seq_cst);
+            // A single reader can protect only one retired publication. Keep
+            // that reference without allocating a retirement list, and destroy
+            // everything else after unlocking: a payload may release media or
+            // call back into a control-side observer from its destructor.
+            if (m_retired.get() != hazard) retired = std::move(m_retired);
+            if (previous.get() == hazard) m_retired.swap(previous);
         }
-        reclaim();
     }
 
     Reader read() noexcept {
@@ -92,19 +99,11 @@ public:
     }
 
 private:
-    void reclaim() {
-        const T* hazard = m_hazard.load(std::memory_order_seq_cst);
-        std::lock_guard lock(m_ownerMutex);
-        std::erase_if(m_retired, [hazard](const auto& item) {
-            return item.get() != hazard;
-        });
-    }
-
     std::atomic<const T*> m_raw{nullptr};
     std::atomic<const T*> m_hazard{nullptr};
     mutable std::mutex m_ownerMutex;
     std::shared_ptr<const T> m_owner;
-    std::vector<std::shared_ptr<const T>> m_retired;
+    std::shared_ptr<const T> m_retired;
 };
 
 } // namespace daw::engine

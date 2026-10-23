@@ -18,6 +18,7 @@ struct CreatorColors {
 };
 CreatorColors creatorColors();
 void styleCreator(QWidget *widget);
+void styleCreator(QWidget *widget, const CreatorColors &colors);
 void creatorIcon(QAction *action, icons::Glyph glyph, bool primary = false);
 icons::Glyph creatorCategoryIcon(std::string_view category);
 int creatorCategoryOrder(std::string_view category);

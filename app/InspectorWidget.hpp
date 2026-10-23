@@ -3,6 +3,7 @@
 #include <QString>
 #include <QWidget>
 #include <QHash>
+#include <QStringList>
 
 namespace daw { class EngineController; }
 
@@ -22,13 +23,15 @@ namespace ui { class IconButton; }
 class InspectorWidget : public QWidget {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
     void setHeaderHeight(int height);
     /// The two widths this panel ever has. Public because the tool strip above
     /// it lines its zones up with this column and has to know them — they used
     /// to be duplicated there as bare numbers.
-    static constexpr int kExpandedWidth = 120;
+    static constexpr int kDividerWidth = 4;
+    static constexpr int kExpandedWidth = 120 + kDividerWidth;
     static constexpr int kChannelWidth = 100;
-    static constexpr int kRailWidth = 30;
+    static constexpr int kRailWidth = 30 + kDividerWidth;
 
     explicit InspectorWidget(daw::EngineController* controller,
                              QWidget* parent = nullptr);
@@ -70,6 +73,8 @@ signals:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     void buildUi();
@@ -77,6 +82,8 @@ private:
     void pickColor();
     void loadProperties();
     void finishClipEdits();
+    void updateStrip(bool forceRebuild = false);
+    void discardStrip(QString trackId);
     QWidget* buildClipSection();
     QDoubleSpinBox* addClipSpin(QFormLayout* form, const QString& label,
                                const QString& parameterId, double minimum,
@@ -86,6 +93,7 @@ private:
     void commitClipParameter(const QString& parameterId, double before);
 
     bool m_rackRefreshPending = false;
+    bool m_rebuildPending = false;
     daw::EngineController* m_controller = nullptr;
     QString m_trackId;
     QString m_clipId;
@@ -110,4 +118,7 @@ private:
     QHash<QString, double> m_clipGestureStarts;
     QVBoxLayout* m_stripSlot = nullptr;
     ChannelStrip* m_strip = nullptr;
+    QHash<QString, ChannelStrip*> m_strips;
+    QStringList m_recentStrips;
+    QString m_stripProjectId;
 };

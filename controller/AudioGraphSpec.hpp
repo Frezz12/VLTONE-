@@ -47,6 +47,7 @@ struct AudioGraphSpec {
         std::vector<SendModel> sends;
         std::vector<MiniModuleRoute> miniModules;
         std::vector<SidechainRoute> sidechains;
+        std::vector<RackGroupModel> rackGroups;
         modulation::Rack modulation;
         bool renderControlOnly = false;
         std::vector<ClipFx> clipFx;
@@ -58,6 +59,7 @@ struct AudioGraphSpec {
     float masterVolume = 1.0f, masterPan = 0.0f;
     std::vector<MiniModuleRoute> masterMiniModules;
     std::vector<SidechainRoute> masterSidechains;
+    std::vector<RackGroupModel> masterRackGroups;
     modulation::Rack masterModulation;
     bool metronomeEnabled = false;
     std::string auditionCapture;

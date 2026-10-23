@@ -141,7 +141,6 @@ private:
     Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> m_componentPoint;
     Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> m_controllerPoint;
 
-    vst3::HostApplication m_hostContext;
     vst3::ComponentHandler m_handler;
     vst3::PlugFrame m_frame;
     Steinberg::IPtr<vst3::ParameterChanges> m_inputChanges;

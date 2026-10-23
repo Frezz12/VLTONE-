@@ -49,6 +49,7 @@ protected:
   void showEvent(QShowEvent *) override;
 
 private:
+  friend class McpService;
   friend class CreatorAiWorkspace;
   friend class CreatorAiPanel;
   struct CodeResult;

@@ -1,5 +1,6 @@
 #include "RackModulationPanel.hpp"
 #include "RackModulationEditor.hpp"
+#include "RackParameterBinding.hpp"
 #include <QShortcut>
 #include "Controls.hpp"
 #include "Theme.hpp"
@@ -10,6 +11,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -28,6 +30,7 @@
 #include <QSettings>
 #include <QTimer>
 #include <QToolButton>
+#include <QToolTip>
 #include <QVBoxLayout>
 #include <array>
 
@@ -45,24 +48,40 @@ public:
     }
 };
 }
-RackModulationPanel::RackModulationPanel(daw::EngineController* c, QWidget* rack)
-    : QWidget(rack), m_controller(c), m_rack(rack), m_layout(new QHBoxLayout(this)) {
+RackModulationPanel::RackModulationPanel(daw::EngineController* c, QWidget* rack, QString slot)
+    : QWidget(rack), m_controller(c), m_rack(rack), m_slot(std::move(slot)), m_layout(new QHBoxLayout(this)) {
     setObjectName("RackModulationPanel"); setMinimumWidth(0);
     m_layout->setContentsMargins(0, 0, 0, 0); m_layout->setSpacing(8);
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] { rebuild(); });
     QTimer::singleShot(0, this, [this] { qApp->installEventFilter(this); });
 }
 RackModulationPanel::~RackModulationPanel() {
+    finishDepthGesture();
     for (auto* widget : findChildren<QWidget*>()) if (auto* graph = dynamic_cast<RackModulationEditor*>(widget)) {
         graph->finishGesture(); graph->begin = {}; graph->finish = {}; graph->changed = {};
     }
     finishGesture(); qApp->removeEventFilter(this);
 }
 QString RackModulationPanel::key(const char* suffix) const {
-    return "rack/" + QString::fromStdString(m_controller->project().miniModuleProjectId) + "/" + m_channel + "/modulation/" + suffix;
+    return "rack/" + QString::fromStdString(m_controller->project().miniModuleProjectId) + "/" + m_channel + "/modulation/" + m_slot + "/" + suffix;
+}
+bool RackModulationPanel::includes(const daw::modulation::Source& s) const {
+    if (m_slot.isEmpty()) return s.ownerSlotId.empty() || !m_controller->insertModel(m_channel.toStdString(), s.ownerSlotId);
+    if (s.ownerSlotId == m_slot.toStdString()) return true;
+    return s.ownerSlotId.empty() && std::any_of(m_shown.routes.begin(), m_shown.routes.end(), [&](const auto& r) {
+        return r.sourceId == s.id && r.slotId == m_slot.toStdString();
+    });
+}
+void RackModulationPanel::finishEdits() {
+    finishDepthGesture();
+    for (auto* widget : findChildren<QWidget*>()) if (auto* graph = dynamic_cast<RackModulationEditor*>(widget)) graph->finishGesture();
+    finishGesture();
+}
+void RackModulationPanel::hideEvent(QHideEvent* e) {
+    finishEdits(); setAssigning(false); QWidget::hideEvent(e);
 }
 void RackModulationPanel::setChannel(const QString& channel) {
-    finishGesture();
+    finishEdits();
     if (m_expanded) m_expanded->close();
     setAssigning(false); m_channel = channel;
     m_selected = QSettings().value(key("selected")).toString();
@@ -91,7 +110,8 @@ void RackModulationPanel::refresh() {
         if (const auto target = m_controller->lastEditedPluginParameter(m_channel.toStdString())) {
             auto slot = target->slotId;
             if (slot.empty()) if (const auto* t = m_controller->project().findTrack(target->channelId)) slot = t->instrument.id;
-            assign(QString::fromStdString(slot), QString::fromStdString(target->parameterId));
+            if (m_slot.isEmpty() || m_slot.toStdString() == slot)
+                assign(QString::fromStdString(slot), QString::fromStdString(target->parameterId));
         }
     }
     const auto& current = m_controller->rackModulation(m_channel.toStdString());
@@ -99,15 +119,19 @@ void RackModulationPanel::refresh() {
         m_structureRevision != m_controller->project().structureRevision();
     if (!structure) {
         for (std::size_t i = 0; i < current.sources.size(); ++i)
-            structure |= current.sources[i].id != m_shown.sources[i].id || current.sources[i].kind != m_shown.sources[i].kind;
+            structure |= current.sources[i].id != m_shown.sources[i].id || current.sources[i].kind != m_shown.sources[i].kind || current.sources[i].ownerSlotId != m_shown.sources[i].ownerSlotId;
         for (std::size_t i = 0; i < current.routes.size(); ++i) {
             const auto& a = current.routes[i]; const auto& b = m_shown.routes[i];
             structure |= a.id != b.id || a.sourceId != b.sourceId || a.slotId != b.slotId || a.parameterId != b.parameterId || a.pluginUid != b.pluginUid;
         }
     }
-    if (structure && !m_pending) {
+    if (structure && !m_pending && !QApplication::activePopupWidget()) {
         m_pending = true;
-        QTimer::singleShot(0, this, [this] { m_pending = false; m_shown = m_controller->rackModulation(m_channel.toStdString()); rebuild(); });
+        QTimer::singleShot(0, this, [this] {
+            m_pending = false;
+            if (QApplication::activePopupWidget()) return;
+            m_shown = m_controller->rackModulation(m_channel.toStdString()); rebuild();
+        });
     } else if (!structure && m_shown != current) {
         m_shown = current; synchronize();
     }
@@ -129,8 +153,9 @@ void RackModulationPanel::finishGesture() {
     if (m_gesture) { m_controller->collapseUndo(m_gesture, "Edit modulation shape"); m_gesture = {}; }
 }
 void RackModulationPanel::synchronize() {
-    m_rack->setProperty("modulationSource", m_selected);
+    if (m_rack) m_rack->setProperty("modulationSource", m_selected);
     for (const auto& update : m_refreshers) update();
+    for (const auto& update : m_expandedRefreshers) update();
     if (m_expanded) {
         const auto* value = source(m_expandedSource);
         if (!value) m_expanded->close();
@@ -147,12 +172,14 @@ void RackModulationPanel::expandEditor(const QString& id) {
     const auto* value = source(id); if (!value) return;
     auto* dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->setModal(false);
     dialog->setObjectName("ModulationExpandedEditor");
-    dialog->setWindowTitle(QString::fromStdString(value->name)); dialog->resize(720, 360); dialog->setMinimumSize(420, 240);
+    dialog->setWindowTitle(QString::fromStdString(value->name)); dialog->resize(720, 520); dialog->setMinimumSize(420, 380);
     m_expanded = dialog; m_expandedSource = id;
     auto* layout = new QVBoxLayout(dialog);
     auto* graph = new RackModulationEditor(dialog); graph->setSource(*value); layout->addWidget(graph, 1);
     graph->begin = [this] { beginGesture(); }; graph->finish = [this] { finishGesture(); };
     graph->changed = [this, id](const auto& next) { editSource(id, [&](auto& s) { s.points = next.points; s.steps = next.steps; }); };
+    m_expandedRefreshers.clear();
+    layout->addWidget(sourceControls(id, dialog, true, m_expandedRefreshers));
     auto* hint = new QLabel(graph->toolTip(), dialog); hint->setWordWrap(true); layout->addWidget(hint);
     for (const auto& entry : {std::pair{QKeySequence::Undo, "undo"}, std::pair{QKeySequence::Redo, "redo"}}) {
         auto* shortcut = new QShortcut(QKeySequence(entry.first), dialog);
@@ -160,8 +187,8 @@ void RackModulationPanel::expandEditor(const QString& id) {
             graph->finishGesture(); command(action);
         });
     }
-    connect(dialog, &QDialog::finished, this, [this, graph] { graph->finishGesture(); finishGesture(); });
-    dialog->show(); graph->setFocus();
+    connect(dialog, &QDialog::finished, this, [this, graph] { graph->finishGesture(); finishGesture(); m_expandedRefreshers.clear(); });
+    synchronize(); dialog->show(); graph->setFocus();
 }
 void RackModulationPanel::automate(const std::string& id, bool depth) {
     daw::AutomationTarget target;
@@ -171,13 +198,16 @@ void RackModulationPanel::automate(const std::string& id, bool depth) {
     m_controller->ensureAutomation(target); emit edited();
 }
 void RackModulationPanel::addSource(daw::modulation::Kind kind) {
-    m_selected = QString::fromStdString(m_controller->addRackModulator(m_channel.toStdString(), kind));
+    m_selected = QString::fromStdString(m_controller->addRackModulator(m_channel.toStdString(), kind, m_slot.toStdString()));
     m_shown = m_controller->rackModulation(m_channel.toStdString()); rebuild(); emit edited();
 }
 bool RackModulationPanel::command(const QString& action) {
     if (auto* graph = dynamic_cast<RackModulationEditor*>(QApplication::focusWidget()); graph && isAncestorOf(graph)) {
         graph->finishGesture();
-        if (action == "delete") { graph->removeSelected(); return true; }
+        if (action == "delete" && (graph->source().kind == daw::modulation::Kind::Shaper ||
+                                   graph->source().kind == daw::modulation::Kind::Steps)) {
+            graph->removeSelected(); return true;
+        }
     }
     finishGesture();
     auto id = m_selected;
@@ -196,10 +226,12 @@ bool RackModulationPanel::command(const QString& action) {
     // A focused source must never dispatch device commands to a stale plugin selection.
     return true;
 }
-void RackModulationPanel::sourceMenu(const QString& id, const QPoint& at) {
+void RackModulationPanel::sourceMenu(QString id, const QPoint& at) {
     QMenu menu(this);
+    menu.setObjectName("ModulationSourceMenu");
     auto* rename = menu.addAction(tr("Rename")); auto* duplicate = menu.addAction(tr("Duplicate"));
     auto* remove = menu.addAction(tr("Delete"));
+    remove->setObjectName("DeleteModulationSource");
     menu.addSeparator();
     auto* left = menu.addAction(tr("Move left")); auto* right = menu.addAction(tr("Move right"));
     auto* all = menu.addAction(tr("Enable all modulation")); all->setCheckable(true); all->setChecked(m_shown.enabled);
@@ -250,6 +282,8 @@ void RackModulationPanel::advanced(const QString& id) {
     if (dialog.exec() == QDialog::Accepted) editSource(id, [&](auto& s) { s = value; });
 }
 void RackModulationPanel::setAssigning(bool value) {
+    if (value) for (auto* panel : window()->findChildren<RackModulationPanel*>())
+        if (panel != this && panel->assigning()) { panel->setAssigning(false); panel->synchronize(); }
     m_assigning = value && !m_selected.isEmpty(); m_touch = m_controller->parameterTouchRevision(m_channel.toStdString()); highlight();
 }
 void RackModulationPanel::highlight() {
@@ -270,10 +304,113 @@ void RackModulationPanel::assign(const QString& slot, const QString& parameter) 
     if (route.empty()) { QMessageBox::information(this, tr("Modulation"), tr("This connection is unavailable or would create a feedback loop. Choose an independent audio source.")); return; }
     m_route = QString::fromStdString(route); setAssigning(false); emit edited(); m_shown = m_controller->rackModulation(m_channel.toStdString()); rebuild();
 }
+void RackModulationPanel::finishDepthGesture(bool cancel) {
+    if (m_depthRoute.isEmpty()) return;
+    const auto route = std::exchange(m_depthRoute, QString{}).toStdString();
+    auto control = m_depthControl; m_depthControl.clear();
+    if (cancel) m_controller->setRackModulationDepth(m_channel.toStdString(), route, m_depthBefore);
+    else m_controller->commitRackModulationDepth(m_channel.toStdString(), route, m_depthBefore);
+    if (control) {
+        control->setProperty("modulationDepthDragging", false); control->unsetCursor();
+        if (QWidget::mouseGrabber() == control) control->releaseMouse();
+        control->update();
+    }
+    QToolTip::hideText(); emit edited(false); refresh();
+}
+bool RackModulationPanel::depthEvent(QWidget* widget, QEvent* event) {
+    if (!m_depthRoute.isEmpty()) {
+        if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+            finishDepthGesture(true); return true;
+        }
+        if (widget == m_depthControl) {
+            if (event->type() == QEvent::MouseMove) {
+                auto* mouse = static_cast<QMouseEvent*>(event);
+                if (!(mouse->buttons() & Qt::LeftButton)) { finishDepthGesture(); return true; }
+                const double delta = (m_depthY - mouse->globalPosition().y()) / ((mouse->modifiers() & Qt::ShiftModifier) ? 1500. : 150.);
+                m_depthY = mouse->globalPosition().y();
+                for (const auto& r : m_controller->rackModulation(m_channel.toStdString()).routes) if (r.id == m_depthRoute.toStdString()) {
+                    const auto routeId = r.id;
+                    const double depth = std::clamp(r.depth + delta, -1., 1.);
+                    m_controller->setRackModulationDepth(m_channel.toStdString(), routeId, depth);
+                    QToolTip::showText(mouse->globalPosition().toPoint() + QPoint(12, -26), tr("Depth %1%").arg(depth * 100, 0, 'f', 1), widget);
+                    if (auto* knob = qobject_cast<ui::Knob*>(widget))
+                        RackParameterBinding::refreshModulation(knob, m_controller, m_channel.toStdString(),
+                            widget->property("modulationSlot").toString().toStdString(), widget->property("modulationParameter").toString().toStdString());
+                    break;
+                }
+                refresh(); return true;
+            }
+            if (event->type() == QEvent::MouseButtonRelease) { finishDepthGesture(); return true; }
+            if (event->type() == QEvent::Hide || event->type() == QEvent::UngrabMouse ||
+                event->type() == QEvent::WindowDeactivate || event->type() == QEvent::FocusOut) finishDepthGesture();
+        }
+    }
+    if (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::KeyPress && event->type() != QEvent::ContextMenu) return false;
+    if (!isVisible() || m_assigning || !widget || !widget->isEnabled() ||
+        !widget->property("modulationEligible").toBool() || widget->property("modulationChannel").toString() != m_channel)
+        return false;
+    QWidget* scope = widget->parentWidget();
+    while (scope && !scope->property("modulationDepthEditing").toBool()) scope = scope->parentWidget();
+    if (!scope || scope != m_rack || scope->property("modulationSource").toString() != m_selected) return false;
+    const auto slot = widget->property("modulationSlot").toString().toStdString();
+    const auto parameter = widget->property("modulationParameter").toString().toStdString();
+    const auto& routes = m_controller->rackModulation(m_channel.toStdString()).routes;
+    const auto found = std::find_if(routes.begin(), routes.end(), [&](const auto& r) {
+        return r.slotId == slot && r.parameterId == parameter && r.sourceId == m_selected.toStdString();
+    });
+    if (found == routes.end()) return false;
+    const auto route = *found;
+    if (event->type() == QEvent::MouseButtonPress && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+        m_depthControl = widget; m_depthRoute = QString::fromStdString(route.id); m_depthBefore = route.depth;
+        m_depthY = static_cast<QMouseEvent*>(event)->globalPosition().y();
+        widget->setProperty("modulationDepthDragging", true); widget->setCursor(Qt::SizeVerCursor);
+        widget->setFocus(Qt::MouseFocusReason); widget->grabMouse(); return true;
+    }
+    if (event->type() == QEvent::KeyPress) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
+            const double step = (key->modifiers() & Qt::ShiftModifier) ? .001 : .01;
+            m_controller->setRackModulationDepth(m_channel.toStdString(), route.id, route.depth + (key->key() == Qt::Key_Up ? step : -step));
+            m_controller->commitRackModulationDepth(m_channel.toStdString(), route.id, route.depth);
+            emit edited(false); refresh(); return true;
+        }
+    }
+    if (event->type() == QEvent::ContextMenu) {
+        QMenu menu(this);
+        const auto status = m_controller->rackModulationStatus(m_channel.toStdString(), route.id);
+        if (!status.empty()) { menu.addAction(QString::fromStdString(status))->setEnabled(false); menu.addSeparator(); }
+        auto* enabled = menu.addAction(tr("Enable assignment")); enabled->setCheckable(true); enabled->setChecked(route.enabled);
+        auto* bipolar = menu.addAction(tr("Two-sided movement")); bipolar->setCheckable(true); bipolar->setChecked(route.bipolar);
+        auto* automateAction = menu.addAction(tr("Automate depth")); menu.addSeparator();
+        auto* remove = menu.addAction(tr("Remove assignment"));
+        const auto action = menu.exec(static_cast<QContextMenuEvent*>(event)->globalPos());
+        if (action == automateAction) automate(route.id, true);
+        else if (action == remove) change([&](auto& rack) { std::erase_if(rack.routes, [&](const auto& r) { return r.id == route.id; }); });
+        else if (action == enabled || action == bipolar) change([&](auto& rack) {
+            for (auto& r : rack.routes) if (r.id == route.id) {
+                if (action == enabled) r.enabled = enabled->isChecked(); else r.bipolar = bipolar->isChecked();
+            }
+        });
+        return true;
+    }
+    return false;
+}
 bool RackModulationPanel::eventFilter(QObject* object, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* widget = qobject_cast<QWidget*>(object);
+        if (widget && isAncestorOf(widget)) for (auto* parent = widget; parent && parent != this; parent = parent->parentWidget()) {
+            if (parent->objectName() != "RackModulatorCard") continue;
+            const auto id = parent->property("sourceId").toString();
+            if (id != m_selected) {
+                setAssigning(false); m_selected = id; QSettings().setValue(key("selected"), id); synchronize(); highlight();
+            }
+            break;
+        }
+    }
     if (object == this && event->type() == QEvent::LanguageChange)
         QTimer::singleShot(0, this, [this] { rebuild(); });
     if (m_consumed && object == m_consumed && (event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick)) { m_consumed.clear(); return true; }
+    if (depthEvent(qobject_cast<QWidget*>(object), event)) return true;
     if (!isVisible() || !m_assigning) return false;
     if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) { setAssigning(false); synchronize(); return true; }
     const bool click = event->type() == QEvent::MouseButtonPress && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton;
@@ -282,29 +419,9 @@ bool RackModulationPanel::eventFilter(QObject* object, QEvent* event) {
     auto* widget = qobject_cast<QWidget*>(object);
     for (auto* control = widget; control && control != m_rack; control = control->parentWidget()) {
         if (!control->property("modulationEligible").toBool() || control->property("modulationChannel").toString() != m_channel) continue;
+        if (!m_slot.isEmpty() && control->property("modulationSlot").toString() != m_slot) continue;
         if (click) m_consumed = widget;
         assign(control->property("modulationSlot").toString(), control->property("modulationParameter").toString()); return true;
     }
     return false;
-}
-void RackModulationPanel::chooseParameter() {
-    setAssigning(false);
-    QDialog dialog(this); dialog.setWindowTitle(tr("Choose parameter")); dialog.resize(470, 440); auto* layout = new QVBoxLayout(&dialog);
-    auto* search = new QLineEdit(&dialog); search->setPlaceholderText(tr("Search devices and parameters")); search->setAccessibleName(search->placeholderText()); layout->addWidget(search);
-    auto* list = new QListWidget(&dialog); layout->addWidget(list, 1);
-    std::vector<const daw::InsertModel*> devices;
-    const auto id = m_channel.toStdString();
-    if (const auto* track = m_controller->project().findTrack(id); track && track->instrument.isLoaded()) devices.push_back(&track->instrument);
-    if (const auto* chain = m_controller->channelInserts(id)) for (const auto& slot : *chain) if (slot.isLoaded()) devices.push_back(&slot);
-    for (const auto& slot : m_controller->miniModules(id)) devices.push_back(&slot);
-    for (const auto* slot : devices) for (const auto& parameter : m_controller->insertParameters(id, slot->id)) {
-        if (!parameter.isAutomatable || parameter.isReadOnly || parameter.id.empty() || !std::isfinite(parameter.minValue) || !std::isfinite(parameter.maxValue) || parameter.minValue >= parameter.maxValue) continue;
-        auto* item = new QListWidgetItem(QString::fromStdString(slot->name) + " → " + QString::fromStdString(parameter.name), list);
-        item->setData(Qt::UserRole, QString::fromStdString(slot->id)); item->setData(Qt::UserRole + 1, QString::fromStdString(parameter.id));
-    }
-    connect(search, &QLineEdit::textChanged, &dialog, [list](const QString& text) { for (int i = 0; i < list->count(); ++i) list->item(i)->setHidden(!list->item(i)->text().contains(text, Qt::CaseInsensitive)); });
-    auto* actions = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog); layout->addWidget(actions);
-    connect(actions, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(actions, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(list, &QListWidget::itemActivated, &dialog, &QDialog::accept); search->setFocus();
-    if (dialog.exec() == QDialog::Accepted) if (const auto* item = list->currentItem()) assign(item->data(Qt::UserRole).toString(), item->data(Qt::UserRole + 1).toString());
 }

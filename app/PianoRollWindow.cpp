@@ -1,5 +1,6 @@
 #include "ScrollMotion.hpp"
 #include "PianoRollWindow.hpp"
+#include "ScriptContextMenu.hpp"
 #include "SlideCurveEditor.hpp"
 #include "SlideNotes.hpp"
 #include "MenuActions.hpp"
@@ -349,8 +350,8 @@ const QCursor& toolCursor(icons::Glyph glyph) {
     auto it = cache.find(int(glyph));
     if (it != cache.end()) return it.value();
     const qreal dpr = qApp->devicePixelRatio();
-    const int size = 24;
-    QPixmap pm(int(size * dpr), int(size * dpr));
+    const int size = 22;
+    QPixmap pm(qRound(size * dpr), qRound(size * dpr));
     pm.setDevicePixelRatio(dpr);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
@@ -362,11 +363,12 @@ const QCursor& toolCursor(icons::Glyph glyph) {
                  QColor(0xFA, 0xFA, 0xFA));
     p.end();
     // Brushes and pointers act at their tips; scissors cut where their blades
-    // cross, and the disable mark acts at the centre of its X.
+    // cross, and other tools act at the centre of the glyph.
     const QPoint hot = glyph == icons::Glyph::Brush   ? QPoint(6, 18)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
-    return *cache.insert(int(glyph), QCursor(pm, hot.x(), hot.y()));
+    const QPoint scaledHot = (QPointF(hot) * (size / 24.0)).toPoint();
+    return *cache.insert(int(glyph), QCursor(pm, scaledHot.x(), scaledHot.y()));
 }
 
 /// Note copy/paste survives changing clip and closing the window, which is the
@@ -5078,6 +5080,10 @@ void PianoRollView::mousePressEvent(QMouseEvent* ev) {
         return;
     }
 
+    // Alt+right-click opens extension actions without changing the existing erase stroke.
+    if(ev->button()==Qt::RightButton&&(ev->modifiers()&Qt::AltModifier)&&ui::scripts::contextAppender) {
+        m_suppressContextMenu=false;ev->accept();return;
+    }
     if (!m_gestureUndoActive) {
         m_controller->beginNoteEdit(m_trackId.toStdString(),
                                     m_clipId.toStdString());
@@ -6107,12 +6113,18 @@ void PianoRollView::keyReleaseEvent(QKeyEvent* ev) {
 }
 
 void PianoRollView::contextMenuEvent(QContextMenuEvent* ev) {
-    if (m_suppressContextMenu) {
+    if (m_suppressContextMenu && ev->reason()!=QContextMenuEvent::Keyboard) {
         // A right-button edit already owns this press; do not open a menu over it.
         m_suppressContextMenu = false;
         ev->accept();
         return;
     }
+    m_suppressContextMenu=false;
+    QMenu menu(this);
+    nlohmann::json notes=nlohmann::json::array();
+    for(const auto& id:m_selected)notes.push_back(id.toStdString());
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","notes"},{"target",{{"track",m_trackId.toStdString()},{"clip",m_clipId.toStdString()},{"note",(ev->reason()==QContextMenuEvent::Keyboard?m_primary:noteAt(ev->pos(),nullptr,nullptr)).toStdString()}}},{"notes",notes}});
+    if(!menu.isEmpty()){menu.exec(ev->globalPos());ev->accept();return;}
     ev->ignore();
 }
 
@@ -6244,7 +6256,7 @@ void PianoRollView::updateCursor(const QPointF& pos) {
             setCursor(toolCursor(icons::Glyph::Knife));
             return;
         case Tool::Mute:
-            setCursor(toolCursor(icons::Glyph::Close));
+            setCursor(toolCursor(icons::Glyph::NoteMute));
             return;
         case Tool::Erase:
             setCursor(toolCursor(icons::Glyph::Eraser));
@@ -6600,7 +6612,7 @@ PianoRollWindow::PianoRollWindow(daw::EngineController* controller,
     fit->setButtonSize(ui::kViewControlWidth, ui::kViewControlHeight);
     connect(fit, &QAbstractButton::clicked, this, [this] { m_view->zoomToFit(); });
     controlsColumn->addWidget(fit);
-    m_timeZoom = new ui::ViewScrubSlider(icons::Glyph::ResizeHorizontal,
+    m_timeZoom = new ui::ViewScrubSlider(icons::Glyph::ZoomIn,
         ui::ViewScrubSlider::Axis::Horizontal, pianoZoomToSlider(kMinFitPxPerBeat), controls);
     m_timeZoom->setObjectName(QStringLiteral("PianoRollTimeZoom"));
     m_timeZoom->setRange(0, kPianoZoomSteps);
@@ -6825,9 +6837,9 @@ void PianoRollWindow::buildToolbar() {
          tr("Slice (2) — hold S to borrow it for one cut")},
         {PianoRollView::Tool::Erase, icons::Glyph::Eraser, tr("Erase (3)")},
         {PianoRollView::Tool::Select, icons::Glyph::Pointer, tr("Select (4 / E / Ctrl)")},
-        {PianoRollView::Tool::Mute, icons::Glyph::Close,
+        {PianoRollView::Tool::Mute, icons::Glyph::NoteMute,
          tr("Disable notes (5) — hold T to borrow it for one note")},
-        {PianoRollView::Tool::Slide, icons::Glyph::Automation, tr("Slide (6)")},
+        {PianoRollView::Tool::Slide, icons::Glyph::NoteSlide, tr("Slide (6)")},
     };
     for (const auto& [tool, glyph, tip] : palette) {
         QToolButton* button = toolbarButton(m_toolbar, glyph, tip, true);
@@ -7193,6 +7205,9 @@ void populateSharedEditorMenu(QMenu& target, QMenu& source) {
 } // namespace
 
 void PianoRollWindow::populateActionsMenu(QMenu& menu) {
+    nlohmann::json notes=nlohmann::json::array();
+    for(const auto& note:selectedNotesForAssistant())notes.push_back(note.id);
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","notes"},{"target",{{"track",m_trackId.toStdString()},{"clip",m_clipId.toStdString()}}},{"notes",notes}});
     menu.addAction(m_importMidiAction);
     menu.addAction(m_exportMidiAction);
     menu.addSeparator();

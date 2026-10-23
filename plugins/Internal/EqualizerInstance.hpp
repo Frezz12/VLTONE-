@@ -3,6 +3,8 @@
 #include "Host/PluginInstance.hpp"
 #include "Internal/EqualizerParams.hpp"
 
+#include <vlt/spectre/Analyzer.hpp>
+
 #include <array>
 #include <atomic>
 #include <complex>
@@ -64,6 +66,8 @@ public:
     void setAnalyzerConfig(const AnalyzerConfig& config) noexcept;
     AnalyzerConfig analyzerConfig() const noexcept;
     void setAuditionBand(int band) noexcept;
+    int auditionBand() const noexcept { return m_auditionBand.load(std::memory_order_acquire); }
+    // Control/UI thread only: consumes Spectre windows once for all EQ views.
     Telemetry telemetry(bool consumeMeters = false) noexcept;
     Telemetry consumeTelemetry() noexcept { return telemetry(true); }
 
@@ -128,7 +132,6 @@ private:
     void collectAnalyzer(double preLeft, double preRight, double postLeft,
                          double postRight, double sideLeft,
                          double sideRight) noexcept;
-    void publishAnalyzerFrame() noexcept;
     void updateAutoGain() noexcept;
     void resetDsp() noexcept;
     std::size_t linearFftSize() const noexcept;
@@ -170,13 +173,9 @@ private:
     std::vector<double> m_linearWindow;
     std::vector<double> m_linearNormalization;
 
-    static constexpr std::size_t kAnalyzerSize = 2048;
-    std::array<std::array<double, kAnalyzerSize>, 6> m_analyzerRing{};
-    std::size_t m_analyzerPosition = 0;
-    std::size_t m_analyzerCountdown = kAnalyzerSize / 2;
-    std::array<std::atomic<float>, kSpectrumBinCount> m_preSpectrum{};
-    std::array<std::atomic<float>, kSpectrumBinCount> m_postSpectrum{};
-    std::array<std::atomic<float>, kSpectrumBinCount> m_sideSpectrum{};
+    // Audio owns capture/reset; the UI owns FFT, ballistics and frame reads.
+    std::array<vlt::spectre::Analyzer, 3> m_analyzers; // pre, post, sidechain
+    std::uint32_t m_analyzerCaptureFlags = 0;
     std::array<std::atomic<float>, kBandCount> m_dynamicTelemetry{};
     std::atomic<std::uint32_t> m_analyzerFlags{0};
     std::atomic<int> m_analyzerSpeed{1};
@@ -187,7 +186,6 @@ private:
     std::atomic<float> m_inputPeakRight{0.0f};
     std::atomic<float> m_outputPeakLeft{0.0f};
     std::atomic<float> m_outputPeakRight{0.0f};
-    std::vector<std::complex<double>> m_analyzerWork;
 
     mutable std::mutex m_stateMutex;
     std::array<double, kParameterCount> m_comparisonA{};

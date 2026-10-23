@@ -124,8 +124,8 @@ bool StripSilenceDialog::checkForTest(const QString& screenshot) {
     QObject::connect(&timeline, &TimelineWidget::stripSilenceRequested, &timeline, [&] { requested = true; });
     if (action) action->trigger();
     check(requested, "audio context menu requests the dialog");
-    check(panel.checkAdaptiveLayoutForTest(), "clip and recording tools fit a narrow context panel");
     const auto second = controller.importAudio(wav, track, 6);
+    check(panel.checkAdaptiveLayoutForTest(), "clip and recording tools fit a narrow context panel");
     {
         StripSilenceDialog batch(controller, {{track, clip}, {track, second}});
         batch.show();

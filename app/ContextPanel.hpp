@@ -44,6 +44,7 @@ class QWidget;
 class ContextPanel : public ui::GlassPanel {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
     ContextPanel(daw::EngineController* controller, ui::SelectionModel* selection,
                  QWidget* parent = nullptr);
 
@@ -182,9 +183,9 @@ private:
     QWidget* buildRecording();
 
     void onSelectionChanged(bool force = false);
-    /// Swap in `next`, animating the change: the old content slides out, the
-    /// plate springs to the new size, the new controls cascade in. The same
-    /// motion whatever changed — clip to clip moves exactly like clip to track.
+    void updateEditAvailability();
+    /// Swap in `next`. Same-kind controls update immediately while the plate
+    /// follows the selection; other context changes also transition the row.
     void transitionTo(QWidget* next, Context context);
     /// The geometry the plate wants inside its host, given its content.
     QRect targetGeometry() const;
@@ -221,6 +222,8 @@ private:
     // a dangling handle behind.
     QPointer<QAbstractAnimation> m_transition;
     std::function<void()> m_applyValues;   // pushes document → current controls
+    std::function<bool(const QString&)> m_retargetTrack;
+    std::function<void()> m_finishEdits;
     bool m_enabled = true;
     bool m_suppressed = false;
     bool m_recordEngaged = false;

@@ -43,7 +43,9 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
     const bool pendingCanApply = pendingPitchQualityChanges && !externallyActive && !pluginAudioActivity();
     if (generation == pluginMainThreadGeneration && !compatibilitySweep && !pendingCanApply) return out;
     pluginMainThreadGeneration = generation;
-    if (compatibilitySweep) pluginCompatibilitySweepTicks = 0;
+    // A real wake already performed the slot sweep. Start a fresh idle
+    // interval instead of immediately repeating it for legacy polling.
+    pluginCompatibilitySweepTicks = 0;
     out.scanned = true;
     pendingPitchQualityChanges = false;
     const bool canApplyQuality = !externallyActive && !pluginAudioActivity();
@@ -130,7 +132,7 @@ AudioPluginServiceResult AudioRuntime::servicePlugins(bool externallyActive) {
                 const auto& event = notifications[i];
                 const bool gesture = event.kind == plugins::PluginEvent::Kind::ParamGestureBegin;
                 if (!gesture && lastParameter[event.paramIndex] != i) continue;
-                if (!gesture) {
+                if (!gesture && event.userGesture) {
                     const std::array<InsertParameter, 1> confirmed{{{parameters[event.paramIndex].id, event.value, true}}};
                     overlayPendingParameters(checkpointParameterEdits[node->instanceId()], confirmed);
                 }

@@ -82,6 +82,7 @@ void EngineController::removeMidiLearn(const std::string &track, const std::stri
 bool EngineController::liveMidiInput(const std::string &trackId, int status, int d1, int d2,
                                      std::uint64_t source, MidiInputStamp stamp,
                                      LiveMidiOrigin origin) {
+    if (m_documentOnly) return false;
     if (status < 0x80 || status > 0xef || d1 < 0 || d1 > 127 || d2 < 0 || d2 > 127 ||
         !std::isfinite(stamp.transportBeats) || !std::isfinite(stamp.tempo) || stamp.tempo <= 0)
         return false;

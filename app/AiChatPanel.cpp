@@ -1,4 +1,5 @@
 #include "AiChatPanel.hpp"
+#include "ScriptService.hpp"
 #include "AiChatShared.hpp"
 
 #include "AiPrefs.hpp"
@@ -447,6 +448,21 @@ AiChatPanel::~AiChatPanel() {
     if (m_client) m_client->cancel();
     if (m_musicClient) m_musicClient->cancel();
     if (m_contentCatalog) m_contentCatalog->cancelRefresh();
+}
+
+void AiChatPanel::setProjectController(daw::EngineController* controller) {
+    if (m_controller == controller) return;
+    // Clients drop their callbacks on cancellation: a late response cannot
+    // execute tools against the next document.
+    if (m_client) m_client->cancel();
+    if (m_musicClient) m_musicClient->cancel();
+    if (m_session) m_session->cancel();
+    m_musicTicker->stop();
+    m_controller = controller;
+    m_session = std::make_unique<ai::AiSession>(*controller);
+    m_compositionCandidates = std::make_shared<ai::CompositionCandidateStore>();
+    m_musicTurns.clear(); m_streaming.clear(); m_transcriptHashes.clear();
+    renderTranscript(); renderMusicTranscript(); refreshContext(); updateBusyState();
 }
 
 QWidget* AiChatPanel::buildHeader() {
@@ -1635,6 +1651,19 @@ void AiChatPanel::send() {
                    QMessageBox::No) == QMessageBox::Yes;
     };
 
+    const auto scriptInvocation=ui::ScriptService::instance()?ui::ScriptService::instance()->invocationContext(m_controller):json::object();
+    context.extensionTool = [scriptInvocation](const std::string& operation,const json& args,ai::InteractionMode mode)->json {
+        auto* scripts=ui::ScriptService::instance();
+        if(!scripts)throw std::runtime_error("Extension runtime is unavailable");
+        if(operation=="search_scripts")return scripts->describe(QString::fromStdString(args.value("query","")));
+        const auto id=QString::fromStdString(args.at("id").get<std::string>());
+        if(operation=="get_script_run")return scripts->status(id);
+        if(operation=="stop_script"){scripts->stop(id);return true;}
+        if(!scriptInvocation.contains("project"))throw std::runtime_error("The assistant's original project is unavailable");
+        const auto run=scripts->run(id,scriptInvocation,args.value("arguments",json::object()),QString::fromLatin1(ai::interactionModeName(mode)).toLower());
+        if(run.isEmpty())throw std::runtime_error("Extension is disabled, unavailable or needs permission approval in Script manager");
+        return {{"id",run.toStdString()}};
+    };
     context.searchCommands = [this](const std::string& query,
                                     ai::InteractionMode mode) {
         json commands = json::array();
@@ -1661,7 +1690,7 @@ void AiChatPanel::send() {
         }
         return json{{"commands", std::move(commands)}};
     };
-    context.invokeCommand = [this](const std::string& id,
+    context.invokeCommand = [this,scriptInvocation](const std::string& id,
                                    ai::InteractionMode mode,
                                    std::string& error) {
         if (!m_commands) {
@@ -1669,6 +1698,14 @@ void AiChatPanel::send() {
             return false;
         }
         const QString commandId = QString::fromStdString(id);
+        if(commandId.startsWith("script.")) {
+            if(auto* scripts=ui::ScriptService::instance()) {
+                if(!scriptInvocation.contains("project")){error="the original project is unavailable";return false;}
+                const auto run=scripts->run(commandId,scriptInvocation,json::object(),QString::fromLatin1(ai::interactionModeName(mode)).toLower());
+                if(!run.isEmpty())return true;
+            }
+            error="extension requires permissions or is unavailable";return false;
+        }
         const ShortcutManager::Command* command =
             m_commands->command(commandId);
         if (!command) {
@@ -2388,7 +2425,7 @@ void AiChatPanel::renderTranscript() {
             });
             card.second->addWidget(button);
         };
-        starter(icons::Glyph::Grid, tr("Program a beat"),
+        starter(icons::Glyph::Pattern, tr("Program a beat"),
             tr("Create a 4-bar drum pattern in the step sequencer with separate kick, snare and hi-hat lanes. Use the project's tempo and choose suitable sounds from my library."));
         starter(icons::Glyph::Mic, tr("Mix a vocal"),
             tr("Mix the selected vocal: inspect levels and the current effects, choose suitable installed plugins, set up compression and de-essing, and add tasteful space using sends. Explain the changes."));

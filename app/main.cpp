@@ -2,8 +2,13 @@
 #include "ScrollMotion.hpp"
 #include "MediaWorker.hpp"
 #include "plugins/PluginManager.hpp"
+#if DAW_ENABLE_VST3
+#include "Vst3/Vst3Module.hpp"
+#endif
 #include "UiPerformanceChecks.hpp"
 #include "MainWindow.hpp"
+#include "McpService.hpp"
+#include "ScriptService.hpp"
 #include "ClipLibraryChecks.hpp"
 #include "StripSilenceDialog.hpp"
 #include "CreateTracksDialog.hpp"
@@ -415,6 +420,7 @@ int main(int argc, char** argv) {
     bool mixerContextCheck = false;
     bool channelColorCheck = false;
     bool creatorCheck = false;
+    bool scriptCheck = false;
     bool offlineCheck = false;
     bool pluginBatchCheck = false;
     bool tempoCheck = false;
@@ -454,6 +460,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--mixercontextcheck") == 0) mixerContextCheck = true;
         else if (std::strcmp(argv[i], "--channel-color-check") == 0) channelColorCheck = true;
         else if (std::strcmp(argv[i], "--creator-check") == 0) creatorCheck = true;
+        else if (std::strcmp(argv[i], "--script-check") == 0) { scriptCheck = true; selftest = true; }
         else if (std::strcmp(argv[i], "--samplercheck") == 0) samplerCheck = true;
         else if (std::strcmp(argv[i], "--slicercheck") == 0) slicerCheck = true;
         else if (std::strcmp(argv[i], "--offlinecheck") == 0) offlineCheck = true;
@@ -538,6 +545,9 @@ int main(int argc, char** argv) {
     ui::registerFontUrlScheme();
     QtWebEngineQuick::initialize();
     AudioApplication app(argc, argv);
+#if DAW_ENABLE_VST3
+    const auto pluginModules = qScopeGuard([] { daw::plugins::Vst3Module::releaseUnusedModules(); });
+#endif
     // Readers may still be decoding a theme image when a window closes. Join
     // them while Qt's image plugins and queued-call receiver are still alive.
     const auto mediaTasks = qScopeGuard([] { ui::finishThemeMediaTasks(); });
@@ -646,6 +656,12 @@ int main(int argc, char** argv) {
             qputenv("DAW_PRESET_ROOT",
                     QDir(headlessPrefsDir).filePath("presets").toUtf8());
         }
+        // Tests must neither discover nor autostart the user's extensions.
+        // A dedicated fixture library can still be supplied explicitly.
+        if (!qEnvironmentVariableIsSet("VLT_SCRIPT_LIBRARY")) {
+            qputenv("VLT_SCRIPT_LIBRARY",
+                    QDir(headlessPrefsDir).filePath("scripts").toUtf8());
+        }
     }
 
     // Select the backend after settings isolation, before creating any Quick
@@ -719,6 +735,37 @@ int main(int argc, char** argv) {
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_KNOB_APPEARANCE_ONLY")) {
         return ui::checkKnobAppearanceForTest(qEnvironmentVariable("DAW_KNOB_APPEARANCE_SHOTS")) ? 0 : 77;
     }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PERFORMANCE_ONLY")) {
+        MainWindow window(false);
+        return window.checkPerformanceWindowForTest(qEnvironmentVariable("DAW_PERFORMANCE_SHOTS")) ? 0 : 99;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_PROJECT_TABS_ONLY")) {
+        MainWindow window(false);
+        return window.checkProjectTabsForTest(qEnvironmentVariable("DAW_PROJECT_TABS_SHOTS")) ? 0 : 100;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_MCP_ONLY")) {
+        MainWindow window(false);
+        return ui::McpService::runCheck(window, qEnvironmentVariable("DAW_MCP_SHOTS")) ? 0 : 101;
+    }
+    // Browser keyboard checks must run independently of project-dialog and
+    // remote-command fixtures, like the other focused editor checks below.
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_BROWSER_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.populateDemo();
+        window.resize(1280, 800);
+        window.show();
+        QApplication::processEvents();
+        QTemporaryDir fixture(QDir::temp().filePath("daw-selftest-browser-XXXXXX"));
+        const QString audio = fixture.filePath("demo.wav");
+        const QString midi = fixture.filePath("phrase.mid");
+        const QString demo = QDir::temp().filePath("daw_demo_tone.wav");
+        const bool ok = fixture.isValid() && QFile::copy(demo, audio) &&
+            writeDemoMidiFile(midi) && window.checkBrowser(fixture.path(), audio, midi);
+        std::fprintf(stderr, "%s Browser: audio/MIDI previews, sample replacement and organization\n",
+                     ok ? "PASS" : "FAIL");
+        window.endRecoverySessionForTest();
+        return ok ? 0 : 5;
+    }
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_TRACK_OVERVIEW_ONLY")) {
         return TrackOverviewPanel::checkForTest(qEnvironmentVariable("DAW_TRACK_OVERVIEW_SHOTS")) ? 0 : 76;
     }
@@ -761,6 +808,7 @@ int main(int argc, char** argv) {
     if (midiAuditionCheck) return PianoRollView::checkAuditionForTest() ? 0 : 79;
     if (mixerContextCheck) return ChannelStrip::checkContextMenusForTest() ? 0 : 80;
     if (channelColorCheck) return ChannelStrip::checkColorForTest() ? 0 : 82;
+    if (scriptCheck) return ui::ScriptService::runCheck(qEnvironmentVariable("VLT_SCRIPT_CHECK_DIR")) ? 0 : 85;
     if (creatorCheck) return ui::CreatorWindow::runCheck(qEnvironmentVariable("DAW_CREATOR_CHECK_DIR")) ? 0 : 83;
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_SIDECHAIN_ONLY")) {
         MainWindow window(/*openDevice=*/false);
@@ -783,6 +831,20 @@ int main(int argc, char** argv) {
         window.show();
         return window.checkRecordingContextForTest() &&
                        window.checkTypingKeyboard() ? 0 : 75;
+    }
+    if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_NATIVE_WINDOWS_ONLY")) {
+        MainWindow window(/*openDevice=*/false);
+        window.resize(1200, 800);
+        window.show();
+        window.populateDemo();
+        QApplication::processEvents();
+        window.openPluginManager();
+        window.openSettings(SettingsWindow::kInterfaceTab);
+        window.openDemoSampler();
+        return InternalEditorFrame::checkPlacementForTest() &&
+               window.checkSettingsViewportForTest() &&
+               window.checkAuxiliaryWindowPolicyForTest() &&
+               window.checkPluginKeyboardForTest() ? 0 : 18;
     }
     if (selftest && qEnvironmentVariableIsSet("DAW_SELFTEST_SETTINGS_ONLY")) {
         MainWindow window(/*openDevice=*/false);
@@ -1409,10 +1471,15 @@ int main(int argc, char** argv) {
                            });
     }
 
+    auto openingLaunchDocuments = std::make_shared<bool>(true);
     const bool externalLaunchRequest = projectOpenFilter.setHandler(
-        [&window](const QString& path) { window.openExternalPath(path); },
+        [&window, openingLaunchDocuments](const QString& path) {
+            if (std::exchange(*openingLaunchDocuments, false)) window.openStartupPath(path);
+            else window.openExternalPath(path);
+        },
         !headless && !projectArgument.isEmpty()
             ? QStringList{projectArgument} : QStringList{});
+    *openingLaunchDocuments = false;
     if (!headless && !recoveredAtStartup && !externalLaunchRequest)
         window.openConfiguredStartupTemplate();
 
@@ -2027,6 +2094,10 @@ int main(int argc, char** argv) {
                 !check(window.checkKnobAutomationForTest(), "knob automation commands") ||
                 !check(window.checkParameterDockForTest(), "parameter dock")) return 22;
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
+        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_CONTEXT_ONLY")) {
+            window.populateDemo();
+            if (!window.checkContextSyncForTest()) return 74;
+            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_RULER_ONLY")) {
             window.populateDemo();
             if (!window.checkTimelineRulersForTest()) return 74;
@@ -2068,22 +2139,6 @@ int main(int argc, char** argv) {
                              "focused interaction selftest failed\n");
                 return 17;
             }
-            QTimer::singleShot(0, &app, [] { QApplication::quit(); });
-        } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_BROWSER_ONLY")) {
-            window.populateDemo();
-            QTemporaryDir fixture(
-                QDir::temp().filePath("daw-selftest-browser-XXXXXX"));
-            const QString audio = fixture.filePath("demo.wav");
-            const QString midi = fixture.filePath("phrase.mid");
-            const QString demo = QDir::temp().filePath("daw_demo_tone.wav");
-            if (!fixture.isValid() || !QFile::copy(demo, audio) ||
-                !writeDemoMidiFile(midi) ||
-                !window.checkBrowser(fixture.path(), audio, midi)) {
-                std::fprintf(stderr, "focused browser selftest failed\n");
-                return 5;
-            }
-            std::fprintf(stderr,
-                         "PASS Browser: rounded rows, audio/MIDI previews and empty selection\n");
             QTimer::singleShot(0, &app, [] { QApplication::quit(); });
         } else if (qEnvironmentVariableIsSet("DAW_SELFTEST_NOTEBOOK_ONLY")) {
             if (!window.checkNotebookForTest()) return 41;

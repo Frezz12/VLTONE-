@@ -8,7 +8,6 @@
 class QLabel;
 class QLineEdit;
 class QListWidget;
-class QMouseEvent;
 class QPushButton;
 class QWidget;
 
@@ -61,9 +60,6 @@ public:
 
     QString selectedPath() const { return m_selectedPath; }
     bool checkForTest() const;
-
-protected:
-    void mousePressEvent(QMouseEvent* event) override;
 
 private:
     void browse();

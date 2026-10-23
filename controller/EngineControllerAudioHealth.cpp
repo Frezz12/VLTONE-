@@ -31,6 +31,7 @@ bool EngineController::applyChannelSnapshot(const std::string& channelId,
         track->volume = std::clamp(state.volume, 0.f, 2.f);
         track->pan = std::clamp(state.pan, -1.f, 1.f);
         if (includeRouting) {
+            track->channelColor = state.channelColor ? std::optional<InsertModel>(state.channelColor->model) : std::nullopt;
             track->muted = state.muted; track->soloed = state.soloed; track->mono = state.mono;
             track->outputBusId = state.outputBusId != channelId && m_project.findTrack(state.outputBusId)
                 ? state.outputBusId : std::string{};
@@ -42,11 +43,27 @@ bool EngineController::applyChannelSnapshot(const std::string& channelId,
     }
     replaceModulationAutomation(m_project, channelId, state.modulationAutomation);
     invalidateAutomationReadoutCache();
-    const ChainReplacement replacement{channelId, state.inserts};
+    const ChainReplacement replacement{channelId, state.inserts,
+        includeRouting && track && trackAccepts(track->kind, ClipKind::Midi) ? &state : nullptr};
     if (!applyChains(std::span(&replacement, 1))) { m_project = previous; rebuildGraph(); return false; }
     if (auto* groups = mutableRackGroups(channelId)) *groups = state.rackGroups;
     syncAllTrackGains();
     return true;
+}
+
+audio::Result EngineController::restartInsert(const AudioPluginAddress& address, std::uint64_t project) {
+    if (project != m_projectGeneration || !address.instance ||
+        m_runtime->pluginInstanceId(address) != address.instance)
+        return audio::Result::fail(audio::EngineError::InvalidArgument, "The plugin or project has changed.");
+    if (isPlaying() || isRecording() || isCountingIn())
+        return audio::Result::fail(audio::EngineError::EngineRunning, "Stop playback and recording before restarting the plugin.");
+    if (m_runtime->hasPluginFault(address)) {
+        const auto status = m_runtime->pluginRuntimeStatus(address.channelId, address.slotId);
+        return retryInsertRecovery(address.channelId, address.slotId, {project, status.address.instance});
+    }
+    return m_runtime->recoverPlugin(address, [&] {
+        if (m_pluginRetiring) m_pluginRetiring(address.channelId, address.slotId);
+    }, true);
 }
 
 void EngineController::publishAudioFailure(AudioFailureNotice notice) {

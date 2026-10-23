@@ -31,6 +31,7 @@ inline const char* kindName(Kind kind) noexcept {
 }
 struct Source {
     std::string id, name;
+    std::string ownerSlotId; // Presentation owner; routes may still target other devices.
     Kind kind = Kind::Lfo;
     bool enabled = true;
     Wave wave = Wave::Sine;
@@ -197,7 +198,7 @@ inline bool valid(const Source& s) noexcept {
         previous = p.x;
     }
     for (const auto v : s.steps) if (!between(v, 0, 1)) return false;
-    return !s.id.empty() && s.id.size() <= 128 && s.name.size() <= 256 &&
+    return !s.id.empty() && s.id.size() <= 128 && s.name.size() <= 256 && s.ownerSlotId.size() <= 128 &&
         int(s.kind) >= 0 && int(s.kind) <= 4 && int(s.wave) >= 0 && int(s.wave) <= 4 &&
         int(s.tap) >= 0 && int(s.tap) <= 2 && between(s.rate, 0.01, 20.0) &&
         between(s.beats, 0.03125, 128.0) && between(s.phase, 0.0, 1.0) &&

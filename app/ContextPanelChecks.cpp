@@ -1,4 +1,5 @@
 #include "ContextPanel.hpp"
+#include "Controls.hpp"
 #include "EngineController.hpp"
 #include "PluginQuickAdder.hpp"
 #include "SelectionModel.hpp"
@@ -9,22 +10,29 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEventLoop>
+#include <QPropertyAnimation>
 #include <QSettings>
 #include <QSlider>
 #include <QTimer>
 
 #include <cstdio>
+#include <cmath>
 
 bool ContextPanel::checkAdaptiveLayoutForTest() {
     // The check owns an isolated headless preference store. Start from the
     // moving mode so prior user settings cannot make geometry assertions vary.
     QSettings().setValue(QStringLiteral("contextPanel/followSelection"), true);
     ui::ClipSel audio;
+    ui::ClipSel secondAudio;
     ui::ClipSel midi;
     for (const auto& track : m_controller->project().tracks) {
         for (const auto& clip : track.clips) {
-            if (audio.clipId.isEmpty() && clip.kind == daw::ClipKind::Audio)
-                audio = {QString::fromStdString(track.id), QString::fromStdString(clip.id)};
+            if (clip.kind == daw::ClipKind::Audio) {
+                if (audio.clipId.isEmpty())
+                    audio = {QString::fromStdString(track.id), QString::fromStdString(clip.id)};
+                else if (secondAudio.clipId.isEmpty())
+                    secondAudio = {QString::fromStdString(track.id), QString::fromStdString(clip.id)};
+            }
             if (midi.clipId.isEmpty() && clip.kind == daw::ClipKind::Midi)
                 midi = {QString::fromStdString(track.id), QString::fromStdString(clip.id)};
         }
@@ -53,12 +61,15 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     const int home = strip.width() / 2 + 64;
     panel.setHomeAnchorProvider(
         [&](int& centre) { centre = home; return true; });
+    QPointer<QWidget> retiredRow = panel.m_content;
     selection.setClips({audio});
     panel.relayout();
     const auto check = [](bool passed, const char* detail) {
         std::fprintf(stderr, "%s Context layout: %s\n", passed ? "PASS" : "FAIL", detail);
         return passed;
     };
+    if (!check(!retiredRow || !retiredRow->isVisible(),
+               "interrupted transition hides the retired row before deferred deletion")) return false;
     const auto visibleActions = [&] {
         int count = 0;
         for (auto* widget : panel.findChildren<QWidget*>())
@@ -66,11 +77,21 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
         return count;
     };
     const auto fits = [&] {
-        if (panel.x() < left || panel.x() + panel.width() > right) return false;
+        if (panel.x() < left || panel.x() + panel.width() > right) {
+            std::fprintf(stderr, "Context bounds: panel=%d..%d allowed=%d..%d\n",
+                         panel.x(), panel.x() + panel.width(), left, right);
+            return false;
+        }
         for (auto* widget : panel.findChildren<QWidget*>()) {
             if (!widget->property("contextPriority").isValid() || !widget->isVisible()) continue;
             const int x = widget->mapTo(&panel, QPoint()).x();
-            if (x < 0 || x + widget->width() > panel.width()) return false;
+            if (x < 0 || x + widget->width() > panel.width()) {
+                std::fprintf(stderr, "Context action overflow: %s/%s x=%d width=%d panel=%d currentRow=%d\n",
+                             widget->metaObject()->className(), qPrintable(widget->objectName()),
+                             x, widget->width(), panel.width(),
+                             int(panel.m_content && panel.m_content->isAncestorOf(widget)));
+                return false;
+            }
         }
         return true;
     };
@@ -133,9 +154,34 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     anchor = left;
     panel.relayout();
     if (!check(panel.x() == left, "selected clip follows its left-edge anchor")) return false;
+    if (!check(!secondAudio.clipId.isEmpty(), "same-kind motion fixture has two audio clips")) return false;
+    const QRect initial = panel.geometry();
+    anchor = right;
+    selection.setClips({secondAudio});
+    if (!check(panel.geometry().topLeft() == initial.topLeft() && panel.m_drift &&
+                   panel.m_drift->state() == QAbstractAnimation::Running &&
+                   panel.m_content->isVisible() && !panel.m_contentSliding && !panel.m_outgoing,
+               "same-kind clip selection moves the plate without delaying its controls")) return false;
+    const QRect destination = panel.targetGeometry();
+    panel.m_drift->setCurrentTime(panel.m_drift->duration() / 2);
+    const QRect halfway = panel.geometry();
+    if (!check(halfway.x() > initial.x() && halfway.x() < destination.x(),
+               "same-kind panel movement passes through intermediate positions")) return false;
+    anchor = left;
+    selection.setClips({audio});
+    if (!check(panel.geometry() == halfway && panel.m_drift &&
+                   panel.m_drift->startValue().toRect() == halfway,
+               "rapid reselection continues from the current position")) return false;
+    panel.m_drift->setCurrentTime(panel.m_drift->duration());
+    if (!check(panel.geometry() == panel.targetGeometry(),
+               "interrupted movement settles above the latest selected clip")) return false;
     anchor = right;
     panel.followSelection();
     selection.setTracks({audio.trackId});
+    if (!check(centredOnReadout() && panel.m_content &&
+                   panel.m_content->isVisible() && !panel.m_contentSliding &&
+                   !panel.m_outgoing,
+               "track tools are ready during selection without a delayed slide")) return false;
     settle();
     if (!check(centredOnReadout(), "clip-to-track selection returns under the transport readout")) return false;
     const QRect trackGeometry = panel.geometry();
@@ -175,6 +221,9 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     left = right - 180;
     panel.relayout();
     panel.openPluginSearch();
+    if (!check(panel.m_quickAdder && panel.m_quickAdder->isExpanded() &&
+                   panel.m_quickAdder->isVisible(),
+               "hidden plugin action becomes available in the shortcut event")) return false;
     { QEventLoop loop; QTimer::singleShot(360, &loop, &QEventLoop::quit); loop.exec(); }
     auto* search = panel.findChild<PluginQuickAdder*>();
     // Eight-pixel flare and fourteen-pixel end padding remain on each side.
@@ -182,7 +231,10 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
                search->width() <= right - left - 44,
                "hidden plugin action opens a search that fits the narrow strip")) return false;
     search->closeSearch();
+    settle();
     panel.relayout();
+    if (!check(!search->isExpanded() && fits() && visibleActions() > 1,
+               "closing plugin search restores actions within the same narrow bounds")) return false;
 
     // Change context, then narrow the bounds before the swap has completed.
     selection.setTracks({audio.trackId});
@@ -218,6 +270,89 @@ bool ContextPanel::checkAdaptiveLayoutForTest() {
     if (!check(panel.isVisible() && importButton && create && alignment &&
         importButton->isVisible() && create->isVisible() && alignment->isVisible(),
         "empty selection shows import, create track and vocal alignment")) return false;
+
+    {
+        daw::EngineController controller;
+        if (!controller.initialize(48000.0, 512, false)) return false;
+        const auto first = controller.addTrack(daw::TrackKind::Audio, "Context first");
+        const auto second = controller.addTrack(daw::TrackKind::Audio, "Context second");
+        const auto folder = controller.addFolder(false, "Context folder");
+        ui::SelectionModel tracks;
+        QWidget host;
+        host.resize(1000, ui::kToolPanelHeight);
+        ContextPanel reused(&controller, &tracks, &host);
+        host.show();
+        tracks.setTracks({QString::fromStdString(first)});
+        QWidget* row = reused.m_content;
+        auto* volume = row->findChild<ui::MiniSlider*>("ContextPanelTrackVolume");
+        auto* pan = row->findChild<ui::MiniSlider*>("ContextPanelTrackPan");
+        auto* mute = row->findChild<QAbstractButton*>("ContextPanelTrackMute");
+        auto* adder = reused.m_quickAdder.data();
+        if (!check(volume && pan && mute && adder, "track fixture exposes level, pan, mute and plugins")) return false;
+        tracks.setTracks({QString::fromStdString(second)});
+        if (!check(reused.m_content == row &&
+                   reused.m_content->findChild<ui::MiniSlider*>("ContextPanelTrackVolume") == volume &&
+                   reused.m_content->findChild<ui::MiniSlider*>("ContextPanelTrackPan") == pan &&
+                   reused.m_content->findChild<QAbstractButton*>("ContextPanelTrackMute") == mute &&
+                   reused.m_quickAdder == adder && adder->trackId() == QString::fromStdString(second),
+                   "compatible track selection retains the controls and updates the plugin target")) return false;
+        volume->editStarted();
+        volume->valueChanged(-6.0);
+        volume->editFinished();
+        pan->editStarted();
+        pan->valueChanged(35.0);
+        pan->editFinished();
+        mute->click();
+        const auto unchanged = [&] {
+            const auto* track = controller.project().findTrack(first);
+            return track && track->volume == 1.0f && track->pan == 0.0f && !track->muted;
+        };
+        const auto* edited = controller.project().findTrack(second);
+        if (!check(unchanged() && edited &&
+                   std::abs(edited->volume - std::pow(10.0, -6.0 / 20.0)) < 1e-6 &&
+                   std::abs(edited->pan - 0.35f) < 1e-6 && edited->muted,
+                   "retained volume, pan and mute edit only the newly selected track")) return false;
+
+        // A press before the first value change is already a gesture.
+        volume->editStarted();
+        tracks.setTracks({QString::fromStdString(first)});
+        if (!check(reused.m_content != row,
+                   "active control press rebuilds instead of retargeting its gesture")) return false;
+
+        tracks.setTracks({QString::fromStdString(second)});
+        QPointer<ui::MiniSlider> retiring =
+            reused.m_content->findChild<ui::MiniSlider*>("ContextPanelTrackVolume");
+        retiring->editStarted();
+        retiring->valueChanged(-12.0);
+        tracks.setTracks({QString::fromStdString(first)});
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        if (!check(unchanged() &&
+                   retiring.isNull() &&
+                   std::abs(controller.project().findTrack(second)->volume -
+                            std::pow(10.0, -12.0 / 20.0)) < 1e-6,
+                   "retiring control commits before deletion without a physical release")) return false;
+        controller.undo();
+        if (!check(unchanged() &&
+                   std::abs(controller.project().findTrack(second)->volume -
+                            std::pow(10.0, -6.0 / 20.0)) < 1e-6,
+                   "retiring control gesture preserves undo for its original track")) return false;
+
+        tracks.setTracks({QString::fromStdString(second)});
+        reused.openPluginSearch();
+        row = reused.m_content;
+        adder = reused.m_quickAdder;
+        if (!check(adder && adder->isExpanded(), "plugin search is open before track switch")) return false;
+        tracks.setTracks({QString::fromStdString(first)});
+        if (!check(reused.m_content != row &&
+                   adder->trackId() == QString::fromStdString(second) &&
+                   reused.m_quickAdder->trackId() == QString::fromStdString(first),
+                   "open plugin search keeps its target when a replacement row is created")) return false;
+        row = reused.m_content;
+        tracks.setTracks({QString::fromStdString(folder)});
+        if (!check(reused.m_content != row &&
+                   !reused.m_content->findChild<ui::MiniSlider*>("ContextPanelTrackVolume"),
+                   "a folder with no channel rebuilds the compatible tool layout")) return false;
+    }
     return check(viewControls->isVisible(),
                  "navigation controls remain visible after the arrangement widens");
 }

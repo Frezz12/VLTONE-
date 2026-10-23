@@ -91,6 +91,17 @@ int main() {
           "prepares immutable sources and deduplicates selection");
     auto plan = analyze(sources, options);
     check(plan[0].size() == 2, "stereo cancellation cannot masquerade as silence");
+    {
+        auto cut = sources.front().placements;
+        cut.front().lengthSamples = 12000;
+        cut.front().sourceEndFrame = 12000;
+        const auto exact = buildSilenceEnvelope(cut, 1, 48000);
+        const auto kept = detectSilenceRegions(exact, exactSettings(), 0, 120);
+        check(kept.size() == 1 && near(kept.front().end, .25, .001),
+              "analysis does not mistake playback smoothing for source material after a cut");
+        check(!cut.front().edgeTransitionsRendered,
+              "analysis leaves the playback source snapshot unchanged");
+    }
     std::vector<EngineController::ClipAddress> created;
     const auto depth = controller.undoDepth();
     check(controller.applyStripSilence(sources, plan, options, created).isOk() && created.size() == 2,

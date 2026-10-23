@@ -19,6 +19,7 @@ namespace daw { class EngineController; }
 class TrackOverviewPanel final : public QWidget {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller) { m_controller = controller; m_structure.clear(); refresh(); }
     explicit TrackOverviewPanel(daw::EngineController* controller, QWidget* parent = nullptr);
     void refresh();
     void setSelectedTracks(const QStringList& ids, const QString& primary = {});

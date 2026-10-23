@@ -1579,10 +1579,7 @@ QSize PluginEditorWindow::boundedWindowSizeForTest(const QSize& requested,
 
 QSize PluginEditorWindow::boundedWindowSize(const QSize& requested) const {
     if (auto* frame = qobject_cast<InternalEditorFrame*>(parentWidget())) {
-        // Internal editors are bounded by the DAW workspace, not by the whole
-        // monitor. Giving a resizable plugin the monitor size and shrinking
-        // only its host frame leaves the plugin drawing a larger image through
-        // a smaller viewport — the exact cropped/incorrect-scale failure.
+        // Subtract the native frame before negotiating the vendor UI size.
         return boundedToAvailable(requested, frame->maximumContentSize());
     }
     QScreen* target = parentWidget() ? parentWidget()->screen() : screen();

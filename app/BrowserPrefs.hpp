@@ -23,14 +23,20 @@ struct Collection {
     QStringList paths;
 };
 
-/// An icon-only shortcut to a collection. The all-folders tab is implicit and
-/// permanent; these are the optional tabs beside it.
+/// A shortcut to a collection in the browser sidebar.
 struct Tab {
     QString collectionId;
     QString icon;
 };
 
-inline constexpr int kMaxTabs = 8; // including the permanent all-folders tab
+inline constexpr int kMaxTabs = 33; // 32 custom shortcuts plus the implicit Files destination
+
+inline const QString kPluginsTab = QStringLiteral("browser-plugins");
+inline const QString kInstrumentsTab = QStringLiteral("browser-instruments");
+inline const QString kPresetsTab = QStringLiteral("browser-presets");
+bool isDeviceTab(const QString& id);
+bool sidebarExpanded();
+void setSidebarExpanded(bool expanded);
 
 QString favoritesId();
 QVector<Collection> collections();

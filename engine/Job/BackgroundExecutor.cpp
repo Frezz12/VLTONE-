@@ -37,6 +37,13 @@ BackgroundExecutor::Handle BackgroundExecutor::submit(std::function<void()> work
     m_changed.notify_all();
     return task;
 }
+void BackgroundExecutor::cancel(const Handle& task) {
+    if (!task) return;
+    std::lock_guard lock(m_mutex);
+    task->cancelled = true;
+    std::erase(m_queue, task);
+    if (!task->running) task->complete = true;
+}
 void BackgroundExecutor::cancelAndWait(const Handle& task) {
     if (!task) return;
     std::unique_lock lock(m_mutex);

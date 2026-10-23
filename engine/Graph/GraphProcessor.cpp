@@ -24,14 +24,19 @@ void GraphProcessor::setGraph(std::shared_ptr<const CompiledGraph> graph) {
     // take, which meant a rebuild landing mid-block let the renderer index a
     // moved-from vector.
     const std::size_t nodeCount = graph ? graph->nodes.size() : 0;
-    m_jobs.prepare(std::max<std::size_t>(nodeCount, 64));
+    if (graph) m_jobs.prepare(std::max<std::size_t>(nodeCount, 64));
+    std::shared_ptr<const CompiledGraph> previous, retired;
     {
         std::lock_guard lock(m_graphOwnerMutex);
-        if (m_graphOwner) m_retiredGraphs.push_back(std::move(m_graphOwner));
+        previous = std::move(m_graphOwner);
         m_graphOwner = std::move(graph);
         m_graphRaw.store(m_graphOwner.get(), std::memory_order_seq_cst);
+        const auto* hazard = m_graphHazard.load(std::memory_order_seq_cst);
+        if (m_retiredGraph.get() != hazard) retired = std::move(m_retiredGraph);
+        if (previous.get() == hazard) m_retiredGraph.swap(previous);
     }
-    reclaimRetired();
+    // Node/plugin destruction can be slow. It must neither hold the snapshot
+    // mutex needed by UI observers nor run on the rendering thread.
 }
 
 std::shared_ptr<const CompiledGraph> GraphProcessor::graph() const {
@@ -50,14 +55,6 @@ const CompiledGraph* GraphProcessor::acquireGraph() noexcept {
 
 void GraphProcessor::releaseGraph() noexcept {
     m_graphHazard.store(nullptr, std::memory_order_release);
-}
-
-void GraphProcessor::reclaimRetired() {
-    const CompiledGraph* hazard = m_graphHazard.load(std::memory_order_seq_cst);
-    std::lock_guard lock(m_graphOwnerMutex);
-    std::erase_if(m_retiredGraphs, [hazard](const auto& graph) {
-        return graph.get() != hazard;
-    });
 }
 
 FrameCount GraphProcessor::latencySamples() const {
@@ -130,11 +127,16 @@ void GraphProcessor::processNode(const CompiledGraph& graph,
                                   unsigned workerIndex, double* nodeCost) {
     const ProcessContext context = makeContext(graph, entry);
     const PcmReadScope pcmRead(!m_offline);
-    const bool measured = m_profileBlock || nodeCost;
+    const bool diagnostics = !m_offline && (m_measureBlock || entry.node->alwaysMeasureProcessing());
+    const bool measured = diagnostics || m_profileBlock || nodeCost;
     const auto started = measured ? rt::nowNanos() : 0;
+    if (diagnostics) entry.node->diagnostics.begin(started);
     entry.node->process(context);
     if (measured) {
-        const auto elapsed = rt::nowNanos() - started;
+        const auto finished = rt::nowNanos();
+        const auto elapsed = finished - started;
+        if (diagnostics) entry.node->diagnostics.finish(finished, elapsed,
+            graph.sampleRate > 0 ? std::uint64_t(double(m_frames) * 1e9 / graph.sampleRate) : 0);
         if (nodeCost) *nodeCost = double(elapsed);
         if (m_profileBlock) m_jobs.recordProfile(workerIndex,
             {graph.generation, elapsed, m_position, entry.id, workerIndex, rt::ProfileEvent::Kind::Node});
@@ -250,6 +252,7 @@ Status GraphProcessor::processBlock(const AudioBlock& output, FrameCount frames,
     m_transport = transport;
     m_fuseBlock = m_taskFusion.load(std::memory_order_relaxed);
     m_profileBlock = m_jobs.profiling();
+    m_measureBlock = m_diagnosticsEnabled.load(std::memory_order_relaxed);
     prepareMidiTimeline(*snapshot, frames, timelinePosition, playing, offline);
 
     // A compact graph with expensive independent plugins can still benefit

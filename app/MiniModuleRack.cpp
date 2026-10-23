@@ -49,10 +49,14 @@ QString caption(const std::string &name) {
   return QCoreApplication::translate("MiniModuleRack", name.c_str());
 }
 QString formatted(const Control &c, double value) {
+  if ((c.id == "lowcut" && c.name == "Low Cut" && value <= 20) ||
+      (c.id == "highcut" && c.name == "High Cut" && value >= 20000))
+    return caption("Off");
   if (c.unit == "%")
     return QString::number(value * (c.minimum >= 0 && c.maximum <= 1 ? 100 : 1), 'f', 0) + QStringLiteral("%");
   if (c.unit == "Hz")
-    return QString::number(value, 'f', 2) + QStringLiteral(" Hz");
+    return value >= 1000 ? QString::number(value / 1000, 'f', 1) + QStringLiteral(" kHz")
+                        : QString::number(value, 'f', value < 20 ? 2 : 0) + QStringLiteral(" Hz");
   return QString::number(value, 'f', 1) + (c.unit.empty() ? QString{} : " " + QString::fromStdString(c.unit));
 }
 QColor faceColor(const Appearance &a) {
@@ -256,8 +260,10 @@ protected:
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setPen(m_ink);
+    const auto label = text() == "Pitch / Formant" && fontMetrics().horizontalAdvance(text()) > width()
+                           ? QStringLiteral("Formant") : text();
     p.drawText(rect(), Qt::AlignCenter,
-               fontMetrics().elidedText(text(), Qt::ElideRight, width()));
+               fontMetrics().elidedText(label, Qt::ElideRight, width()));
   }
   void mousePressEvent(QMouseEvent *e) override {
     m_start = e->pos();
@@ -469,6 +475,8 @@ public:
       m_mode = selector(m_body, "MiniModuleMode");
       m_mode->setAccessibleName(tr("Module mode"));
       m_mode->setToolTip(tr("Sound mode"));
+      if (model.miniModule->id == "pitch-formant")
+        m_mode->setToolTip(caption("Live: lower latency. Pro: smoother processing with more latency. Both modes use delay compensation."));
       for (const auto &mode : model.miniModule->modes)
         m_mode->addItem(caption(mode.name), QString::fromStdString(mode.id));
       body->addWidget(m_mode);
@@ -717,7 +725,7 @@ MiniModuleRack::MiniModuleRack(daw::EngineController *controller,
   m_power->setObjectName("ChannelMiniPower");
   m_power->setAccessibleName(tr("Bypass all mini modules on this channel"));
   m_power->setButtonSize(20, 20);
-  m_power->setGlyphSize(14);
+  m_power->setGlyphSize(13);
   m_power->setProperty("circular", true);
   m_power->setFocusPolicy(Qt::StrongFocus);
   m_power->setCheckable(true);
@@ -749,7 +757,7 @@ MiniModuleRack::MiniModuleRack(daw::EngineController *controller,
   settings->setObjectName("ChannelStripMenu");
   settings->setAccessibleName(tr("Channel strip settings"));
   settings->setButtonSize(18, 20);
-  settings->setGlyphSize(14);
+  settings->setGlyphSize(13);
   settings->setProperty("circular", true);
   settings->setFocusPolicy(Qt::StrongFocus);
   connect(settings, &QAbstractButton::clicked, this, [this, settings] {
@@ -927,7 +935,7 @@ void MiniModuleRack::addMenu(const QPoint &point, const QString &replace) {
       emit edited();
     });
   };
-  for (const auto *type : {"color", "doubler", "chorus"})
+  for (const auto type : daw::plugins::mini::builtinIds())
     add(daw::plugins::mini::builtin(type));
   const auto files = MiniModuleLibrary::entries();
   if (!files.empty())

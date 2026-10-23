@@ -237,9 +237,9 @@ bool MainWindow::checkNotebookForTest() {
     if (ok) {
         // Synthetic key delivery exercises the application's event filters;
         // Chromium text insertion and document persistence are checked above.
-        const auto depth = m_controller.undoDepth();
+        const auto depth = projectController().undoDepth();
         const auto selected = m_selectedTrackId.toStdString();
-        const auto* track = m_controller.project().findTrack(selected);
+        const auto* track = projectController().project().findTrack(selected);
         const bool muted = track && track->muted;
         const bool solo = track && track->soloed;
         for (const auto key : {Qt::Key_M, Qt::Key_S, Qt::Key_T}) {
@@ -249,9 +249,9 @@ bool MainWindow::checkNotebookForTest() {
             QApplication::sendEvent(editor, &press);
             QApplication::sendEvent(editor, &release);
         }
-        track = m_controller.project().findTrack(selected);
+        track = projectController().project().findTrack(selected);
         ok = track && track->muted == muted && track->soloed == solo &&
-             m_controller.undoDepth() == depth && notebook->isVisible();
+             projectController().undoDepth() == depth && notebook->isVisible();
         if (!ok) error = QStringLiteral("notebook typing triggered track shortcuts");
     }
     if (ui::graphics::gpuWorkspaceEnabled()) {
@@ -295,7 +295,7 @@ bool MainWindow::checkNotebookForTest() {
 }
 
 void MainWindow::openNotebookForShot() {
-    if (m_controller.notebookHtml().empty()) m_controller.setNotebookHtml(
+    if (projectController().notebookHtml().empty()) projectController().setNotebookHtml(
         "<h1>Session notes</h1><p>Friday, 9 October · Rough mix</p>"
         "<h2>Next pass</h2><ul><li>Bring the vocal forward in the chorus.</li>"
         "<li>Keep the low end tight around the kick.</li>"

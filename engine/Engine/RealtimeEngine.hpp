@@ -177,6 +177,7 @@ public:
     BlockResult lastBlockResult() const noexcept { return m_lastBlockResult.load(std::memory_order_relaxed); }
     std::uint64_t failedBlocks() const noexcept { return m_failedBlocks.load(std::memory_order_relaxed); }
     void setProfiling(bool enabled) noexcept { m_processor.setProfiling(enabled); }
+    void setDiagnosticsEnabled(bool enabled) noexcept { m_processor.setDiagnosticsEnabled(enabled); }
     bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept {
         return m_processor.popProfile(worker, event);
     }

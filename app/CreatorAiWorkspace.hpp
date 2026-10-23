@@ -12,12 +12,14 @@ public:
   std::uint64_t revision() const override;
   std::string systemPrompt(const daw::ai::ToolContext &) const override;
   std::vector<daw::ai::ToolSpec> tools(daw::ai::InteractionMode) const override;
+  static const std::vector<daw::ai::ToolSpec>& toolSpecs();
   std::optional<daw::ai::ToolResult> execute(const daw::ai::ToolCall &,
                                              const daw::ai::ToolContext &,
                                              std::uint64_t) override;
   void begin(std::uint64_t, const std::string &, std::size_t) override;
   void finish(bool, bool) override;
   void cancel() override;
+  bool busy() const { return m_codeFuture.valid() || m_ownsBuild; }
   std::string completionIssue() const override;
   nlohmann::json context() const;
   void documentChanging();

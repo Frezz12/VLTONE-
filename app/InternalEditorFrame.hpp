@@ -2,77 +2,41 @@
 
 #include <QFrame>
 #include <QPointer>
-#include <QRect>
 #include <QString>
-#include <QTimer>
 
-#include <array>
-
-class QLabel;
+class QCloseEvent;
 class QHideEvent;
 class QMoveEvent;
-class QPainter;
-class QRasterWindow;
 class QResizeEvent;
 class QShowEvent;
-namespace ui::graphics { class WorkspaceSurface; }
 class QVBoxLayout;
 
-namespace ui {
-class IconButton;
-}
-
-/// A movable, resizable editor that remains a child of the DAW workspace.
-///
-/// Unlike a QWidget carrying Qt::Window (or a QDialog), this frame never gets
-/// an HWND/NSWindow of its own.  The parent clips it, owns its stacking order,
-/// and therefore keeps it inside the application on every platform.  Editors
-/// only provide their content; this class owns the shared chrome and placement
-/// policy so later editors can adopt the same interaction without duplicating
-/// it.
+/// An owned tool window. The OS supplies its title, borders, move and resize
+/// behavior; the main application remains its owner and task-switching entry.
 class InternalEditorFrame final : public QFrame {
     Q_OBJECT
 public:
-    explicit InternalEditorFrame(QString settingsKey,
-                                 QWidget* parent = nullptr);
+    explicit InternalEditorFrame(QString settingsKey, QWidget* parent = nullptr);
     ~InternalEditorFrame() override;
 
     void setContent(QWidget* content);
     QWidget* content() const { return m_content; }
-    /// A control surface outside the frame which still belongs to this editor.
-    /// Mouse-down there must not deactivate the editor before the control gets
-    /// its matching release/click.
     void setAccessoryWidget(QWidget* accessory);
-    /// The body below the transport is used for initial placement and maximize.
-    /// Floating windows can move across the entire parent, including its header.
     void setWorkspaceArea(QWidget* area);
-    /// Host a foreign NSView/HWND without allowing Qt to promote the shared
-    /// workspace and its Quick surface to native child widgets.
     void prepareForNativeSurface();
 
-    /// Restore the saved placement on first use, show, raise and activate.
     void present();
-    /// Restore widget and native stacking without taking keyboard focus.
     void raiseEditor();
     void activateEditor();
+    void deactivateEditor();
     bool isEditorActive() const { return m_active; }
-    bool isInteracting() const { return m_dragging || m_resizing; }
-    /// Plugin windows keep only Close; also disable title double-click and
-    /// ignore an old maximized placement when expansion is disabled.
+    bool isInteracting() const { return m_interacting; }
     void setExpansionEnabled(bool enabled);
-
     void setMaximized(bool maximized);
-    bool isMaximized() const { return m_maximized; }
-    void setDetached(bool detached);
-    bool isDetached() const { return m_detached; }
 
-    /// Resize for plugin UIs and parameter docks. Keep an on-screen editor
-    /// fully visible, or preserve the title position of a parked editor.
     void resizeForContent(const QSize& contentSize);
-    /// Largest content rectangle the workspace can expose after subtracting
-    /// this frame's title bar and one-pixel contour.
     QSize maximumContentSize() const;
-    /// Move within the workspace, retaining the background beneath native editors.
+    /// Screen coordinates, like QWidget::move for a window.
     void moveWithinWorkspace(const QPoint& position);
     static bool checkPlacementForTest();
 
@@ -81,74 +45,34 @@ signals:
     void activeChanged(bool active);
 
 protected:
+    bool event(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    void closeEvent(QCloseEvent* event) override;
     void hideEvent(QHideEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
-    void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
 
 private:
-    enum Edge : int {
-        NoEdge = 0,
-        LeftEdge = 1,
-        TopEdge = 2,
-        RightEdge = 4,
-        BottomEdge = 8,
-    };
-
     void applyTheme();
-    void paintChrome(QPainter& painter);
-    void updateClipping();
     void setEditorActive(bool active);
     void restorePlacement();
     void savePlacement();
-    void constrainToParent();
+    void constrainToScreen();
     QRect availableRect() const;
-    QRect workspaceRect() const;
-    QRect constrainedGeometry(const QRect& wanted) const;
-    void updateResizeHandles();
-    void updateMaximizeButton();
-    void restoreContentFocus();
     bool belongsToFrame(const QWidget* widget) const;
     bool belongsToAccessory(const QWidget* widget) const;
-    void installApplicationEventFilter();
-    void uninstallApplicationEventFilter();
-    QRect interactiveResizeGeometry(const QPoint& globalPosition) const;
-    void queueInteractiveResize(const QRect& geometry);
-    void applyPendingInteractiveResize();
-    void cancelPendingInteractiveResize();
 
     QString m_settingsKey;
     QVBoxLayout* m_column = nullptr;
-    QWidget* m_titleBar = nullptr;
-    QLabel* m_title = nullptr;
-    ui::IconButton* m_maximizeButton = nullptr;
-    ui::IconButton* m_closeButton = nullptr;
-    ui::IconButton* m_detachButton = nullptr;
-    QPointer<ui::graphics::WorkspaceSurface> m_detachedSurface;
-    QPointer<QRasterWindow> m_nativeChrome;
-    QRect m_dockedGeometry;
-    bool m_detached = false;
     QPointer<QWidget> m_content;
     QPointer<QWidget> m_accessory;
     QPointer<QWidget> m_workspaceArea;
     QPointer<QWidget> m_lastContentFocus;
     QSize m_preferredContentSize{1100, 640};
-    std::array<QWidget*, 8> m_resizeHandles{};
-
-    QRect m_restoreGeometry;
-    QRect m_pressGeometry;
-    QRect m_pendingResizeGeometry;
-    QPoint m_pressGlobal;
-    QTimer m_resizeApplyTimer;
-    int m_resizeEdges = NoEdge;
-    bool m_dragging = false;
-    bool m_resizing = false;
-    bool m_maximized = false;
-    bool m_expansionEnabled = true;
     bool m_active = false;
-    bool m_pitchChrome = false;
+    bool m_interacting = false;
+    bool m_expansionEnabled = true;
     bool m_placementRestored = false;
-    bool m_applicationEventFilterInstalled = false;
 };

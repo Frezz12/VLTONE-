@@ -1,13 +1,19 @@
 #include "EngineController.hpp"
+#include "RenderSessionData.hpp"
 
 #include "plugins/PluginConvert.hpp"
 #include "platform/AudioFileDecoder.hpp"
 #include "platform/PathUtils.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <map>
+#include <mutex>
+#include <thread>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -366,7 +372,7 @@ audio::Result EngineController::bounceInPlace(
     if (cloudProjectBound()) {
         EngineController draft;
         if (auto ready = draft.initialize(m_sampleRate, m_bufferSize, false); !ready) { discard(); return ready; }
-        draft.m_pluginManager.copyCatalogFrom(m_pluginManager);
+        draft.m_pluginManager.copyCatalogFrom(pluginManager());
         draft.m_recordDir = m_recordDir;
         if (auto ready = draft.materializeCollaborationProject(m_project, true); !ready) { discard(); return ready; }
         const auto before = m_project;
@@ -574,8 +580,10 @@ audio::Result EngineController::renderClipsOffline(
     bool includeTail,
     const std::function<bool(const rendering::Progress&)>& onProgress,
     OfflineRenderReport& out) {
-    for (const auto& address : addresses) if (isTrackEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     out = {};
+    if (m_documentOnly) return audio::Result::fail(audio::EngineError::NotSupported,
+        "Enable this project's engine before processing audio.");
+    for (const auto& address : addresses) if (isTrackEditLocked(address.trackId)) return audio::Result::fail(audio::EngineError::InvalidArgument, "Track editing is locked");
     if (m_exportInProgress || (cloudProjectBound() && (!sharedEditingAllowed() || !m_sharedAssetMutationSink ||
         m_sharedMutationSink->commandSchemaVersion() < 6))) {
         return audio::Result::fail(audio::EngineError::InvalidArgument,
@@ -589,7 +597,7 @@ audio::Result EngineController::renderClipsOffline(
     if (enabledChain.inserts.empty())
         return audio::Result::fail(audio::EngineError::InvalidArgument, "add or enable an offline effect");
     for (const auto& slot : enabledChain.inserts) {
-        const auto descriptor = m_pluginManager.find(toHostFormat(slot.model.format), slot.model.uid);
+        const auto descriptor = pluginManager().find(toHostFormat(slot.model.format), slot.model.uid);
         if (!descriptor || (cloudProjectBound() && !sharedPluginAllowed(*descriptor)))
             return audio::Result::fail(audio::EngineError::FileNotFound,
                                        "plugin is not available: " + slot.model.name);
@@ -658,13 +666,26 @@ audio::Result EngineController::renderClipsOffline(
             sources.push_back(std::move(copy));
         }
         out.clipCount = clips.size();
+        out.clips.resize(clips.size());
+        // Each worker owns a complete plugin chain and decoded audio. Bound
+        // both CPU and memory use instead of launching one process per clip.
+        out.workerCount = std::min(clips.size(), std::size_t(
+            std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u)));
+        const auto proceed = [&](const rendering::Progress& progress) {
+            const bool keepGoing = !onProgress || onProgress(progress);
+            if (!keepGoing || projectRevision() != sourceRevision) out.cancelled = true;
+            return !out.cancelled;
+        };
+        if (!proceed({rendering::Progress::Stage::Preparing})) return audio::Result::ok();
 
-        EngineController scratch;
-        if (const auto ready = scratch.initialize(m_sampleRate, m_bufferSize, false); !ready)
-            return ready;
-        std::vector<double> durations;
-        for (std::size_t index = 0; index < clips.size(); ++index) {
-            out.clipIndex = index;
+        // Prepare/capture the common rack once. Immutable snapshots can be
+        // rendered in parallel; no live plugin or controller crosses threads.
+        RenderSessionSpec prepared;
+        {
+            EngineController scratch;
+            if (const auto ready = scratch.initialize(m_sampleRate, m_bufferSize, false); !ready)
+                return ready;
+            scratch.m_pluginManager.restoreCatalog(pluginManager().catalogSnapshot());
             ProjectModel project;
             project.sampleRate = m_sampleRate;
             project.tempo = before.tempo;
@@ -675,23 +696,7 @@ audio::Result EngineController::renderClipsOffline(
             TrackModel track;
             track.id = newUuid();
             track.kind = TrackKind::Audio;
-            track.name = sources[index].name;
-            ClipModel clip = sources[index];
-            // A previous per-instance print is the input of the next offline
-            // operation. Its file never replaces the linked content itself.
-            if (offlineProcessCacheValid(clips[index])) {
-                const auto source = renderedSource(clip.offlineProcess.renderedFilePath,
-                    clip.offlineProcess.renderedDurationSeconds);
-                if (!source.filePath.empty()) applyClipAudioVersion(clip, source);
-            }
-            clip.id = newUuid();
-            clip.muted = false;
-            clip.inserts.clear();
-            clip.offlineProcess = {};
-            clip.offlineHistory.clear();
-            clip.offlineVersionId.clear();
-            clip.playbackInjection = {};
-            track.clips.push_back(std::move(clip));
+            track.name = "Offline Processing";
             project.tracks.push_back(std::move(track));
             scratch.restoreProject(project, "Offline source");
             if (!scratch.pasteChannelInserts(project.tracks.front().id, enabledChain))
@@ -709,33 +714,128 @@ audio::Result EngineController::renderClipsOffline(
             spec.file.container = audio::platform::Container::Wav;
             spec.file.encoding = audio::platform::Encoding::Float32;
             spec.range = rendering::Range::Custom;
-            // Keep musical position and tempo for synced/time-aware plugins.
-            spec.customStartSeconds = sources[index].startSeconds;
-            spec.customEndSeconds = spec.customStartSeconds + sources[index].durationSeconds;
+            spec.customStartSeconds = sources.front().startSeconds;
+            spec.customEndSeconds = spec.customStartSeconds + sources.front().durationSeconds;
             spec.tail = includeTail ? rendering::Tail::UntilSilence : rendering::Tail::None;
             spec.tailSilenceDb = -96.0;
             spec.tailHoldSeconds = 0.3;
             spec.tailMaxSeconds = 30.0;
-            rendering::Report rendered;
-            const auto progress = [&](const rendering::Progress& one) {
-                rendering::Progress total = one;
-                total.fraction = (double(index) + one.fraction) / double(clips.size());
-                const bool proceed = !onProgress || onProgress(total);
-                return proceed && projectRevision() == sourceRevision;
-            };
-            const auto result = scratch.renderProject(spec, progress, rendered);
-            staged.files.insert(staged.files.end(), rendered.files.begin(), rendered.files.end());
-            if (!result) return result;
-            if (rendered.cancelled || projectRevision() != sourceRevision) {
-                out.cancelled = true;
-                return audio::Result::ok();
-            }
-            if (rendered.files.size() != 1 || !(rendered.renderedSeconds > 0.0))
-                return audio::Result::fail(audio::EngineError::FileWriteError,
-                                           "offline processing produced no audio file");
-            durations.push_back(rendered.renderedSeconds);
+            if (const auto captured = scratch.captureRenderSession(spec, prepared); !captured)
+                return captured;
         }
-        scratch.shutdown();
+        if (!proceed({rendering::Progress::Stage::Preparing})) return audio::Result::ok();
+
+        std::atomic_bool cancel{false};
+        std::mutex progressMutex;
+        staged.files.reserve(clips.size());
+        struct Job {
+            std::vector<std::string>& stagedFiles;
+            std::future<audio::Result> work;
+            rendering::Report report;
+            rendering::Progress progress{rendering::Progress::Stage::Preparing};
+            explicit Job(std::vector<std::string>& files) : stagedFiles(files) {}
+            ~Job() {
+                if (work.valid()) work.wait();
+                for (auto& file : report.files) stagedFiles.push_back(std::move(file));
+            }
+        };
+        std::vector<std::unique_ptr<Job>> jobs(clips.size());
+        // Cancel before Job destructors wait, including when a UI callback
+        // throws. Every child is reaped before its staged files are removed.
+        struct CancelOnExit {
+            std::atomic_bool& flag;
+            ~CancelOnExit() { flag.store(true); }
+        } cancelOnExit{cancel};
+        std::vector<double> durations(clips.size());
+        std::size_t next = 0, running = 0;
+        using State = OfflineRenderReport::ClipProgress::State;
+        while (out.completedClips < clips.size()) {
+            for (std::size_t index = 0; index < next; ++index) {
+                auto& job = *jobs[index];
+                if (!job.work.valid() || job.work.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                    continue;
+                const auto result = job.work.get();
+                --running;
+                if (!result) {
+                    out.clips[index].state = State::Failed;
+                    return result;
+                }
+                if (job.report.cancelled) { out.cancelled = true; return audio::Result::ok(); }
+                if (job.report.files.size() != 1 || !(job.report.renderedSeconds > 0.0))
+                    return audio::Result::fail(audio::EngineError::FileWriteError,
+                                               "offline processing produced no audio file");
+                durations[index] = job.report.renderedSeconds;
+                out.clips[index] = {State::Complete, 1.0};
+                ++out.completedClips;
+            }
+            while (running < out.workerCount && next < clips.size()) {
+                const auto index = next++;
+                auto data = std::make_shared<RenderSessionSpec::Data>(*prepared.m_data);
+                auto& track = data->snapshot.project.tracks.front();
+                ClipModel clip = sources[index];
+                // A valid per-instance print is the input to the next layer.
+                if (offlineProcessCacheValid(clips[index])) {
+                    const auto source = renderedSource(clip.offlineProcess.renderedFilePath,
+                        clip.offlineProcess.renderedDurationSeconds);
+                    if (!source.filePath.empty()) applyClipAudioVersion(clip, source);
+                }
+                clip.id = newUuid();
+                clip.muted = false;
+                clip.inserts.clear();
+                clip.offlineProcess = {};
+                clip.offlineHistory.clear();
+                clip.offlineVersionId.clear();
+                clip.playbackInjection = {};
+                track.clips.push_back(std::move(clip));
+                // Preserve absolute musical time for synced/time-aware FX.
+                data->spec.baseName = "offline-" + newUuid();
+                data->spec.customStartSeconds = sources[index].startSeconds;
+                data->spec.customEndSeconds = sources[index].startSeconds + sources[index].durationSeconds;
+                RenderSessionSpec session;
+                session.m_data = std::move(data);
+                jobs[index] = std::make_unique<Job>(staged.files);
+                auto* job = jobs[index].get();
+                out.clips[index].state = State::Preparing;
+                job->work = std::async(std::launch::async, [session, job, &cancel, &progressMutex] {
+                    return renderSession(session, [&](const rendering::Progress& value) {
+                        {
+                            std::lock_guard lock(progressMutex);
+                            job->progress = value;
+                        }
+                        return !cancel.load();
+                    }, job->report);
+                });
+                ++running;
+            }
+            rendering::Progress total{rendering::Progress::Stage::Preparing};
+            {
+                std::lock_guard lock(progressMutex);
+                for (std::size_t index = 0; index < clips.size(); ++index) {
+                    auto& clip = out.clips[index];
+                    if (jobs[index] && clip.state != State::Complete) {
+                        const auto& progress = jobs[index]->progress;
+                        clip.state = progress.stage == rendering::Progress::Stage::Preparing
+                            ? State::Preparing : State::Rendering;
+                        clip.fraction = std::max(clip.fraction, std::clamp(progress.fraction, 0.0, 1.0));
+                        out.clipIndex = index;
+                    }
+                    if (clip.state == State::Rendering || clip.state == State::Complete)
+                        total.stage = rendering::Progress::Stage::Rendering;
+                    // Duration weighting prevents a tiny clip from moving the
+                    // whole batch's progress as far as a long recording.
+                    total.totalSeconds += sources[index].durationSeconds;
+                    total.renderedSeconds += sources[index].durationSeconds * clip.fraction;
+                }
+            }
+            total.fraction = total.renderedSeconds / total.totalSeconds;
+            if (!proceed(total)) return audio::Result::ok();
+            if (out.completedClips < clips.size()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        // Move files in selection order, regardless of completion order.
+        for (auto& job : jobs) {
+            staged.files.push_back(job->report.files.front());
+            job->report.files.clear();
+        }
         // No project mutation is allowed between validation and this commit.
         if (projectRevision() != sourceRevision) {
             out.cancelled = true;

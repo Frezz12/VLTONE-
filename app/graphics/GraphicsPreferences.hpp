@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <unordered_map>
 #include <functional>
+#include <vector>
 class QWidget;
 
 namespace ui::graphics {
@@ -20,6 +21,7 @@ public:
     int backgroundFps() const { return QualityPolicy::mediaFps(level()); }
     void setQuality(Quality quality);
     void reportFrame(const FrameStats& frame);
+    std::vector<FrameStats> recentFrames() const;
     void watchCompatibilityWindow(QWidget* source, std::function<void(FrameStats&)> context);
 signals:
     void qualityChanged();

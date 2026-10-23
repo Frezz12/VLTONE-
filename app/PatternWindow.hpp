@@ -34,6 +34,7 @@ public:
     bool addInstrument(const daw::plugins::PluginDescriptor& descriptor);
     const QStringList& selectedSourceTrackIds() const { return m_selectedIds; }
     const QString& selectedSourceTrackId() const { return m_primaryId; }
+    void setSelectedSources(const QStringList& ids, const QString& primary = {});
     /// Replace the selected layer's audio while retaining an existing
     /// Sampler instance and all of its controls.
     bool replaceSelectedSample(const QString& path);
@@ -98,7 +99,6 @@ private:
     void endRowGesture(const QString& trackId, const QPoint& globalPos);
     int rowIndexAtGlobal(const QPoint& globalPos) const;
     int insertionIndexAtGlobal(const QPoint& globalPos) const;
-    void setSelectedSources(const QStringList& ids, const QString& primary = {});
     void selectRange(int first, int last);
     void updateSelectionVisuals();
     void updateDropIndicator(int insertionIndex);

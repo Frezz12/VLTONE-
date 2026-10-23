@@ -20,9 +20,11 @@ public:
     const float* data() const noexcept;
     bool fileBacked() const noexcept;
     bool readOnly() const noexcept;
+    // Retain mapped pages during background I/O without keeping a clip alive.
+    std::shared_ptr<const float> mappedSamples() const noexcept;
 private:
     struct Mapping;
-    std::unique_ptr<Mapping> m_mapping;
+    std::shared_ptr<Mapping> m_mapping;
     std::vector<float> m_memory;
 };
 } // namespace daw::engine

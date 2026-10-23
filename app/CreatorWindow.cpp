@@ -1,4 +1,5 @@
 #include "CreatorWindow.hpp"
+#include "ScriptService.hpp"
 #include "VltContentInstaller.hpp"
 #include "CreatorCommands.hpp"
 #include "CreatorAiPanel.hpp"
@@ -171,7 +172,7 @@ struct CreatorWindow::CodeResult {
   json reply;
 };
 CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
-    : QMainWindow(parent, Qt::Window), m_controller(controller),
+    : QMainWindow(parent, Qt::Tool), m_controller(controller),
       m_project(CreatorProject::create(tr("Untitled"), tr("My mini module"))) {
   setObjectName("CreatorWindow");
   m_installDirectory = MiniModuleLibrary::directory();
@@ -647,6 +648,7 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
   m_compilePoll->setInterval(25);
   connect(m_compilePoll, &QTimer::timeout, this, &CreatorWindow::pollCode);
   auto *recovery = new QTimer(this);
+  recovery->setObjectName("Creator.RecoveryTimer");
   recovery->setInterval(5000);
   struct RecoverySerialization {
     std::future<std::string> text;
@@ -669,11 +671,12 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
       return;
     }
     if (!m_started || m_undo->isClean() || recoveryState->savedRevision == m_revision) return;
-    m_project.viewports[m_project.layoutKey()] = m_canvas->viewportState();
+    auto snapshot = m_project;
+    snapshot.viewports[snapshot.layoutKey()] = m_canvas->viewportState();
     recoveryState->revision = m_revision;
     // Only the value snapshot crosses threads; scene/widgets and the atomic
     // commit remain on the UI thread, after checking the current revision.
-    recoveryState->text = std::async(std::launch::async, [project = m_project] {
+    recoveryState->text = std::async(std::launch::async, [project = std::move(snapshot)] {
       try { return project.toJson().dump(2); }
       catch (const std::exception&) { return std::string{}; }
     });
@@ -691,6 +694,9 @@ CreatorWindow::CreatorWindow(daw::EngineController *controller, QWidget *parent)
 }
 CreatorWindow::~CreatorWindow() {
   delete m_ai; m_ai = nullptr;
+  // External clients also own workspaces parented to this document. Tear them
+  // down while the compiler service and document members are still alive.
+  for (auto *workspace : findChildren<CreatorAiWorkspace*>(QString(), Qt::FindDirectChildrenOnly)) delete workspace;
   m_cancel.store(true);
   if (m_codeFuture.valid())
     m_codeFuture.wait();
@@ -727,7 +733,7 @@ void CreatorWindow::startup() {
   dialog.setMinimumWidth(430);
   auto *layout = new QVBoxLayout(&dialog);
   auto *intro = new QLabel(
-      tr("Create a mini module or continue an existing project."), &dialog);
+      tr("Create a mini module or Lua script, or continue an existing project."), &dialog);
   intro->setWordWrap(true);
   layout->addWidget(intro);
   auto *create = new QPushButton(tr("New project"), &dialog);
@@ -801,6 +807,9 @@ void CreatorWindow::newProject() {
   QDialog dialog(this);
   dialog.setWindowTitle(tr("New Creator project"));
   auto *form = new QFormLayout(&dialog);
+  auto *kind = new QComboBox(&dialog);
+  kind->addItems({tr("Mini-module"), tr("Lua script")});
+  form->addRow(tr("Project type"), kind);
   auto *project = new QLineEdit(tr("My project"), &dialog),
        *module = new QLineEdit(tr("My mini module"), &dialog);
   project->setMaxLength(128);
@@ -813,19 +822,29 @@ void CreatorWindow::newProject() {
   const auto valid = [=] {
     buttons->button(QDialogButtonBox::Ok)
         ->setEnabled(!project->text().trimmed().isEmpty() &&
-                     !module->text().trimmed().isEmpty());
+                     (kind->currentIndex()==1 || !module->text().trimmed().isEmpty()));
   };
   connect(project, &QLineEdit::textChanged, &dialog, valid);
   connect(module, &QLineEdit::textChanged, &dialog, valid);
+  connect(kind,&QComboBox::currentIndexChanged,&dialog,[=](int index){form->setRowVisible(module,index==0);valid();});
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   if (dialog.exec() != QDialog::Accepted)
     return;
+  if (kind->currentIndex() == 1) {
+    if (auto* scripts = ScriptService::instance()) {
+      ScriptPackage package{{},ScriptLibrary::manifestForLua(project->text().trimmed()),
+        {{"main.lua","print(\"Hello from VLTONE\")\n"}}};
+      scripts->createScript(&package);
+    }
+    return;
+  }
   m_path.clear();
   m_selected.clear();
   m_undo->clear();
   apply(CreatorProject::create(project->text().trimmed(),
                                module->text().trimmed()));
+  setProperty("vlt.documentId", freshId());
   m_undo->resetClean();
   m_canvas->fitGraph();
 }
@@ -840,6 +859,14 @@ bool CreatorWindow::openProject(const QString &requested) {
           : requested;
   if (path.isEmpty())
     return false;
+  {
+      vlt::script::Json script;
+      QString scriptError;
+      if (ScriptLibrary::readCreatorDocument(path, script, scriptError)) {
+        if (auto* scripts = ScriptService::instance()) return scripts->openLuaProject(path);
+        return false;
+    }
+  }
   CreatorProject project;
   QString error;
   if (!CreatorProject::open(path, project, error)) {
@@ -850,6 +877,7 @@ bool CreatorWindow::openProject(const QString &requested) {
   m_selected.clear();
   m_undo->clear();
   apply(std::move(project));
+  setProperty("vlt.documentId", freshId());
   m_undo->setClean();
   rememberRecent();
   m_canvas->restoreViewport(m_project.viewports.value(m_project.layoutKey()));
@@ -1751,13 +1779,21 @@ bool CreatorWindow::startBuild(CreatorBuildService::Done done) {
   if (m_codeFuture.valid() || m_build->busy()) return false;
   const auto revision = codeHash(daw::plugins::mini::toJson(m_project.definition).dump());
   const auto projectId = m_project.definition.id;
+  const auto sourcePath = m_path;
+  CreatorFileState sourceBefore;
+  QString sourceError;
+  const bool sourceKnown = sourcePath.isEmpty() || CreatorFileState::read(sourcePath, sourceBefore, sourceError);
   m_diagnostics->clear();
   m_compileAction->setEnabled(false); m_cancelAction->setEnabled(true);
   m_build->progress = [this](const auto& stage) { m_status->setText(stage); };
   const bool chatBuild = bool(done);
   return m_build->start(m_project, m_installDirectory,
-    [this, revision, projectId] {
-      return m_project.definition.id == projectId && revision == codeHash(daw::plugins::mini::toJson(m_project.definition).dump());
+    [this, revision, projectId, sourcePath, sourceBefore, sourceKnown] {
+      CreatorFileState sourceNow;
+      QString error;
+      const bool sameSource = sourceKnown && m_path == sourcePath && (sourcePath.isEmpty() ||
+        (CreatorFileState::read(sourcePath, sourceNow, error) && sourceNow == sourceBefore));
+      return sameSource && m_project.definition.id == projectId && revision == codeHash(daw::plugins::mini::toJson(m_project.definition).dump());
     }, [this, chatBuild, done = std::move(done)](auto result) {
       m_compileAction->setEnabled(true); m_cancelAction->setEnabled(false);
       if (!chatBuild) for (const auto& entry : result->diagnostics) {

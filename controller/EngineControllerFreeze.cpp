@@ -84,6 +84,7 @@ std::string EngineController::freezeFingerprint(const TrackModel& track) const {
     copy.channelColor = track.channelColor;
     copy.miniModules = track.miniModules;
     copy.modulation = track.modulation;
+    copy.rackGroups = track.rackGroups;
     for(auto& module:copy.miniModules) normalizeFreezeSlot(module);
     copy.samplerFx = track.samplerFx; copy.clips = track.clips;
     normalizeFreezeSlot(copy.instrument);

@@ -33,6 +33,7 @@ class PanKnob;
 
 namespace daw {
 class EngineController;
+struct SampleSilenceTrim;
 namespace plugins::sampler {
 struct SampleData;
 }
@@ -179,6 +180,7 @@ private:
     QWidget* buildWaveformSection();
     void detectPitch();
     void refreshPitchAnalysis();
+    void refreshTrimAnalysis();
     void refreshMeter();
     void applyDetectedPitch(bool setRoot);
     void rebuildFxSlots();
@@ -251,6 +253,10 @@ private:
     bool m_pitchBusy = false, m_pitchAnalyzed = false;
     daw::analysis::SamplePitchEstimate m_pitchEstimate;
     std::shared_ptr<std::atomic<bool>> m_pitchCancelled;
+    ui::Knob* m_trimKnob = nullptr;
+    std::shared_ptr<const daw::plugins::sampler::SampleData> m_trimSample;
+    std::shared_ptr<const daw::SampleSilenceTrim> m_trimAnalysis;
+    std::shared_ptr<std::atomic<bool>> m_trimCancelled;
     float m_fxGestureVolume = 1.0f;
     float m_fxGesturePan = 0.0f;
     bool m_fxLevelGesture = false;

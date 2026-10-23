@@ -356,6 +356,7 @@ CompSegment compSegmentFromJson(const json& j) {
 
 json clipSampleEditToJson(const ClipSampleEditModel& s) {
     return json{
+        {"trimThresholdDb", s.trimThresholdDb},
         {"loopMode", s.loopMode}, {"loopStart", s.loopStart},
         {"loopEnd", s.loopEnd}, {"stretchMode", int(s.stretchMode)},
         {"stretchTime", s.stretchTime}, {"stretchPitch", s.stretchPitch},
@@ -373,6 +374,8 @@ json clipSampleEditToJson(const ClipSampleEditModel& s) {
 
 ClipSampleEditModel clipSampleEditFromJson(const json& j) {
     ClipSampleEditModel s;
+    const double trimDb = j.value("trimThresholdDb", -96.0);
+    s.trimThresholdDb = std::isfinite(trimDb) ? std::clamp(trimDb, -96.0, 0.0) : -96.0;
     s.loopMode = std::clamp(j.value("loopMode", 0), 0, 2);
     s.loopStart = std::clamp(j.value("loopStart", 0.0), 0.0, 1.0);
     s.loopEnd = std::clamp(j.value("loopEnd", 1.0), 0.0, 1.0);

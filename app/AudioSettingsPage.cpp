@@ -503,6 +503,7 @@ void AudioSettingsPage::apply() {
     preferences.driverType = m_driverCombo->currentData().toString();
     preferences.config = settled;
     ui::saveAudioPreferences(preferences);
+    emit configurationChanged();
     syncSettledConfiguration();
     m_bufferNote->setText(tr("Audio settings applied."));
     m_bufferNote->setVisible(true);

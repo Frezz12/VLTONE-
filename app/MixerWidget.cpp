@@ -21,6 +21,7 @@
 #include "UiConstants.hpp"
 #include "SettingsWindow.hpp"
 #include "ShortcutManager.hpp"
+#include "ScrollMotion.hpp"
 
 #include "EngineController.hpp"
 
@@ -46,12 +47,95 @@
 #include <QVBoxLayout>
 
 namespace {
-constexpr int kStripGap = 2;
-constexpr int kVerticalInset = 6;
+constexpr int kStripGap = 0;
 int channelStride(int width) { return width + kStripGap; }
 int channelsWidth(int count, int width) {
     return count > 0 ? count * channelStride(width) - kStripGap : 0;
 }
+
+class MixerModeSwitch final : public QAbstractButton, public ui::graphics::ScenePaintSource {
+public:
+    MixerModeSwitch(const QString& mixer, const QString& rack, QWidget* parent)
+        : QAbstractButton(parent), m_mixer(mixer), m_rack(rack) {
+        setObjectName(QStringLiteral("MixerRackToggle"));
+        setCheckable(true);
+        setFocusPolicy(Qt::TabFocus);
+        setCursor(Qt::PointingHandCursor);
+        QFont labelFont = font();
+        labelFont.setPixelSize(11);
+        labelFont.setWeight(QFont::DemiBold);
+        setFont(labelFont);
+        setFixedSize(56, 24);
+        setAccessibleName(mixer + QStringLiteral(" / ") + rack);
+        connect(this, &QAbstractButton::toggled, this, [this](bool rackMode) {
+            const double target = rackMode ? 1.0 : 0.0;
+            if (m_pointerActivation && isVisible() &&
+                !ui::ScrollPreferences::instance().reducedMotion())
+                m_slide.setTarget(target);
+            else
+                m_slide.jumpTo(target);
+            updateLabel();
+        });
+        connect(&ThemeManager::instance(), &ThemeManager::changed, this,
+                QOverload<>::of(&QWidget::update));
+        updateLabel();
+    }
+
+    void paintScene(QPainter& p, const QRegion&) override {
+        const auto& t = th();
+        p.setRenderHint(QPainter::Antialiasing);
+        if (!isEnabled()) p.setOpacity(0.4);
+        const bool highlighted = underMouse() || hasFocus();
+        const QRectF body = QRectF(rect()).adjusted(.5, 3.5, -.5, -3.5);
+        p.setPen(QPen(hasFocus() ? t.accent : t.separator(), 1));
+        p.setBrush(isDown() ? t.well() : mixColors(t.panelBottom(), t.textPrimary,
+                                                  highlighted ? .08 : .025));
+        p.drawRoundedRect(body, 5, 5);
+        const double slide = m_slide.value();
+        const double half = body.width() / 2;
+        const QRectF thumb(body.left() + 2 + half * slide,
+                           body.top() + 2, half - 4, body.height() - 4);
+        p.setPen(QPen(mixColors(t.separator(), t.accent, .65), 1));
+        p.setBrush(mixColors(t.panelBottom(), t.accent, highlighted ? .30 : .20));
+        p.drawRoundedRect(thumb, 3, 3);
+        const QColor lit = mixColors(t.textPrimary, t.accentHighlight, .65);
+        p.setFont(font());
+        p.setPen(mixColors(t.textSecondary, lit, 1 - slide));
+        p.drawText(QRectF(body.left(), 0, half, height()), Qt::AlignCenter, QStringLiteral("M"));
+        p.setPen(mixColors(t.textSecondary, lit, slide));
+        p.drawText(QRectF(body.left() + half, 0, half, height()), Qt::AlignCenter, QStringLiteral("R"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        paintScene(p, QRegion(rect()));
+    }
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        const QScopedValueRollback pointer(m_pointerActivation, true);
+        m_pointerRack = event->position().x() >= width() / 2.0;
+        QAbstractButton::mouseReleaseEvent(event);
+    }
+    void nextCheckState() override {
+        if (m_pointerActivation) setChecked(m_pointerRack);
+        else QAbstractButton::nextCheckState();
+    }
+    void enterEvent(QEnterEvent* event) override { QAbstractButton::enterEvent(event); update(); }
+    void leaveEvent(QEvent* event) override { QAbstractButton::leaveEvent(event); update(); }
+
+private:
+    void updateLabel() {
+        setText(isChecked() ? m_rack : m_mixer);
+        setToolTip(QStringLiteral("M — %1\nR — %2").arg(m_mixer, m_rack));
+        setAccessibleDescription(QCoreApplication::translate(
+            "MixerWidget", isChecked() ? "Show mixer" : "Show rack"));
+        update();
+    }
+    QString m_mixer, m_rack;
+    bool m_pointerActivation = false;
+    bool m_pointerRack = false;
+    ui::Fade m_slide{this, 120};
+};
 
 } // namespace
 
@@ -69,31 +153,18 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // A raised command bar above the recessed channel bay.
+    // One compact mode switch leaves the header free of duplicate context.
     m_header = new QWidget(this);
     m_header->setObjectName("MixerHeader");
-    m_header->setFixedHeight(30);
+    m_header->setFixedHeight(26);
     auto* head = new QHBoxLayout(m_header);
-    head->setContentsMargins(12, 0, 8, 0);
-    head->setSpacing(8);
+    head->setContentsMargins(6, 1, 6, 1);
+    head->setSpacing(10);
 
-    m_headerAccent = new QWidget(m_header);
-    m_headerAccent->setObjectName(QStringLiteral("MixerHeaderAccent"));
-    m_headerAccent->setFixedSize(2, 14);
-    m_headerGlyph = new QLabel(m_header);
-    m_headerGlyph->setFixedSize(16, 16);
-    auto* title = new QLabel(tr("MIXER"), m_header);
-    m_headerTitle = title;
-    m_viewToggle = new QToolButton(m_header);
-    m_viewToggle->setObjectName("MixerRackToggle");
-    m_viewToggle->setFixedSize(24, 24);
-    m_viewToggle->setFocusPolicy(Qt::StrongFocus);
-    connect(m_viewToggle, &QToolButton::clicked, this, [this] { setRackMode(!m_rackMode); });
-    title->setObjectName("MixerTitle");
-    m_headerCount = new QLabel(m_header);
-    m_headerCount->setObjectName(QStringLiteral("MixerHeaderCount"));
-    m_headerCount->setFixedHeight(20);
-    m_headerCount->setAlignment(Qt::AlignCenter);
+    m_viewToggle = new MixerModeSwitch(tr("Mixer"), tr("Rack"), m_header);
+    connect(m_viewToggle, &QAbstractButton::clicked, this, [this](bool rack) {
+        if (rack != m_rackMode) setRackMode(rack);
+    });
     auto* settings = new ui::IconButton(icons::Glyph::Gear,
                                         tr("Mixer settings"), m_header);
     settings->setObjectName(QStringLiteral("MixerSettingsButton"));
@@ -114,11 +185,7 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
         ui::MixerPreferences::instance().setMasterVisible(!m_masterVisible);
     });
 
-    head->addWidget(m_headerAccent);
-    m_headerGlyph->hide();
     head->addWidget(m_viewToggle);
-    head->addWidget(title);
-    head->addWidget(m_headerCount);
     head->addStretch(1);
     head->addWidget(m_masterToggle);
     head->addWidget(settings);
@@ -129,7 +196,7 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     body->setObjectName(QStringLiteral("MixerBody"));
     body->setAttribute(Qt::WA_StyledBackground, true);
     auto* bodyRow = new QHBoxLayout(body);
-    bodyRow->setContentsMargins(8, kVerticalInset, 8, kVerticalInset);
+    bodyRow->setContentsMargins(0, 0, 0, 0);
     bodyRow->setSpacing(0);
 
     m_stripsHost = new QWidget(body);
@@ -187,6 +254,10 @@ MixerWidget::MixerWidget(daw::EngineController* controller, QWidget* parent)
     m_views->addWidget(body);
     m_rack = new RackWidget(controller, m_views);
     m_views->addWidget(m_rack);
+    m_rack->editorIsOpen = [this](const QString& channel, const QString& slot) {
+        return pluginEditorIsOpen && pluginEditorIsOpen(channel, slot);
+    };
+    connect(m_rack, &RackWidget::editorToggleRequested, this, &MixerWidget::pluginEditorToggleRequested);
     outer->addWidget(m_views, 1);
     connect(m_rack, &RackWidget::editorRequested, this, &MixerWidget::pluginEditorRequested);
     connect(m_rack, &RackWidget::automationRequested, this, &MixerWidget::automatePluginRequested);
@@ -238,15 +309,15 @@ void MixerWidget::setRackMode(bool enabled) {
     if (m_rack) m_rack->finishEdits();
     if (changed) finishChannelEdits();
     m_rackMode = enabled;
+    // Prepare the selected channel before showEvent synchronizes the rack.
+    // Ordinary mixer selections leave this hidden, expensive view untouched.
+    if (enabled) m_rack->setChannel(m_selectedTrackId);
     m_views->setCurrentIndex(enabled ? 1 : 0);
-    m_viewToggle->setIcon(icons::icon(enabled ? icons::Glyph::Layers : icons::Glyph::Mixer, th().accent, 16));
-    m_viewToggle->setToolTip(enabled ? tr("Show mixer") : tr("Show rack"));
-    m_viewToggle->setAccessibleName(m_viewToggle->toolTip());
-    m_headerTitle->setText(enabled ? tr("RACK") : tr("MIXER"));
-    m_headerCount->setText(enabled ? m_rack->channelName() : tr("%1 channels").arg(m_channels.size()));
+    m_viewToggle->setChecked(enabled);
     m_masterToggle->setVisible(!enabled);
-    if (enabled) { m_rack->setChannel(m_selectedTrackId); m_headerCount->setText(m_rack->channelName()); m_rack->setFocus(); }
-    else syncVisibleStrips();
+    if (enabled) {
+        if (!m_viewToggle->hasFocus()) m_rack->setFocus();
+    } else { syncVisibleStrips(); syncDetails(); }
     QSettings().setValue("ui/rackMode", enabled);
     if (changed) emit rackModeChanged(enabled);
     syncMeterTimer();
@@ -256,14 +327,8 @@ void MixerWidget::applyTheme() {
     const Theme& t = th();
     setStyleSheet(QString(R"(
 #MixerPanel { background: %BOTTOM%; border: none; }
-#MixerHeader { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                          stop:0 %TOP%, stop:1 %BOTTOM%);
-               border: 1px solid %SECTION%; border-top-color: %LIGHT%;
-               border-top-left-radius: 8px; border-top-right-radius: 8px; }
-#MixerTitle { color: %TEXT%; font-size: 11px; font-weight: 600;
-              letter-spacing: 0.7px; }
-#MixerHeaderCount { color: %TEXT2%; font-size: 10px; background: %WELL%;
-                    border: 1px solid %SEP%; border-radius: 6px; padding: 0 7px; }
+#MixerHeader { background: %BOTTOM%; border: none;
+               border-top: 1px solid %SECTION%; border-bottom: 1px solid %SEP%; }
 #MixerBody { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                         stop:0 %BAY_TOP%, stop:1 %WELL%);
              border: 1px solid %SECTION%; border-top: none; }
@@ -271,9 +336,9 @@ void MixerWidget::applyTheme() {
 #MixerStripHost, #MixerMasterHost { background: transparent; border: none; }
 #MixerDetailsSplitter::handle { background: %SECTION%; border-left: 2px solid %WELL%; border-right: 2px solid %WELL%; }
 #MixerDetailsSplitter::handle:hover { background: %ACCENT%; }
-#MasterVisibilityButton { color: %TEXT2%; background: %WELL%; border: 1px solid %SEP%;
-                         border-radius: 6px; padding: 2px 8px; font-size: 11px; }
-#MasterVisibilityButton:checked { color: %TEXT%; background: %SELECT%; border-color: %SELECT_EDGE%; }
+#MasterVisibilityButton { color: %TEXT2%; background: transparent; border: 1px solid transparent;
+                         border-radius: 4px; padding: 0 6px; font-size: 11px; }
+#MasterVisibilityButton:checked { color: %TEXT%; background: %SELECT%; }
 #MasterVisibilityButton:hover { background: %HOVER%; color: %TEXT%; }
 #MasterVisibilityButton:pressed { background: %WELL%; }
 QScrollBar#MixerNavigationBar { background: %WELL%; }
@@ -294,13 +359,10 @@ QScrollBar#MixerNavigationBar::handle:pressed {
     background: %ACCENT%;
 }
 )")
-        .replace("%TOP%", t.panelTop().name())
         .replace("%BOTTOM%", t.panelBottom().name())
-        .replace("%LIGHT%", t.edgeLight(t.panelTop()).name())
         .replace("%BAY_TOP%", mixColors(t.well(), t.surface, .35).name())
         .replace("%WELL%", t.well().name())
-        .replace("%SELECT%", mixColors(t.panelBottom(), t.accent, .17).name())
-        .replace("%SELECT_EDGE%", mixColors(t.separator(), t.accent, .42).name())
+        .replace("%SELECT%", mixColors(t.panelBottom(), t.accent, .10).name())
         .replace("%ACCENT%", t.accent.name())
         .replace("%SCROLL%", mixColors(t.well(), t.textPrimary, .25).name())
         .replace("%SCROLL_EDGE%", mixColors(t.well(), t.textPrimary, .32).name())
@@ -310,12 +372,6 @@ QScrollBar#MixerNavigationBar::handle:pressed {
         .replace("%TEXT2%", t.textSecondary.name())
         .replace("%HOVER%", t.controlTop().name())
         .replace("%TEXT%", t.textPrimary.name()));
-    if (m_headerAccent)
-        m_headerAccent->setStyleSheet(
-            QStringLiteral("background: %1; border-radius: 1px;").arg(t.accent.name()));
-    if (m_headerGlyph)
-        m_headerGlyph->setPixmap(
-            icons::icon(icons::Glyph::Mixer, t.accent, 15).pixmap(15, 15));
     updateMasterToggle();
     update();
 }
@@ -343,7 +399,7 @@ double MixerWidget::faderGainForTest(const QString& trackId) const {
 }
 
 void MixerWidget::syncFromModel(const QStringList& trackIds) {
-    if (m_rack) { m_rack->sync(); if (m_rackMode) m_headerCount->setText(m_rack->channelName()); }
+    if (m_rack && m_rackMode) m_rack->sync();
     QSet<QString> affected(trackIds.begin(), trackIds.end());
     for (const auto& id : trackIds) {
         if (const auto* track = m_controller->project().findTrack(id.toStdString());
@@ -631,6 +687,26 @@ bool MixerWidget::checkLayoutForTest() {
     };
     settle();
     if (!aligned("audio, instrument, bus and master; different FX/send counts")) return false;
+    const QString hiddenRackChannel = mixer.m_rack->channelId();
+    mixer.setSelectedTrack(QStringLiteral("layout-1"));
+    if (mixer.m_rack->channelId() != hiddenRackChannel) {
+        std::fprintf(stderr, "FAIL layout: ordinary selection rebuilt the hidden rack\n");
+        return false;
+    }
+    mixer.setRackMode(true);
+    const QPointer<ui::MiniModuleRack> retainedRack = mixer.m_rack->findChild<ui::MiniModuleRack*>();
+    if (mixer.m_rack->channelId() != QStringLiteral("layout-1") || !retainedRack) return false;
+    mixer.setRackMode(false);
+    mixer.setSelectedTrack(QStringLiteral("layout-2"));
+    mixer.syncFromModel({QStringLiteral("layout-2")});
+    if (!retainedRack || mixer.m_rack->channelId() != QStringLiteral("layout-1")) return false;
+    emit mixer.m_slots[1]->rackSelectionRequested(QStringLiteral("layout-1"), {QStringLiteral("layout-1-fx-0")});
+    mixer.setRackMode(true);
+    if (mixer.m_rack->selectedDevices() != QStringList{QStringLiteral("layout-1-fx-0")}) return false;
+    mixer.setSelectedTrack(QStringLiteral("layout-2"));
+    if (mixer.m_rack->channelId() != QStringLiteral("layout-2")) return false;
+    mixer.setRackMode(false);
+    std::fprintf(stderr, "PASS layout: hidden rack stays idle; opening, explicit device selection and visible selection stay current\n");
     if (mixer.m_slots.back() || project.tracks.front().inserts.size() != 0 ||
         project.tracks[1].inserts.size() != 1) return false;
     if (!shots.isEmpty() && !mixer.grab().save(shots + "-short-chains.png")) return false;
@@ -863,8 +939,14 @@ bool MixerWidget::stripIsVisible(const ChannelStrip* strip) const {
 }
 
 void MixerWidget::wireStrip(ChannelStrip* strip) {
+    strip->setProperty("vlt.flushChannelStrip", true);
     connect(strip, &ChannelStrip::rackSelectionRequested, this, [this](const QString& channel, const QStringList& ids) {
-        setSelectedTrack(channel); m_rack->selectDevices(ids); emit trackSelected(channel);
+        setSelectedTrack(channel);
+        // An explicit device selection must still target this channel while
+        // the rack is hidden, so opening it restores the requested devices.
+        if (!m_rackMode) m_rack->setChannel(channel);
+        m_rack->selectDevices(ids);
+        emit trackSelected(channel);
     });
     strip->setStripWidth(m_channelWidth);
     ui::perf::sample("mixer.strip.created", 1);
@@ -964,7 +1046,6 @@ void MixerWidget::rebuild() {
     m_stripsHost->setMinimumWidth(channelsWidth(int(m_channels.size()), m_channelWidth));
     for (auto* strip : previous) { strip->finishEdits(); strip->hide(); strip->deleteLater(); }
     m_stripsHost->setMinimumHeight(0);
-    m_headerCount->setText(m_rackMode ? m_rack->channelName() : tr("%1 channels").arg(m_channels.size()));
     m_syncingStrips = false;
     syncVisibleStrips();
     syncFromModel();
@@ -1034,7 +1115,7 @@ void MixerWidget::applyDetailsWidth(int width) {
 }
 
 void MixerWidget::syncDetails() {
-    if (m_view != ui::MixerPreferences::View::Compact || m_syncingDetails) return;
+    if (m_rackMode || m_view != ui::MixerPreferences::View::Compact || m_syncingDetails) return;
     const QScopedValueRollback<bool> guard(m_syncingDetails, true);
     const auto* track = m_controller->project().findTrack(m_selectedTrackId.toStdString());
     const QString id = track && daw::carriesAudio(*track) ? m_selectedTrackId : QString{};
@@ -1232,13 +1313,14 @@ void MixerWidget::refreshMeters() {
 }
 
 void MixerWidget::setSelectedTrack(const QString& trackId) {
+    ui::perf::Scope timing("selectTrack.MixerWidget.ms");
     if (m_selectedTrackId != trackId) finishChannelEdits();
     m_selectedTrackId = trackId;
-    if (m_rack) { m_rack->setChannel(trackId); if (m_rackMode) m_headerCount->setText(m_rack->channelName()); }
     const auto* track = m_controller->project().findTrack(trackId.toStdString());
     for (ChannelStrip* strip : m_strips) {
         strip->setSelected(strip->isMaster()
             ? (trackId == daw::EngineController::kMasterChannelId || (track && track->kind == daw::TrackKind::Master)) : strip->trackId() == trackId);
     }
+    if (m_rack && m_rackMode) m_rack->setChannel(trackId);
     syncDetails();
 }

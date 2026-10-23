@@ -273,7 +273,8 @@ void setTabIcon(const QString& collectionId, const QString& icon) {
 QString activeCollection() {
     const QString stored = QSettings().value(key("activeCollection")).toString();
     if (stored.isEmpty()) return {};
-    if (stored == QStringLiteral("project-clips")) return stored;
+    if (stored == QStringLiteral("project-clips") || isDeviceTab(stored) ||
+        stored == kPresetsTab || stored == favoritesId()) return stored;
     const auto current = tabs();
     return std::any_of(current.cbegin(), current.cend(), [&stored](const Tab& tab) {
         return tab.collectionId == stored;
@@ -282,6 +283,18 @@ QString activeCollection() {
 
 void setActiveCollection(const QString& collectionId) {
     QSettings().setValue(key("activeCollection"), collectionId);
+}
+
+bool isDeviceTab(const QString& id) {
+    return id == kPluginsTab || id == kInstrumentsTab;
+}
+
+bool sidebarExpanded() {
+    return QSettings().value(key("sidebarExpanded"), false).toBool();
+}
+
+void setSidebarExpanded(bool expanded) {
+    QSettings().setValue(key("sidebarExpanded"), expanded);
 }
 
 QString directFolderColor(const QString& folder) {

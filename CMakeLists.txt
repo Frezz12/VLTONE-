@@ -143,6 +143,7 @@ add_subdirectory(core)
 add_subdirectory(creator)
 add_subdirectory(plugins)      # VST3/CLAP/AU hosting; the only user of the SDKs
 add_subdirectory(runtime)      # disposable background-job transport
+add_subdirectory(scripting)    # isolated Lua runtime and versioned public API
 add_subdirectory(scanner)      # daw_scan: loads plugins out of process, so a crash is survivable
 add_subdirectory(guard)        # daw_guard: watches the app from outside, so a hang is visible
 add_subdirectory(controller)   # framework-agnostic; no Qt dependency

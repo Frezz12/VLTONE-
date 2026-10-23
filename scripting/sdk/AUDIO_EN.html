@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Clip analysis and slicing — Lua SDK</title>
+<style>body{font:16px/1.6 system-ui;max-width:900px;margin:40px auto;padding:0 24px}pre{padding:16px;background:#eee;color:#222;white-space:pre-wrap}a{color:#447acc}</style>
+<p><a href="SDK_EN.html">SDK</a> · <a href="API.html">API</a></p><h1>Analyze audible clip timing</h1>
+<p>source points at the original file, whose frames do not represent timeline time after Warp, stretching, reverse, trimming, looping or comping. audio.renderClip{track,clip,revision} starts a cancellable job rendering an immutable clip snapshot before live clip/track effects. Existing offline processing is included. It never overwrites original media.</p>
+<p>Poll jobs.get from a timer or subscribe to the job event; do not busy-wait in Lua. Once complete, check error and open result.path with audio.open. Frame zero is the clip start. Convert a detected frame to absolute beats with result.start + frame / stream.sampleRate / result.secondsPerBeat. Do not subtract the source offset.</p>
+<pre>local applied = vlt.project.sliceAudio{
+  snapshot=result.snapshot, cuts=detectedTimelineBeats, label="Slice at transients"
+}</pre>
+<p>See <a href="examples/transient-slicer/main.lua">examples/transient-slicer</a> for a complete runnable tool with progress, cancellation and error handling. Required permissions are project.read, files.read and project.write; external write access is unnecessary.</p>
+<p>sliceAudio edits only the captured clip in one Undo. It rejects stale project revisions, sorts positions, and skips duplicates or fragments of 20 ms or less. Out-of-range positions reject the request without edits. Returns cuts, skipped and created (new fragment IDs). Ordinary clips and Resample stretching retain source edits. Warp, pitch-preserving stretching, loops, comps and fades use durable rendered media to preserve DSP phase and envelopes across cuts. These transforms are baked into the new fragments. Undo restores the original clip and settings. Stopping the script does not remove applied audio.</p>
+<p>Low-level clip.split uses absolute timeline beats and retains the original ID on the left. Submit multiple cuts right-to-left, leaving more than 20 ms on both sides. Prefer renderClip / sliceAudio for arbitrary audible material.</p></html>

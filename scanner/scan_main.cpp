@@ -1,3 +1,7 @@
+#if DAW_ENABLE_VST3
+#include "Vst3/Vst3Module.hpp"
+#endif
+
 // daw_scan — opens one plugin, prints what it found, exits.
 //
 // Scanning means running third-party code that has every opportunity to crash,
@@ -316,9 +320,9 @@ int scannerMain(const std::vector<std::string>& arguments) {
                 {"default", parameter.defaultValue}, {"stepped", parameter.isStepped},
                 {"automatable", parameter.isAutomatable}, {"bypass", parameter.isBypass}});
         }
-        validated.parameterSchema = nlohmann::json{{"version", 2},
+        validated.setParameterSchema(nlohmann::json{{"version", 2},
             {"parameters", parameters}, {"inputs", layout.inputs}, {"outputs", layout.outputs},
-            {"wantsMidi", validated.wantsMidi}, {"producesMidi", validated.producesMidi}}.dump();
+            {"wantsMidi", validated.wantsMidi}, {"producesMidi", validated.producesMidi}}.dump());
         writeResult(scan::encodeResult({validated}));
         return 0;
     }
@@ -336,7 +340,11 @@ int wmain(int argc, wchar_t** argv) {
         arguments.push_back(daw::platform::pathToUtf8(
             std::filesystem::path(std::wstring(argv[i]))));
     }
-    return scannerMain(arguments);
+    const int result = scannerMain(arguments);
+#if DAW_ENABLE_VST3
+    daw::plugins::Vst3Module::releaseUnusedModules();
+#endif
+    return result;
 }
 #else
 int main(int argc, char** argv) {

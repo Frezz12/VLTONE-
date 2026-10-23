@@ -3,328 +3,325 @@
 #include "Controls.hpp"
 #include "Theme.hpp"
 #include "Icons.hpp"
+#include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
-#include <QHash>
 #include <QLabel>
 #include <QMenu>
+#include <QPainter>
 #include <QRandomGenerator>
-#include <QResizeEvent>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
-#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <cmath>
 
 namespace {
-class CompactNumber final : public QDoubleSpinBox {
+class WaveChoice final : public QAbstractButton, public ui::graphics::ScenePaintSource {
 public:
-    using QDoubleSpinBox::QDoubleSpinBox;
-    QString textFromValue(double value) const override {
-        auto text = QDoubleSpinBox::textFromValue(value);
-        const auto decimal = locale().decimalPoint();
-        if (text.contains(decimal)) {
-            while (text.endsWith('0')) text.chop(1);
-            if (text.endsWith(decimal)) text.chop(decimal.size());
-        }
-        return text;
+    WaveChoice(daw::modulation::Wave wave, QWidget* parent) : QAbstractButton(parent), m_wave(wave) {
+        setFixedSize(32, 24); setCheckable(true); setAutoExclusive(true); setFocusPolicy(Qt::StrongFocus);
     }
-};
-class ElidedButton final : public QToolButton {
-public:
-    using QToolButton::QToolButton;
-    void setLabel(const QString& text) { full = text; setAccessibleName(text); setToolTip(text); fit(); }
+    void paintScene(QPainter& p, const QRegion&) override {
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(hasFocus() ? th().accent : th().separator(), 1));
+        p.setBrush(mixColors(th().well(), th().accent, isChecked() ? .20 : underMouse() ? .08 : 0));
+        p.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), 3, 3);
+        QPainterPath wave;
+        for (int i = 0; i <= 32; ++i) {
+            const QPointF at(5. + i * (width() - 10.) / 32.,
+                6. + (1. - daw::modulation::waveValue(m_wave, i / 32.01)) * (height() - 12.));
+            if (i == 0) wave.moveTo(at); else wave.lineTo(at);
+        }
+        p.setBrush(Qt::NoBrush); p.setPen(QPen(isChecked() ? th().accent : th().textSecondary, 1.4));
+        p.drawPath(wave);
+    }
 protected:
-    void resizeEvent(QResizeEvent* e) override { QToolButton::resizeEvent(e); fit(); }
+    void paintEvent(QPaintEvent*) override { QPainter p(this); paintScene(p, QRegion(rect())); }
 private:
-    void fit() { setText(fontMetrics().elidedText(full, Qt::ElideRight, std::max(8, width() - 8))); }
-    QString full;
+    daw::modulation::Wave m_wave;
 };
-QToolButton* button(const QString& text, QWidget* parent, const std::function<void()>& run) {
-    auto* b = new QToolButton(parent); b->setText(text); b->setAccessibleName(text); b->setToolTip(text);
-    b->setMinimumHeight(26); b->setFocusPolicy(Qt::StrongFocus);
-    QObject::connect(b, &QAbstractButton::clicked, parent, run); return b;
-}
 }
 
-void RackModulationPanel::rebuild() {
+QWidget* RackModulationPanel::sourceControls(const QString& id, QWidget* parent, bool detailed,
+                                             std::vector<std::function<void()>>& refreshers) {
     using namespace daw::modulation;
-    finishGesture();
-    QString focusedSource;
-    for (auto* widget = QApplication::focusWidget(); widget && widget != this; widget = widget->parentWidget())
-        if (widget->objectName() == "RackModulatorCard" && isAncestorOf(widget)) { focusedSource = widget->property("sourceId").toString(); break; }
-    QHash<QString, int> scrolls;
-    for (auto* area : findChildren<QScrollArea*>("ModulationAssignments"))
-        scrolls.insert(area->property("sourceId").toString(), area->verticalScrollBar()->value());
-    m_refreshers.clear();
-    while (auto* item = m_layout->takeAt(0)) { delete item->widget(); delete item; }
-    m_structureRevision = m_controller->project().structureRevision();
-    if (!source(m_selected)) {
-        m_assigning = false; m_route.clear();
-        m_selected = m_shown.sources.empty() ? QString{} : QString::fromStdString(m_shown.sources.front().id);
+    auto* controls = new QWidget(parent);
+    auto* column = new QVBoxLayout(controls); column->setContentsMargins(0, 0, 0, 0); column->setSpacing(3);
+    const auto* initial = source(id); if (!initial) return controls;
+    const auto slider = [&](const QString& label, const char* name,
+        std::function<double(const Source&)> get, std::function<void(Source&, double)> set,
+        std::function<QString(const Source&)> format, QWidget* extra = nullptr) {
+        auto* field = new QWidget(controls);
+        auto* layout = new QVBoxLayout(field); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(0);
+        auto* heading = new QHBoxLayout; heading->setSpacing(4);
+        auto* caption = new QLabel(label, field);
+        auto* value = new QLabel(field); value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto font = caption->font(); font.setPixelSize(10);
+        caption->setFont(font); value->setFont(font);
+        heading->addWidget(caption); heading->addWidget(value, 1);
+        if (extra) heading->addWidget(extra);
+        layout->addLayout(heading);
+        auto* control = new ui::GlassSlider(Qt::Horizontal, field);
+        control->setObjectName(QString::fromLatin1(name)); control->setProperty("sourceId", id);
+        control->setRange(0, 1000); control->setSingleStep(1); control->setPageStep(25); control->setFixedHeight(22);
+        control->setFocusPolicy(Qt::StrongFocus); control->setAccessibleName(label);
+        caption->setBuddy(control); layout->addWidget(control); column->addWidget(field);
+        if (!detailed) {
+            layout->setDirection(QBoxLayout::LeftToRight); layout->setSpacing(3);
+            heading->setSpacing(2); caption->setFixedWidth(29); value->setFixedWidth(35);
+            field->setFixedHeight(22);
+        }
+        connect(control, &QSlider::sliderPressed, this, [this] { beginGesture(); });
+        connect(control, &QSlider::sliderReleased, this, [this] { finishGesture(); });
+        connect(control, &QSlider::valueChanged, this, [this, id, set, control](int value) {
+            beginGesture(); editSource(id, [&](auto& s) { set(s, value / 1000.); });
+            if (!control->isSliderDown()) finishGesture();
+        });
+        refreshers.push_back([this, id, control, value, get, format] {
+            if (const auto* s = source(id)) {
+                QSignalBlocker block(control);
+                if (!control->isSliderDown()) control->setValue(int(std::round(std::clamp(get(*s), 0., 1.) * 1000)));
+                const auto text = format(*s); value->setText(text); control->setToolTip(control->accessibleName() + " · " + text);
+            }
+        });
+        return control;
+    };
+    const auto combo = [&](const QString& label, const char* name) {
+        auto* result = new QComboBox(controls); result->setObjectName(QString::fromLatin1(name));
+        result->setMinimumWidth(0); result->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        result->setFixedHeight(24); result->setAccessibleName(label); result->setToolTip(label);
+        column->addWidget(result); return result;
+    };
+    if (initial->kind == Kind::Lfo) {
+        auto* waves = new QHBoxLayout; waves->setSpacing(3);
+        const QStringList names{tr("Sine"), tr("Triangle"), tr("Ramp up"), tr("Ramp down"), tr("Square")};
+        for (int i = 0; i < names.size(); ++i) {
+            auto* button = new WaveChoice(Wave(i), controls); button->setObjectName(QStringLiteral("ModulationWave%1").arg(i));
+            button->setToolTip(names[i]); button->setAccessibleName(names[i]); waves->addWidget(button);
+            connect(button, &QAbstractButton::clicked, this, [this, id, i] { editSource(id, [i](auto& s) { s.wave = Wave(i); }); });
+            refreshers.push_back([this, id, button, i] { if (const auto* s = source(id)) button->setChecked(int(s->wave) == i); });
+        }
+        waves->addStretch(); column->addLayout(waves);
     }
-    QSettings().setValue(key("selected"), m_selected);
-    int totalWidth = 0;
-    for (const auto& initial : m_shown.sources) {
-        const auto id = QString::fromStdString(initial.id);
-        const bool collapsed = QSettings().value(key("collapsed/") + id, false).toBool();
-        const auto count = std::count_if(m_shown.routes.begin(), m_shown.routes.end(), [&](const auto& r) { return r.sourceId == initial.id; });
-        auto* card = new QFrame(this); card->setObjectName("RackModulatorCard"); card->setProperty("sourceId", id);
-        card->setFocusPolicy(Qt::StrongFocus); card->setFixedWidth(collapsed ? 170 : 560); card->setMinimumHeight(220);
-        totalWidth += card->width() + (totalWidth ? 8 : 0);
-        auto* column = new QVBoxLayout(card); column->setContentsMargins(8, 5, 8, 7); column->setSpacing(5);
-        auto* header = new QHBoxLayout; header->setSpacing(4); column->addLayout(header);
-        auto* on = new ui::IconButton(icons::Glyph::Power, tr("Enable %1").arg(QString::fromStdString(initial.name)), card);
-        on->setButtonSize(24, 24); on->setCheckable(true); on->setFocusPolicy(Qt::StrongFocus); header->addWidget(on);
-        connect(on, &QAbstractButton::clicked, this, [this, id](bool v) { editSource(id, [&](auto& s) { s.enabled = v; }); });
-        auto* title = new ElidedButton(card); title->setMinimumHeight(26); title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        title->setFocusPolicy(Qt::StrongFocus); title->setObjectName("ModulationSourceTitle"); title->setProperty("sourceId", id); header->addWidget(title, 1);
-        connect(title, &QAbstractButton::clicked, this, [this, id] { setAssigning(false); m_selected = id; QSettings().setValue(key("selected"), id); synchronize(); });
-        title->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(title, &QWidget::customContextMenuRequested, this, [this, id, title](const QPoint& at) { sourceMenu(id, title->mapToGlobal(at)); });
-        auto* menu = button(QStringLiteral("…"), card, [this, id] {
-            if (auto* trigger = qobject_cast<QWidget*>(sender())) sourceMenu(id, trigger->mapToGlobal(QPoint(0, trigger->height())));
+    if (hasRate(initial->kind)) {
+        auto* sync = new QToolButton(controls); sync->setCheckable(true); sync->setFixedSize(24, 20);
+        sync->setObjectName("ModulationSync"); sync->setAccessibleName(tr("Tempo sync")); sync->setToolTip(tr("Tempo sync"));
+        connect(sync, &QAbstractButton::clicked, this, [this, id](bool on) { editSource(id, [on](auto& s) { s.sync = on; }); });
+        refreshers.push_back([this, id, sync] { if (const auto* s = source(id)) {
+            QSignalBlocker block(sync); sync->setChecked(s->sync);
+            sync->setIcon(icons::icon(icons::Glyph::Metronome, s->sync ? th().accent : th().textSecondary, 15));
+        } });
+        auto* rate = slider(tr("Rate"), "ModulationRate",
+            [](const auto& s) { return s.sync ? (7. - std::log2(s.beats)) / 12. : std::log(s.rate / .01) / std::log(2000.); },
+            [](auto& s, double t) { if (s.sync) s.beats = std::exp2(7. - std::round(t * 12.)); else s.rate = std::clamp(.01 * std::pow(2000., t), .01, 20.); },
+            [this](const auto& s) { return s.sync ? (s.beats >= 4 ? tr("%1 bars").arg(s.beats / 4, 0, 'g', 3)
+                      : QStringLiteral("1/%1").arg(4 / s.beats, 0, 'g', 3)) : QString::number(s.rate, 'f', 2) + " Hz"; }, sync);
+        rate->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(rate, &QWidget::customContextMenuRequested, this, [this, id, rate](const QPoint& at) {
+            QMenu menu(this); auto* action = menu.addAction(tr("Automate rate"));
+            if (menu.exec(rate->mapToGlobal(at)) == action) automate(id.toStdString(), false);
         });
-        menu->setFixedSize(26, 26); menu->setAccessibleName(tr("Module menu")); menu->setToolTip(tr("Module menu")); header->addWidget(menu);
-        auto* fold = new ui::IconButton(collapsed ? icons::Glyph::ChevronRight : icons::Glyph::Chevron, tr("Expand or collapse module"), card);
-        fold->setButtonSize(24, 24); fold->setObjectName("ModulationFold"); fold->setProperty("sourceId", id); fold->setFocusPolicy(Qt::StrongFocus); header->addWidget(fold);
-        connect(fold, &QAbstractButton::clicked, this, [this, id, collapsed] { QSettings().setValue(key("collapsed/") + id, !collapsed); setAssigning(false); rebuild(); });
-        m_refreshers.push_back([this, id, card, title, on] {
-            const auto* s = source(id); if (!s) return;
-            QSignalBlocker block(on); on->setChecked(s->enabled);
-            title->setLabel(QString::fromStdString(s->name)); card->setAccessibleName(QString::fromStdString(s->name));
-            const auto style = "#RackModulatorCard{background:" + th().surface.name() + ";border:1px solid " +
-                (id == m_selected ? th().accent : th().separator()).name() + ";border-radius:7px;}";
-            if (card->styleSheet() != style) card->setStyleSheet(style);
-        });
-        auto* body = new QHBoxLayout; body->setSpacing(8); column->addLayout(body, 1);
-        auto* controls = new QWidget(card); controls->setFixedWidth(collapsed ? 154 : 220); body->addWidget(controls);
-        auto* left = new QVBoxLayout(controls); left->setContentsMargins(0, 0, 0, 0); left->setSpacing(4);
-        auto* graph = new RackModulationEditor(controls); graph->setSource(initial); graph->setProperty("sourceId", id); left->addWidget(graph, 1);
-        graph->begin = [this] { beginGesture(); }; graph->finish = [this] { finishGesture(); };
-        graph->changed = [this, id](const Source& next) { editSource(id, [&](auto& s) { s.points = next.points; s.steps = next.steps; }); };
-        m_refreshers.push_back([this, id, graph] { if (const auto* s = source(id)) graph->setSource(*s); });
-        if (collapsed) {
-            graph->setMaximumHeight(84); left->addWidget(new QLabel(tr("Assignments: %1").arg(count), controls)); left->addStretch();
-            m_layout->addWidget(card); continue;
-        }
-        const auto row = [&] { auto* r = new QHBoxLayout; r->setSpacing(4); left->addLayout(r); return r; };
-        const auto combo = [&](QHBoxLayout* r, const QString& label) {
-            auto* box = new QComboBox(controls); box->setMinimumSize(0, 24); box->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-            box->setStyleSheet("QComboBox{padding:2px 5px;min-height:18px;} QComboBox::drop-down{width:18px;}");
-            box->setAccessibleName(label); box->setToolTip(label); r->addWidget(box, 1); return box;
-        };
-        const auto number = [&](QHBoxLayout* r, const QString& label, double low, double high, const QString& suffix,
-                                std::function<double(const Source&)> get, std::function<void(Source&, double)> set, bool caption = true) {
-            auto* field = new QWidget(controls); auto* box = new QVBoxLayout(field); box->setContentsMargins(0, 0, 0, 0); box->setSpacing(1);
-            auto* spin = new CompactNumber(field); spin->setRange(low, high); spin->setDecimals(2); spin->setSuffix(suffix);
-            spin->setKeyboardTracking(false); spin->setMinimumSize(0, 24); spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-            spin->setButtonSymbols(QAbstractSpinBox::NoButtons); spin->setAccessibleName(label); spin->setToolTip(label);
-            if (caption) { auto* text = new QLabel(label, field); text->setBuddy(spin); box->addWidget(text); }
-            box->addWidget(spin); r->addWidget(field, 1);
-            connect(spin, &QDoubleSpinBox::valueChanged, this, [this, id, set](double value) { editSource(id, [&](auto& s) { set(s, value); }); });
-            m_refreshers.push_back([this, id, spin, get] { if (const auto* s = source(id)) { QSignalBlocker block(spin); if (spin->value() != get(*s)) spin->setValue(get(*s)); } });
-            return spin;
-        };
-        if (initial.kind == Kind::Lfo) {
-            auto* shape = combo(row(), tr("Waveform")); shape->addItems({tr("Sine"), tr("Triangle"), tr("Ramp up"), tr("Ramp down"), tr("Square")});
-            connect(shape, &QComboBox::activated, this, [this, id](int i) { editSource(id, [&](auto& s) { s.wave = Wave(i); }); });
-            m_refreshers.push_back([this, id, shape] { if (const auto* s = source(id)) { QSignalBlocker block(shape); shape->setCurrentIndex(int(s->wave)); } });
-        }
-        if (hasRate(initial.kind)) {
-            auto* rateRow = row(); auto* period = combo(rateRow, initial.kind == Kind::Steps || initial.kind == Kind::Random ? tr("Step duration") : tr("Period"));
+        if (detailed) {
+            auto* period = combo(tr("Period"), "ModulationPeriod");
             for (const double beats : {128., 64., 32., 16., 8., 4., 2., 1., .5, .25, .125, .0625, .03125}) {
-                const QString label = beats >= 4 ? tr("%1 bars").arg(beats / 4) : "1/" + QString::number(4 / beats);
+                const auto label = beats >= 4 ? tr("%1 bars").arg(beats / 4) : QStringLiteral("1/%1").arg(4 / beats);
                 period->addItem(label, beats);
                 if (beats * 1.5 <= 128) period->addItem(label + " ·", beats * 1.5);
                 if (beats * 2 / 3 >= .03125) period->addItem(label + " T", beats * 2 / 3);
             }
-            period->setObjectName("ModulationPeriod");
             connect(period, &QComboBox::activated, this, [this, id, period] { editSource(id, [&](auto& s) { s.beats = period->currentData().toDouble(); }); });
-            auto* hz = number(rateRow, tr("Rate"), .01, 20, " Hz", [](const auto& s) { return s.rate; }, [](auto& s, double v) { s.rate = v; }, false);
-            auto* mode = combo(rateRow, tr("Rate mode")); mode->addItems({tr("Sync"), tr("Hz")});
-            mode->ensurePolished(); mode->setFixedWidth(std::max(70, mode->sizeHint().width()));
-            connect(mode, &QComboBox::activated, this, [this, id](int i) { editSource(id, [&](auto& s) { s.sync = i == 0; }); });
-            m_refreshers.push_back([this, id, period, hz, mode] {
-                if (const auto* s = source(id)) {
-                    QSignalBlocker p(period), m(mode); int index = -1;
-                    for (int i = 0; i < period->count(); ++i) if (std::abs(period->itemData(i).toDouble() - s->beats) < 1e-9) { index = i; break; }
-                    if (index < 0) { period->addItem(tr("%1 beats").arg(s->beats, 0, 'g', 4), s->beats); index = period->count() - 1; }
-                    period->setCurrentIndex(index); period->setVisible(s->sync); hz->parentWidget()->setVisible(!s->sync); mode->setCurrentIndex(s->sync ? 0 : 1);
-                }
-            });
-            for (auto* control : {static_cast<QWidget*>(period), static_cast<QWidget*>(hz)}) {
-                control->setContextMenuPolicy(Qt::CustomContextMenu);
-                connect(control, &QWidget::customContextMenuRequested, this, [this, id, control](const QPoint& at) {
-                    QMenu menu(this); auto* action = menu.addAction(tr("Automate rate"));
-                    if (menu.exec(control->mapToGlobal(at)) == action) automate(id.toStdString(), false);
-                });
-            }
-        }
-        if (initial.kind == Kind::Follower) {
-            auto* audioRow = row(); auto* audio = combo(audioRow, tr("Audio source")); audio->addItem(tr("Own input"), "");
-            for (const auto& track : m_controller->project().tracks) if (daw::carriesAudio(track) && track.id != m_channel.toStdString())
-                audio->addItem(QString::fromStdString(track.name), QString::fromStdString(track.id));
-            if (m_channel != "master") audio->addItem(tr("Master"), "master");
-            connect(audio, &QComboBox::activated, this, [this, id, audio] { editSource(id, [&](auto& s) { s.audioChannelId = audio->currentData().toString().toStdString(); }); });
-            m_refreshers.push_back([this, id, audio] {
-                if (const auto* s = source(id)) {
-                    QSignalBlocker a(audio); const auto channel = QString::fromStdString(s->audioChannelId); int index = audio->findData(channel);
-                    if (index < 0) { audio->addItem(tr("Missing audio source"), channel); index = audio->count() - 1; }
-                    audio->setCurrentIndex(index); audio->setToolTip(tr("Audio source") + "\n" + audio->currentText());
-                }
-            });
-            auto* dynamics = row();
-            number(dynamics, tr("Gain"), -48, 48, " dB", [](const auto& s) { return s.gainDb; }, [](auto& s, double v) { s.gainDb = v; });
-            number(dynamics, tr("Attack"), .1, 2000, " ms", [](const auto& s) { return s.attackMs; }, [](auto& s, double v) { s.attackMs = v; });
-            number(dynamics, tr("Release"), 1, 10000, " ms", [](const auto& s) { return s.releaseMs; }, [](auto& s, double v) { s.releaseMs = v; });
-        }
-        if (initial.kind == Kind::Steps) {
-            auto* sequence = row();
-            auto* length = number(sequence, tr("Steps"), 1, 32, "", [](const auto& s) { return double(s.steps.size()); }, [](auto& s, double v) { s.steps.resize(std::size_t(v), .5); }, false);
-            length->setDecimals(0); length->parentWidget()->setMaximumWidth(56); length->setObjectName("ModulationStepCount");
-            auto* direction = combo(sequence, tr("Direction")); direction->addItems({tr("Forward"), tr("Reverse"), tr("Ping pong")});
-            connect(direction, &QComboBox::activated, this, [this, id](int i) { editSource(id, [&](auto& s) { s.direction = Direction(i); }); });
-            m_refreshers.push_back([this, id, direction] { if (const auto* s = source(id)) { QSignalBlocker block(direction); direction->setCurrentIndex(int(s->direction)); } });
-        }
-        if (initial.kind == Kind::Random) {
-            auto* options = row(); auto* mode = combo(options, tr("Random mode")); mode->addItems({tr("Stepped"), tr("Smooth")});
-            auto* loop = combo(options, tr("Repeat pattern")); loop->addItem(tr("No repeat"), 0);
-            for (int n : {2, 4, 8, 16, 32}) loop->addItem(tr("%1 steps").arg(n), n);
-            connect(mode, &QComboBox::activated, this, [this, id](int i) { editSource(id, [&](auto& s) { s.randomSmooth = i == 1; }); });
-            connect(loop, &QComboBox::activated, this, [this, id, loop] { editSource(id, [&](auto& s) { s.randomLoop = loop->currentData().toUInt(); }); });
-            m_refreshers.push_back([this, id, mode, loop] { if (const auto* s = source(id)) {
-                QSignalBlocker a(mode), b(loop); mode->setCurrentIndex(s->randomSmooth ? 1 : 0); loop->setCurrentIndex(loop->findData(int(s->randomLoop)));
+            refreshers.push_back([this, id, period] { if (const auto* s = source(id)) {
+                QSignalBlocker block(period); int at = -1;
+                for (int i = 0; i < period->count(); ++i) if (std::abs(period->itemData(i).toDouble() - s->beats) < 1e-9) { at = i; break; }
+                if (at < 0) { period->addItem(tr("%1 beats").arg(s->beats), s->beats); at = period->count() - 1; }
+                period->setCurrentIndex(at); period->setVisible(s->sync);
             } });
         }
-        auto* actions = row();
-        if (initial.kind == Kind::Shaper) {
-            auto* presets = combo(actions, tr("Shape presets")); presets->setObjectName("ModulationShapePreset");
-            presets->addItems({tr("Ramp up"), tr("Ramp down"), tr("S-curve"), tr("Pulse"), tr("Ducking")});
-            presets->setCurrentIndex(-1); presets->setPlaceholderText(tr("Shape…"));
-            connect(presets, &QComboBox::activated, this, [this, id, presets](int i) {
-                editSource(id, [&](auto& s) { shapePreset(s, unsigned(i)); }); QSignalBlocker block(presets); presets->setCurrentIndex(-1);
-            });
-        } else if (initial.kind == Kind::Steps) {
-            auto* pattern = button(tr("Pattern…"), controls, [this, id] {
-                QMenu menu(this); auto* invert = menu.addAction(tr("Invert")); auto* left = menu.addAction(tr("Shift left")); auto* right = menu.addAction(tr("Shift right"));
-                auto* generate = menu.addAction(tr("Euclidean…")); const auto action = menu.exec(QCursor::pos());
-                if (!action) return;
-                if (action == generate) {
-                    const auto* value = source(id); if (!value) return;
-                    const int count = int(value->steps.size()); QDialog dialog(this); dialog.setWindowTitle(tr("Euclidean pattern")); auto* form = new QFormLayout(&dialog);
-                    auto* pulses = new QSpinBox(&dialog); pulses->setRange(0, count); pulses->setValue(std::min(5, count));
-                    auto* rotation = new QSpinBox(&dialog); rotation->setRange(0, count - 1);
-                    form->addRow(tr("Pulses"), pulses); form->addRow(tr("Rotation"), rotation);
-                    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog); form->addRow(buttons);
-                    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-                    if (dialog.exec() == QDialog::Accepted) editSource(id, [&](auto& s) { euclideanSteps(s, pulses->value(), rotation->value()); });
-                } else editSource(id, [&](auto& s) {
-                    if (action == invert) for (auto& v : s.steps) v = 1 - v;
-                    else if (action == left) std::rotate(s.steps.begin(), s.steps.begin() + 1, s.steps.end());
-                    else std::rotate(s.steps.rbegin(), s.steps.rbegin() + 1, s.steps.rend());
-                });
-            });
-            pattern->setObjectName("ModulationPattern"); actions->addWidget(pattern, 1);
-        } else if (initial.kind == Kind::Random) {
-            auto* reseed = button(tr("New pattern"), controls, [this, id] { editSource(id, [](auto& s) {
-                auto seed = QRandomGenerator::global()->generate(); if (seed == s.seed) ++seed; s.seed = seed;
-            }); });
-            reseed->setObjectName("ModulationReseed"); actions->addWidget(reseed, 1);
-            m_refreshers.push_back([this, id, reseed] { if (const auto* s = source(id)) reseed->setToolTip(tr("Seed: %1. Saved with the project.").arg(s->seed)); });
-        } else actions->addStretch();
-        if (initial.kind == Kind::Shaper || initial.kind == Kind::Steps) {
-            auto* expand = new ui::IconButton(icons::Glyph::WindowMaximize, tr("Enlarge editor"), controls); expand->setButtonSize(26, 26);
-            expand->setObjectName("ModulationExpand"); expand->setFocusPolicy(Qt::StrongFocus); actions->addWidget(expand);
-            connect(expand, &QAbstractButton::clicked, this, [this, id] { expandEditor(id); });
-        }
-        auto* advancedButton = new ui::IconButton(icons::Glyph::Gear, tr("Source settings"), controls); advancedButton->setButtonSize(26, 26);
-        advancedButton->setFocusPolicy(Qt::StrongFocus); actions->addWidget(advancedButton);
-        connect(advancedButton, &QAbstractButton::clicked, this, [this, id] { advanced(id); });
-        auto* divider = new QFrame(card); divider->setFrameShape(QFrame::VLine); body->addWidget(divider);
-        auto* targets = new QWidget(card); body->addWidget(targets, 1);
-        auto* right = new QVBoxLayout(targets); right->setContentsMargins(0, 0, 0, 0); right->setSpacing(3);
-        auto* toolbar = new QHBoxLayout; toolbar->setSpacing(3); right->addLayout(toolbar);
-        toolbar->addWidget(new QLabel(tr("Connections %1").arg(count), targets), 1);
-        auto* assignButton = button(tr("Assign"), targets, [this, id] {
-            const bool active = m_assigning && m_selected == id; m_selected = id; setAssigning(!active); synchronize();
+        if (initial->kind == Kind::Lfo || detailed)
+            slider(tr("Phase"), "ModulationPhase", [](const auto& s) { return s.phase; },
+                [](auto& s, double value) { s.phase = value; },
+                [](const auto& s) { return QString::number(s.phase * 360, 'f', 0) + QChar(0x00b0); });
+        if (detailed)
+            slider(tr("Smoothing"), "ModulationSmoothing", [](const auto& s) { return std::log1p(s.smoothMs) / std::log(1001.); },
+                [](auto& s, double value) { s.smoothMs = std::clamp(std::expm1(value * std::log(1001.)), 0., 1000.); },
+                [](const auto& s) { return QString::number(s.smoothMs, 'f', 1) + " ms"; });
+    }
+    if (initial->kind == Kind::Follower) {
+        auto* audio = combo(tr("Audio source"), "ModulationAudioSource"); audio->addItem(tr("Own input"), "");
+        for (const auto& track : m_controller->project().tracks)
+            if (daw::carriesAudio(track) && track.id != m_channel.toStdString())
+                audio->addItem(QString::fromStdString(track.name), QString::fromStdString(track.id));
+        if (m_channel != "master") audio->addItem(tr("Master"), "master");
+        connect(audio, &QComboBox::activated, this, [this, id, audio] { editSource(id, [&](auto& s) { s.audioChannelId = audio->currentData().toString().toStdString(); }); });
+        refreshers.push_back([this, id, audio] { if (const auto* s = source(id)) {
+            QSignalBlocker block(audio); const auto channel = QString::fromStdString(s->audioChannelId);
+            int at = audio->findData(channel); if (at < 0) { audio->addItem(tr("Missing audio source"), channel); at = audio->count() - 1; }
+            audio->setCurrentIndex(at);
+        } });
+        slider(tr("Gain"), "ModulationGain", [](const auto& s) { return (s.gainDb + 48.) / 96.; },
+            [](auto& s, double t) { s.gainDb = t * 96. - 48.; }, [](const auto& s) { return QString::number(s.gainDb, 'f', 1) + " dB"; });
+        slider(tr("Attack"), "ModulationAttack", [](const auto& s) { return std::log(s.attackMs / .1) / std::log(20000.); },
+            [](auto& s, double t) { s.attackMs = std::clamp(.1 * std::pow(20000., t), .1, 2000.); }, [](const auto& s) { return QString::number(s.attackMs, 'f', 1) + " ms"; });
+        slider(tr("Release"), "ModulationRelease", [](const auto& s) { return std::log(s.releaseMs) / std::log(10000.); },
+            [](auto& s, double t) { s.releaseMs = std::clamp(std::pow(10000., t), 1., 10000.); }, [](const auto& s) { return QString::number(s.releaseMs, 'f', 0) + " ms"; });
+    }
+    if (initial->kind == Kind::Shaper) {
+        auto* preset = combo(tr("Shape presets"), "ModulationShapePreset");
+        preset->addItems({tr("Ramp up"), tr("Ramp down"), tr("S-curve"), tr("Pulse"), tr("Ducking")});
+        preset->setCurrentIndex(-1); preset->setPlaceholderText(tr("Shape…"));
+        connect(preset, &QComboBox::activated, this, [this, id, preset](int i) {
+            editSource(id, [i](auto& s) { shapePreset(s, unsigned(i)); }); QSignalBlocker block(preset); preset->setCurrentIndex(-1);
         });
-        assignButton->setObjectName("ModulationAssign"); assignButton->setProperty("sourceId", id); toolbar->addWidget(assignButton);
-        m_refreshers.push_back([this, id, assignButton] { assignButton->setText(m_assigning && m_selected == id ? tr("Cancel · Esc") : tr("Assign")); });
-        auto* parameters = button(QStringLiteral("…"), targets, [this, id] { m_selected = id; chooseParameter(); synchronize(); });
-        parameters->setFixedWidth(26); parameters->setObjectName("ModulationParameters"); parameters->setAccessibleName(tr("Choose parameter")); parameters->setToolTip(tr("Choose parameter")); toolbar->addWidget(parameters);
-        auto* assignments = new QWidget; auto* list = new QVBoxLayout(assignments); list->setContentsMargins(0, 0, 0, 0); list->setSpacing(0);
-        for (const auto& route : m_shown.routes) if (route.sourceId == initial.id) {
-            const auto routeId = QString::fromStdString(route.id);
-            auto* group = new QWidget(assignments); group->setObjectName("ModulationRoute"); group->setProperty("routeId", routeId); group->setFixedHeight(28);
-            auto* line = new QHBoxLayout(group); line->setContentsMargins(0, 1, 0, 1); line->setSpacing(3);
-            const auto edit = [this, routeId](const std::function<void(Route&)>& fn) { change([&](auto& rack) { for (auto& r : rack.routes) if (r.id == routeId.toStdString()) fn(r); }); };
-            auto* enabled = new ui::IconButton(icons::Glyph::Power, tr("Enable assignment"), group); enabled->setButtonSize(24, 24); enabled->setCheckable(true); enabled->setFocusPolicy(Qt::StrongFocus); line->addWidget(enabled);
-            connect(enabled, &QAbstractButton::clicked, this, [edit](bool v) { edit([&](auto& r) { r.enabled = v; }); });
-            const auto* slot = m_controller->insertModel(m_channel.toStdString(), route.slotId);
-            QString name = QString::fromStdString(slot ? slot->name : route.pluginUid) + " → " + QString::fromStdString(route.parameterId);
-            for (const auto& info : m_controller->insertParameters(m_channel.toStdString(), route.slotId))
-                if (info.id == route.parameterId) name = QString::fromStdString(slot ? slot->name : route.pluginUid) + " → " + QString::fromStdString(info.name);
-            auto* label = new ElidedButton(group); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); label->setMinimumHeight(24); label->setFocusPolicy(Qt::StrongFocus); line->addWidget(label, 1);
-            connect(label, &QAbstractButton::clicked, this, [this, id, routeId] { m_selected = id; m_route = routeId; synchronize(); highlight(); });
-            auto* depth = new CompactNumber(group); depth->setRange(-100, 100); depth->setDecimals(1); depth->setSuffix("%"); depth->setButtonSymbols(QAbstractSpinBox::NoButtons);
-            depth->setKeyboardTracking(false); depth->setFixedWidth(66); depth->setMinimumHeight(24); depth->setAccessibleName(tr("Depth")); depth->setObjectName("ModulationDepth");
-            depth->setToolTip(tr("Maximum deviation as a percentage of the parameter range. Negative values reverse the movement.")); line->addWidget(depth);
-            connect(depth, &QDoubleSpinBox::valueChanged, this, [edit](double value) { edit([&](auto& r) { r.depth = value / 100; }); });
-            auto* polarity = button(QStringLiteral("±"), group, [] {}); polarity->setCheckable(true); polarity->setFixedSize(26, 24); polarity->setAccessibleName(tr("Two-sided movement"));
-            polarity->setToolTip(tr("One-sided starts at the base; two-sided moves above and below it.")); line->addWidget(polarity);
-            connect(polarity, &QAbstractButton::clicked, this, [edit](bool v) { edit([&](auto& r) { r.bipolar = v; }); });
-            const auto contextMenu = [this, routeId](const QPoint& at) {
-                QMenu menu(this); auto* automateAction = menu.addAction(tr("Automate depth")); auto* remove = menu.addAction(tr("Remove")); const auto action = menu.exec(at);
-                if (action == automateAction) automate(routeId.toStdString(), true);
-                else if (action == remove) change([&](auto& rack) { std::erase_if(rack.routes, [&](const auto& r) { return r.id == routeId.toStdString(); }); });
-            };
-            for (auto* control : {static_cast<QWidget*>(group), static_cast<QWidget*>(label), static_cast<QWidget*>(depth), static_cast<QWidget*>(polarity)}) {
-                control->setContextMenuPolicy(Qt::CustomContextMenu);
-                connect(control, &QWidget::customContextMenuRequested, this, [contextMenu, control](const QPoint& at) { contextMenu(control->mapToGlobal(at)); });
-            }
-            m_refreshers.push_back([this, routeId, enabled, depth, polarity, label, name] {
-                for (const auto& r : m_shown.routes) if (r.id == routeId.toStdString()) {
-                    QSignalBlocker a(enabled), b(depth), c(polarity); enabled->setChecked(r.enabled);
-                    if (depth->value() != r.depth * 100) depth->setValue(r.depth * 100);
-                    polarity->setChecked(r.bipolar); polarity->setText(r.bipolar ? QStringLiteral("±") : QStringLiteral("+"));
-                    const auto status = m_controller->rackModulationStatus(m_channel.toStdString(), r.id); label->setLabel(status.empty() ? name : "! " + name);
-                    if (!status.empty()) {
-                        QString reason = tr("Assignment unavailable");
-                        if (status == "Device unavailable") reason = tr("Device unavailable");
-                        else if (status == "Parameter unavailable") reason = tr("Parameter unavailable");
-                        else if (status == "Plugin identity changed") reason = tr("Plugin identity changed");
-                        else if (status == "Audio source unavailable") reason = tr("Audio source unavailable");
-                        label->setToolTip(name + "\n" + reason);
-                    }
-                    break;
-                }
+    }
+    if (initial->kind == Kind::Steps) {
+        auto* count = combo(tr("Steps"), "ModulationStepCount");
+        for (int i = 1; i <= 32; ++i) count->addItem(tr("%1 steps").arg(i), i);
+        connect(count, &QComboBox::activated, this, [this, id, count] { editSource(id, [&](auto& s) { s.steps.resize(count->currentData().toUInt(), .5); }); });
+        auto* direction = combo(tr("Direction"), "ModulationDirection");
+        direction->addItems({tr("Forward"), tr("Reverse"), tr("Ping pong")});
+        connect(direction, &QComboBox::activated, this, [this, id](int i) { editSource(id, [i](auto& s) { s.direction = Direction(i); }); });
+        refreshers.push_back([this, id, count, direction] { if (const auto* s = source(id)) {
+            QSignalBlocker a(count), b(direction); count->setCurrentIndex(int(s->steps.size()) - 1); direction->setCurrentIndex(int(s->direction));
+        } });
+        auto* pattern = new QToolButton(controls); pattern->setText(tr("Pattern…")); pattern->setObjectName("ModulationPattern");
+        column->addWidget(pattern);
+        connect(pattern, &QAbstractButton::clicked, this, [this, id] {
+            QMenu menu(this); auto* invert = menu.addAction(tr("Invert"));
+            auto* left = menu.addAction(tr("Shift left")); auto* right = menu.addAction(tr("Shift right"));
+            auto* generate = menu.addAction(tr("Euclidean…")); const auto action = menu.exec(QCursor::pos());
+            if (!action) return;
+            if (action == generate) {
+                const auto* value = source(id); if (!value) return;
+                const int count = int(value->steps.size()); QDialog dialog(this); dialog.setWindowTitle(tr("Euclidean pattern"));
+                auto* form = new QFormLayout(&dialog); auto* pulses = new QSpinBox(&dialog); pulses->setRange(0, count); pulses->setValue(std::min(5, count));
+                auto* rotation = new QSpinBox(&dialog); rotation->setRange(0, count - 1);
+                form->addRow(tr("Pulses"), pulses); form->addRow(tr("Rotation"), rotation);
+                auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog); form->addRow(buttons);
+                connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+                if (dialog.exec() == QDialog::Accepted) editSource(id, [&](auto& s) { euclideanSteps(s, pulses->value(), rotation->value()); });
+            } else editSource(id, [&](auto& s) {
+                if (action == invert) for (auto& v : s.steps) v = 1 - v;
+                else if (action == left) std::rotate(s.steps.begin(), s.steps.begin() + 1, s.steps.end());
+                else if (action == right) std::rotate(s.steps.rbegin(), s.steps.rbegin() + 1, s.steps.rend());
             });
-            list->addWidget(group);
+        });
+    }
+    if (initial->kind == Kind::Random) {
+        auto* mode = combo(tr("Random mode"), "ModulationRandomMode"); mode->addItems({tr("Stepped"), tr("Smooth")});
+        auto* loop = combo(tr("Repeat pattern"), "ModulationRepeat"); loop->addItem(tr("No repeat"), 0);
+        for (int n : {2, 4, 8, 16, 32}) loop->addItem(tr("%1 steps").arg(n), n);
+        connect(mode, &QComboBox::activated, this, [this, id](int i) { editSource(id, [i](auto& s) { s.randomSmooth = i == 1; }); });
+        connect(loop, &QComboBox::activated, this, [this, id, loop] { editSource(id, [&](auto& s) { s.randomLoop = loop->currentData().toUInt(); }); });
+        refreshers.push_back([this, id, mode, loop] { if (const auto* s = source(id)) {
+            QSignalBlocker a(mode), b(loop); mode->setCurrentIndex(s->randomSmooth ? 1 : 0); loop->setCurrentIndex(loop->findData(int(s->randomLoop)));
+        } });
+        auto* reseed = new QToolButton(controls); reseed->setText(tr("New pattern")); reseed->setObjectName("ModulationReseed");
+        column->addWidget(reseed);
+        connect(reseed, &QAbstractButton::clicked, this, [this, id] { editSource(id, [](auto& s) { s.seed = QRandomGenerator::global()->generate(); }); });
+    }
+    if (detailed) {
+        auto* settings = new QToolButton(controls); settings->setText(tr("Source settings")); settings->setMinimumHeight(24);
+        column->addWidget(settings);
+        connect(settings, &QAbstractButton::clicked, this, [this, id] { advanced(id); });
+    }
+    return controls;
+}
+
+void RackModulationPanel::addMenu() {
+    QMenu menu(this);
+    for (const auto kind : {daw::modulation::Kind::Lfo, daw::modulation::Kind::Follower,
+            daw::modulation::Kind::Shaper, daw::modulation::Kind::Steps, daw::modulation::Kind::Random}) {
+        auto* action = menu.addAction(QCoreApplication::translate("RackWidget", daw::modulation::kindName(kind)));
+        connect(action, &QAction::triggered, this, [this, kind] { addSource(kind); });
+    }
+    menu.exec(QCursor::pos());
+}
+
+void RackModulationPanel::rebuild() {
+    finishEdits();
+    m_refreshers.clear();
+    while (auto* item = m_layout->takeAt(0)) { delete item->widget(); delete item; }
+    m_structureRevision = m_controller->project().structureRevision();
+    const auto* chosen = source(m_selected);
+    if (!chosen || !includes(*chosen)) {
+        m_assigning = false; m_selected.clear(); m_route.clear();
+        for (const auto& s : m_shown.sources) if (includes(s)) { m_selected = QString::fromStdString(s.id); break; }
+    }
+    QSettings().setValue(key("selected"), m_selected);
+    int totalWidth = 0;
+    for (const auto& initial : m_shown.sources) {
+        if (!includes(initial)) continue;
+        const auto id = QString::fromStdString(initial.id);
+        auto* card = new QFrame(this); card->setObjectName("RackModulatorCard"); card->setProperty("sourceId", id);
+        card->setFocusPolicy(Qt::StrongFocus); card->setFixedWidth(210);
+        totalWidth += 210 + (totalWidth ? 8 : 0);
+        auto* column = new QVBoxLayout(card); column->setContentsMargins(6, 3, 6, 3); column->setSpacing(3);
+        auto* header = new QHBoxLayout; header->setSpacing(1); column->addLayout(header);
+        auto* power = new ui::IconButton(icons::Glyph::Power, tr("Enable source"), card);
+        power->setButtonSize(24, 24); power->setCheckable(true); header->addWidget(power);
+        connect(power, &QAbstractButton::clicked, this, [this, id](bool on) { editSource(id, [on](auto& s) { s.enabled = on; }); });
+        auto* title = new QToolButton(card); title->setObjectName("ModulationSourceTitle"); title->setProperty("sourceId", id);
+        title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); title->setMinimumHeight(24);
+        title->setFocusPolicy(Qt::StrongFocus); header->addWidget(title, 1);
+        connect(title, &QAbstractButton::clicked, this, [this, id] {
+            setAssigning(false); m_selected = id; QSettings().setValue(key("selected"), id); synchronize(); highlight();
+        });
+        title->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(title, &QWidget::customContextMenuRequested, this, [this, id, title](const QPoint& at) { sourceMenu(id, title->mapToGlobal(at)); });
+        auto* assign = new QToolButton(card); assign->setObjectName("ModulationAssign"); assign->setProperty("sourceId", id);
+        assign->setFixedSize(24, 24); assign->setCheckable(true); assign->setFocusPolicy(Qt::StrongFocus);
+        assign->setAccessibleName(tr("Assign modulation")); header->addWidget(assign);
+        connect(assign, &QAbstractButton::clicked, this, [this, id] {
+            const bool on = m_assigning && m_selected == id; m_selected = id; setAssigning(!on); synchronize();
+        });
+        auto* expand = new ui::IconButton(icons::Glyph::WindowMaximize, tr("Enlarge editor"), card);
+        expand->setObjectName("ModulationExpand"); expand->setButtonSize(24, 24); expand->setFocusPolicy(Qt::StrongFocus);
+        header->addWidget(expand); connect(expand, &QAbstractButton::clicked, this, [this, id] { expandEditor(id); });
+        auto* graph = new RackModulationEditor(card); graph->setSource(initial); graph->setProperty("sourceId", id);
+        if (initial.kind != daw::modulation::Kind::Shaper) {
+            graph->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(graph, &QWidget::customContextMenuRequested, this, [this, id, graph](const QPoint& at) { sourceMenu(id, graph->mapToGlobal(at)); });
         }
-        if (!count) {
-            auto* help = new QLabel(tr("Assign this source to a parameter to hear its movement."), assignments); help->setWordWrap(true); list->addWidget(help);
-            m_refreshers.push_back([this, id, help] { help->setText(m_assigning && id == m_selected
-                ? tr("Click a highlighted control, or move a knob in the plugin editor. Esc cancels.")
-                : tr("Assign this source to a parameter to hear its movement.")); });
-        }
-        list->addStretch();
-        auto* area = new QScrollArea(targets); area->setFrameShape(QFrame::NoFrame); area->setWidgetResizable(true); area->setWidget(assignments); area->setMinimumWidth(0);
-        area->setObjectName("ModulationAssignments"); area->setProperty("sourceId", id);
-        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded); right->addWidget(area, 1);
-        if (scrolls.contains(id)) QTimer::singleShot(0, area, [area, value = scrolls.value(id)] { area->verticalScrollBar()->setValue(value); });
+        graph->setMinimumHeight(48);
+        graph->setMaximumHeight(112); column->addWidget(graph, 1);
+        graph->begin = [this] { beginGesture(); }; graph->finish = [this] { finishGesture(); };
+        graph->changed = [this, id](const auto& next) { editSource(id, [&](auto& s) { s.points = next.points; s.steps = next.steps; }); };
+        column->addWidget(sourceControls(id, card, false, m_refreshers));
+        column->addStretch();
+        m_refreshers.push_back([this, id, card, title, power, assign, graph] {
+            const auto* s = source(id); if (!s) return;
+            QSignalBlocker a(power), b(assign); power->setChecked(s->enabled);
+            const auto name = QString::fromStdString(s->name);
+            title->setText(title->fontMetrics().elidedText(name, Qt::ElideRight, std::max(18, title->width() - 4)));
+            title->setToolTip(name); title->setAccessibleName(name); card->setAccessibleName(name);
+            assign->setChecked(m_assigning && m_selected == id);
+            assign->setIcon(icons::icon(icons::Glyph::RackAssign, assign->isChecked() ? th().accent : th().textSecondary, 17));
+            assign->setToolTip(assign->isChecked() ? tr("Click a parameter · Esc cancels") : tr("Assign modulation"));
+            const auto style = QString("#RackModulatorCard{background:%1;border:1px solid %2;border-radius:6px;}")
+                .arg(th().well().name(), (m_selected == id ? mixColors(th().separator(), th().accent, .5) : th().separator()).name());
+            if (card->styleSheet() != style) card->setStyleSheet(style);
+            graph->setSource(*s);
+        });
         m_layout->addWidget(card);
     }
-    setFixedWidth(totalWidth); setVisible(totalWidth > 0 && !m_controller->hasCloudProjectBinding()); synchronize();
-    if (!focusedSource.isEmpty()) for (auto* title : findChildren<QToolButton*>("ModulationSourceTitle"))
-        if (title->property("sourceId").toString() == focusedSource) { title->setFocus(Qt::OtherFocusReason); break; }
-    highlight();
+    if (!m_slot.isEmpty()) {
+        auto* add = new QToolButton(this); add->setObjectName("RackAddModulation"); add->setFixedWidth(28);
+        add->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding); add->setMinimumHeight(120);
+        add->setIcon(icons::icon(icons::Glyph::Plus, th().textSecondary, 16));
+        add->setStyleSheet(QString("#RackAddModulation{background:%1;border:1px dashed %2;border-radius:4px;}"
+                                  "#RackAddModulation:hover{border:1px solid %3;}")
+            .arg(th().well().name(), th().separator().name(), th().accent.name()));
+        add->setToolTip(tr("Add modulation")); add->setAccessibleName(tr("Add modulation"));
+        add->setFocusPolicy(Qt::StrongFocus); m_layout->addWidget(add);
+        connect(add, &QAbstractButton::clicked, this, &RackModulationPanel::addMenu);
+        totalWidth += 28 + (totalWidth ? 8 : 0);
+    }
+    setFixedWidth(totalWidth); setVisible(totalWidth > 0 && !m_controller->hasCloudProjectBinding());
+    synchronize(); highlight(); emit layoutChanged();
 }

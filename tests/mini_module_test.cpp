@@ -447,11 +447,19 @@ int main(int argc, char **) {
           document["tracks"][0]["miniModules"][0]);
     check(!ProjectSerializer::deserializeDocument(migrated, document.dump()),
           "project loader rejects a fourth card");
-    auto unavailable = controller.project();
-    unavailable.findTrack(track)->miniModules = {invalid};
+    // A document-only fixture must not reference opaque state files from the
+    // controller's separately saved package.
+    ProjectModel unavailable;
+    TrackModel unavailableTrack;
+    unavailableTrack.id = track;
+    unavailableTrack.kind = TrackKind::Audio;
+    unavailableTrack.miniModules = {invalid};
+    unavailable.tracks.push_back(std::move(unavailableTrack));
     const auto unavailablePath = (directory / "unknown.vlt").string();
-    check(bool(ProjectSerializer::save(unavailable, unavailablePath)) &&
-              bool(controller.openProject(unavailablePath)) &&
+    const auto saveUnavailable = ProjectSerializer::save(unavailable, unavailablePath);
+    const auto openUnavailable = saveUnavailable ? controller.openProject(unavailablePath) : saveUnavailable;
+    if (!openUnavailable) std::printf("Unavailable module load: %s\n", openUnavailable.message().c_str());
+    check(bool(openUnavailable) &&
               controller.miniModules(track).front().miniModule.has_value() &&
               toJson(*controller.miniModules(track).front().miniModule) == toJson(*invalid.miniModule),
           "unavailable module can remain in a local document");
@@ -462,6 +470,8 @@ int main(int argc, char **) {
     spec.customEndSeconds = .02;
     rendering::Report report;
     const auto result = controller.renderProject(spec, {}, report);
+    if (result || result.message().find("Mini module unavailable") == std::string::npos)
+      std::printf("Unavailable module render: %s\n", result.message().c_str());
     check(!result && result.message().find("Mini module unavailable") !=
                          std::string::npos,
           "ordinary export rejects an unavailable module");

@@ -83,7 +83,10 @@ int main() {
         check(c.setEqualizerAnalyzer(track, equalizer, analyzer) &&
               c.equalizerSnapshot(track, equalizer)->analyzer.frozen &&
               c.auditionEqualizerBand(track, equalizer, 0) &&
-              c.auditionEqualizerBand(track, equalizer, -1), "analyzer and audition use controller commands");
+              c.equalizerSnapshot(track, equalizer)->auditionBand == 0 &&
+              c.auditionEqualizerBand(track, equalizer, -1) &&
+              c.equalizerSnapshot(track, equalizer)->auditionBand == -1,
+              "analyzer and audition commands expose live state to every EQ view");
         const auto response = c.equalizerResponse(track, equalizer);
         check(response && std::all_of(response->combined.begin(), response->combined.end(),
               [](double x) { return std::isfinite(x); }) &&
@@ -102,6 +105,7 @@ int main() {
 
         check(c.setInsertChannelMode(track, equalizer, daw::PluginChannelMode::DualMono), "EQ enters dual mono");
         const auto left = c.insertIdentity(track, equalizer);
+        check(c.auditionEqualizerBand(track, equalizer, 0), "left EQ can audition a band");
         c.setInsertEditorChannel(track, equalizer, daw::PluginEditorChannel::Right);
         const auto right = c.insertIdentity(track, equalizer);
         check(left && right && left != right, "identity follows the selected dual-mono processor");
@@ -119,6 +123,8 @@ int main() {
               "a left editor can detach after selecting right without changing selection");
         c.setInsertEditorChannel(track, equalizer, daw::PluginEditorChannel::Left);
         check(c.equalizerSnapshot(track, equalizer)->bands[0].gainDb == 6, "left-channel snapshot stays independent");
+        check(c.equalizerSnapshot(track, equalizer)->auditionBand == -1,
+              "switching the editor's mono side releases audition on the previous processor");
 
         const auto instrument = c.addTrack(daw::TrackKind::Instrument, "Slicer");
         if (!check(c.setTrackInstrumentPlugin(instrument, slicer::SlicerInstance::staticDescriptor()), "Slicer loads")) return 1;

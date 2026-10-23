@@ -1,0 +1,152 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>VLTONE Lua SDK 1</title>
+<style>body{font:16px/1.6 system-ui;max-width:1020px;margin:40px auto;padding:0 24px}code,pre{background:#eee;color:#222}pre{padding:16px;overflow:auto}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #aaa;text-align:left}a{color:#447acc}</style>
+<h1>Пользовательские расширения VLTONE · SDK 1</h1>
+<p><a href="AUDIO_RU.html">Анализ и нарезка любых аудиоклипов</a></p>
+<p><a href="STYLE_RU.html">Свои стили: палитра, карточки, кнопки</a></p>
+<p><a href="SDK_EN.html">English</a> · <a href="API_RU.html">Справочник API</a> · <a href="api.json">Каталог JSON</a> · <a href="vlt.lua">Аннотации для редакторов</a> · <a href="AI_GUIDE.md">Руководство для AI</a></p>
+<p><a href="USER_RU.html">Руководство пользователя</a> · <a href="UI_RU.html">Окна, виджеты и интерфейс VLTONE</a></p>
+<h2>Установка и запуск</h2>
+<p>Откройте «Скрипты → Менеджер скриптов» и установите .lua, .vltscript или Lua-проект .vltcreator.
+Установка, просмотр и проверка пакета не выполняют его код. В менеджере доступны команды,
+работающие экземпляры, журнал, переход к ошибке, горячие клавиши, контекстные меню, разрешения
+и автозапуск. Автозапуск включается отдельно. При обновлении сохраняются назначения команд со стабильными
+идентификаторами; новые права изменения, записи, сети и запуска программ требуют согласования.</p>
+<p>В меню «Скрипты» находятся запуск файла, поиск команды, Creator, панель, остановка всех и SDK.
+Панель по умолчанию скрыта. Её меню позволяет закрепить панель с любой стороны или отделить в окно,
+добавить кнопки с собственными подписями, значками и фиксированными аргументами, разделители,
+изменить порядок стрелками или перетаскиванием. Окно инструмента остаётся связано со своим проектом
+при переключении вкладок; название проекта показано в заголовке.</p>
+<p>В piano roll меню скриптов открывается через Alt+правую кнопку, клавишу контекстного меню
+или меню действий редактора. Обычная правая кнопка сохраняет жест удаления нот.</p>
+<h2>Первая команда</h2>
+<pre>local context = vlt.context.get()
+local project = vlt.project.get()
+return vlt.project.apply{
+  revision=project.revision, label="Переименовать дорожку",
+  operations={{op="track.rename", track=context.target.track, name="Куплет"}}
+}</pre>
+<p>Нужны разрешения project.read и project.write. Используйте context.target — объект под правым кликом
+может отличаться от глобального выделения. Контекст содержит type, target, selection, range,
+для piano roll — notes с идентификаторами нот. Фиксированные аргументы кнопки находятся в arguments.
+Также доступны project, preview, resourceDirectory и temporaryDirectory.</p>
+<h2>Пакет и Creator</h2>
+<pre>{
+  "format":"vltscript", "sdk":1, "id":"example.my-tool",
+  "name":"Мой инструмент", "version":"1.0.0",
+  "permissions":["project.read","project.write"],
+  "commands":[{"id":"run","label":"Мой инструмент","entry":"main.lua",
+               "contexts":["global","clip","track"]}]
+}</pre>
+<p>.vltscript — ZIP с manifest.json в корне, файлами Lua и каталогом resources/.
+Запрещены абсолютные пути, выход за каталог, символьные ссылки и нативные Lua-модули.
+Локальные модули подключаются через require("module.name") из module/name.lua.
+Суммарный размер исходников — до 1 МиБ, встроенных ресурсов — до 64 МиБ.
+Идентификаторы расширений и команд: 3–96 строчных латинских букв, цифр, точек, дефисов или
+подчёркиваний, первый символ — буква или цифра. Библиотека: Documents/VLTONE/Scripts.</p>
+<p>При создании в Creator выбираются мини-модуль или Lua-скрипт. В рабочей области Lua есть
+дерево исходников и ресурсов, подсветка, Ctrl+Space для дополнения, поиск, диагностика, история и AI.
+«Проверить» компилирует без выполнения. «Предпросмотр копии» работает с отдельным проектом и временными
+файлами; запуск в настоящем проекте — отдельное действие. Сохранение создаёт .vltcreator v4 с kind=lua.
+Версии 1–3 и v4 kind=mini продолжают открываться как мини-модули. Формат .vltmini сохранён.</p>
+<h2>Данные, изменения и Undo</h2>
+<p>Музыкальное время измеряется в четвертных долях, файловое — в целочисленных кадрах с указанной
+sampleRate. time.convert принимает value/from/to: beats, seconds или frames. Параметры устройств
+имеют собственные min/max/unit; choices содержит значения и подписи дискретных вариантов.
+Адрес параметра включает track, device, parameter и identity устройства. Замена устройства меняет identity.</p>
+<p>project.get возвращает revision, generation, tempo, sampleRate, readOnly и tracks.
+По умолчанию возвращаются до 128 дорожек, 256 клипов на дорожку и 4096 событий на клип.
+Для больших проектов используйте track/clip, includeEvents=false, trackOffset/trackLimit,
+clipOffset/clipLimit и eventOffset/eventLimit. Поля trackCount, clipCount, noteCount и pointCount
+показывают полные количества. Между страницами проверяйте неизменность revision.
+Ответ ограничен 1,5 МиБ; при превышении запросите меньшую страницу.
+devices.list и parameters.list принимают offset и limit (по умолчанию 256, максимум 4096).
+В parameters.list можно передать parameter для поиска одного параметра по идентификатору.
+Точки автоматизации сохраняют shape (linear, hold, scurve), curve и eventOrder;
+сохраняйте эти поля при изменении снимка, чтобы не менять форму кривой.
+Дорожки содержат clips, devices и sends; устройства для установки перечисляются devices.list.
+project.apply принимает revision снимка, label и массив operations. Весь пакет создаёт одну запись
+Undo. При ошибке восстанавливаются данные и существующая история. Если проект изменился во время
+расчёта, получите новый снимок и пересчитайте результат. Не применяйте устаревшие операции повторно.</p>
+<table><tr><th>Операция</th><th>Поля помимо op и track</th></tr>
+<tr><td>track.add / remove / rename</td><td>kind,name / — / name</td></tr>
+<tr><td>track.mix / move</td><td>volume,pan,muted,solo,output / index,parent</td></tr>
+<tr><td>send.add / remove / set</td><td>destination / send / send,level,enabled,preFader</td></tr>
+<tr><td>clip.addMidi / importAudio</td><td>start,length / path,start (files.read и разрешённый ресурс)</td></tr>
+<tr><td>clip.remove / rename / move</td><td>clip / clip,name / clip,start</td></tr>
+<tr><td>clip.trim / gain / fade / mute</td><td>clip,start,offset,length / clip,gain / clip,in,out / clip,muted</td></tr>
+<tr><td>clip.copy / split</td><td>clip,start / clip,at</td></tr>
+<tr><td>notes.set / automation.set</td><td>clip,notes / clip,points</td></tr>
+<tr><td>notes.update</td><td>clip,notes и необязательный remove — массив id. Обновляет полные записи нот по id, сохраняет остальные ноты.</td></tr>
+<tr><td>automation.create</td><td>target={kind=volume/pan/mute/send/parameter}; send либо адрес параметра для соответствующего вида</td></tr>
+<tr><td>device.add / instrument / replace</td><td>format,uid,index / format,uid / device,identity,format,uid</td></tr>
+<tr><td>device.remove / bypass / move</td><td>device,identity / device,identity,bypassed / device,identity,index</td></tr></table>
+<p>Нота: id,pitch,start,length,velocity, необязательные pan/channel/muted/color/releaseVelocity.
+Точка автоматизации: id,beat,value,curve; value задан в единицах параметра.
+Пустой массив создавайте как vlt.array({}). Обычная пустая таблица передаётся как объект;
+массивы, полученные от хоста, сохраняют свой тип. Ошибки API можно перехватывать pcall.</p>
+<h2>Окна и контролы</h2>
+<pre>vlt.ui.window{id="main", title="Инструмент", children={
+  {type="label", id="status", text="Готово"},
+  {type="button", text="Выполнить", onClick=function()
+    vlt.ui.set{id="status", text="Завершено"}
+  end}
+}}</pre>
+<p>Типы: column, row, group, tabs, button, menu, field, toggle, list, choice, knob,
+slider, number, progress, canvas, waveform, label. Общие поля: id,text,label,tooltip.
+Компоновки и вкладки содержат children, у содержимого вкладки есть title.
+onChange поля возвращает строку, списка — индекс от 1, числового контрола — число.
+Числовые контролы используют min/max/value/unit; progress — 0..1.
+bind={track,device,parameter,identity} связывает штатный контрол с параметром: значения
+синхронизируются в обе стороны, один жест образует одну запись Undo.</p>
+<p>В предпросмотр копируются описания и значения доступных параметров; реальные плагины не загружаются.
+Изменение ручек затрагивает только копию документа. Результаты офлайн-рендера требуют обычного запуска
+с доступными исходными файлами и устройствами.</p>
+<p>ui.set меняет text,value,visible,enabled,drawing; ui.close закрывает окно по id.
+Canvas принимает массив фигур line/rect/ellipse/text с x,y,w,h,x2,y2,color,width,fill,text.
+Waveform принимает массив пиков 0..1. Лимиты: 10 000 элементов рисунка, 512 контролов и 16 окон
+на экземпляр. Закрытие последнего окна завершает инструмент, если команда не объявила background:true.</p>
+<h2>Аудио, файлы, события</h2>
+<p>ui.chooseFile: mode=open/save/folder, filter и write=true для папки назначения.
+Права на конкретный путь проверяются при каждом обращении. files.list возвращает
+path,name,directory,bytes; files.read/write работают с ограниченным UTF-8 текстом.</p>
+<p>audio.process: operation=analyze/trim/copy/reverse/gain/fade/split, path и output.
+trim использует thresholdDb; split извлекает диапазон startFrame..endFrame в отдельный файл;
+gain принимает линейный коэффициент, fade — inFrames/outFrames.
+audio.render принимает path и необязательные start/end в долях. Задание возвращает id.
+jobs.get возвращает progress/complete/result/error; jobs.cancel отменяет публикацию результата.
+Исходные файлы сохраняются; существующее назначение не перезаписывается.</p>
+<pre>local source=vlt.audio.open{path=inputPath}
+local output=vlt.audio.create{path=outputPath, channels=source.channels, sampleRate=source.sampleRate}
+local info, pcm=vlt.audio.read{id=source.id, frame=0, frames=2048}
+for i=1,#pcm do pcm[i]=pcm[i]*0.5 end
+vlt.audio.write({id=output.id}, pcm)
+vlt.audio.close{id=source.id}
+vlt.audio.close{id=output.id, publish=true}</pre>
+<p>Целый файл обрабатывайте порциями через таймер, как в примере pcm-analysis.
+Буфер содержит чередующиеся float32-сэмплы каналов с индексами от 1; максимум 65 536 кадров
+и 1 МиБ на передачу. Закрытие без publish=true удаляет незавершённый выходной файл.</p>
+<p>events.on подписывает на project/selection/transport/parameter/job и принимает callback.
+Для parameter передайте адрес параметра; events.off — id подписки. timers.start —
+milliseconds и callback, timers.stop — id таймера. События объединяются вне аудиопотока.
+storage.get/set — локальные настройки расширения. network.request выполняет ограниченный HTTPS GET.
+process.start запускает явно разрешённую программу по абсолютному пути с массивом arguments,
+без командной оболочки. Внешняя программа работает с правами пользователя ОС.</p>
+<h2>Изоляция и проверки</h2>
+<p>Активные экземпляры имеют отдельные процессы и состояния Lua 5.5.1. Чистый процесс
+сбрасывается перед повторным использованием; один процесс подготовлен заранее.
+Лимит памяти Lua — 64 МиБ, обработчика — две секунды без времени ожидания хоста.
+«Остановить» завершает зависший процесс. Закрытие проекта отменяет задания и подписки.
+В совместном проекте запрещены все изменения, включая обычные команды, AI и привязанные ручки.
+Доступны чтение и самостоятельные файловые инструменты с выданными правами.</p>
+<pre>vlt_script_tool --check examples/midi-transpose
+vlt_script_tool --pack examples/midi-transpose transpose.vltscript
+vlt_script_tool --check transpose.vltscript
+vlt_script_worker --sdk</pre>
+<p>Утилита не требует дисплея, Lua или компилятора на машине пользователя.
+Примеры: midi-transpose, sample-folder, pcm-analysis, device-console, background-events, canvas-window.
+Предпросмотр использует копию проекта и временную папку, без доступа к пользовательским файлам и внешним процессам.
+Сбой автозапуска приостанавливает расширение до ручного включения.</p><h2>Файлы проекта и нарезка</h2><p>При запуске скрипта объявленные права чтения проекта и разрешённых файлов выдаются автоматически. Изменения, запись, сеть и внешние программы требуют отдельного согласования. «Отозвать разрешения» отключает автоматическую выдачу для этого расширения до ручного пересмотра.</p>
+<p>С разрешениями project.read и files.read исходники привязанного проекта доступны автоматически, без выбора каждого файла. vlt.project.files{offset=0,limit=256} возвращает {files={path,name,bytes}[],total,offset,revision}. Для следующей страницы увеличивайте offset на число полученных файлов и проверяйте revision. Доступ обновляется при изменении проекта. Исходники доступны только для чтения; соседние файлы не получают доступ автоматически. Для отдельного результата используйте context.temporaryDirectory (доступен на чтение и запись при соответствующих файловых разрешениях) или выберите место сохранения. Импорт временного результата через clip.importAudio сохраняет постоянную копию для проекта и Undo. В предпросмотре реальные файлы проекта недоступны.</p>
+<p>В project.get поле клипа source содержит путь к исходнику; start, length, offset — доли. reversed, looped, stretched и composite описывают особенности воспроизведения. Простому анализатору исходника следует отклонять эти случаи. clip.split принимает абсолютную позицию at в долях; левая часть сохраняет исходный id, created содержит id правой части. Несколько разрезов одного клипа выполняйте справа налево в одном project.apply. Пример: examples/transient-slicer.</p>
+<p>В настройке панели доступны текст, изображение и изображение с текстом. Выбранное изображение сохраняется в библиотеке, поэтому перенос или удаление оригинальной картинки не ломает кнопку. Поле label у числовых полей, строк ввода, списков и слайдеров отображается рядом с контролом; number также принимает step и decimals.</p>
+</html>

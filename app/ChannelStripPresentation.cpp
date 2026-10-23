@@ -174,7 +174,9 @@ void ChannelStrip::finishEdits() {
     if (m_fader) m_fader->finishEditing();
     if (m_pan) m_pan->finishEditing();
     if (auto* rack = qobject_cast<ui::MiniModuleRack*>(m_colorWell)) rack->finishEdits();
-    for (auto* knob : findChildren<ui::Knob*>()) knob->finishEditing();
+    // Mini-module controls are finished by their rack above. The remaining
+    // knobs are the cached sends; avoid walking every slot in every channel.
+    for (auto* knob : m_sendKnobs) knob->finishEditing();
     finishInsertBypassPaint();
     if (m_browserDropActive || m_dropHighlight || !findChildren<QDrag*>().isEmpty()) QDrag::cancel();
     m_browserDropActive = m_dropHighlight = false;
@@ -192,7 +194,7 @@ void ChannelStrip::updatePresentationHeader() {
     auto icon = ui::trackicons::icon(QString::fromStdString(track->iconId), ink);
     if (icon.isNull()) {
         const auto glyph = track->kind == daw::TrackKind::Audio ? icons::Glyph::Waveform
-            : track->kind == daw::TrackKind::Pattern ? icons::Glyph::Grid
+            : track->kind == daw::TrackKind::Pattern ? icons::Glyph::Pattern
             : track->kind == daw::TrackKind::Bus || track->kind == daw::TrackKind::Group ||
               track->kind == daw::TrackKind::Folder ? icons::Glyph::Layers : icons::Glyph::MidiKeys;
         icon = icons::icon(glyph, ink, 20);

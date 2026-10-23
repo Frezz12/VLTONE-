@@ -152,6 +152,15 @@ void PluginCache::put(PluginCacheEntry entry) {
         [](const auto& a, const auto& b) { return a.uid < b.uid; });
     std::sort(entry.plugins.begin(), entry.plugins.end(),
         [](const auto& a, const auto& b) { return a.uid < b.uid; });
+    // Disk v2 stores both the last good catalogue and current scan results.
+    // Share identical schemas without changing either generation's contents.
+    for (auto& component : entry.components) {
+        const auto descriptor = std::lower_bound(entry.plugins.begin(), entry.plugins.end(), component.uid,
+            [](const auto& plugin, const auto& uid) { return plugin.uid < uid; });
+        if (descriptor != entry.plugins.end() && descriptor->uid == component.uid &&
+            descriptor->parameterSchemaText() == component.descriptor.parameterSchemaText())
+            component.descriptor.parameterSchema = descriptor->parameterSchema;
+    }
     for (PluginCacheEntry& existing : m_entries) {
         if (existing.format == entry.format && sameModulePath(existing.path, entry.path)) {
             existing = std::move(entry);
@@ -289,21 +298,32 @@ bool PluginCache::save(const std::string& path) const {
         if (!target.parent_path().empty()) fs::create_directories(target.parent_path(), ec);
         if (ec) return false;
 
-        json entries = json::array();
+        fs::path temporary = target;
+        temporary += ".tmp";
+        fs::remove(temporary, ec);
+        ec.clear();
+        std::ofstream os(temporary, std::ios::trunc);
+        if (!os) return false;
+        // Stream the large arrays one descriptor at a time. A full catalogue
+        // must not coexist as entries, a copied JSON root and a dumped string.
+        const auto objectPrefix = [&](const json& fields) {
+            auto text = fields.dump(2, ' ', false, json::error_handler_t::replace);
+            text.back() = ','; // the caller appends the streamed array fields
+            os << text;
+        };
+        objectPrefix(json{
+            {"version", kCacheVersion},
+            {"searchPathsInitialized", m_searchPathsInitialized},
+            {"searchPaths", json{{"clap", pathsToJson(m_clapPaths)},
+                {"vst3", pathsToJson(m_vst3Paths)}, {"vst", pathsToJson(m_vstPaths)},
+                {"au", pathsToJson(m_auPaths)}}},
+        });
+        os << "\n\"entries\": [\n";
+        bool firstEntry = true;
         for (const PluginCacheEntry& entry : m_entries) {
-            json components = json::array();
-            for (const auto& component : entry.components) {
-                components.push_back({{"uid", component.uid},
-                    {"descriptor", descriptorToJson(component.descriptor)},
-                    {"state", stateName(component.state)}, {"reason", component.failureReason},
-                    {"attempts", component.attempts}, {"durationMs", component.durationMs},
-                    {"timeoutRetryPending", component.timeoutRetryPending}});
-            }
-            json descriptors = json::array();
-            for (const plugins::PluginDescriptor& descriptor : entry.plugins) {
-                descriptors.push_back(descriptorToJson(descriptor));
-            }
-            entries.push_back(json{
+            if (!firstEntry) os << ",\n";
+            firstEntry = false;
+            objectPrefix(json{
                 {"format", std::string(plugins::toString(entry.format))},
                 {"path", entry.path},
                 {"fileSize", entry.fileSize},
@@ -314,36 +334,30 @@ bool PluginCache::save(const std::string& path) const {
                 {"scannerVerified", entry.scannerVerified},
                 {"reason", entry.failureReason},
                 {"attempts", entry.attempts},
-                {"plugins", descriptors},
                 {"discovery", stateName(entry.discovery)},
                 {"discoveryMs", entry.discoveryDurationMs},
                 {"timeoutRetryPending", entry.timeoutRetryPending},
-                {"components", components},
             });
+            os << "\n\"plugins\": [\n";
+            for (std::size_t i = 0; i < entry.plugins.size(); ++i) {
+                if (i) os << ",\n";
+                os << descriptorToJson(entry.plugins[i]).dump(2, ' ', false, json::error_handler_t::replace);
+            }
+            os << "\n],\n\"components\": [\n";
+            for (std::size_t i = 0; i < entry.components.size(); ++i) {
+                if (i) os << ",\n";
+                const auto& component = entry.components[i];
+                os << json{{"uid", component.uid}, {"descriptor", descriptorToJson(component.descriptor)},
+                    {"state", stateName(component.state)}, {"reason", component.failureReason},
+                    {"attempts", component.attempts}, {"durationMs", component.durationMs},
+                    {"timeoutRetryPending", component.timeoutRetryPending}}
+                    .dump(2, ' ', false, json::error_handler_t::replace);
+            }
+            os << "\n]\n}";
         }
-
-        json root{
-            {"version", kCacheVersion},
-            {"searchPathsInitialized", m_searchPathsInitialized},
-            {"searchPaths",
-             json{{"clap", pathsToJson(m_clapPaths)},
-                  {"vst3", pathsToJson(m_vst3Paths)},
-                  {"vst", pathsToJson(m_vstPaths)},
-                  {"au", pathsToJson(m_auPaths)}}},
-            {"entries", entries},
-        };
-
-        fs::path temporary = target;
-        temporary += ".tmp";
-        fs::remove(temporary, ec);
-        ec.clear();
-        std::ofstream os(temporary, std::ios::trunc);
-        if (!os) return false;
-        // Pretty-printed, unlike the wire format: this one a user may well open to
-        // find out why their plugin is not showing up.
         // Plugin stderr may contain locale-encoded or binary bytes. Diagnostic
         // text must never turn a plugin failure into a cache-write failure.
-        os << root.dump(2, ' ', false, json::error_handler_t::replace);
+        os << "\n]\n}\n";
         os.flush();
         if (!os.good()) {
             os.close();

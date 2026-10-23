@@ -100,11 +100,13 @@ static bool checkStretchableRects() {
                 if (!recorder.supported()) return false;
                 const auto meshes = recorder.takeMeshes();
                 if (cached == 1 && width >= 8) {
-                    if (meshes.size() != 3) return false;
+                    if (meshes.size() != 1 || !meshes[0].clip || !meshes[0].group) return false;
+                    const auto& children = meshes[0].group->meshes;
+                    if (children.size() != 3) return false;
                     for (int i = 0; i < 3; ++i) {
-                        if (!meshes[i].group || meshes[i].snapTranslation ||
-                            (previous[i] && previous[i] != meshes[i].group)) return false;
-                        previous[i] = meshes[i].group;
+                        if (!children[i].group || children[i].clip || children[i].snapTranslation ||
+                            (previous[i] && previous[i] != children[i].group)) return false;
+                        previous[i] = children[i].group;
                     }
                 } else if (cached == 2) {
                     for (const auto& mesh : meshes) if (mesh.group &&
@@ -125,6 +127,44 @@ static bool checkStretchableRects() {
                               << " dpr=" << dpr << " mode=" << cached << " pixels=" << different << '\n';
                     return false;
                 }
+            }
+        }
+    }
+    // Adjacent retained time tiles share one viewport mask while keeping
+    // their own cached geometry and scrolling transforms. Check opacity,
+    // rectangular/curved masks and reversals at fractional display scales.
+    for (qreal dpr : {1., 1.25, 1.5, 2.}) for (bool rounded : {false, true}) {
+        RetainedScene tiles;
+        std::array<std::shared_ptr<const SceneMeshGroup>, 2> previous;
+        for (int pan : {0, 13, 30, 0}) {
+            QPainterPath mask;
+            if (rounded) mask.addRoundedRect(QRectF(8, 7, 100, 43), 5, 5);
+            else mask.addRect(QRectF(8, 7, 100, 43));
+            SceneRecorder recorder(QSize(180, 80), dpr);
+            {
+                QPainter p(&recorder); p.setClipPath(mask);
+                for (int i = 0; i < 2; ++i) {
+                    p.setOpacity(i ? .65 : .8);
+                    tiles.paint(p, i, QSize(100, 60), QPointF(i * 80 - pan, 0), [i](QPainter& tile) {
+                        tile.fillRect(QRect(0, 0, 100, 60), i ? QColor(40, 160, 220, 190) : QColor(210, 90, 40));
+                    });
+                }
+            }
+            const auto meshes = recorder.takeMeshes();
+            if (meshes.size() != 1 || !meshes[0].clip || !meshes[0].group ||
+                meshes[0].group->meshes.size() != 2) return false;
+            qint64 bytes = 0;
+            for (int i = 0; i < 2; ++i) {
+                const auto& child = meshes[0].group->meshes[i];
+                if (!child.group || child.clip || child.transform.dx() != i * 80 - pan ||
+                    (previous[i] && previous[i] != child.group)) return false;
+                previous[i] = child.group; bytes += child.group->bytes;
+            }
+            if (meshes[0].group->bytes != bytes || tiles.builds() != 2) return false;
+            auto separate = meshes[0].group->meshes;
+            for (auto& mesh : separate) mesh.clip = meshes[0].clip;
+            if (rasterize(meshes, dpr) != rasterize(separate, dpr)) {
+                std::cerr << "A common viewport mask changed retained tile pixels\n"; return false;
             }
         }
     }

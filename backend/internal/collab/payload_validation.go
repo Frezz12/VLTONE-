@@ -1178,8 +1178,13 @@ func validateClipSampleEdit(raw json.RawMessage) error {
 		"reverb", "stereoDelay", "pogo", "removeDc", "reversePolarity",
 		"normalize", "fadeStereo", "reverse", "swapStereo",
 	}
-	if err := exactPayloadKeys(body, required, nil); err != nil {
+	if err := exactPayloadKeys(body, required, []string{"trimThresholdDb"}); err != nil {
 		return err
+	}
+	if _, present := body["trimThresholdDb"]; present {
+		if _, err := payloadNumber(body, "trimThresholdDb", -96, 0, false); err != nil {
+			return err
+		}
 	}
 	for name, bounds := range map[string][2]int64{
 		"loopMode": {0, 2}, "stretchMode": {0, 4}, "rootNote": {0, 127},

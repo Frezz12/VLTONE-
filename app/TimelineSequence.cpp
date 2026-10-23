@@ -136,7 +136,7 @@ void TimelineWidget::drawMidiClipHeader(QPainter& p, const daw::ClipModel& clip,
         if (active) p.fillRect(QRectF(rect.left() + 6, rect.bottom() - 3, rect.width() - 12, 1), text);
     };
     mode(layout.midi, icons::Glyph::MidiKeys, !sequenced, true);
-    mode(layout.sequence, icons::Glyph::GridDivision, sequenced, sequenceAvailable(clip));
+    mode(layout.sequence, icons::Glyph::Pattern, sequenced, sequenceAvailable(clip));
     p.restore();
 }
 

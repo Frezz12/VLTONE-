@@ -383,25 +383,18 @@ struct SessionStatusStrip::Impl {
 
 void SessionStatusStrip::Impl::ensurePopup() {
     if (popup) return;
-    popup = new QFrame(q, Qt::Tool | Qt::FramelessWindowHint);
+    popup = new QFrame(q, Qt::Tool | Qt::WindowTitleHint |
+                         Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     popup->setObjectName(QStringLiteral("SessionDetails"));
     popup->setWindowTitle(SessionActivity::tr("Session details"));
     popup->setAccessibleName(popup->windowTitle());
     popup->setAttribute(Qt::WA_ShowWithoutActivating);
+    popup->setAttribute(Qt::WA_QuitOnClose, false);
     popup->resize(580, 460);
     popup->installEventFilter(q);
     auto* column = new QVBoxLayout(popup);
     column->setContentsMargins(16, 14, 16, 14);
     column->setSpacing(10);
-    auto* heading = new QHBoxLayout;
-    heading->addWidget(dialog::titleLabel(SessionActivity::tr("Session"), popup));
-    heading->addStretch();
-    auto* close = new QPushButton(SessionActivity::tr("Close"), popup);
-    heading->addWidget(close);
-    column->addLayout(heading);
-    QObject::connect(close, &QPushButton::clicked, q, [this] {
-        popup->hide(); pinned = false; detailsButton->setFocus();
-    });
     popupSummary = new QLabel(popup);
     popupSummary->setTextFormat(Qt::PlainText);
     popupSummary->setWordWrap(true);
@@ -488,12 +481,15 @@ void SessionStatusStrip::Impl::showPopup(bool pin) {
     pinned = pinned || pin;
     refreshPopup();
     const QRect available = q->screen()->availableGeometry();
-    popup->resize(std::min(580, available.width()), std::min(460, available.height()));
+    popup->winId();
+    const QSize border = popup->frameGeometry().size() - popup->size();
+    popup->resize(QSize(580, 460).boundedTo((available.size() - border).expandedTo(QSize(1, 1))));
+    const QSize outer = popup->frameGeometry().size();
     const QPoint anchor = q->mapToGlobal(QPoint(0, 0));
     popup->move(std::clamp(anchor.x(), available.left(),
-                          std::max(available.left(), available.right() - popup->width() + 1)),
-                std::clamp(anchor.y() - popup->height() - 4, available.top(),
-                          std::max(available.top(), available.bottom() - popup->height() + 1)));
+                          std::max(available.left(), available.right() - outer.width() + 1)),
+                std::clamp(anchor.y() - outer.height() - 4, available.top(),
+                          std::max(available.top(), available.bottom() - outer.height() + 1)));
     popup->show();
     popup->raise();
     if (pin) { popup->activateWindow(); roster->setFocus(); }
@@ -894,6 +890,15 @@ SessionStatusStrip::~SessionStatusStrip() {
 }
 
 bool SessionStatusStrip::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_impl->popup &&
+        event->type() == QEvent::NonClientAreaMouseButtonPress) {
+        m_impl->pinned = true;
+        m_impl->closeTimer->stop();
+    }
+    if (watched == m_impl->popup && event->type() == QEvent::Close) {
+        m_impl->pinned = false;
+        m_impl->detailsButton->setFocus();
+    }
     const bool trigger = watched == this || watched == m_impl->detailsButton;
     if (trigger && (event->type() == QEvent::Enter || event->type() == QEvent::FocusIn))
         m_impl->hoverTimer->start();
@@ -1432,6 +1437,14 @@ bool checkSessionStatusStripForTest(QString* error) {
         QMetaObject::invokeMethod(strip.m_impl->noticeTimer, "timeout", Qt::DirectConnection);
         strip.m_impl->ensurePopup();
         strip.m_impl->refreshPopup();
+        if (strip.m_impl->popup->windowType() != Qt::Tool ||
+            strip.m_impl->popup->windowFlags().testFlag(Qt::FramelessWindowHint) ||
+            strip.m_impl->popup->testAttribute(Qt::WA_QuitOnClose))
+            return fail(QStringLiteral("session details lost its owned system frame"));
+        strip.m_impl->pinned = true;
+        strip.m_impl->popup->close();
+        if (strip.m_impl->pinned)
+            return fail(QStringLiteral("system close left session details pinned"));
         if (strip.activity().persistentProblems != 1 || strip.m_impl->tasks->topLevelItemCount() != 1 ||
             strip.m_impl->tasks->topLevelItem(0)->toolTip(1) != message ||
             !strip.m_impl->taskDetails->isEnabled() || strip.m_impl->retryAll->isEnabled())

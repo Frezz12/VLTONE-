@@ -8,6 +8,7 @@
 #include "SelectionModel.hpp"
 #include "Theme.hpp"
 #include "UiConstants.hpp"
+#include "UiPerformance.hpp"
 
 #include "RecordingSettingsPage.hpp"
 #include "StripSilencePreferences.hpp"
@@ -17,6 +18,7 @@
 #include "plugins/PluginConvert.hpp"
 
 #include <QColorDialog>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -736,8 +738,10 @@ QWidget* ContextPanel::buildAudioClip() {
                 });
         connect(adder, &PluginQuickAdder::searchStateChanged, this,
                 [this, host, actionsHost, pluginDivider](bool expanded) {
+                    if (m_content != host) return;
                     ui::contextAvailable(actionsHost, !expanded);
                     if (pluginDivider) ui::contextAvailable(pluginDivider, !expanded);
+                    m_measuredSpace = -1;
                     if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
                     setGeometry(targetGeometry());
                     layoutSelf();
@@ -746,6 +750,7 @@ QWidget* ContextPanel::buildAudioClip() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
+            m_measuredSpace = -1;
             if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
             setGeometry(targetGeometry());
             layoutSelf();
@@ -1332,7 +1337,7 @@ QWidget* ContextPanel::buildPatternClip(bool multi) {
                 });
 
         auto* editor = islandButton(
-            icons::Glyph::Grid,
+            icons::Glyph::Pattern,
             multi ? tr("Open the first selected Pattern in the editor")
                   : tr("Open Pattern Editor"),
             host);
@@ -1663,17 +1668,25 @@ QWidget* ContextPanel::buildTrackMulti() {
 // ── Content: track / mixer channel ──
 
 QWidget* ContextPanel::buildTrack() {
-    const std::string trackId = m_selection->singleTrack().toStdString();
-    auto trackOf = [this, trackId]() -> const daw::TrackModel* {
-        return m_controller->project().findTrack(trackId);
+    // Each row owns its binding: a retired row finishing a gesture must keep
+    // targeting its original track even after the next row has been built.
+    struct Binding {
+        std::string trackId;
+        std::string colourTrackId;
+        QPointer<ui::MiniSlider> editingControl;
+    };
+    auto binding = std::make_shared<Binding>();
+    binding->trackId = m_selection->singleTrack().toStdString();
+    auto trackOf = [this, binding]() -> const daw::TrackModel* {
+        return m_controller->project().findTrack(binding->trackId);
     };
     if (!trackOf()) return nullptr;
     const bool automationLane = daw::isAutomationLane(*trackOf());
-    const std::string colourTrackId =
+    binding->colourTrackId =
         automationLane && !trackOf()->parentId.empty() ? trackOf()->parentId
-                                                       : trackId;
-    auto colourTrackOf = [this, colourTrackId]() -> const daw::TrackModel* {
-        return m_controller->project().findTrack(colourTrackId);
+                                                       : binding->trackId;
+    auto colourTrackOf = [this, binding]() -> const daw::TrackModel* {
+        return m_controller->project().findTrack(binding->colourTrackId);
     };
 
     QHBoxLayout* outer = nullptr;
@@ -1689,9 +1702,10 @@ QWidget* ContextPanel::buildTrack() {
     if (toolEnabled("track.colour")) {
         auto* swatch = islandSwatch(tr("Track colour"), host);
         connect(swatch, &QAbstractButton::clicked, this,
-                [this, colourTrackOf, colourTrackId] {
+                [this, colourTrackOf, binding] {
             const auto* t = colourTrackOf();
             if (!t) return;
+            const std::string colourTrackId = binding->colourTrackId;
             const QColor picked = QColorDialog::getColor(colorFromRgb(t->color),
                                                          this, tr("Track Colour"));
             if (!picked.isValid()) return;
@@ -1721,8 +1735,8 @@ QWidget* ContextPanel::buildTrack() {
         automation->setAccessibleName(
             tr("Show or hide automation for this track"));
         connect(automation, &QAbstractButton::clicked, this,
-                [this, trackId] { emit automationToggleRequested(
-                    QString::fromStdString(trackId)); });
+                [this, binding] { emit automationToggleRequested(
+                    QString::fromStdString(binding->trackId)); });
         row->addWidget(automation);
         loaders.push_back([this, trackOf, automation] {
             const auto* track = trackOf();
@@ -1735,6 +1749,7 @@ QWidget* ContextPanel::buildTrack() {
 
     if (toolEnabled("track.state") && !automationLane) {
         auto* mute = new ui::MsrButton(tr("M"), Theme::mute(), tr("Mute"), host);
+        mute->setObjectName(QStringLiteral("ContextPanelTrackMute"));
         auto* solo = new ui::MsrButton(tr("S"), Theme::solo(), tr("Solo"), host);
         ui::contextPriority(mute, 100);
         ui::contextPriority(solo, 100);
@@ -1745,25 +1760,25 @@ QWidget* ContextPanel::buildTrack() {
         if (hasChannel) {
             mute->setAutomatable(true);
             connect(mute, &ui::MsrButton::automateRequested, this,
-                    [this, trackId] {
-                        emit automateMuteRequested(QString::fromStdString(trackId));
+                    [this, binding] {
+                        emit automateMuteRequested(QString::fromStdString(binding->trackId));
                     });
         }
 
-        connect(mute, &QAbstractButton::clicked, this, [this, trackId](bool on) {
+        connect(mute, &QAbstractButton::clicked, this, [this, binding](bool on) {
             if (m_updating) return;
-            const auto result = m_controller->setTrackMuted(trackId, on);
+            const auto result = m_controller->setTrackMuted(binding->trackId, on);
             afterEdit(/*structural=*/true,
                       daw::collab::marksLocalFileDirty(result));
         });
-        connect(solo, &QAbstractButton::clicked, this, [this, trackId](bool on) {
+        connect(solo, &QAbstractButton::clicked, this, [this, binding](bool on) {
             if (m_updating) return;
-            m_controller->setTrackSoloed(trackId, on);
+            m_controller->setTrackSoloed(binding->trackId, on);
             afterEdit(/*structural=*/true);
         });
-        connect(mono, &QAbstractButton::clicked, this, [this, trackId](bool on) {
+        connect(mono, &QAbstractButton::clicked, this, [this, binding](bool on) {
             if (m_updating) return;
-            m_controller->setTrackMono(trackId, on);
+            m_controller->setTrackMono(binding->trackId, on);
             afterEdit(/*structural=*/true);
         });
 
@@ -1785,8 +1800,8 @@ QWidget* ContextPanel::buildTrack() {
         volume->setObjectName(QStringLiteral("ContextPanelTrackVolume"));
         volume->setAutomatable(true);
         connect(volume, &ui::MiniSlider::automateRequested, this,
-                [this, trackId] {
-                    emit automateControlRequested(QString::fromStdString(trackId),
+                [this, binding] {
+                    emit automateControlRequested(QString::fromStdString(binding->trackId),
                                                   false);
                 });
         volume->setRange(kMinDb, 6.0);
@@ -1794,33 +1809,38 @@ QWidget* ContextPanel::buildTrack() {
         volume->setDefaultValue(0.0);
         volume->setFormatter(formatDb);
         auto volumeStart = std::make_shared<std::optional<float>>();
+        connect(volume, &ui::MiniSlider::editStarted, this,
+                [binding, volume] { binding->editingControl = volume; });
         connect(volume, &ui::MiniSlider::valueChanged, this,
-                [this, trackId, volumeStart](double db) {
+                [this, binding, volumeStart, volume](double db) {
                     if (m_updating) return;
+                    binding->editingControl = volume;
                     if (!*volumeStart) {
                         if (const auto* track =
-                                m_controller->project().findTrack(trackId))
+                                m_controller->project().findTrack(binding->trackId))
                             *volumeStart = track->volume;
                     }
-                    m_controller->setTrackVolumeLive(trackId,
+                    m_controller->setTrackVolumeLive(binding->trackId,
                                                      float(dbToGain(db)));
                     emit liveEdited();
                 });
         connect(volume, &ui::MiniSlider::editFinished, this,
-                [this, trackId, volumeStart] {
+                [this, binding, volumeStart] {
                     if (*volumeStart) {
                         m_controller->commitTrackVolumeEdit(
-                            {{trackId, **volumeStart}});
+                            {{binding->trackId, **volumeStart}});
                         volumeStart->reset();
                     }
+                    binding->editingControl = nullptr;
                     emit projectEdited();
                 });
 
         auto* pan = islandSlider(icons::Glyph::Pan, tr("Pan"), host);
+        pan->setObjectName(QStringLiteral("ContextPanelTrackPan"));
         pan->setAutomatable(true);
         connect(pan, &ui::MiniSlider::automateRequested, this,
-                [this, trackId] {
-                    emit automateControlRequested(QString::fromStdString(trackId),
+                [this, binding] {
+                    emit automateControlRequested(QString::fromStdString(binding->trackId),
                                                   true);
                 });
         pan->setRange(-100.0, 100.0);
@@ -1838,25 +1858,29 @@ QWidget* ContextPanel::buildTrack() {
                    QString::number(amount);
         });
         auto panStart = std::make_shared<std::optional<float>>();
+        connect(pan, &ui::MiniSlider::editStarted, this,
+                [binding, pan] { binding->editingControl = pan; });
         connect(pan, &ui::MiniSlider::valueChanged, this,
-                [this, trackId, panStart](double value) {
+                [this, binding, panStart, pan](double value) {
                     if (m_updating) return;
+                    binding->editingControl = pan;
                     if (!*panStart) {
                         if (const auto* track =
-                                m_controller->project().findTrack(trackId))
+                                m_controller->project().findTrack(binding->trackId))
                             *panStart = track->pan;
                     }
-                    m_controller->setTrackPanLive(trackId,
+                    m_controller->setTrackPanLive(binding->trackId,
                                                   float(value / 100.0));
                     emit liveEdited();
                 });
         connect(pan, &ui::MiniSlider::editFinished, this,
-                [this, trackId, panStart] {
+                [this, binding, panStart] {
                     if (*panStart) {
                         m_controller->commitTrackPanEdit(
-                            {{trackId, **panStart}});
+                            {{binding->trackId, **panStart}});
                         panStart->reset();
                     }
+                    binding->editingControl = nullptr;
                     emit projectEdited();
                 });
 
@@ -1878,7 +1902,7 @@ QWidget* ContextPanel::buildTrack() {
         }
         auto* adder = new PluginQuickAdder(m_controller, host);
         ui::contextPriority(adder, 30);
-        adder->setTrackId(QString::fromStdString(trackId));
+        adder->setTrackId(QString::fromStdString(binding->trackId));
         adder->setAccentColor(colorFromRgb(trackOf()->color));
         outer->addWidget(adder, 0, Qt::AlignVCenter);
         m_quickAdder = adder;
@@ -1891,14 +1915,16 @@ QWidget* ContextPanel::buildTrack() {
                     invalidateBackdrop();
                 });
         connect(adder, &PluginQuickAdder::editorRequested, this,
-                [this, track = QString::fromStdString(trackId)](
+                [this, binding](
                     const QString& insertId) {
-                    emit pluginEditorRequested(track, insertId);
+                    emit pluginEditorRequested(QString::fromStdString(binding->trackId), insertId);
                 });
         connect(adder, &PluginQuickAdder::searchStateChanged, this,
                 [this, host, actionsHost, pluginDivider](bool expanded) {
+                    if (m_content != host) return;
                     ui::contextAvailable(actionsHost, !expanded);
                     if (pluginDivider) ui::contextAvailable(pluginDivider, !expanded);
+                    m_measuredSpace = -1;
                     if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
                     setGeometry(targetGeometry());
                     layoutSelf();
@@ -1907,6 +1933,7 @@ QWidget* ContextPanel::buildTrack() {
                 });
         connect(adder, &PluginQuickAdder::sizeChanged, this, [this, host] {
             if (!m_content || m_content != host) return;
+            m_measuredSpace = -1;
             if (QWidget* strip = parentWidget()) strip->setFixedHeight(ui::kToolPanelHeight);
             setGeometry(targetGeometry());
             layoutSelf();
@@ -1915,6 +1942,30 @@ QWidget* ContextPanel::buildTrack() {
         });
     }
 
+    m_finishEdits = [binding] {
+        if (binding->editingControl) binding->editingControl->editFinished();
+    };
+    m_retargetTrack = [this, binding, host, hasChannel, automationLane,
+                      adder = m_quickAdder](const QString& id) {
+        if (binding->editingControl || QApplication::activeModalWidget() ||
+            QApplication::activePopupWidget() || (adder && adder->isExpanded()))
+            return false;
+        if (auto* grab = QWidget::mouseGrabber();
+            grab && (grab == host || host->isAncestorOf(grab)))
+            return false;
+        const auto* track = m_controller->project().findTrack(id.toStdString());
+        if (!track || daw::carriesAudio(*track) != hasChannel ||
+            daw::isAutomationLane(*track) != automationLane)
+            return false;
+        binding->trackId = track->id;
+        binding->colourTrackId = automationLane && !track->parentId.empty()
+            ? track->parentId : track->id;
+        if (adder) {
+            adder->setTrackId(id);
+            adder->setAccentColor(colorFromRgb(track->color));
+        }
+        return true;
+    };
     m_applyValues = [loaders = std::move(loaders), this] {
         m_updating = true;
         for (const auto& load : loaders) load();
@@ -2128,8 +2179,14 @@ void ContextPanel::setRecordEngaged(bool engaged) {
 }
 
 QWidget* ContextPanel::buildContent(Context context) {
+    // Complete live values against the retiring row's identity before its
+    // controls are deleted; a physical release may arrive after DeferredDelete.
+    auto finishEdits = std::move(m_finishEdits);
+    m_finishEdits = nullptr;
+    if (finishEdits) finishEdits();
     m_quickAdder = nullptr;
     m_applyValues = nullptr;
+    m_retargetTrack = nullptr;
     switch (context) {
         case Context::Global: return buildGlobal();
         case Context::Other: return buildGlobal();
@@ -2153,17 +2210,17 @@ void ContextPanel::openPluginSearch() {
     if (target != Context::Track && target != Context::AudioClip) return;
     if (m_context != target || !m_quickAdder) {
         rebuild();
-        QTimer::singleShot(kSpringMs + 10, this, [this] {
-            if (m_quickAdder) m_quickAdder->openSearch();
-        });
-        return;
     }
-    m_quickAdder->openSearch();
+    // Keyboard commands own the current state immediately, including when a
+    // different context was still arriving when the shortcut was pressed.
+    relayout();
+    if (m_quickAdder) m_quickAdder->openSearch();
 }
 
 // ── Selection → content ──
 
 void ContextPanel::onSelectionChanged(bool force) {
+    ui::perf::Scope timing("selection.context.ms");
     const Context next = resolve();
 
     // The identity of what is selected, so re-selecting the *same* object after
@@ -2189,14 +2246,34 @@ void ContextPanel::onSelectionChanged(bool force) {
         refresh();   // same object, values may have moved under us
         return;
     }
+    if (!force && next == Context::Track && m_context == Context::Track &&
+        m_content && m_retargetTrack && m_retargetTrack(key)) {
+        m_contextKey = key;
+        refresh();
+        invalidateBackdrop();
+        return;
+    }
 
     m_contextKey = key;
     transitionTo(buildContent(next), next);
 }
 
+void ContextPanel::updateEditAvailability() {
+    if (!m_content) return;
+    bool locked = false;
+    if (m_context != Context::Recording && m_context != Context::Global) {
+        for (const auto& id : m_selection->tracks())
+            locked |= m_controller->isTrackEditLocked(id.toStdString());
+        for (const auto& clip : m_selection->clips())
+            locked |= m_controller->isTrackEditLocked(clip.trackId.toStdString());
+    }
+    m_content->setEnabled(!locked);
+}
+
 void ContextPanel::refresh() {
     m_measuredSpace = -1;
     if (m_applyValues) m_applyValues();
+    updateEditAvailability();
     if (m_content && isVisible() && targetGeometry().size() != size()) relayout();
 }
 
@@ -2225,6 +2302,11 @@ void ContextPanel::setSuppressed(bool suppressed) {
 // ── Motion ──
 
 void ContextPanel::transitionTo(QWidget* next, Context context) {
+    // Same-kind selections expose their controls immediately while the plate
+    // follows the new clip. Only a change of tools needs a row transition.
+    const bool sameContext = context == m_context;
+    const bool immediate = sameContext || context == Context::Track ||
+                           context == Context::TrackMulti;
     // stop() destroys the group (DeleteWhenStopped) and never emits finished,
     // so the interrupted swap's cleanup has to happen right here instead.
     if (m_transition) m_transition->stop();
@@ -2233,6 +2315,7 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
     if (m_drift) m_drift->stop();
     m_contentSliding = false;
     if (m_outgoing) {
+        m_outgoing->hide();
         m_outgoing->deleteLater();
         m_outgoing = nullptr;
     }
@@ -2243,6 +2326,7 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
     m_measuredSpace = -1;
     m_context = next ? context : Context::None;
     if (!next) m_applyValues = nullptr;
+    updateEditAvailability();
 
     // Needed before the animations are built: the incoming row slides to where
     // it will rest inside the plate's *final* size, not its current one.
@@ -2259,6 +2343,32 @@ void ContextPanel::transitionTo(QWidget* next, Context context) {
         layoutSelf();
     } else if (QWidget* strip = parentWidget()) {
         strip->setFixedHeight(ui::kToolPanelHeight);
+    }
+
+    if (immediate) {
+        if (m_outgoing) {
+            m_outgoing->hide();
+            m_outgoing->deleteLater();
+            m_outgoing = nullptr;
+        }
+        setBackdropFrozen(false);
+        if (sameContext && wasVisible && m_content && followsClipSelection()) {
+            resize(target.size());
+            driftTo(target);
+        } else {
+            setGeometry(target);
+        }
+        layoutSelf();
+        setAccentColor(th().accent);
+        if (m_content) {
+            m_content->show();
+            show();
+            raise();
+        } else {
+            hide();
+        }
+        update();
+        return;
     }
 
     auto* group = new QParallelAnimationGroup(this);
@@ -2484,6 +2594,7 @@ void ContextPanel::relayout() {
     if (m_drift) m_drift->stop();
     m_contentSliding = false;
     if (m_outgoing) {
+        m_outgoing->hide();
         m_outgoing->deleteLater();
         m_outgoing = nullptr;
     }

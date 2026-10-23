@@ -116,7 +116,7 @@ private:
         if (!m_storage.fileBacked()) return;
         m_readCache = &PcmReadCache::instance();
         const SampleStorage& storage = m_storage;
-        m_sourceId = m_readCache->addSource(storage.data(), std::size_t(m_channels) * m_frames);
+        m_sourceId = m_readCache->addSource(storage.mappedSamples(), std::size_t(m_channels) * m_frames);
     }
     SampleStorage m_storage;
     ChannelCount m_channels;

@@ -13,11 +13,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <thread>
 
 #if defined(Q_OS_MACOS)
 #include <CoreMIDI/CoreMIDI.h>
 
-#include <thread>
 #endif
 
 namespace {
@@ -91,6 +91,15 @@ MidiInputManager::~MidiInputManager() {
     ++m_generation; // queued callbacks from the old ports become harmless
     closePorts();
     allNotesOff();
+}
+
+void MidiInputManager::setProjectController(daw::EngineController* controller) {
+    if (m_controller == controller) return;
+    allNotesOff();
+    const std::lock_guard lock(m_bindingMutex);
+    ++m_bindingGeneration;
+    m_controller = controller;
+    m_lastTarget.clear();
 }
 
 int MidiInputManager::openPortCount() const {
@@ -231,7 +240,14 @@ void MidiInputManager::refreshPorts() {
 void MidiInputManager::postMessage(
     quint64 generation, quint64 source,
     const std::vector<unsigned char>& message) {
-    const auto stamp = m_controller->midiInputStamp();
+    daw::MidiInputStamp stamp;
+    quint64 bindingGeneration;
+    {
+        const std::lock_guard lock(m_bindingMutex);
+        if (!m_controller) return;
+        stamp = m_controller->midiInputStamp();
+        bindingGeneration = m_bindingGeneration;
+    }
     if(m_pendingMessages.fetch_add(1,std::memory_order_acq_rel)>=8192) {
         m_inputOverflow.store(true,std::memory_order_release);
         m_pendingMessages.fetch_sub(1,std::memory_order_release);return;
@@ -240,14 +256,15 @@ void MidiInputManager::postMessage(
                            qsizetype(message.size()));
     QMetaObject::invokeMethod(
         this,
-        [this, generation, source, bytes, stamp] {
+        [this, generation, bindingGeneration, source, bytes, stamp] {
             const auto remaining=m_pendingMessages.fetch_sub(1,std::memory_order_acq_rel)-1;
             if(m_inputOverflow.load(std::memory_order_acquire)) {
                 allNotesOff();
                 if(!remaining)m_inputOverflow.store(false,std::memory_order_release);
                 return;
             }
-            if (generation == m_generation) handleMessage(source, bytes, stamp);
+            if (generation == m_generation && bindingGeneration == m_bindingGeneration)
+                handleMessage(source, bytes, stamp);
         },
         Qt::QueuedConnection);
 }
@@ -279,6 +296,7 @@ void MidiInputManager::releaseHeld(quint64 source, int channel) {
 }
 
 void MidiInputManager::allNotesOff() {
+    if (!m_controller) { m_held.clear(); m_routes.clear(); return; }
     for (const Held& held : m_held) {
         m_controller->liveMidiInput(
             held.trackId, daw::engine::MidiEvent::kNoteOff | held.channel,
@@ -316,7 +334,7 @@ void MidiInputManager::refreshTarget() {
 
 bool MidiInputManager::handleMessage(quint64 source,
                                      const QByteArray& message, daw::MidiInputStamp stamp) {
-    if (message.isEmpty()) return false;
+    if (!m_controller || message.isEmpty()) return false;
     const auto status = std::uint8_t(message[0]);
     const int bytes = messageBytes(status);
     if (bytes == 0 || message.size() != bytes) return false;
@@ -377,7 +395,41 @@ bool MidiInputManager::handleMessage(quint64 source,
 
 bool MidiInputManager::injectMessageForTest(const QByteArray& message,
                                             quint64 source) {
-    return handleMessage(source, message, m_controller->midiInputStamp());
+    return m_controller && handleMessage(source, message, m_controller->midiInputStamp());
+}
+
+bool MidiInputManager::checkProjectHandoffForTest(daw::EngineController* previous) {
+    auto* active = m_controller;
+    if (!active || !previous || previous == active || heldCount()) return false;
+    Port port;
+    port.owner = this;
+    port.generation = m_generation;
+    port.source = 0xFFFFFF20;
+    const auto post = [&](unsigned char status) {
+        std::thread backend([&] {
+            std::vector<unsigned char> message{status, 67, 100};
+            Port::callback(0., &message, &port);
+        });
+        backend.join();
+    };
+    const auto drain = [&] { QCoreApplication::sendPostedEvents(this, QEvent::MetaCall); };
+    setProjectController(previous);
+    post(0x90);
+    setProjectController(active);
+    drain();
+    const bool staleDropped = heldCount() == 0;
+    post(0x90); drain();
+    const bool samePortAccepted = heldCount() == 1;
+    post(0x80); drain();
+    const bool released = heldCount() == 0;
+    setProjectController(nullptr);
+    post(0x90); drain();
+    const bool detached = !injectMessageForTest(QByteArray::fromHex("904364")) && heldCount() == 0;
+    setProjectController(active);
+    --port.generation;
+    post(0x90); drain();
+    const bool oldPortDropped = heldCount() == 0;
+    return staleDropped && samePortAccepted && released && detached && oldPortDropped;
 }
 
 bool MidiInputManager::checkQueueOverflowForTest() {

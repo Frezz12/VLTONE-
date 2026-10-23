@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace daw::recovery {
+struct WorkspaceRecoveryDocument;
 
 /// One immutable crash-recovery generation. Plugin APIs are called while this
 /// object is assembled on the message thread; the journal worker only writes
@@ -28,6 +29,15 @@ struct RecoverySnapshot {
     bool fragmented = false;
     std::vector<std::shared_ptr<const TrackModel>> trackParts;
     std::vector<std::shared_ptr<const PluginState>> sharedPluginStates;
+    std::string selectedDocument;
+    std::vector<std::shared_ptr<const WorkspaceRecoveryDocument>> documents;
+};
+
+struct WorkspaceRecoveryDocument {
+    std::string id, path, name;
+    std::string viewState;
+    bool dirty = false;
+    RecoverySnapshot snapshot;
 };
 
 } // namespace daw::recovery

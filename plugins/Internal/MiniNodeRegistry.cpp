@@ -1,4 +1,5 @@
 #include "MiniNodeRegistry.hpp"
+#include "MiniEffectInstance.hpp"
 #include "ChannelColorInstance.hpp"
 #include "CompressorInstance.hpp"
 #include "DelayInstance.hpp"
@@ -162,6 +163,15 @@ std::span<const NodeDescription> nodeRegistry() {
            modulation::parameterTable(modulation::Kind::Doubler));
     effect("chorus", "Chorus",
            modulation::parameterTable(modulation::Kind::Chorus));
+    for (const auto& type : effectTypes()) {
+      effect(type.id.data(), type.name.data(), effectParameters(type.kind));
+      for (auto& p : r.back().parameters)
+        if (p.nativeIndex == 2) {
+          MiniEffectInstance labels(type.kind);
+          for (double v = p.minimum; v <= p.maximum; ++v)
+            p.choices.push_back(labels.parameterText(2, v));
+        }
+    }
     effect("flanger", "Flanger",
            modulation::parameterTable(modulation::Kind::Flanger));
     effect("phaser", "Phaser",

@@ -44,9 +44,9 @@ RealtimeEngine::RenderGate::RenderGate(RealtimeEngine& engine)
     : m_engine(engine), m_lock(engine.m_controlMutex) {
     if (m_engine.m_gateDepth++ != 0) return;
     m_engine.m_gateRequested.store(true);
-    // Spin rather than sleep: this closes in at most one block period, and the
-    // control thread has nothing useful to do with the interval anyway.
-    while (m_engine.m_rendering.load()) std::this_thread::yield();
+    // Lifecycle edits must await the current block, but must not compete with
+    // its DSP workers by spinning a control/UI thread for the whole period.
+    while (m_engine.m_rendering.load()) m_engine.m_rendering.wait(true);
 }
 
 RealtimeEngine::RenderGate::~RenderGate() {
@@ -298,6 +298,7 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     m_rendering.store(true);
     if (m_gateRequested.load()) {
         m_rendering.store(false);
+        m_rendering.notify_all();
         renderGated();
         return;
     }
@@ -424,6 +425,7 @@ void RealtimeEngine::renderBlock(const AudioBlock& output,
     }
 
     m_rendering.store(false);
+    if (m_gateRequested.load()) m_rendering.notify_all();
 }
 
 Status RealtimeEngine::offlineFailure(const CompiledGraph::CompiledNode& entry,

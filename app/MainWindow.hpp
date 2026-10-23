@@ -19,13 +19,17 @@
 #include <vector>
 
 #include "EngineController.hpp"
+#include "ProjectWorkspace.hpp"
 #include "SelectionModel.hpp"
 #include "UiConstants.hpp"
 #include "recovery/RecoveryJournal.hpp"
 
 class QLabel;
 namespace ui { class CreatorWindow; }
+namespace ui { class ScriptService; }
+namespace ui { class McpService; }
 namespace ui { class NotificationCenter; }
+namespace ui { class ProjectLoadDialog; }
 class QDialog;
 class QImage;
 class QMenu;
@@ -33,6 +37,7 @@ class QProgressBar;
 class QResizeEvent;
 class QTimer;
 class QToolButton;
+class QTabBar;
 class QAction;
 class TrackListWidget;
 class TrackOverviewPanel;
@@ -48,6 +53,7 @@ class SampleEditorWindow;
 class AutomationEditorWindow;
 class InternalEditorFrame;
 class PluginManagerWindow;
+class PerformanceWindow;
 class SettingsWindow;
 class PianoRollWindow;
 class PatternWindow;
@@ -103,7 +109,7 @@ public:
     /// hidden. These two hooks expose only the scan and its UI refresh, not the
     /// rest of the controller lifecycle.
     daw::PluginManager& pluginManagerForStartup() {
-        return m_controller.pluginManager();
+        return projectController().pluginManager();
     }
     void applyStartupPluginScanResults();
 
@@ -123,7 +129,7 @@ public:
     /// scope (beside CommandGateway) while the engine is owned by this window.
     /// No editing UI should use this hook for ordinary mutations.
     daw::EngineController* collaborationEngineController() noexcept {
-        return &m_controller;
+        return &projectController();
     }
     /// Re-read the already projected model without marking a local file dirty
     /// or emitting the legacy projectEdited signal. `impact` is the reducer's
@@ -162,7 +168,7 @@ public:
     /// Headless regression check: a freshly constructed window must expose an
     /// empty project until the user adds or imports a track.
     bool checkFreshProjectEmptyForTest() const {
-        return m_controller.project().tracks.empty();
+        return projectController().project().tracks.empty();
     }
     bool checkRemoteCommandMetadataForTest(QString* error = nullptr) const;
 
@@ -173,6 +179,7 @@ public:
     /// A `.vltt` package is routed to the new-project-from-template flow, so an
     /// operating-system double-click can never make Save overwrite a template.
     bool openProjectPath(const QString& path);
+    bool openStartupPath(const QString& path);
     /// Route a path delivered by argv, Finder or Explorer to project/template
     /// opening, portable theme import, or the configured Quick Import flow.
     bool openExternalPath(const QString& path);
@@ -230,6 +237,9 @@ public:
     /// Show the plugin manager, creating the window on first use. Public so the
     /// headless screenshot/selftest runs can construct it.
     void openPluginManager(int tab = 0);
+    void openPerformanceWindow();
+    bool checkPerformanceWindowForTest(const QString& shots);
+    bool checkProjectTabsForTest(const QString& shots);
 
     /// Select the first track and open its Context Panel plugin search. A
     /// headless screenshot hook for the expandable quick-adder.
@@ -638,6 +648,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* ev) override;
 
 private:
+    friend class ui::McpService;
     /// Register a non-modal editor/panel that belongs above the shell while it
     /// is in use. A timeline press deliberately lowers this whole family; an
     /// explicit reopen (for example, clicking a MIDI clip) presents it again.
@@ -656,8 +667,7 @@ private:
     /// editor window in front means the chord was never meant for the clips.
     bool routeEditChord(EditChord chord);
 
-    /// Put an application-owned modeless surface inside the shared workspace
-    /// chrome. System/modal dialogs deliberately keep their native semantics.
+    /// Host modeless editor content in a system-decorated, owned tool window.
     InternalEditorFrame* hostInternalWindow(QWidget* content,
                                             const QString& settingsKey);
     void presentInternalWindow(QWidget* content);
@@ -668,9 +678,8 @@ private:
     void registerAuxiliaryWindow(QWidget* window);
     void installGpuSurface(QWidget* source);
     void presentAuxiliaryWindow(QWidget* window);
-    void raiseEditorWindows();
-    void lowerAuxiliaryWindowsForWorkspace();
     void closeAuxiliaryWindows();
+    void restoreMainWindowFocus();
     /// Apply the held state of the two modifier gestures above.
     void setAuditionHeld(bool held);
     void setLayerInvertHeld(bool held);
@@ -724,6 +733,7 @@ private:
     void onRecordModeChanged();
 
     void buildMenus();
+    void setupScripts();
     void updateLocalProcessingActions();
     quint64 m_processingSelectionRevision = ~quint64(0);
     quint64 m_processingProjectRevision = ~quint64(0);
@@ -892,6 +902,9 @@ private:
     /// File > New Project: one selected audio track with the mixer visible.
     bool initializeBlankProject();
     void serviceAudioHealth();
+    bool checkPluginProcessingHealth();
+    void ensurePerformanceWindow();
+    void handlePerformanceAction(daw::AudioPluginAddress address, quint64 project, int action);
     void showAudioFailure(const daw::AudioFailureNotice& notice, bool reveal = false);
     void retryAudioFailure(const daw::AudioFailureNotice& notice);
     QString chooseProjectTemplate();
@@ -901,7 +914,39 @@ private:
     bool applyDetectedKeyToPitch(int root, const std::string& scale);
     void addProjectTemplateTracks(const QString& packageDir);
 
-    daw::EngineController m_controller;
+    ProjectWorkspace m_projects;
+    daw::EngineController& projectController() { return m_projects.current().controller; }
+    const daw::EngineController& projectController() const { return m_projects.current().controller; }
+    daw::EngineController& audioController() { return m_projects.audio.active() ? *m_projects.audio.active() : projectController(); }
+    void finishAudioRecordingForHealth();
+    void buildProjectTabs(QVBoxLayout* layout);
+    void refreshProjectTabs();
+    void captureProjectView();
+    bool selectProjectTab(const ProjectId& id);
+    bool addProjectTab(const QString& path = {}, bool fromTemplate = false);
+    bool closeProjectTabs(const QList<ProjectId>& ids, std::unique_ptr<ProjectSession> replacement = {}, bool interactive = true);
+    bool setProjectTabsEnabled(bool enabled);
+    QMenu* createProjectTabMenu(const ProjectId& id);
+    bool saveAllProjectTabs();
+    void toggleProjectAudio(ui::ProjectLoadDialog* progress = nullptr);
+    bool requireProjectAudio();
+    void serviceBackgroundProject();
+    void configureProjectSession(ProjectSession& session);
+    void retireProjectEditor(const ProjectId& id, const QString& channel, const QString& slot);
+    bool projectPathAvailable(const QString& path) const;
+    void tagProjectEditor(QWidget* editor);
+    void appendWorkspaceRecovery(daw::recovery::RecoverySnapshot& snapshot);
+    bool restoreProjectWorkspace(const daw::recovery::SessionInfo& session, QString* error);
+    QTabBar* m_projectTabs = nullptr;
+    QWidget* m_projectTabStrip = nullptr;
+    QAction* m_projectTabsModeAction = nullptr;
+    QAction* m_projectEngineAction = nullptr;
+    bool m_projectTabsEnabled = true;
+    QToolButton* m_projectPower = nullptr;
+    QToolButton* m_audioOwnerButton = nullptr;
+    bool m_switchingProject = false;
+    bool m_closingProjects = false;
+    bool m_projectTabsReady = false;
     /// What is selected, in one place, for the views that need to know rather
     /// than the view that made the selection. See ui::SelectionModel.
     ui::SelectionModel m_selection;
@@ -1063,16 +1108,20 @@ private:
     QTimer* m_countInTimer = nullptr;
     QElapsedTimer m_countInClock;
     ShortcutManager* m_shortcuts = nullptr;
+    ui::ScriptService* m_scripts = nullptr;
+    ui::McpService* m_mcp = nullptr;
     /// The computer keyboard as a MIDI keyboard. Lives here rather than in a
     /// window because it filters the whole application: a key plays a note
     /// whichever window has focus.
     TypingKeyboard* m_typingKeyboard = nullptr;
     /// Every physical MIDI input, hot-plugged and marshalled onto the UI thread.
     MidiInputManager* m_midiInput = nullptr;
-    QHash<QString, std::array<unsigned int, 128>> m_livePitchCounts;
     QAction* m_typingKeyboardAction = nullptr;
     SettingsWindow* m_settingsWindow = nullptr;
     PluginManagerWindow* m_pluginManagerWindow = nullptr;
+    PerformanceWindow* m_performanceWindow = nullptr;
+    QElapsedTimer m_pluginHealthClock;
+    bool m_pluginProcessingStalled = false;
     ui::CreatorWindow* m_creatorWindow = nullptr;
     /// Open editors, keyed by "<channelId>/<insertId>". Not a single instance:
     /// several plugins are routinely open side by side.
@@ -1087,7 +1136,7 @@ private:
     bool m_browserSampleTargetPreservesSampler = false;
     /// Every application-owned modeless window now uses InternalEditorFrame.
     /// The content pointer remains the feature registry's identity; the frame
-    /// owns geometry, stacking and custom chrome.
+    /// owns geometry and the native system frame.
     QHash<QWidget*, InternalEditorFrame*> m_internalEditorFrames;
     /// Deterministic routing owner used only while the self-test drives menu
     /// actions. Native window activation is asynchronous (and unavailable on
@@ -1097,8 +1146,7 @@ private:
     /// window override is set deliberately means "no text widget has focus".
     QPointer<QWidget> m_editChordFocusWidgetForTest;
     QList<QPointer<QWidget>> m_auxiliaryWindows;
-    bool m_auxiliaryLowered = false;
-    bool m_auxiliaryRaiseQueued = false;
+    bool m_mainFocusRestoreQueued = false;
     bool m_structureRefreshPending = false;
     /// The expensive safety sweep over open plugin/sample editors is needed
     /// only after document structure can have changed, never on every UI tick.

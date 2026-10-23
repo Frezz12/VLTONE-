@@ -2,11 +2,14 @@
 #include "Controls.hpp"
 #include "EqualizerStyle.hpp"
 #include "Icons.hpp"
-#include "RackBuiltinView.hpp"
 #include "RackParameterBinding.hpp"
+#include "RackBuiltinView.hpp"
+#include "RackModulationPanel.hpp"
+#include "ScrollMotion.hpp"
 #include "Theme.hpp"
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -26,8 +29,61 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <array>
 
 namespace {
+class PluginLauncher final : public QAbstractButton, public ui::graphics::ScenePaintSource {
+public:
+    explicit PluginLauncher(QWidget* parent) : QAbstractButton(parent) {
+        setObjectName("RackDeviceOpen");
+        setCheckable(true);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
+        setMinimumSize(250, 100);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    }
+    void paintScene(QPainter& p, const QRegion&) override {
+        p.setRenderHint(QPainter::Antialiasing);
+        const auto& t = th();
+        const double hover = m_hover.value();
+        const QRectF tile = QRectF(rect()).adjusted(8.5, 8.5, -8.5, -8.5);
+        p.setPen(QPen(hasFocus() ? t.accent : mixColors(t.separator(), t.accent, isChecked() ? .65 : .25 * hover), 1));
+        QLinearGradient fill(tile.topLeft(), tile.bottomRight());
+        fill.setColorAt(0, mixColors(t.well(), t.accent, (isChecked() ? .12 : .035) + hover * .035));
+        fill.setColorAt(1, t.panelBottom());
+        p.setBrush(fill); p.drawRoundedRect(tile, 8, 8);
+        const bool compact = height() < 160;
+        const QPointF center(tile.center().x(), tile.top() + (compact ? 25 : tile.height() * .36) + (isDown() ? 1 : 0));
+        const QRectF window(center.x() - (compact ? 24 : 31), center.y() - (compact ? 17 : 23), compact ? 48 : 62, compact ? 34 : 46);
+        p.setPen(QPen(mixColors(t.textSecondary, t.accent, isChecked() ? .8 : .35 + hover * .4), 1.4));
+        p.setBrush(mixColors(t.surface, t.accent, isChecked() ? .1 : .025));
+        p.drawRoundedRect(window, 5, 5);
+        p.drawLine(window.topLeft() + QPointF(1, 11), window.topRight() + QPointF(-1, 11));
+        icons::paint(p, isChecked() ? icons::Glyph::Check : icons::Glyph::RackControls,
+                     QRectF(center.x() - 11, center.y() - 6, 22, 22), t.accent);
+        const double textY = center.y() + (compact ? 23 : 34);
+        QFont title = font(); title.setPixelSize(compact ? 12 : 13); title.setWeight(QFont::DemiBold); p.setFont(title);
+        p.setPen(t.textPrimary);
+        p.drawText(QRectF(tile.left() + 6, textY, tile.width() - 12, 20), Qt::AlignCenter, text());
+        title.setPixelSize(10); title.setWeight(QFont::Normal); p.setFont(title); p.setPen(t.textSecondary);
+        p.drawText(QRectF(tile.left() + 6, textY + 21, tile.width() - 12, 16), Qt::AlignCenter,
+                   isChecked() ? QCoreApplication::translate("RackDeviceCard", "Click to close")
+                               : QCoreApplication::translate("RackDeviceCard", "Show the full interface"));
+    }
+protected:
+    void paintEvent(QPaintEvent*) override { QPainter p(this); paintScene(p, QRegion(rect())); }
+    void enterEvent(QEnterEvent* e) override {
+        QAbstractButton::enterEvent(e);
+        if (ui::ScrollPreferences::instance().reducedMotion()) m_hover.jumpTo(1); else m_hover.setTarget(1);
+    }
+    void leaveEvent(QEvent* e) override {
+        QAbstractButton::leaveEvent(e);
+        if (ui::ScrollPreferences::instance().reducedMotion()) m_hover.jumpTo(0); else m_hover.setTarget(0);
+    }
+private:
+    ui::Fade m_hover{this, 120};
+};
+
 class DeviceTitle final : public QLabel {
   public:
     using QLabel::QLabel;
@@ -166,21 +222,37 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
     font.setBold(true);
     font.setPixelSize(11);
     m_title->setFont(font);
-    auto* open = new ui::IconButton(icons::Glyph::WindowMaximize, tr("Open full editor"), m_header);
-    open->setObjectName("RackDeviceOpen");
-    open->setButtonSize(24, 24);
-    m_configure = new ui::IconButton(icons::Glyph::Gear, tr("Configure eight controls"), m_header);
-    m_configure->setObjectName("RackDeviceConfigure");
-    m_configure->setButtonSize(24, 24);
-    m_expand = new ui::IconButton(icons::Glyph::ChevronRight, tr("Show all parameters"), m_header);
+    m_pageBar = new QWidget(m_header);
+    auto* modes = new QHBoxLayout(m_pageBar);
+    modes->setContentsMargins(0, 0, 0, 0); modes->setSpacing(1);
+    m_pages = new QButtonGroup(this);
+    const std::array<std::pair<icons::Glyph, QString>, 3> pages{{
+        {icons::Glyph::RackFace, tr("Plugin")}, {icons::Glyph::RackControls, tr("Parameters")},
+        {icons::Glyph::RackModulation, tr("Modulation")}}};
+    for (int i = 0; i < int(pages.size()); ++i) {
+        auto* mode = new ui::IconButton(pages[i].first, pages[i].second, m_pageBar);
+        mode->setObjectName(QStringLiteral("RackDevicePage%1").arg(i));
+        mode->setButtonSize(24, 24); mode->setCheckable(true); mode->setFocusPolicy(Qt::StrongFocus);
+        mode->setAccessibleName(pages[i].second); m_pages->addButton(mode, i); modes->addWidget(mode);
+    }
+    m_pages->button(0)->setChecked(true);
+    connect(m_pages, &QButtonGroup::idClicked, this, [this](int page) { setPage(Page(page)); });
+    m_expand = new ui::IconButton(icons::Glyph::RackExpand, tr("Show all parameters"), m_header);
     m_expand->setButtonSize(24, 24);
     m_expand->setObjectName("RackDeviceExpandParameters");
     m_expand->setCheckable(true);
+    m_headerEditor = new ui::IconButton(icons::Glyph::Detach, tr("Open full editor"), m_header);
+    m_headerEditor->setObjectName("RackDeviceOpenEditor");
+    m_headerEditor->setButtonSize(24, 24);
+    m_headerEditor->setGlyphSize(16);
+    m_headerEditor->setCheckable(true);
+    m_headerEditor->setFocusPolicy(Qt::StrongFocus);
+    m_headerEditor->setAccessibleName(tr("Open full editor"));
     header->addWidget(m_power);
-    header->addWidget(open);
     header->addWidget(m_title, 1);
-    header->addWidget(m_configure);
+    header->addWidget(m_pageBar);
     header->addWidget(m_expand);
+    header->addWidget(m_headerEditor);
     header->addWidget(m_fold);
     m_root->addWidget(m_header);
     connect(m_power, &QAbstractButton::clicked, this, [this](bool on) {
@@ -189,16 +261,14 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
         emit edited(false);
         sync();
     });
-    connect(open, &QAbstractButton::clicked, this, [this] {
-        finishEdits();
-        emit editorRequested(m_channel, m_slot);
-    });
     connect(m_expand, &QAbstractButton::clicked, this, [this] {
         setCollapsed(false);
         setExpanded(!m_expanded);
     });
     connect(m_fold, &QAbstractButton::clicked, this, [this] { setCollapsed(false); });
-    connect(m_configure, &QAbstractButton::clicked, this, &RackDeviceCard::configurePins);
+    connect(m_headerEditor, &QAbstractButton::clicked, this, [this] {
+        finishEdits(); emit editorToggleRequested(m_channel, m_slot); refresh(false);
+    });
     auto* footer = m_footer = new QWidget(this);
     footer->setObjectName("RackDeviceFooter");
     footer->setFixedHeight(30);
@@ -264,6 +334,7 @@ RackDeviceCard::RackDeviceCard(daw::EngineController* c, QString channel, QStrin
     connect(&ThemeManager::instance(), &ThemeManager::changed, this, &RackDeviceCard::updateTheme);
     m_expanded = QSettings().value(expansionKey(c, m_channel, m_slot), false).toBool();
     m_collapsed = QSettings().value(collapseKey(c, m_channel, m_slot), false).toBool();
+    m_recent = QSettings().value(expansionKey(c, m_channel, m_slot) + "/recent").toStringList();
     updateTheme();
     sync();
 }
@@ -281,6 +352,7 @@ void RackDeviceCard::updateTheme() {
     update();
 }
 void RackDeviceCard::finishEdits() {
+    if (m_modulation) m_modulation->finishEdits();
     if (m_binding)
         m_binding->finishAll();
     if (m_mixBefore) {
@@ -296,15 +368,19 @@ void RackDeviceCard::sync() {
     if (!model)
         return;
     m_syncing = true;
+    m_internal = model->format == daw::PluginFormat::Internal;
+    m_headerEditor->setVisible(m_internal && !m_collapsed);
     const auto identity = m_controller->insertIdentity(m_channel.toStdString(), m_slot.toStdString());
     const auto uid = QString::fromStdString(model->uid);
     const auto runtimeState =
         m_controller->insertRuntimeStatus(m_channel.toStdString(), m_slot.toStdString()).state;
-    const bool rebuild = !m_body || runtimeState != m_runtimeState || identity != m_identity ||
+    const bool engineOff = !m_controller->audioEnabled();
+    const bool rebuild = !m_body || engineOff != m_engineOff || runtimeState != m_runtimeState || identity != m_identity ||
                          m_side != model->editorChannel || uid != m_uid || m_pins != model->rackParameterIds;
     if (rebuild) {
         finishEdits();
         m_runtimeState = runtimeState;
+        m_engineOff = engineOff;
         m_uid = uid;
         m_identity = identity;
         m_side = model->editorChannel;
@@ -342,6 +418,7 @@ void RackDeviceCard::sync() {
     const bool sidechain =
         m_controller->insertSupportsSidechain(m_channel.toStdString(), m_slot.toStdString());
     m_sidechain->setEnabled(sidechain);
+    m_headerEditor->setEnabled(!m_engineOff && m_binding && m_binding->available());
     m_sidechain->setText(model->sidechainTrackIds.empty() ? tr("SC")
                                                           : tr("SC %1").arg(model->sidechainTrackIds.size()));
     m_sidechain->setToolTip(sidechain ? tr("Choose sidechain sources")
@@ -351,10 +428,28 @@ void RackDeviceCard::sync() {
 void RackDeviceCard::refresh(bool synchronize) {
     if (synchronize) sync();
     if (m_collapsed) return;
+    const bool opened = editorIsOpen && editorIsOpen();
+    m_headerEditor->setChecked(opened);
+    m_headerEditor->setToolTip(opened ? tr("Close plugin") : tr("Open full editor"));
+    m_headerEditor->setAccessibleName(m_headerEditor->toolTip());
+    if (m_openEditor) {
+        m_openEditor->setChecked(opened);
+        m_openEditor->setText(opened ? tr("Plugin is open") : tr("Open plugin"));
+        m_openEditor->setAccessibleName(opened ? tr("Close plugin") : tr("Open plugin"));
+    }
+    refreshRecentParameters();
+    if (m_modulation) m_modulation->refresh();
+    if (m_builtin) m_builtin->refresh();
     if (m_binding)
         m_binding->refresh();
-    if (m_builtin)
-        m_builtin->refresh();
+}
+void RackDeviceCard::setPage(Page page) {
+    if (page == m_page) return;
+    finishEdits();
+    m_page = page;
+    m_pages->button(int(page))->setChecked(true);
+    rebuildControls();
+    emit widthChanged();
 }
 void RackDeviceCard::setSelected(bool on) {
     if (m_selected == on)
@@ -386,9 +481,11 @@ void RackDeviceCard::setCollapsed(bool on) {
     emit widthChanged();
 }
 void RackDeviceCard::updateCollapsed() {
-    const bool native = RackBuiltinView::supports(m_uid);
-    m_expand->setVisible(!native && !m_collapsed);
+    m_expand->setVisible(!m_collapsed);
+    m_headerEditor->setVisible(m_internal && !m_collapsed);
+    m_pageBar->setVisible(!m_collapsed);
     m_fold->setVisible(m_collapsed);
+    m_bodyScroll->setVisible(!m_collapsed);
     m_body->setVisible(!m_collapsed);
     m_footer->setVisible(!m_collapsed);
     m_headerLayout->setDirection(m_collapsed ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
@@ -405,42 +502,56 @@ void RackDeviceCard::updateCollapsed() {
     m_fold->setToolTip(action);
     m_fold->setAccessibleName(action);
     m_header->setToolTip(m_collapsed ? tr("Double-click to expand device") : tr("Double-click to collapse device"));
-    setFixedWidth(m_collapsed ? 36 : (native ? RackBuiltinView::preferredWidth(m_uid) : (m_expanded ? 560 : 288)));
+    updateWidth();
+}
+void RackDeviceCard::updateWidth() {
+    const int face = m_builtin ? std::max(288, RackBuiltinView::preferredWidth(m_uid) + 24) : 288;
+    setFixedWidth(m_collapsed ? 36 : face + (m_expanded ? 272 : 0) + (m_modulation ? m_modulation->width() + 6 : 0));
 }
 void RackDeviceCard::rebuildControls() {
-    if (m_body) {
-        m_root->removeWidget(m_body);
-        delete m_body;
+    if (m_bodyScroll) {
+        m_root->removeWidget(m_bodyScroll);
+        delete m_bodyScroll;
         m_body = nullptr;
     }
     delete m_binding;
     m_binding = nullptr;
-    m_builtin = nullptr;
+    m_modulation = nullptr; m_builtin = nullptr; m_openEditor = nullptr; m_pinned = nullptr; m_pinnedGrid = nullptr;
+    m_displayed.clear();
     m_binding = new RackParameterBinding(m_controller, m_channel, m_slot, this);
     connect(m_binding, &RackParameterBinding::edited, this, [this] { emit edited(false); });
     connect(m_binding, &RackParameterBinding::automationRequested, this,
             [this](const QString& id) { emit automationRequested(m_channel, m_slot, id); });
-    m_body = new QWidget(this);
+    m_bodyScroll = new QScrollArea(this);
+    m_bodyScroll->setObjectName("RackDeviceBodyScroll");
+    m_bodyScroll->setFrameShape(QFrame::NoFrame);
+    m_bodyScroll->setWidgetResizable(true);
+    m_bodyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_bodyScroll->setMinimumHeight(0);
+    m_bodyScroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    m_body = new QWidget;
+    m_bodyScroll->setWidget(m_body);
     m_body->setObjectName("RackDeviceBody");
     auto* row = new QHBoxLayout(m_body);
-    row->setContentsMargins(3, 3, 3, 3);
+    const int verticalInset = m_page == Page::Editor && m_uid == "daw.equalizer" ? 3 : 1;
+    row->setContentsMargins(3, verticalInset, 3, verticalInset);
     row->setSpacing(4);
-    const bool native = RackBuiltinView::supports(m_uid);
-    m_configure->setVisible(!native);
-    m_configure->setEnabled(!m_controller->hasCloudProjectBinding());
+    m_pages->button(int(Page::Modulation))->setEnabled(!m_controller->hasCloudProjectBinding());
     m_expand->setChecked(m_expanded);
     m_expand->setToolTip(m_expanded ? tr("Hide all parameters") : tr("Show all parameters"));
     if (!m_binding->available() || m_runtimeState != daw::AudioPluginRuntimeState::Local) {
         auto* col = new QVBoxLayout;
-        auto* message = new QLabel(tr("Device unavailable"), m_body);
+        auto* message = new QLabel(m_engineOff ? tr("Engine off") : tr("Device unavailable"), m_body);
         message->setWordWrap(true);
         col->addWidget(message);
         const auto status = m_controller->insertRuntimeStatus(m_channel.toStdString(), m_slot.toStdString());
-        auto* detail = new QLabel(QString::fromStdString(status.detail), m_body);
+        auto* detail = new QLabel(m_engineOff ? tr("Enable this project's engine to use this device.")
+                                             : QString::fromStdString(status.detail), m_body);
         detail->setWordWrap(true);
         detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
         col->addWidget(detail, 1);
         auto* retry = new QToolButton(m_body);
+        retry->setVisible(!m_engineOff);
         retry->setText(tr("Restore device"));
         retry->setEnabled(status.canRetry);
         col->addWidget(retry);
@@ -450,92 +561,87 @@ void RackDeviceCard::rebuildControls() {
             emit edited(true);
         });
         row->addLayout(col);
-    } else if (native) {
+    } else if (m_page == Page::Editor && RackBuiltinView::supports(m_uid)) {
         m_builtin = new RackBuiltinView(m_binding, m_uid, m_body);
+        m_builtin->setObjectName("RackBuiltinFace");
+        m_builtin->setFixedWidth(std::max(278, RackBuiltinView::preferredWidth(m_uid)));
         row->addWidget(m_builtin);
+    } else if (m_page == Page::Editor) {
+        m_openEditor = new PluginLauncher(m_body);
+        m_openEditor->setFixedWidth(278);
+        m_openEditor->setText(tr("Open plugin"));
+        m_openEditor->setAccessibleName(tr("Open plugin"));
+        connect(m_openEditor, &QAbstractButton::clicked, this, [this] {
+            finishEdits(); emit editorToggleRequested(m_channel, m_slot); refresh(false);
+        });
+        row->addWidget(m_openEditor);
     } else {
-        auto* pinned = new QWidget(m_body);
-        pinned->setFixedWidth(278);
-        auto* grid = new QGridLayout(pinned);
-        grid->setContentsMargins(2, 0, 2, 0);
-        grid->setSpacing(0);
-        QStringList ids;
-        for (const auto& id : m_pins)
-            ids.push_back(QString::fromStdString(id));
-        if (ids.isEmpty())
-            for (const auto& p : m_binding->parameters()) {
-                if (ids.size() == 8)
-                    break;
-                ids.push_back(QString::fromStdString(p.id));
-            }
-        for (int i = 0; i < 8; ++i) {
-            if (i < ids.size() && m_binding->info(ids[i])) {
-                auto* knob = m_binding->knob(ids[i], pinned, 66);
-                knob->setMinimumHeight(60);
-                knob->setMaximumHeight(78);
-                knob->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-                grid->addWidget(knob, i / 4, i % 4);
-            } else {
-                auto* empty = new QLabel(QStringLiteral("—"), pinned);
-                empty->setAlignment(Qt::AlignCenter);
-                empty->setMinimumSize(60, 60);
-                empty->setEnabled(false);
-                grid->addWidget(empty, i / 4, i % 4);
-            }
+        if (m_page == Page::Modulation) {
+            m_body->setProperty("modulationDepthEditing", true);
+            m_modulation = new RackModulationPanel(m_controller, m_body, m_slot);
+            m_modulation->setChannel(m_channel);
+            connect(m_modulation, &RackModulationPanel::edited, this, &RackDeviceCard::edited);
+            connect(m_modulation, &RackModulationPanel::layoutChanged, this, [this] { updateWidth(); emit widthChanged(); });
+            row->addWidget(m_modulation);
         }
-        row->addWidget(pinned);
-        if (m_expanded) {
-            auto* col = new QVBoxLayout;
-            auto* search = new QLineEdit(m_body);
-            search->setObjectName("RackParameterSearch");
-            search->setPlaceholderText(tr("Find a parameter…"));
-            search->setAccessibleName(tr("Find a parameter"));
-            auto* grid = new ParameterGrid(m_binding, m_body);
-            col->addWidget(search);
-            col->addWidget(grid, 1);
-            row->addLayout(col, 1);
-            connect(search, &QLineEdit::textChanged, grid,
-                    [grid](const QString& text) { grid->filter(text); });
-        }
+        m_pinned = new QWidget(m_body);
+        m_pinned->setObjectName("RackRecentParameters");
+        m_pinned->setFixedWidth(278);
+        m_pinnedGrid = new QGridLayout(m_pinned);
+        m_pinnedGrid->setContentsMargins(2, 2, 2, 0);
+        m_pinnedGrid->setSpacing(0); m_pinnedGrid->setRowStretch(2, 1);
+        row->addWidget(m_pinned);
+        refreshRecentParameters();
     }
-    m_root->insertWidget(1, m_body, 1);
+    if (m_expanded && m_binding->available()) {
+        auto* col = new QVBoxLayout;
+        auto* search = new QLineEdit(m_body);
+        search->setObjectName("RackParameterSearch");
+        search->setPlaceholderText(tr("Find a parameter…"));
+        search->setAccessibleName(tr("Find a parameter"));
+        auto* grid = new ParameterGrid(m_binding, m_body);
+        col->addWidget(search); col->addWidget(grid, 1); row->addLayout(col, 1);
+        connect(search, &QLineEdit::textChanged, grid, [grid](const QString& text) { grid->filter(text); });
+    }
+    m_root->insertWidget(1, m_bodyScroll, 1);
     updateCollapsed();
 }
-void RackDeviceCard::configurePins() {
-    finishEdits();
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Rack controls"));
-    dialog.resize(420, 360);
-    auto* form = new QFormLayout(&dialog);
-    QList<QComboBox*> cells;
-    for (int i = 0; i < 8; ++i) {
-        auto* box = new QComboBox(&dialog);
-        box->setEditable(true);
-        box->setInsertPolicy(QComboBox::NoInsert);
-        box->addItem(tr("Empty"), QString{});
-        for (const auto& p : m_binding->parameters())
-            box->addItem(QString::fromStdString(p.name), QString::fromStdString(p.id));
-        int selected = 0;
-        if (!m_pins.empty() && i < int(m_pins.size()))
-            selected = box->findData(QString::fromStdString(m_pins[i]));
-        else if (m_pins.empty() && i < int(m_binding->parameters().size()))
-            selected = i + 1;
-        box->setCurrentIndex(std::max(0, selected));
-        form->addRow(tr("Control %1").arg(i + 1), box);
-        cells.push_back(box);
-    }
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() == QDialog::Accepted) {
-        std::vector<std::string> ids;
-        for (auto* cell : cells)
-            ids.push_back(cell->currentData().toString().toStdString());
-        if (m_controller->setRackParameters(m_channel.toStdString(), m_slot.toStdString(), ids)) {
-            sync();
-            emit edited(true);
+void RackDeviceCard::refreshRecentParameters() {
+    if (!m_binding) return;
+    for (auto* knob : m_body->findChildren<ui::Knob*>())
+        if (knob->isEditing() || knob->property("modulationDepthDragging").toBool()) return;
+    const auto& touched = m_controller->recentRackParameters(m_slot.toStdString());
+    if (!touched.empty()) {
+        QStringList recent;
+        for (const auto& id : touched) recent.push_back(QString::fromStdString(id));
+        if (recent != m_recent) {
+            m_recent = recent;
+            QSettings().setValue(expansionKey(m_controller, m_channel, m_slot) + "/recent", m_recent);
         }
+    }
+    if (!m_pinnedGrid) return;
+    QStringList ids;
+    const auto append = [&](const QString& id) {
+        if (ids.size() < 8 && !ids.contains(id) && m_binding->info(id)) ids.push_back(id);
+    };
+    if (!m_recent.isEmpty()) append(m_recent.front());
+    for (const auto& id : m_pins) append(QString::fromStdString(id));
+    for (const auto& id : m_recent) append(id);
+    for (const auto& info : m_binding->parameters()) append(QString::fromStdString(info.id));
+    if (ids == m_displayed) return;
+    m_binding->finishAll();
+    const auto* focused = QApplication::focusWidget();
+    const QString focusedId = focused && m_pinned->isAncestorOf(focused)
+        ? focused->property("modulationParameter").toString() : QString{};
+    while (auto* item = m_pinnedGrid->takeAt(0)) { delete item->widget(); delete item; }
+    m_displayed = ids;
+    for (int i = 0; i < ids.size(); ++i) {
+        auto* knob = m_binding->knob(ids[i], m_pinned, 66);
+        knob->setFixedSize(66, 58);
+        knob->setProperty("recentParameterIndex", i);
+        if (i == 0 && !m_recent.isEmpty()) knob->setToolTip(tr("Last touched") + " · " + knob->accessibleName());
+        m_pinnedGrid->addWidget(knob, i / 4, i % 4, Qt::AlignTop);
+        if (ids[i] == focusedId) { knob->show(); knob->setFocus(Qt::OtherFocusReason); }
     }
 }
 void RackDeviceCard::sidechainMenu() {

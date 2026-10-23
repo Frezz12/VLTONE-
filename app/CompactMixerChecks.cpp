@@ -13,6 +13,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPointer>
@@ -318,9 +319,9 @@ bool MixerWidget::checkCompactForTest() {
     mixer.m_scroll->horizontalScrollBar()->setValue(12345);
     settle();
     const int compactCount = int(mixer.m_strips.size());
-    const double anchor = double(mixer.m_scroll->horizontalScrollBar()->value()) / (mixer.channelWidth() + 2);
+    const double anchor = double(mixer.m_scroll->horizontalScrollBar()->value()) / mixer.channelWidth();
     prefs.setCompactWidth(48); settle();
-    check(std::abs(double(mixer.m_scroll->horizontalScrollBar()->value()) / 50 - anchor) < .02,
+    check(std::abs(double(mixer.m_scroll->horizontalScrollBar()->value()) / mixer.channelWidth() - anchor) < .02,
           "changing compact width preserves the fractional scroll anchor");
     prefs.setCompactWidth(32); settle();
     const auto layoutDepth = controller.undoDepth();
@@ -329,16 +330,51 @@ bool MixerWidget::checkCompactForTest() {
     prefs.setView(ui::MixerPreferences::View::Classic);
     settle();
     check(mixer.channelWidth() == 111 && !mixer.m_details && mixer.m_selectedTrackId.toStdString() == first &&
-          std::abs(double(mixer.m_scroll->horizontalScrollBar()->value()) / 113 - anchor) < .02,
+          std::abs(double(mixer.m_scroll->horizontalScrollBar()->value()) / mixer.channelWidth() - anchor) < .02,
           "Classic restores its own width and preserves selection and scroll anchor");
     prefs.setView(ui::MixerPreferences::View::Compact);
     settle();
-    check(mixer.channelWidth() == 32 && std::abs(double(mixer.m_scroll->horizontalScrollBar()->value()) / 34 - anchor) < .02,
+    check(mixer.channelWidth() == 32 && std::abs(double(mixer.m_scroll->horizontalScrollBar()->value()) / mixer.channelWidth() - anchor) < .02,
           "returning to Compact preserves the channel scroll anchor");
     check(controller.undoDepth() == layoutDepth && controller.routingGraph() == layoutGraph,
           "switching views leaves project history and audio graph unchanged");
-    mixer.setRackMode(true);
-    mixer.setRackMode(false);
+    const QPoint mixerSide(mixer.m_viewToggle->width() / 4, mixer.m_viewToggle->height() / 2);
+    const QPoint rackSide(mixer.m_viewToggle->width() * 3 / 4, mixerSide.y());
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonPress, rackSide);
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonRelease, rackSide);
+    check(mixer.rackMode() && mixer.rack()->isVisible() &&
+          QSettings().value("ui/rackMode").toBool(),
+          "single mode switch opens Rack immediately and persists the chosen mode");
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonPress, mixerSide);
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonRelease, mixerSide);
+    check(!mixer.rackMode(), "rapid repeat click reverses the mode without waiting for the shuttle");
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonPress, mixerSide);
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonRelease, mixerSide);
+    check(!mixer.rackMode(), "clicking the lit M side keeps Mixer selected");
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonPress, rackSide);
+    mouse(mixer.m_viewToggle, QEvent::MouseButtonRelease, rackSide);
+    // The second channel was deleted above; use the surviving return channel.
+    mixer.setSelectedTrack(QString::fromStdString(bus));
+    check(mixer.m_details->trackId().toStdString() == first && mixer.rack()->channelId().toStdString() == bus,
+          "rack selection leaves the hidden compact details intact");
+    mixer.m_viewToggle->setFocus(Qt::TabFocusReason);
+    const auto keyboardToggle = [&] {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+        QApplication::sendEvent(mixer.m_viewToggle, &press);
+        QApplication::sendEvent(mixer.m_viewToggle, &release);
+    };
+    keyboardToggle();
+    check(!mixer.rackMode() && !mixer.rack()->isVisible() &&
+          !QSettings().value("ui/rackMode").toBool(),
+          "Space returns to Mixer and persists the chosen mode");
+    keyboardToggle();
+    check(mixer.rackMode() && mixer.m_viewToggle->hasFocus(),
+          "keyboard mode changes keep focus on the switch for immediate reversal");
+    keyboardToggle();
+    check(mixer.m_details->trackId().toStdString() == bus,
+          "returning from Rack updates compact details to the latest selection");
+    mixer.setSelectedTrack(QString::fromStdString(first));
     settle();
     check(mixer.m_view == ui::MixerPreferences::View::Compact && mixer.m_details->trackId().toStdString() == first,
           "Rack returns to the chosen mixer view and selection");

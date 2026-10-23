@@ -439,6 +439,15 @@ VLT_NODE vlt::AudioFrame process(VLT_PORT("input") vlt::AudioFrame input, VLT_PO
         "full AI rollback preserves unrelated DAW changes");
   check(installUtility(), "second update prepares conflict checks");
   const auto afterUpdate = window.project();
+  auto *recoveryTimer = window.findChild<QTimer *>("Creator.RecoveryTimer");
+  const auto savedViewport = window.m_canvas->viewportState();
+  auto shiftedViewport = savedViewport;
+  shiftedViewport.center += QPointF(17, 11);
+  window.m_canvas->restoreViewport(shiftedViewport);
+  check(recoveryTimer && QMetaObject::invokeMethod(recoveryTimer, "timeout", Qt::DirectConnection) &&
+            window.project() == afterUpdate,
+        "autosave captures the viewport without mutating the open Creator document");
+  window.m_canvas->restoreViewport(savedViewport);
   CreatorFileState expectedFile;
   CreatorFileState::read(installedPath, expectedFile, error);
   QFile changed(installedPath);

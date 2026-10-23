@@ -92,7 +92,7 @@ struct VocalAlignmentWindow::Job {
 };
 
 VocalAlignmentWindow::VocalAlignmentWindow(daw::EngineController* controller, ui::SelectionModel* selection, QWidget* parent)
-    : QDialog(parent, Qt::Window), m_controller(controller), m_selection(selection), m_generation(controller->projectGeneration()) {
+    : QDialog(parent, Qt::Tool), m_controller(controller), m_selection(selection), m_generation(controller->projectGeneration()) {
     setObjectName("VocalAlignmentWindow");
     setWindowTitle(tr("Vocal Alignment"));
     setModal(false); setAttribute(Qt::WA_DeleteOnClose);

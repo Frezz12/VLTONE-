@@ -22,6 +22,7 @@ void EngineController::applyChannelColorState(const std::string& id, const std::
 }
 
 void EngineController::setChannelColorParameter(const std::string& id, const std::string& param, double value) {
+    if (!m_undo.isApplying() && isTrackEditLocked(id)) return;
     auto* track=m_project.findTrack(id);
     if (!track || !supportsChannelColor(track->kind) || !std::isfinite(value) ||
         (param!="drive" && param!="tone") || !sharedEditingAllowed()) return;
@@ -34,6 +35,7 @@ void EngineController::setChannelColorParameter(const std::string& id, const std
 }
 
 void EngineController::setChannelColorEnabled(const std::string& id, bool enabled) {
+    if (!m_undo.isApplying() && isTrackEditLocked(id)) return;
     const auto* track=m_project.findTrack(id);
     if (!track || !supportsChannelColor(track->kind) || !sharedEditingAllowed()) return;
     const auto before=track->channelColor;

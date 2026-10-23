@@ -104,6 +104,8 @@ public:
 
     SampleRate sampleRate() const { return m_sampleRate.load(std::memory_order_relaxed); }
     BufferSize bufferSize() const { return m_bufferSize.load(std::memory_order_relaxed); }
+    double inputLatencySeconds() const { return m_inputLatencySeconds; }
+    double outputLatencySeconds() const { return m_outputLatencySeconds; }
 
     std::vector<DeviceInfo> enumerateInputDevices();
     std::vector<DeviceInfo> enumerateOutputDevices();

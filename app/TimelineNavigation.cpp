@@ -1,4 +1,5 @@
 #include "TimelineNavigation.hpp"
+#include "TimelineNavigationPaint.hpp"
 #include "ScrollMotion.hpp"
 #include "Theme.hpp"
 #include <QKeyEvent>
@@ -12,24 +13,6 @@
 namespace {
 constexpr double coastSeconds = .15;
 constexpr qint64 velocityWindowNs = 80000000;
-QColor railBase() { return mixColors(th().panelBottom(), th().well(), .65); }
-QColor railWell() { return mixColors(railBase(), th().well(), .45); }
-void setWellDepth(QGradient& depth) {
-    const auto base = railWell();
-    depth.setColorAt(0, mixColors(base, th().edgeDark(base), .35));
-    depth.setColorAt(.4, base);
-    depth.setColorAt(1, mixColors(base, th().edgeLight(base), .25));
-}
-void paintRailSurface(QPainter& p, const QRectF& rect, Qt::Orientation axis) {
-    p.fillRect(rect, railBase());
-    QPainterPath well;
-    // Round only the free end. The other end continues into the shared corner.
-    well.addRoundedRect(axis == Qt::Horizontal ? rect.adjusted(2, 2, 9, -2)
-                                               : rect.adjusted(2, 2, -2, 9), 5, 5);
-    QLinearGradient depth(rect.topLeft(), axis == Qt::Horizontal ? rect.bottomLeft() : rect.topRight());
-    setWellDepth(depth);
-    p.fillPath(well, depth);
-}
 double coordinate(const QPointF& p, Qt::Orientation axis) {
     return axis == Qt::Horizontal ? p.x() : p.y();
 }
@@ -82,11 +65,17 @@ void TimelineNavigationRail::setPlayheadPosition(double x) {
     if (!dirty.isEmpty()) ui::FrameClock::instance().request(this, dirty);
 }
 
+void TimelineNavigationRail::setLeadingConnected(bool connected) {
+    if (m_leadingConnected == connected) return;
+    m_leadingConnected = connected;
+    ui::FrameClock::instance().request(this, rect());
+}
+
 void TimelineNavigationRail::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const bool horizontal = orientation() == Qt::Horizontal;
-    paintRailSurface(p, rect(), orientation());
+    ui::navigation::paintRailSurface(p, rect(), orientation(), !m_leadingConnected);
     const double length = horizontal ? width() : height();
     const double breadth = horizontal ? height() : width();
     if (length <= 0 || breadth <= 0) return;
@@ -238,7 +227,7 @@ TimelineNavigationCorner::TimelineNavigationCorner(QWidget* parent) : FrameWidge
 void TimelineNavigationCorner::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), railBase());
+    p.fillRect(rect(), ui::navigation::railBase());
     // Join both inset wells without a separate border or two end caps.
     QPainterPath joint;
     joint.moveTo(2, -1);
@@ -251,6 +240,6 @@ void TimelineNavigationCorner::paintEvent(QPaintEvent*) {
     joint.quadTo(2, 2, 2, 0);
     joint.closeSubpath();
     QRadialGradient depth(QPointF(0, 0), width());
-    setWellDepth(depth);
+    ui::navigation::setWellDepth(depth);
     p.fillPath(joint, depth);
 }

@@ -127,8 +127,10 @@ int main() {
     corrupt.inserts[0].state = {0xff, 0xff, 0xff};
     check(!c.pasteRackSelection(b, corrupt, 0), "invalid opaque state rejects complete paste");
     check(document(c) == stable, "failed restoration leaves originals untouched");
-    check(!c.pasteRackSelection(b, copy, 1, group), "nested group insertion rejected atomically");
-    check(document(c) == stable, "nested group rejection leaves chain unchanged");
+    check(bool(c.pasteRackSelection(b, copy, 1, group)), "group can be nested inside another group");
+    check(c.rackGroups(b).size() == 2 && !c.rackGroups(b).back().parentId.empty(), "nested group retains its parent");
+    c.undo();
+    check(document(c) == stable, "Undo restores the chain before nesting");
     const auto added = c.addInsert(b, eq, 1);
     check(!added.empty() && c.rackGroups(b)[0].insertIds.size() == 3,
           "adding an effect between members joins the group");

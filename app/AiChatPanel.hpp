@@ -27,6 +27,7 @@ class QTimer;
 class QVBoxLayout;
 class ShortcutManager;
 namespace ui {
+class McpService;
 class IconButton;
 class LlmClient;
 class ModeSwitch;
@@ -54,6 +55,7 @@ class SelectionModel;
 class AiChatPanel : public ui::GlassPanel {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
     explicit AiChatPanel(daw::EngineController* controller,
                          QWidget* parent = nullptr);
     ~AiChatPanel() override;
@@ -114,6 +116,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    friend class ui::McpService;
     using Mode = ui::aiprefs::Mode;
 
     /// One music request and what became of it. The music mode keeps its own

@@ -546,7 +546,7 @@ void PluginManager::scanWorker(bool rescanAll, ScanOptions options) {
             job.descriptor = *descriptor;
             // A prior schema is unnecessary input to create(), and can dwarf
             // the discovery metadata in resumed scans of large instruments.
-            job.descriptor.parameterSchema.clear();
+            job.descriptor.parameterSchema.reset();
             job.descriptor.parameterFingerprint.clear();
         }
         (retry ? retries : ready).push_back(std::move(job));
@@ -566,7 +566,7 @@ void PluginManager::scanWorker(bool rescanAll, ScanOptions options) {
                 return false;
             if (!job.info.discovery) {
                 try {
-                    const auto schema = nlohmann::json::parse(descriptor.parameterSchema);
+                    const auto schema = nlohmann::json::parse(descriptor.parameterSchemaText());
                     if (!schema.is_object() || schema.value("version", 0) != 2 ||
                         !schema.at("parameters").is_array() || !schema.at("inputs").is_array() ||
                         !schema.at("outputs").is_array() ||
@@ -910,8 +910,8 @@ std::vector<PluginDescriptor> PluginManager::plugins() const {
     found.insert(found.end(), scanned.begin(), scanned.end());
     if (m_parameterFingerprint)
         for (auto& descriptor : found)
-            if (!descriptor.parameterSchema.empty())
-                descriptor.parameterFingerprint = m_parameterFingerprint(descriptor.parameterSchema);
+            if (!descriptor.parameterSchemaText().empty())
+                descriptor.parameterFingerprint = m_parameterFingerprint(descriptor.parameterSchemaText());
     return found;
 }
 
@@ -941,8 +941,8 @@ std::optional<PluginDescriptor> PluginManager::find(Format format,
         for (const PluginDescriptor& descriptor : entry.plugins) {
             if (descriptor.format == format && descriptor.uid == uid) {
                 auto result = descriptor;
-                if (m_parameterFingerprint && !result.parameterSchema.empty())
-                    result.parameterFingerprint = m_parameterFingerprint(result.parameterSchema);
+                if (m_parameterFingerprint && !result.parameterSchemaText().empty())
+                    result.parameterFingerprint = m_parameterFingerprint(result.parameterSchemaText());
                 return result;
             }
         }
@@ -977,7 +977,7 @@ std::function<std::string()> PluginManager::sharedStateProbe(PluginDescriptor de
     if (actual.format != descriptor.format || actual.uid != descriptor.uid ||
         actual.vendor != descriptor.vendor || actual.version != descriptor.version ||
         actual.stateSchemaVersion != descriptor.stateSchemaVersion ||
-        actual.parameterSchema.empty() || actual.parameterSchema != descriptor.parameterSchema)
+        actual.parameterSchemaText().empty() || actual.parameterSchemaText() != descriptor.parameterSchemaText())
         return "Plugin installation or parameter schema changed; rescan before joining";
     return {};
     };

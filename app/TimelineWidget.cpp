@@ -1,6 +1,8 @@
 #include "ScrollMotion.hpp"
 #include "AudioImportPreparation.hpp"
 #include "TimelineWidget.hpp"
+#include "RackDrag.hpp"
+#include "ScriptContextMenu.hpp"
 #include "graphics/StretchableRect.hpp"
 #include "ClipLibraryDrag.hpp"
 #include "ClipInfoDialog.hpp"
@@ -61,6 +63,7 @@
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QPainter>
+#include <QPaintEngine>
 #include <QPaintEvent>
 #include <QPainterPath>
 #include <QRegion>
@@ -277,8 +280,8 @@ const QCursor& arrangementToolCursor(icons::Glyph glyph) {
     if (it != cache.end()) return it.value();
 
     const qreal dpr = qApp->devicePixelRatio();
-    constexpr int size = 24;
-    QPixmap pixmap(int(size * dpr), int(size * dpr));
+    constexpr int size = 22;
+    QPixmap pixmap(qRound(size * dpr), qRound(size * dpr));
     pixmap.setDevicePixelRatio(dpr);
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
@@ -293,8 +296,9 @@ const QCursor& arrangementToolCursor(icons::Glyph glyph) {
                      : glyph == icons::Glyph::Glue    ? QPoint(6, 19)
                      : glyph == icons::Glyph::Pointer ? QPoint(6, 4)
                                                       : QPoint(12, 12);
+    const QPoint scaledHot = (QPointF(hot) * (size / 24.0)).toPoint();
     return *cache.insert(int(glyph),
-                         QCursor(pixmap, hot.x(), hot.y()));
+                         QCursor(pixmap, scaledHot.x(), scaledHot.y()));
 }
 
 bool segmentCrossesRect(const QPointF& from, const QPointF& to,
@@ -984,7 +988,20 @@ bool TimelineWidget::deleteSelectedClips() {
 }
 
 bool TimelineWidget::copySelection() {
-    if (m_selection.isEmpty()) return false;
+    if (m_regionActive) {
+        std::vector<std::pair<std::string, std::string>> clips;
+        for (const auto& clip : regionClipCandidates(m_regionStart, m_regionEnd)) clips.emplace_back(clip.trackId, clip.clipId);
+        const auto copied = m_controller->copyProjectRegion(clips, m_regionStart, m_regionEnd, daw::projectTransferClipboard());
+        if (!copied) emit operationStatus(QString::fromStdString(copied.message()));
+        return bool(copied);
+    }
+    std::vector<std::string> tracks;
+    std::vector<std::pair<std::string, std::string>> clips;
+    for (const auto& clip : m_selection) clips.emplace_back(clip.trackId.toStdString(), clip.clipId.toStdString());
+    if (clips.empty() && m_selectionModel) for (const auto& track : m_selectionModel->tracks()) tracks.push_back(track.toStdString());
+    const auto copied = m_controller->copyProjectObjects(tracks, clips, daw::projectTransferClipboard());
+    if (!copied) { emit operationStatus(QString::fromStdString(copied.message())); return false; }
+    if (m_selection.isEmpty()) { arrangementClipboard().clear(); return true; }
     const auto& project = m_controller->project();
     std::unordered_set<std::string> selectedPatternClips;
     for (const auto& ref : m_selection) {
@@ -1047,10 +1064,19 @@ bool TimelineWidget::copySelection() {
 }
 
 bool TimelineWidget::cutSelection() {
+    if (!m_regionActive && m_selection.isEmpty() && m_selectionModel && !m_selectionModel->tracks().empty()) {
+        const auto tracks = m_selectionModel->tracks();
+        if (!copySelection()) return false;
+        const auto group = m_controller->beginUndoGroup();
+        for (const auto& track : tracks) m_controller->removeTrack(track.toStdString());
+        m_controller->collapseUndo(group, "Cut Tracks");
+        m_selectionModel->clear(); emit projectEdited(); update(); return true;
+    }
     // A region cut first isolates the intersecting material. Splitting does not
     // change what is heard; the subsequent removals and splits are collapsed
     // into one undo entry.
     if (m_regionActive) {
+        if (!copySelection()) return false;
         const auto undoGroup = m_controller->beginUndoGroup();
         auto& clipboard = arrangementClipboard();
         clipboard.clear();
@@ -1110,6 +1136,9 @@ bool TimelineWidget::cutSelection() {
 }
 
 bool TimelineWidget::pasteClipboard() {
+    const auto& transfer = daw::projectTransferClipboard();
+    if (!transfer.empty() && (transfer.wholeTracks || transfer.region || transfer.sourceDocument != m_controller->documentIdentity()))
+        return pasteProjectTransfer(m_selectedTrackId, m_controller->positionSeconds());
     const auto clipboard = arrangementClipboard();
     if (clipboard.empty()) return false;
     std::string patternId;
@@ -1623,13 +1652,48 @@ void TimelineWidget::refreshToolCursor() {
 
 void TimelineWidget::setSelectedTracks(const QStringList& ids) {
     if (m_selectedTrackIds == ids) return;
+    QStringList changed;
+    const QSet<QString> before(m_selectedTrackIds.begin(), m_selectedTrackIds.end());
+    const QSet<QString> after(ids.begin(), ids.end());
+    for (const auto& id : before)
+        if (id != m_selectedTrackId && !after.contains(id)) changed.push_back(id);
+    for (const auto& id : after)
+        if (id != m_selectedTrackId && !before.contains(id)) changed.push_back(id);
     m_selectedTrackIds = ids;
-    update();
+    invalidateTrackSelection(changed);
 }
 
 void TimelineWidget::setSelectedTrack(const QString& id) {
+    if (m_selectedTrackId == id) return;
+    QStringList changed;
+    if (!m_selectedTrackIds.contains(m_selectedTrackId)) changed.push_back(m_selectedTrackId);
+    if (!m_selectedTrackIds.contains(id)) changed.push_back(id);
     m_selectedTrackId = id;
-    update();
+    invalidateTrackSelection(changed);
+}
+
+void TimelineWidget::invalidateTrackSelection(const QStringList& ids) {
+    if (ids.isEmpty()) return;
+    visibleRows();
+    QRegion rows;
+    for (const auto& id : ids) {
+        const auto lane = m_laneById.find(id.toStdString());
+        if (lane == m_laneById.end()) continue;
+        const int index = lane->second;
+        // The antialiased top border also covers the preceding device row,
+        // which may belong to the previous retained tile.
+        rows += QRect(0, m_laneOffsets[index] - 1, width(),
+                      m_laneOffsets[index + 1] - m_laneOffsets[index] + 2);
+    }
+    if (rows.isEmpty()) return;
+    // Selection changes only the lane wash. Retire those rows at every cached
+    // time position without rebuilding unrelated waveforms or lane geometry.
+    m_gpuLaneTiles.invalidate([&](quint64 key) {
+        return rows.intersects(QRect(0, int(quint32(key)) * 256, width(), 256));
+    });
+    const QRegion visible = rows.translated(0, tracksTop() - m_scrollY)
+        .intersected(QRect(0, tracksTop(), width(), visibleLaneHeight()));
+    if (!visible.isEmpty()) update(visible);
 }
 
 void TimelineWidget::setPendingCloudRecordingSpans(
@@ -1683,7 +1747,8 @@ void TimelineWidget::setShowBars(bool showBars) {
 int TimelineWidget::rulerHeight() const { return ui::kRulerHeight; }
 
 int TimelineWidget::tracksTop() const {
-    return rulerHeight() + int(arrangementRows().size()) * ui::kArrangementRowHeight;
+    return rulerHeight() + (int(ui::rulerShowsTime(m_rulerFormat)) +
+        int(m_showChords) + int(m_showSections)) * ui::kArrangementRowHeight;
 }
 
 void TimelineWidget::setRulerFormat(ui::RulerFormat format) {
@@ -2068,6 +2133,7 @@ void TimelineWidget::setNavigationControls(QWidget* controls) {
     if (!controls || controls == m_navigationControls) return;
     delete m_navigationControls;
     m_navigationControls = controls;
+    static_cast<TimelineNavigationRail*>(m_verticalScrollBar)->setLeadingConnected(true);
     controls->setParent(this);
     controls->show();
     layoutNavigationControls();
@@ -3055,17 +3121,33 @@ void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
         return std::abs(time / step - std::round(time / step)) < 1e-7;
     };
     const qreal dpr = p.device()->devicePixelRatioF();
+    // A raster painter strokes every vertical line scanline by scanline.
+    // At high DPR that dominated scrolling even with only a few dozen lines.
+    // Rasterize their horizontal coverage once, then repeat that single row;
+    // vector/scene painters keep their native line primitives.
+    const bool rasterGrid = p.paintEngine()->type() == QPaintEngine::Raster;
+    QImage gridStrip;
+    QPainter stripPainter;
+    if (rasterGrid) {
+        gridStrip = QImage(int(std::ceil(width() * dpr)), 1, QImage::Format_ARGB32_Premultiplied);
+        gridStrip.setDevicePixelRatio(dpr);
+        gridStrip.fill(Qt::transparent);
+        stripPainter.begin(&gridStrip);
+        stripPainter.setRenderHint(QPainter::Antialiasing, true);
+    }
+    QPainter& gridPainter = rasterGrid ? stripPainter : p;
     const auto drawLine = [&](double time) {
         // Centre hairlines on a physical pixel, so subpixel widths stay fine
         // instead of spreading across two pixels on a 100% display.
         const qreal x = (std::floor(secondsToX(time) * dpr) + 0.5) / dpr;
-        p.drawLine(QPointF(x, std::max(double(tracksTop()), dirty.top())),
-                   QPointF(x, dirty.bottom()));
+        if (rasterGrid) gridPainter.drawLine(QPointF(x, 0), QPointF(x, 1.0 / dpr));
+        else gridPainter.drawLine(QPointF(x, std::max(double(tracksTop()), dirty.top())),
+                                  QPointF(x, dirty.bottom()));
     };
     if (!overview && grid > 0.0) {
         const double stepSeconds = grid * secondsPerBeat;
         if (stepSeconds * m_pixelsPerSecond >= kMinGridSpacingPx) {
-            p.setPen(QPen(gridColor(mixColors(t.gridLine, t.background, 0.45)), lineWidth));
+            gridPainter.setPen(QPen(gridColor(mixColors(t.gridLine, t.background, 0.45)), lineWidth));
             long first = long(std::floor(leftSec / stepSeconds));
             if (first < 0) first = 0;
             for (long i = first;; ++i) {
@@ -3083,7 +3165,7 @@ void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
     // Fine beat lines disappear with subdivisions in the overview. Enumerate
     // bars separately: a 7/8 bar boundary is not an integer quarter-note beat.
     if (showBeats) {
-        p.setPen(QPen(gridColor(t.gridLine), lineWidth));
+        gridPainter.setPen(QPen(gridColor(t.gridLine), lineWidth));
         const long firstBeat = std::max(0L, long(std::floor(leftSec / secondsPerBeat)));
         for (long beat = firstBeat; beat * secondsPerBeat <= rightSec; ++beat) {
             const double time = beat * secondsPerBeat;
@@ -3091,9 +3173,20 @@ void TimelineWidget::drawGrid(QPainter& p, const QColor& laneBase,
         }
     }
     const long firstBarGroup = std::max(0L, long(std::floor(leftSec / barStep)));
-    p.setPen(QPen(gridColor(t.gridLineStrong), lineWidth));
+    gridPainter.setPen(QPen(gridColor(t.gridLineStrong), lineWidth));
     for (long group = firstBarGroup; group * barStep <= rightSec; ++group) {
         drawLine(group * barStep);
+    }
+    if (rasterGrid) {
+        stripPainter.end();
+        const double top = std::max(double(tracksTop()), dirty.top()) - lineWidth * .5;
+        const double bottom = dirty.bottom() + lineWidth * .5;
+        // A tiled brush uses Qt's span compositor. Stretching the one-pixel
+        // image would instead pay for a texture transform at every pixel.
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.setBrushOrigin(0, 0);
+        p.fillRect(QRectF(0, top, width(), bottom - top), QBrush(gridStrip));
     }
     p.restore();
 }
@@ -3779,6 +3872,7 @@ void TimelineWidget::showAutomationMenu(const PointHit& hit, const QPoint& globa
 }
 
 void TimelineWidget::populateAutomationMenu(QMenu& menu, const PointHit& hit) {
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","automation"},{"target",{{"track",hit.trackId.toStdString()},{"clip",hit.clipId.toStdString()},{"pointIndex",hit.index}}}});
     const daw::ClipModel* clip = findClipModel(hit.trackId, hit.clipId);
     if (!clip) return;
     const std::vector<daw::AutomationPoint> before = clip->automation.points;
@@ -3906,9 +4000,12 @@ double TimelineWidget::snapBeats(double beats, bool enabled) const {
 void TimelineWidget::selectAutomationClip(const QString& trackId,
                                           const QString& clipId) {
     if (m_selection.size() == 1 && m_selection.front().clipId == clipId) return;
+    QStringList changedTracks{trackId};
+    for (const auto& selected : m_selection) changedTracks.push_back(selected.trackId);
     m_selection = {ClipRef{trackId, clipId}};
     m_selectedClipId = clipId;
-    m_selectedTrackId = trackId;
+    setSelectedTrack(trackId);
+    invalidateTrackSelection(changedTracks);
     publishSelection();
     emit clipSelected(trackId, clipId);
 }
@@ -4007,6 +4104,19 @@ double TimelineWidget::automationBeatsAtX(const daw::ClipModel& clip, int x) con
                                m_controller->project().tempo);
 }
 
+void TimelineWidget::appendAutomationCurvePoint(QPolygonF& line, const QPointF& point) {
+    if (line.size() >= 2) {
+        const auto& from = line[line.size() - 2];
+        const auto& last = line.back();
+        // Remove only numerically collinear samples. Curves, extrema and the
+        // one-pixel edges of Hold segments retain their original geometry.
+        const double cross = (last.x() - from.x()) * (point.y() - last.y()) -
+                             (last.y() - from.y()) * (point.x() - last.x());
+        if (std::abs(cross) <= 1e-9) { line.back() = point; return; }
+    }
+    line.append(point);
+}
+
 void TimelineWidget::drawAutomationClips(QPainter& p,
                                          const daw::TrackModel& track,
                                          int laneY, int bodyH) {
@@ -4071,9 +4181,8 @@ void TimelineWidget::drawAutomationClips(QPainter& p,
         for (int x = from; x <= to; ++x) {
             const double beats =
                 std::clamp(automationBeatsAtX(clip, x), clip.contentOffsetBeats, clip.contentOffsetBeats + lengthBeats);
-            line << QPointF(x, automationValueToY(
-                                   body, daw::automationValueAt(points, beats,
-                                                                fallback)));
+            appendAutomationCurvePoint(line, QPointF(x, automationValueToY(
+                body, daw::automationValueAt(points, beats, fallback))));
         }
         if (line.size() >= 2) {
             under = line;
@@ -6025,7 +6134,7 @@ void TimelineWidget::updateCursor(const QPoint& pos) {
             setCursor(arrangementToolCursor(icons::Glyph::Eraser));
             return;
         case Tool::Mute:
-            setCursor(arrangementToolCursor(icons::Glyph::Close));
+            setCursor(arrangementToolCursor(icons::Glyph::Mute));
             return;
         case Tool::Draw:
             setCursor(arrangementToolCursor(icons::Glyph::Brush));
@@ -6737,7 +6846,9 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
         }
 
         std::string resultId;
-        const auto execute = [this](const daw::RenderSessionSpec& session,
+        auto* const originController = m_controller;
+        const auto originGeneration = originController->projectGeneration();
+        const auto execute = [this, originController, originGeneration](const daw::RenderSessionSpec& session,
                                     daw::rendering::Report& report) -> audio::Result {
             struct PreparedGlue {
                 audio::Result result = audio::Result::ok();
@@ -6749,7 +6860,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
                         QFile::remove(QString::fromStdString(path));
                 }
             };
-            const double rate = m_controller->sampleRate();
+            const double rate = originController->sampleRate();
             try {
                 auto prepared = ui::prepareInBackground<std::shared_ptr<PreparedGlue>>(
                     this, tr("Gluing clips…"), [session, rate](const auto& keepGoing) {
@@ -6766,8 +6877,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
                 auto& value = **prepared;
                 if (!value.result) return value.result;
                 if (!value.report.cancelled && value.report.files.size() == 1) {
-                    if (m_controller->sampleRate() != rate ||
-                        !m_controller->adoptPreparedAudio(std::move(value.audio)))
+                    if (originController->projectGeneration() != originGeneration || originController->sampleRate() != rate ||
+                        !originController->adoptPreparedAudio(std::move(value.audio)))
                         return audio::Result::fail(audio::EngineError::InvalidArgument,
                             "the audio device changed while gluing clips");
                 }
@@ -6778,7 +6889,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
                 return audio::Result::fail(audio::EngineError::Unknown, error.what());
             }
         };
-        const audio::Result result = m_controller->glueClips(addresses, resultId, execute);
+        const audio::Result result = originController->glueClips(addresses, resultId, execute);
         if (!result) {
             emit operationStatus(
                 tr("Could not glue clips: %1")
@@ -6786,6 +6897,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent* ev) {
             return;
         }
         if (resultId.empty()) return; // cancelled; preserve selection and document
+        if (m_controller != originController) {
+            emit backgroundProjectEdited(QString::fromStdString(originController->documentIdentity()));
+            return;
+        }
         const QString glued = QString::fromStdString(resultId);
         m_selection = {ClipRef{hit.trackId, glued}};
         m_selectedClipId = glued;
@@ -7490,6 +7605,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
     // placements, including Pattern members and lane crossings.
     QWidget* dropTarget = QApplication::widgetAt(ev->globalPosition().toPoint());
     while (dropTarget && !dropTarget->property("clipLibraryDropTarget").toBool() &&
+           !dropTarget->property("projectTabDropTarget").toBool() &&
            !dropTarget->property("vocalAlignmentDropTarget").toBool())
         dropTarget = dropTarget->parentWidget();
     if (dropTarget && m_projectGestureLabel != tr("Duplicate Clips") &&
@@ -7511,7 +7627,10 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         m_dragOrigins.clear(); m_dragOriginalStarts.clear(); m_duplicateDragPending = false;
         unsetCursor(); update();
         auto* drag = new QDrag(this);
+        const bool projectTransfer = dropTarget->property("projectTabDropTarget").toBool();
+        if (projectTransfer && !copySelection()) { delete drag; return; }
         auto* mime = ui::cliplibrary::timelineMime(track, clip);
+        if (projectTransfer) mime->setData("application/x-vlt-project-transfer", QByteArray("1"));
         ui::cliplibrary::addTimelineGroup(mime, dragged, m_controller, m_controller->projectGeneration());
         drag->setMimeData(mime);
         if (const auto* model = findClipModel(track,clip)) {
@@ -7520,6 +7639,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* ev) {
         }
         drag->setHotSpot(QPoint(16,16));
         emit clipSelected(track,clip);
+        const ui::rack::DragScope dragScope;
         drag->exec(Qt::CopyAction,Qt::CopyAction);
         drag->deleteLater();
         update(); return;
@@ -8017,10 +8137,11 @@ bool TimelineWidget::showClipTrackPicker() {
     auto* picker = new ClipTrackPicker(m_controller->project(), targets, this);
     const auto selection = m_selection;
     const auto generation = m_controller->projectGeneration();
-    connect(picker, &ClipTrackPicker::trackSelected, this, [this, selection, generation](const QString& track) {
+    const auto document = m_controller->documentIdentity();
+    connect(picker, &ClipTrackPicker::trackSelected, this, [this, selection, generation, document](const QString& track) {
         // A popup may outlive a remote edit or a project switch. Commit only
         // the selection it was opened for, and recheck every destination rule.
-        if (generation != m_controller->projectGeneration() || selection.size() != m_selection.size() ||
+        if (document != m_controller->documentIdentity() || generation != m_controller->projectGeneration() || selection.size() != m_selection.size() ||
             !std::equal(selection.begin(), selection.end(), m_selection.begin(), [](const auto& a, const auto& b) {
                 return a.trackId == b.trackId && a.clipId == b.clipId;
             })) return;
@@ -8138,6 +8259,7 @@ void TimelineWidget::showClipInformation(const QString& trackId, const QString& 
 }
 
 void TimelineWidget::populateClipActionsMenu(QMenu& menu, const ClipHit& hit) {
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","clip"},{"target",{{"track",hit.trackId.toStdString()},{"clip",hit.clipId.toStdString()}}}});
     auto* information = menu.addAction(tr("Clip information…"));
     information->setObjectName(QStringLiteral("ClipInformationAction"));
     connect(information, &QAction::triggered, this, [this, hit] {
@@ -8519,6 +8641,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* ev) {
     // Empty lane area, or below the last lane. On a MIDI lane, offer to put a
     // clip there first; the rest of the menu creates tracks.
     QMenu menu(this);
+    ui::scripts::appendContextMenu(&menu,m_controller,{{"type","arrangement"},{"target",{{"beat",xToSeconds(ev->pos().x())*m_controller->tempo()/60.0}}}});
     QAction* addMidiClip = nullptr;
     QAction* addPatternClip = nullptr;
     QAction* bounceRegion = nullptr;
@@ -8614,6 +8737,9 @@ std::optional<daw::plugins::PluginDescriptor> TimelineWidget::pluginFromMime(
 }
 
 void TimelineWidget::dragEnterEvent(QDragEnterEvent* ev) {
+    if (ev->mimeData()->hasFormat("application/x-vlt-project-transfer")) {
+        ev->setDropAction(Qt::CopyAction); ev->accept(); return;
+    }
     clearFileDropPreview();
     if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
         if (!m_controller->libraryClip(id.toStdString())) return;
@@ -8875,6 +9001,11 @@ void TimelineWidget::drawFileDropPreview(QPainter& p) {
 }
 
 void TimelineWidget::dragMoveEvent(QDragMoveEvent* ev) {
+    if (ev->mimeData()->hasFormat("application/x-vlt-project-transfer")) {
+        m_dropPosition = ev->position().toPoint(); m_dropModifiers = ev->modifiers();
+        m_dropLane = laneAt(m_dropPosition.y()); m_dropActive = true;
+        ev->setDropAction(Qt::CopyAction); ev->accept(); update(); return;
+    }
     if (const auto id = ui::cliplibrary::libraryId(ev->mimeData()); !id.isEmpty()) {
         const auto* entry = m_controller->libraryClip(id.toStdString());
         if (!entry || entry->tracks.empty() || entry->tracks.front().clips.empty()) { ev->ignore(); return; }
@@ -8927,6 +9058,14 @@ void TimelineWidget::dragLeaveEvent(QDragLeaveEvent*) {
 }
 
 void TimelineWidget::dropEvent(QDropEvent* ev) {
+    if (ev->mimeData()->hasFormat("application/x-vlt-project-transfer")) {
+        m_dropActive = false;
+        const auto pos = ev->position().toPoint();
+        const double at = std::max(0., snap(xToSeconds(pos.x()), m_snapEnabled && !(ev->modifiers() & Qt::ControlModifier)));
+        if (pasteProjectTransfer(trackIdForLane(laneAt(pos.y())), at)) { ev->setDropAction(Qt::CopyAction); ev->accept(); }
+        else ev->ignore();
+        update(); return;
+    }
     clearFileDropPreview();
     m_dropActive = false;
     m_dropLibraryId.clear();

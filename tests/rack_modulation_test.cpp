@@ -160,6 +160,80 @@ static std::vector<float> lfo(unsigned blockSize, modulation::Source source, boo
 }
 int main() try {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    {
+        Temp temp; writeConstant(temp.path / "layers.wav", .2f);
+        EngineController c; check(bool(c.initialize(48000, 256, false)), "parallel rack runtime");
+        const auto track = c.addTrack(TrackKind::Audio, "Parallel");
+        check(!c.importAudio((temp.path / "layers.wav").string(), track, 0).empty(), "parallel input audio");
+        const auto descriptor = plugins::equalizer::EqualizerInstance::staticDescriptor();
+        const auto first = c.addInsert(track, descriptor), second = c.addInsert(track, descriptor);
+        c.setInsertParameter(track, first, "output.gain", -6.);
+        c.setInsertParameter(track, second, "output.gain", -6.);
+        c.pumpPreviewPluginEvents();
+        const auto level = [](const ap::DecodedAudio& audio) {
+            double sum = 0;
+            const auto count = std::min<std::size_t>(2048, audio.interleaved.size());
+            for (auto i = audio.interleaved.size() - count; i < audio.interleaved.size(); ++i) sum += std::abs(audio.interleaved[i]);
+            return sum / count;
+        };
+        const auto serial = level(render(c, temp.path / "serial", track, 64));
+        std::string group;
+        check(c.createRackGroup(track, {first, second}, "Layers", &group, true), "create two parallel branches");
+        const auto original = c.rackGroups(track);
+        const auto a = original.front().layers.front().id, b = original.front().layers.back().id;
+        const auto parallel = level(render(c, temp.path / "parallel", track, 511));
+        check(near(parallel / serial, 2. / std::pow(10., -6. / 20.), .002), "parallel processing splits input instead of chaining gains");
+        check(c.setRackLayerState(track, group, a, 1.f, false, true), "solo first branch");
+        const auto solo = render(c, temp.path / "solo", track, 64);
+        check(near(level(solo), parallel / 2, 1e-5), "Solo isolates one branch without changing its level");
+        c.undo(); check(!c.rackGroups(track).front().layers.front().solo, "Solo is undoable");
+        c.redo(); check(c.rackGroups(track).front().layers.front().solo, "Solo redo");
+        check(c.setRackLayerState(track, group, a, .5f, false, true), "live layer level");
+        check(near(level(render(c, temp.path / "half", track, 64)), level(solo) * .5, 1e-5), "layer fader changes audio");
+        audio::AudioBuffer input(2, 256), output(2, 256);
+        c.seekSeconds(0); c.play();
+        for (int i = 0; i < 40; ++i) c.processDeviceBlockForTest(input, output, 256);
+        check(near(std::abs(output.getChannel(0)[255]), level(solo) * .5, 1e-5), "live playback matches the offline parallel mix");
+        c.stop();
+        std::string wrapper;
+        check(c.createRackGroup(track, {first, second}, "Nested", &wrapper), "wrap parallel rack in a serial group");
+        check(near(level(render(c, temp.path / "nested", track, 64)), level(solo) * .5, 1e-5), "nesting preserves parallel sound");
+        const auto beforeDryExport = c.rackGroups(track);
+        rendering::Spec dry; dry.outputDir = (temp.path / "dry").string(); dry.sourceTrackIds = {track};
+        dry.range = rendering::Range::Custom; dry.customStartSeconds = 0; dry.customEndSeconds = .5;
+        dry.tailMaxSeconds = 0; dry.bypassTrackInserts = true; dry.file.encoding = ap::Encoding::Float32;
+        rendering::Report dryReport; ap::DecodedAudio dryAudio;
+        check(bool(c.renderProject(dry, {}, dryReport)) && dryReport.files.size() == 1 && bool(ap::decodeAudioFile(dryReport.files.front(), dryAudio)), "export with the rack bypassed");
+        check(near(level(dryAudio), .2, 1e-5) && c.rackGroups(track) == beforeDryExport, "dry export has one signal path and preserves live groups");
+        const auto saved = (temp.path / "layers.vlt").string();
+        check(bool(c.saveProject(saved)), "save nested parallel rack");
+        EngineController reopened; check(bool(reopened.initialize(48000, 256, false)) && bool(reopened.openProject(saved)), "reopen parallel rack");
+        check(reopened.rackGroups(track) == c.rackGroups(track) &&
+              near(level(render(reopened, temp.path / "reopened-layers", track, 511)), level(solo) * .5, 1e-5), "reload preserves nested routing and mix");
+        EngineController::ChannelSnapshot snapshot;
+        check(bool(c.captureRackSelection(track, {first, second}, snapshot)), "copy nested layers");
+        const auto destination = c.addTrack(TrackKind::Audio, "Copy");
+        check(bool(c.pasteRackSelection(destination, snapshot, 0)), "paste nested layers");
+        const auto copies = c.rackGroups(destination);
+        check(copies.size() == 2 && copies.front().id != c.rackGroups(track).front().id, "copied containers have independent identities");
+        for (const auto& g : copies) if (!g.layers.empty())
+            check(g.layers.front().id != a && !g.parentId.empty(), "copied layer IDs and nesting remap together");
+        check(c.addRackLayer(track, group), "add empty dry branch");
+        auto groups = c.rackGroups(track); std::string empty;
+        for (const auto& g : groups) if (g.id == group) empty = g.layers.back().id;
+        check(!empty.empty() && bool(c.transferRackSelection(track, {first, second}, track, 0, false, empty)), "move all effects between branches without deleting the container");
+        groups = c.rackGroups(track);
+        check(groups.size() == 2, "moving all members retains enclosing groups");
+        c.undo(); check(c.rackGroups(track).size() == 2, "Undo restores layer membership");
+        c.seekSeconds(0); c.play();
+        for (int i = 0; i < 40; ++i) c.processDeviceBlockForTest(input, output, 256);
+        check(near(std::abs(output.getChannel(0)[255]), level(solo) * .5, 1e-5), "Undo publishes restored branch routing to live playback");
+        c.stop();
+        check(c.removeRackLayer(track, group, b), "delete layer with its effects");
+        check(c.insertModel(track, second) == nullptr, "layer deletion removes owned effects");
+        c.undo(); check(c.insertModel(track, second) != nullptr, "Undo restores a deleted layer and its devices");
+    }
+
     modulation::Source source; source.id = newUuid(); source.smoothMs = 0;
     {
         using K = modulation::Kind;

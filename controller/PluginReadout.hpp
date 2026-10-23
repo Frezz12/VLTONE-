@@ -82,6 +82,7 @@ struct EqualizerSnapshot {
     plugins::equalizer::Telemetry telemetry;
     char comparison = 'A';
     std::pair<std::string, std::string> preset;
+    int auditionBand = -1;
 };
 
 #if DAW_ENABLE_REVERB

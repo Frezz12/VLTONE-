@@ -1,6 +1,8 @@
 #include "EngineController.hpp"
 
 #include <cmath>
+#include <nlohmann/json.hpp>
+#include "platform/PathUtils.hpp"
 
 namespace daw {
 
@@ -42,6 +44,19 @@ EffectMeterSnapshot EngineController::effectMeterSnapshot(
 
 SamplerSnapshot EngineController::samplerSnapshot(
     const std::string& channelId, const std::string& insertId) const {
+    if (m_documentOnly) {
+        SamplerSnapshot snapshot;
+        const auto* model = insertModel(channelId, insertId);
+        if (!model || model->uid != "daw.sampler") return snapshot;
+        snapshot.available = true;
+        if (const auto* state = cachedPluginState(insertId, *model)) {
+            const auto json = nlohmann::json::parse(state->bytes.begin(), state->bytes.end(), nullptr, false);
+            if (json.is_object() && json.value("sample", nlohmann::json{}).is_string())
+                snapshot.path = json["sample"].get<std::string>();
+        }
+        snapshot.name = platform::pathToUtf8(platform::pathFromUtf8(snapshot.path).filename());
+        return snapshot;
+    }
     return m_runtime->samplerSnapshot(pluginAddress(channelId, insertId));
 }
 

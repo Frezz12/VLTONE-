@@ -1,0 +1,54 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Custom window design — VLTONE Lua SDK</title>
+<style>:root{color-scheme:light dark}body{font:16px/1.65 system-ui;max-width:960px;margin:40px auto;padding:0 24px;background:Canvas;color:CanvasText}pre{padding:20px;border:1px solid #8886;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}td,th{padding:10px;border-bottom:1px solid #8886;text-align:left;vertical-align:top}a{color:LinkText}a:focus-visible{outline:3px solid Highlight;outline-offset:3px}code{font-size:.92em}</style>
+<nav><a href="USER_EN.html">User guide</a> · <a href="UI_EN.html">Windows and widgets</a> · <a href="API.html">API</a></nav>
+<h1>Give your tool its own design</h1>
+<p>Each window can have its own palette. Style containers, labels, fields and buttons with colors, typography, rounded corners, borders, spacing and interaction states. These changes stay inside that window. Native keyboard navigation, focus and display scaling continue to work.</p>
+<h2>Start with a runnable example</h2>
+<p>Open <a href="examples/styled-workbench/main.lua">examples/styled-workbench/main.lua</a> in Creator and choose Preview. To install the complete example, package its folder using the CLI described in the <a href="SDK_EN.html">SDK guide</a>; the manifest is next to the source. It needs no permissions and does not edit the project. Switch palettes, edit the preset name, and drag the drawing or use arrow keys. Palette changes preserve your input.</p>
+<h2>A palette, a card and a primary button</h2>
+<pre>vlt.ui.window{
+  id="tool", title="My tool", width=520, height=340,
+  theme={background="#151d26", surface="#223140", field="#101820",
+         text="#f0f6fc", muted="#a7b9c9", accent="#78e3bc",
+         onAccent="#102820", border="#3b5063"},
+  style={padding=24, fontSize=14},
+  styles={
+    card={background="$surface", radius=12, padding=18},
+    title={fontSize=24, fontWeight=700},
+    action={background="$accent", color="$onAccent", radius=8,
+            borderWidth=0, padding=10,
+            pressed={background="$surface",color="$text"}}
+  },
+  children={
+    {type="label", text="My new tool", style="title"},
+    {type="column", style="card", spacing=12, children={
+      {type="field", id="name", value="My preset"},
+      {type="button", text="Apply", style="action", onClick=function()
+        vlt.ui.set{id="result", text=vlt.ui.get{id="name"}.value}
+      end}
+    }},
+    {type="label", id="result", text="Ready", style={color="$muted"}}
+  }
+}</pre>
+<h2>Style rules</h2>
+<p>The window's optional <code>theme</code> colors are background, surface, field, text, muted, accent, onAccent and border. Omitted colors follow VLTONE. Theme colors must be opaque. Styles accept Qt colors: <code>#RRGGBB</code>, <code>#AARRGGBB</code>, color names and <code>transparent</code>. Reference the window palette with <code>$background</code>, <code>$surface</code>, <code>$field</code>, <code>$text</code>, <code>$muted</code>, <code>$accent</code>, <code>$onAccent</code> or <code>$border</code>.</p>
+<p><code>styles</code> defines up to 64 named styles. A widget accepts <code>style="card"</code>, <code>style={radius=10}</code>, or <code>style={use="card",padding=24}</code>. Local properties replace the named style's matching properties; each nested state is replaced as a whole. Named definitions cannot reference one another.</p>
+<p>When accent changes without an explicit onAccent, its text color is chosen for contrast.</p>
+<table><tr><th>Style property</th><th>Value</th></tr>
+<tr><td>background, color, accent, borderColor</td><td>Background, text, control accent and border color. Literal color or palette token.</td></tr>
+<tr><td>borderWidth</td><td>Integer 0…12; zero removes the border.</td></tr>
+<tr><td>radius</td><td>Integer 0…96; corner radius.</td></tr>
+<tr><td>padding</td><td>Integer 0…96; inner spacing. Containers use this as their layout inset.</td></tr>
+<tr><td>fontSize, fontWeight, fontFamily</td><td>Size 10…96; weight 100…900 in steps of 100; installed font name. The OS substitutes unavailable fonts.</td></tr>
+<tr><td>hover, pressed, checked, disabled, focus</td><td>Objects containing background, color and borderColor. Keyboard focus also retains the native accessibility outline.</td></tr></table>
+<p>All sizes use logical pixels and scale with the display. Text color and fonts inherit into children. Backgrounds, borders and padding affect the styled widget itself. Native knobs retain their geometry; use canvas with pointer/key handlers for a fully custom dial. Use image for packaged pictures.</p>
+<h2>Update design without rebuilding controls</h2>
+<pre>vlt.ui.set{id="name", style={color="$accent",fontWeight=600}}
+vlt.ui.set{id="name", style={}} -- Reset local overrides
+vlt.ui.set{id="tool", theme={accent="#d795ff"}} -- Other colors follow VLTONE
+vlt.ui.set{id="tool", theme={}} -- Follow the complete application theme</pre>
+<p><code>ui.set</code> replaces the entire style/theme object rather than merging with previous overrides. Invalid arguments leave existing controls unchanged. <code>ui.get{id}.style</code> returns resolved local properties, excluding inherited values. <code>ui.replace</code> keeps the theme, definitions and root style unless replacements are supplied, but replaces all child controls. Prefer ui.set for value or appearance changes so input and focus survive.</p>
+<h2>Build clear layouts</h2>
+<p>Use column/row for flow, grid for equal cells, scroll for long content and tabs for separate tasks. stretch distributes space in a row, column or window root. spacing separates children; margin sets a container's inset. Labels support wrap and align: left/center/right. ui.set width/height set fixed widget dimensions, just like tree definitions; the window itself remains resizable.</p>
+<p>Choose one primary accent, keep text readable and label ambiguous controls. Test Tab navigation, long translated captions and 100/150/200% scaling. Do not communicate errors through color alone. Prefer palette tokens when adapting to VLTONE's light and dark themes.</p>
+<p>Raw CSS/QSS, selectors and URLs are rejected. Styling cannot modify DAW chrome or open files. This API styles VLTONE extension windows, not other applications.</p></html>

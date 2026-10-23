@@ -7,6 +7,7 @@
 #include <span>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace daw::engine {
 class PcmReadScope;
@@ -20,12 +21,12 @@ public:
     static PcmReadCache* existing() noexcept { return s_instance.load(std::memory_order_acquire); }
     explicit PcmReadCache(std::size_t budgetBytes = 256u * 1024u * 1024u);
     ~PcmReadCache();
-    std::uint64_t addSource(const float* data, std::size_t samples);
+    std::uint64_t addSource(std::shared_ptr<const float> data, std::size_t samples);
     void removeSource(std::uint64_t id);
     void hint(std::uint64_t source, std::size_t first) noexcept;
     void warm(std::uint64_t id, std::size_t first, std::size_t count);
     void invalidateRequests() noexcept { m_epoch.fetch_add(1, std::memory_order_acq_rel); }
-    struct Counters { std::uint64_t misses, droppedRequests, staleRequests; std::size_t capacityBytes, lockedBytes; };
+    struct Counters { std::uint64_t misses, droppedRequests, staleRequests; std::size_t capacityBytes, lockedBytes, allocatedBytes; };
     Counters counters() const noexcept;
 private:
     friend class PcmReadScope;
@@ -34,9 +35,13 @@ private:
         std::atomic<int> readers{0}; // High bit: writer; low bits: transient or pinned readers
         std::atomic<std::uint64_t> source{0}, page{0}, used{0};
         std::atomic<std::uint64_t> prefetched{0};
+        // Committed/touched only by fill(), before publishing this slot.
+        bool allocated = false;
+        bool locked = false;
     };
     struct Request { std::uint64_t source, page, epoch; };
-    struct Source { const float* data; std::size_t samples; };
+    struct Source { std::shared_ptr<const float> data; std::size_t samples = 0; };
+    Source findSource(std::uint64_t id);
     std::size_t firstSlot(std::uint64_t source, std::uint64_t page) const noexcept;
     std::size_t pin(std::uint64_t source, std::uint64_t page) noexcept;
     bool request(std::uint64_t source, std::uint64_t page) noexcept;
@@ -44,13 +49,19 @@ private:
     void finishRequest(const Request& request) noexcept;
     std::array<std::atomic<std::uint64_t>, 4096> m_pendingRequests{};
     void fill(std::uint64_t id, std::uint64_t page, const Source& source);
+    void releasePage(Slot& slot) noexcept;
+    bool releaseSourcePages(std::uint64_t id) noexcept;
     void worker();
-    bool m_locked = false;
     std::size_t m_count;
     std::unique_ptr<Slot[]> m_slots;
-    std::unique_ptr<float[]> m_pcm;
+    float* m_pcm = nullptr; // virtual reservation; only populated pages are resident
+    std::atomic<std::size_t> m_allocatedBytes{0}, m_lockedBytes{0};
     LockFreeMPSCQueue<Request, 16384> m_requests;
     std::mutex m_sourcesMutex;
+    // Disk readers and explicit warm-up serialize separately from metadata.
+    std::mutex m_fillMutex;
+    std::vector<std::uint64_t> m_retiredSources; // protected by m_fillMutex
+    std::atomic<bool> m_retirementsPending{false};
     std::unordered_map<std::uint64_t, Source> m_sources;
     std::uint64_t m_nextSource = 1;
     std::atomic<std::uint64_t> m_epoch{1}, m_clock{1}, m_misses{0}, m_dropped{0}, m_stale{0};

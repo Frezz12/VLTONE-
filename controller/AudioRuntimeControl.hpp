@@ -49,6 +49,7 @@ struct AudioDeviceSnapshot {
     std::uint64_t callbacks = 0, renderCalls = 0, lastCallbackNs = 0;
     int lastRenderStatus = 0;
     std::array<std::uint64_t, 4> xruns{};
+    double inputLatencySeconds = 0, outputLatencySeconds = 0;
 };
 
 /// An owned diagnostics batch. Draining remains bounded and off the callback.

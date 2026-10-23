@@ -2309,6 +2309,7 @@ void routingPluginAssetReducerAndWire() {
     edit.loopStart = 0.1;
     edit.loopEnd = 0.9;
     edit.reverse = true;
+    edit.trimThresholdDb = -40;
     check(apply("clip-asset", SetClipAsset{sourceId, clipId, clipAsset})
                   .changed() &&
               apply("clip-sample-edit",
@@ -2318,6 +2319,18 @@ void routingPluginAssetReducerAndWire() {
                   clipAsset &&
               state.project.findTrack(sourceId)->clips.front().sampleEdit.reverse,
           "clip asset identity and final sample gesture are durable commands");
+    auto trimWire = projectCommandToJson(command("trim-codec", SetClipSampleEdit{sourceId, clipId, edit}));
+    const auto trimDecoded = projectCommandFromJson(trimWire);
+    check(trimDecoded && std::get<SetClipSampleEdit>(trimDecoded->body).sampleEdit.trimThresholdDb == -40,
+          "silence Trim threshold survives the collaboration command codec");
+    trimWire["payload"]["sampleEdit"].erase("trimThresholdDb");
+    const auto legacyTrim = projectCommandFromJson(trimWire);
+    check(legacyTrim && std::get<SetClipSampleEdit>(legacyTrim->body).sampleEdit.trimThresholdDb == -96,
+          "legacy sample-edit commands default silence Trim to Off");
+    edit.trimThresholdDb = -70;
+    check(apply("trim-only-edit", SetClipSampleEdit{sourceId, clipId, edit}).changed() &&
+              state.project.findTrack(sourceId)->clips.front().sampleEdit.trimThresholdDb == -70,
+          "changing only the Trim threshold is a durable shared edit");
 
     const PluginLocation clipChain{PluginChain::Clip, sourceId, clipId};
     InsertModel clipEqualizer =

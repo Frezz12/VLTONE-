@@ -257,7 +257,7 @@ TrackOverviewPanel::TrackOverviewPanel(daw::EngineController* controller, QWidge
     setAccessibleName(tr("Tracks"));
     setAttribute(Qt::WA_StyledBackground);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 1, 0); layout->setSpacing(0);
+    layout->setContentsMargins(2, 0, 2, 0); layout->setSpacing(0);
     auto* header = new QWidget(this);
     header->setObjectName("TrackOverviewHeader"); header->setFixedHeight(ui::kRulerHeight);
     auto* top = new QHBoxLayout(header);
@@ -420,10 +420,16 @@ void TrackOverviewPanel::applyTheme() {
 QStringList TrackOverviewPanel::selectedTrackIds() const {
     QStringList result;
     // Document order is stable even if Ctrl-clicks arrived in another order.
-    for (const auto& track : m_controller->project().tracks) {
-        const QString id = QString::fromStdString(track.id);
-        if (const auto* item = m_items.value(id); item && item->isSelected()) result.push_back(id);
+    // Read Qt's selection ranges instead of converting every track ID on
+    // every current-item/selection signal in a large project.
+    const auto& project = m_controller->project();
+    for (const auto& index : m_tree->selectionModel()->selectedRows(0)) {
+        const auto id = index.data(IdRole).toString();
+        if (project.findTrack(id.toStdString())) result.push_back(id);
     }
+    std::sort(result.begin(), result.end(), [&](const auto& a, const auto& b) {
+        return project.indexOf(a.toStdString()) < project.indexOf(b.toStdString());
+    });
     return result;
 }
 
@@ -495,7 +501,7 @@ void TrackOverviewPanel::refresh() {
         item->setCheckState(1, track.muted ? Qt::Checked : Qt::Unchecked);
         item->setCheckState(2, track.soloed ? Qt::Checked : Qt::Unchecked);
         item->setCheckState(3, locked ? Qt::Checked : Qt::Unchecked);
-        const bool mixable = daw::carriesAudio(track) || folder;
+        const bool mixable = !locked && (daw::carriesAudio(track) || folder);
         item->setData(1, AvailableRole, mixable); item->setData(2, AvailableRole, mixable);
         const bool lockable = track.kind != daw::TrackKind::Master && !m_controller->hasCloudProjectBinding() &&
             !m_controller->isRecording() && !m_controller->offlineRenderInProgress() && !m_controller->isTrackEditLocked(track.parentId);
@@ -507,7 +513,7 @@ void TrackOverviewPanel::refresh() {
         item->setToolTip(2, tr("Solo — applies to selected tracks"));
         item->setToolTip(3, m_controller->hasCloudProjectBinding() ? tr("Editing locks are available in local projects") :
             m_controller->isTrackEditLocked(track.parentId) ? tr("Unlock the parent folder first") :
-            tr("Protect clips and track order. Mute and Solo remain available."));
+            tr("Lock track editing, including volume, pan, plugins, Mute and Solo."));
         for (int column = 1; column < 4; ++column)
             item->setData(column, Qt::AccessibleTextRole,
                 (column == 1 ? tr("Mute") : column == 2 ? tr("Solo") : tr("Editing lock")) + ": " + item->text(0));
@@ -540,10 +546,9 @@ void TrackOverviewPanel::filterTracks() {
 }
 
 void TrackOverviewPanel::updateSummary() {
+    const int selected = m_tree->selectionModel()->selectedRows(0).size();
     int visible = 0;
-    for (auto* item : m_items) if (!item->isHidden()) ++visible;
-    const auto ids = selectedTrackIds();
-    const int selected = ids.size();
+    if (!selected) for (auto* item : m_items) if (!item->isHidden()) ++visible;
     const QString summary = selected ? tr("Selected: %1").arg(selected)
         : visible == 0 ? (m_items.isEmpty() ? tr("Add tracks to get started") : tr("No matching tracks"))
         : tr("%1 tracks").arg(visible);

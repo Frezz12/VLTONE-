@@ -27,7 +27,7 @@ json toJson(const PluginDescriptor& descriptor) {
         {"fileSize", descriptor.fileSize},
         {"fileModifiedTime", descriptor.fileModifiedTime},
         {"stateSchemaVersion", descriptor.stateSchemaVersion},
-        {"parameterSchema", descriptor.parameterSchema},
+        {"parameterSchema", descriptor.parameterSchemaText()},
     };
 }
 
@@ -58,7 +58,7 @@ PluginDescriptor fromJson(const json& value) {
     descriptor.fileSize = value.value("fileSize", std::uint64_t(0));
     descriptor.fileModifiedTime = value.value("fileModifiedTime", std::int64_t(0));
     descriptor.stateSchemaVersion = value.value("stateSchemaVersion", 0);
-    descriptor.parameterSchema = value.value("parameterSchema", std::string{});
+    descriptor.setParameterSchema(value.value("parameterSchema", std::string{}));
     return descriptor;
 }
 

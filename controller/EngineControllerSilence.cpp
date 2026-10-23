@@ -24,7 +24,7 @@ bool unchangedRegion(const std::vector<SilenceRegion>& regions, double duration)
 audio::Result EngineController::prepareStripSilence(const std::vector<ClipAddress>& clips,
     std::vector<StripSilenceSource>& sources) try {
     sources.clear();
-    if (!sharedEditingAllowed()) return silenceFailure("This session is read-only.");
+    // Capturing audio is read-only. Applying the result checks edit permission.
     if (isRecording()) return silenceFailure("Stop recording before processing audio clips.");
     if (clips.empty()) return silenceFailure("Select one or more audio clips.");
     flushDeferredClipSync();
@@ -56,7 +56,7 @@ audio::Result EngineController::prepareStripSilence(const std::vector<ClipAddres
         audible.muted = false;
         // Analyze the stored comp, independent of a temporary take audition.
         const auto solo = std::exchange(m_soloClipId, {});
-        try { emitClipPlacements(audible, source.placements); }
+        try { emitClipPlacements(audible, source.placements, false); }
         catch (...) { m_soloClipId = solo; throw; }
         m_soloClipId = solo;
         if (source.placements.empty()) return silenceFailure("The clip has no readable audio.");
@@ -146,18 +146,29 @@ audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSil
         auto at = std::find_if(clips.begin(), clips.end(), [&](const auto& clip) { return clip.id == source.address.clipId; });
         auto original = *at;
         std::string rendered = source.renderedPath;
-        if (rendered.empty() && (original.sampleEdit.loopMode != 0 ||
+        // Script analysis promises cuts of this exact audible snapshot. Native
+        // recording cleanup keeps its existing editable take history instead.
+        const bool preserveSnapshot = !source.preparedRenderPath.empty() &&
+            (!original.warp.empty() || original.sampleEdit.stretchMode != ClipStretchMode::Resample ||
+             std::abs(original.sampleEdit.stretchPitch) > .001 || !original.takes.empty() ||
+             original.fadeInSeconds > 0 || original.fadeOutSeconds > 0);
+        if (rendered.empty() && (preserveSnapshot || original.sampleEdit.loopMode != 0 ||
             (original.fadeInMode == ClipFadeMode::Tape && original.fadeInSeconds > 0) ||
             (original.fadeOutMode == ClipFadeMode::Tape && original.fadeOutSeconds > 0))) {
-            // Loop phase and tape speed cannot be expressed by a source trim.
-            // Stream their audible result to a new file; Undo retains the exact
-            // original source and settings, with no alteration of its media.
+            // Restarting Warp/stretch DSP on each fragment changes its phase;
+            // source trims also cannot retain loop phase, comp seams or fades.
+            // Preserve the audible result while Undo retains the source/settings.
             const auto path = platform::pathFromUtf8(m_recordDir) / ("silence-" + newUuid() + ".wav");
             std::error_code error;
             std::filesystem::create_directories(path.parent_path(), error);
             files.paths.push_back(path);
             rendered = platform::pathToUtf8(path);
-            try { buildSilenceEnvelope(source.placements, source.durationSeconds, source.sampleRate, {}, rendered); }
+            try {
+                if (!source.preparedRenderPath.empty())
+                    std::filesystem::copy_file(platform::pathFromUtf8(source.preparedRenderPath), path);
+                else
+                    buildSilenceEnvelope(source.placements, source.durationSeconds, source.sampleRate, {}, rendered);
+            }
             catch (const std::exception& failure) { return silenceFailure(failure.what()); }
         }
         if (!rendered.empty()) {
@@ -170,9 +181,12 @@ audio::Result EngineController::applyStripSilenceImpl(const std::vector<StripSil
             original.durationSeconds = source.durationSeconds;
             original.sampleEdit = {};
             original.warp = {};
+            original.audioEdit = {};
+            original.playbackInjection = {};
             original.takes.clear(); original.comp.clear();
             original.gain = 1; original.pan = 0;
             original.fadeInSeconds = original.fadeOutSeconds = 0;
+            original.fadeInMode = original.fadeOutMode = ClipFadeMode::Gain;
             original.offlineProcess = {};
             original.offlineVersionId.clear();
         }

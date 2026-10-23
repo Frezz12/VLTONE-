@@ -133,7 +133,8 @@ void CreatorProject::removeMode(const QString &id) {
 }
 json CreatorProject::toJson() const {
   json result{{"format", "vltcreator"},
-              {"version", 3},
+              {"version", 4},
+              {"kind", "mini"},
               {"name", name.toStdString()},
               {"activeMode", activeMode.toStdString()},
               {"definition", daw::plugins::mini::toJson(definition)},
@@ -158,8 +159,10 @@ bool CreatorProject::fromJson(const json &j, CreatorProject &result,
                               QString &error) {
   try {
     if (!j.is_object() || j.at("format") != "vltcreator" ||
-        (j.at("version") != 1 && j.at("version") != 2 && j.at("version") != 3))
+        (j.at("version") != 1 && j.at("version") != 2 && j.at("version") != 3 && j.at("version") != 4))
       throw std::runtime_error("Unsupported Creator project");
+    if (j.value("kind", "mini") != "mini")
+      throw std::runtime_error("Open Lua projects in the Lua Creator workspace");
     CreatorProject p;
     p.name = QString::fromStdString(j.at("name").get<std::string>());
     p.activeMode = QString::fromStdString(j.value("activeMode", std::string{}));

@@ -11,6 +11,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <objbase.h>
 #else
 #include <dlfcn.h>
 #endif
@@ -25,6 +26,40 @@ namespace fs = std::filesystem;
 namespace {
 
 using GetFactoryProc = Steinberg::IPluginFactory* (*)();
+
+#if defined(_WIN32)
+HRESULT retainComApartment() {
+    struct Apartment {
+        HRESULT result;
+        Apartment() : result(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {
+            // A decoder or an offline host may already use MTA. Retain that
+            // apartment instead of depending on someone else's COM lifetime.
+            if (result == RPC_E_CHANGED_MODE)
+                result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        }
+        ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); }
+    };
+    thread_local Apartment apartment;
+    return apartment.result;
+}
+#endif
+
+using ModuleCache = std::map<std::string, std::shared_ptr<Vst3Module>>;
+std::mutex& moduleCacheMutex() {
+    static auto* mutex = new std::mutex;
+    return *mutex;
+}
+ModuleCache& moduleCache() {
+    (void)vst3::hostApplication(); // Outlive every cached factory.
+#if defined(_WIN32)
+    static ModuleCache cache;
+    return cache;
+#else
+    // Objective-C modules cannot safely be unloaded and registered again.
+    static auto* cache = new ModuleCache;
+    return *cache;
+#endif
+}
 
 /// The loadable object inside what the user pointed us at.
 ///
@@ -91,7 +126,28 @@ Vst3Module::~Vst3Module() {
     closeLibrary(m_handle);
 }
 
+void Vst3Module::releaseUnusedModules() {
+#if defined(_WIN32)
+    ModuleCache unused;
+    {
+        std::lock_guard lock(moduleCacheMutex());
+        auto& cache = moduleCache();
+        for (auto it = cache.begin(); it != cache.end();) {
+            if (it->second.use_count() == 1) unused.insert(cache.extract(it++));
+            else ++it;
+        }
+    }
+    // ExitDll and library destructors may call back into the host. Never run
+    // them under the cache mutex, or defer them until platform services die.
+#endif
+}
+
 std::shared_ptr<Vst3Module> Vst3Module::open(const std::string& path) {
+#if defined(_WIN32)
+    // Plugins cache WIC/COM objects across instance lifetimes. Another plugin
+    // must not tear down their apartment when the last processor is removed.
+    if (FAILED(retainComApartment())) return nullptr;
+#endif
     // One module per file, for the life of the process.
     //
     // Not an optimisation, though it is a large one — a shell like Waves takes
@@ -102,20 +158,8 @@ std::shared_ptr<Vst3Module> Vst3Module::open(const std::string& path) {
     // class and it dies inside itself. Real hosts keep plugin binaries resident
     // for the same reason.
     //
-    static std::mutex* cacheMutex = new std::mutex;
-#if defined(_WIN32)
-    // Run release/ExitDll/FreeLibrary during CRT shutdown, before Windows
-    // detaches dependencies in loader order. Leaking this cache skipped
-    // ExitDll and made Waves use an already-destroyed dictionary at exit.
-    // Instances still retain their own module reference; no per-instance unload.
-    (void)vst3::hostApplication(); // Construct first, destroy after cached factories.
-    static std::map<std::string, std::shared_ptr<Vst3Module>> windowsCache;
-    auto* cache = &windowsCache;
-#else
-    // Keep Objective-C modules resident: reloading registers stale classes,
-    // and late teardown can access platform statics that have already gone.
-    static auto* cache = new std::map<std::string, std::shared_ptr<Vst3Module>>;
-#endif
+    auto* cacheMutex = &moduleCacheMutex();
+    auto* cache = &moduleCache();
     {
         std::lock_guard<std::mutex> lock(*cacheMutex);
         const auto found = cache->find(path);

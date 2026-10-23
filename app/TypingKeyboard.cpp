@@ -49,7 +49,7 @@ constexpr int kVelocity = 127;
 bool isTextEntry(const QWidget* widget) {
     for (const QWidget* current = widget; current;
          current = current->parentWidget()) {
-        if (current->property("dawWebInput").toBool()) return true;
+        if ((current->property("dawWebInput").toBool() || current->property("vlt.scriptInput").toBool())) return true;
         if (qobject_cast<const QKeySequenceEdit*>(current) ||
             qobject_cast<const QLineEdit*>(current) ||
             qobject_cast<const QAbstractSpinBox*>(current) ||

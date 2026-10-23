@@ -15,6 +15,8 @@
 #include "Controls.hpp"
 #include "ConsoleLevelWell.hpp"
 #include "EngineController.hpp"
+#include "SampleSilenceTrim.hpp"
+#include "Recording/RecordingEngine.hpp"
 #include "PluginPickerMenu.hpp"
 #include "Theme.hpp"
 #include "UiPerformance.hpp"
@@ -60,6 +62,7 @@
 #include <QTreeWidget>
 #include <QWidgetAction>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -1044,6 +1047,8 @@ void SamplerPanel::hideEvent(QHideEvent* event) {
 
 SamplerPanel::~SamplerPanel() {
     if (m_pitchCancelled) m_pitchCancelled->store(true);
+    if (m_trimCancelled) m_trimCancelled->store(true);
+    endGesture(QStringLiteral("trim"));
     endGesture(QStringLiteral("finepitch"));
     if (m_keyboard) m_keyboard->stopAudition();
     if (m_controller && m_context == Context::Clip) m_controller->stopPreview();
@@ -1210,6 +1215,14 @@ double SamplerPanel::readParameter(const QString& parameterId) {
 void SamplerPanel::writeParameter(const QString& parameterId, double value) {
     if (!m_controller) return;
     if (m_context == Context::Clip) {
+        if (parameterId == QStringLiteral("trim")) {
+            if (!m_trimAnalysis || m_trimSample != currentSample()) return;
+            const auto range = m_trimAnalysis->at(value);
+            m_controller->setClipSampleTrim(m_channelId.toStdString(), m_slotId.toStdString(),
+                value, range.first / m_trimAnalysis->sampleRate, range.end / m_trimAnalysis->sampleRate);
+            emit liveEdited();
+            return;
+        }
         m_controller->setClipSampleParameter(
             m_channelId.toStdString(), m_slotId.toStdString(),
             parameterId.toStdString(), value);
@@ -1240,7 +1253,7 @@ void SamplerPanel::endGesture(const QString& parameterId) {
         m_controller->commitClipSampleParameterEdit(
             m_channelId.toStdString(), m_slotId.toStdString(),
             parameterId.toStdString(), m_gestureStart.take(parameterId),
-            "Change Clip Sample Parameter");
+            parameterId == QStringLiteral("trim") ? "Trim Clip Silence" : "Change Clip Sample Parameter");
         emit projectEdited();
         return;
     }
@@ -1254,6 +1267,16 @@ ui::Knob* SamplerPanel::knob(const QString& parameterId, const QString& captionT
                              bool compact) {
     auto* control = new ui::Knob(captionText, this);
     const daw::plugins::ParameterInfo* info = infoFor(parameterId);
+    if (parameterId == QStringLiteral("trim")) {
+        control->setRange(-96, 0);
+        control->setDefaultValue(-96);
+        control->setStepped(true);
+        control->setValue(readParameter(parameterId));
+        control->setFormatter([](double value) {
+            return value <= -96 ? tr("Off") : QString::number(std::lround(value)) + " dB";
+        });
+        control->setToolTip(tr("Trim silence from both ends by threshold. Internal pauses stay intact. Off restores the full source; Start and End set the edges manually."));
+    }
     if (info) {
         control->setRange(info->minValue, info->maxValue);
         control->setDefaultValue(info->defaultValue);
@@ -1988,13 +2011,23 @@ QWidget* SamplerPanel::buildToolSection() {
     auto* playbackGrid = new QGridLayout;
     playbackGrid->setContentsMargins(0, 0, 0, 0);
     playbackGrid->setSpacing(8);
-    playbackGrid->setColumnStretch(0, 1);
-    playbackGrid->setColumnStretch(1, 1);
+    playbackGrid->setColumnStretch(0, m_context == Context::Clip ? 3 : 1);
+    playbackGrid->setColumnStretch(1, m_context == Context::Clip ? 2 : 1);
     auto* region = knobRow();
     region->addWidget(knob(QStringLiteral("startoffset"), tr("Start")));
     region->addWidget(knob(QStringLiteral("endoffset"), tr("End")));
-    region->addWidget(knob(QStringLiteral("fadein"), tr("Fade In")));
-    region->addWidget(knob(QStringLiteral("fadeout"), tr("Fade Out")));
+    if (m_context == Context::Clip) {
+        m_trimKnob = knob(QStringLiteral("trim"), tr("Trim"));
+        m_trimKnob->setEnabled(false);
+        region->addWidget(m_trimKnob);
+    }
+    auto* fades = m_context == Context::Clip ? knobRow() : region;
+    fades->addWidget(knob(QStringLiteral("fadein"), tr("Fade In")));
+    fades->addWidget(knob(QStringLiteral("fadeout"), tr("Fade Out")));
+    if (m_context == Context::Clip) {
+        fades->addStretch();
+        playbackGrid->addWidget(group(tr("Fades"), fades), 1, 1);
+    }
     region->addStretch();
     playbackGrid->addWidget(group(tr("Sample region"), region), 0, 0);
     auto* loop = knobRow();
@@ -2016,8 +2049,7 @@ QWidget* SamplerPanel::buildToolSection() {
     m_formantKnob->setToolTip(tr("Shifts the vocal character without changing pitch or duration. Vocal mode also preserves formants when pitch changes; Resample uses a tonal tilt."));
     stretch->addWidget(m_formantKnob);
     stretch->addStretch();
-    playbackGrid->addWidget(group(tr("Time & pitch"), stretch), 1, 0, 1,
-                            m_context == Context::Instrument ? 1 : 2);
+    playbackGrid->addWidget(group(tr("Time & pitch"), stretch), 1, 0);
     if (m_context == Context::Instrument) {
         auto* tuning = knobRow();
         tuning->addWidget(knob(QStringLiteral("pitch"), tr("Tune")));
@@ -2202,6 +2234,46 @@ QWidget* SamplerPanel::buildTuningSection() {
         refresh();
     });
     return sectionBox(tr("Note & tuning"), content, this);
+}
+
+void SamplerPanel::refreshTrimAnalysis() {
+    if (!m_trimKnob) return;
+    const auto sample = currentSample();
+    if (sample != m_trimSample) {
+        if (m_trimCancelled) m_trimCancelled->store(true);
+        m_trimSample = sample;
+        m_trimAnalysis.reset();
+        if (sample && sample->audio && sample->baseFrames && sample->audio->sampleRate() > 0) {
+            const auto cancelled = std::make_shared<std::atomic<bool>>(false);
+            m_trimCancelled = cancelled;
+            const QPointer<SamplerPanel> guard(this);
+            static QThreadPool pool;
+            static const bool configured = [] {
+                pool.setMaxThreadCount(1); pool.setThreadPriority(QThread::LowPriority);
+                pool.setExpiryTimeout(5000); return true;
+            }();
+            Q_UNUSED(configured);
+            pool.start([sample, cancelled, guard] {
+                std::shared_ptr<const daw::SampleSilenceTrim> analysis;
+                try {
+                    analysis = std::make_shared<daw::SampleSilenceTrim>(daw::analyzeSampleSilenceTrim(
+                        *sample->audio, sample->baseFrames, [cancelled] { return !cancelled->load(); }));
+                } catch (const std::exception&) {
+                    // A read/allocation failure must not escape Qt's worker.
+                }
+                QMetaObject::invokeMethod(qApp, [guard, sample, cancelled, analysis] {
+                    if (!guard || cancelled->load() || guard->currentSample() != sample) return;
+                    guard->m_trimAnalysis = analysis;
+                    guard->refreshTrimAnalysis();
+                }, Qt::QueuedConnection);
+            });
+        }
+    }
+    const bool ready = m_trimAnalysis && m_trimAnalysis->frames && m_controller->sharedEditingAllowed();
+    m_trimKnob->setEnabled(ready);
+    m_trimKnob->setAccessibleDescription(ready
+        ? tr("Threshold in dB for trimming silence at the start and end. Double click to turn off.")
+        : tr("Analyzing the sample for silence."));
 }
 
 void SamplerPanel::refreshPitchAnalysis() {
@@ -2423,6 +2495,7 @@ void SamplerPanel::refresh() {
     const auto snapshot = sampler();
     std::shared_ptr<const sampler::SampleData> data = currentSample();
     refreshPitchAnalysis();
+    refreshTrimAnalysis();
 
     if (snapshot.available || m_context == Context::Clip) {
         std::string path;
@@ -2637,8 +2710,13 @@ bool SamplerWaveform::checkPeakUpdatesForTest() {
         ui::graphics::SceneRecorder recorder(waveform.size(), 1, cache);
         { QPainter painter(&recorder); waveform.paintScene(painter, waveform.rect()); }
         QVector<ui::graphics::SceneVertex> vertices;
-        for (const auto& mesh : cache->sections.at(1002)->meshes)
-            if (mesh.color == QColor(Qt::white)) vertices += mesh.vertices;
+        const auto collect = [&](auto&& self, const auto& meshes) -> void {
+            for (const auto& mesh : meshes) {
+                if (mesh.group) self(self, mesh.group->meshes);
+                else if (mesh.color == QColor(Qt::white)) vertices += mesh.vertices;
+            }
+        };
+        collect(collect, cache->sections.at(1002)->meshes);
         return vertices;
     };
     waveform.setSample(sample(.1f));
@@ -2764,7 +2842,10 @@ bool SamplerPanel::checkMeterForTest() {
 bool SamplerPanel::checkLayoutForTest() {
     if (qEnvironmentVariableIsSet("VLT_SAMPLER_METER_CHECK_ONLY")) return checkMeterForTest();
     if (!AudioEditPanel::checkForTest()) return false;
-    if (!SamplerWaveform::checkPeakUpdatesForTest()) return false;
+    if (!SamplerWaveform::checkPeakUpdatesForTest()) {
+        std::fprintf(stderr, "FAIL Sampler waveform peak publication/retained geometry\n");
+        return false;
+    }
     daw::EngineController controller{};
     if (!controller.initialize(48000, 512, false).isOk()) return false;
     const auto descriptor = controller.pluginManager().find(
@@ -2998,6 +3079,57 @@ bool SamplerPanel::checkLayoutForTest() {
         check(panel.m_keyboard->isVisible() && scroll->horizontalScrollBar()->maximum() == 0,
               "keyboard disclosure breaks the compact page");
     }
-    if (ok) std::fprintf(stderr, "PASS Sampler: full settings and keyboard fit at 1040 px, compact 960/860 px layouts, immediate Root Note synchronization, note detection, tuning, wheel protection, drag and undo\n");
+    {
+        QTemporaryDir directory;
+        const auto path = directory.filePath("silence-trim.wav").toStdString();
+        audio::AudioBuffer fixture(2, 48000);
+        for (int i = 9600; i < 38400; ++i) {
+            fixture.getChannel(0)[i] = .5f;
+            fixture.getChannel(1)[i] = -.5f;
+        }
+        audio::AudioRecorder recorder;
+        recorder.initialize(48000, 2);
+        recorder.writeWAVFile(path, fixture, 48000);
+        const auto owner = controller.addTrack(daw::TrackKind::Audio, "Trim UI");
+        const auto id = controller.importAudio(path, owner, 4);
+        controller.clipSampleData(owner, id);
+        SamplerPanel panel(&controller, Context::Clip, QString::fromStdString(owner), QString::fromStdString(id));
+        panel.resize(1040, 770); panel.show(); panel.refresh();
+        QElapsedTimer timer; timer.start();
+        while (!panel.m_trimAnalysis && timer.elapsed() < 5000) {
+            QApplication::processEvents(); QThread::msleep(1); panel.refresh();
+        }
+        check(panel.m_trimKnob && panel.m_trimKnob->isEnabled(), "Trim analysis never enables the threshold dial");
+        const auto depth = controller.undoDepth();
+        QMetaObject::invokeMethod(panel.m_trimKnob, "valueChanged", Qt::DirectConnection, Q_ARG(double, -40.0));
+        QMetaObject::invokeMethod(panel.m_trimKnob, "editFinished", Qt::DirectConnection);
+        panel.refresh();
+        const auto* trimmed = controller.audioClip(owner, id);
+        check(trimmed && std::abs(trimmed->startSeconds - 4.2) < 1e-7 &&
+              std::abs(trimmed->durationSeconds - .6) < 1e-7 && panel.m_trimKnob->value() == -40 &&
+              controller.undoDepth() == depth + 1, "Trim dial is not bound to both edges and a single Undo");
+        wheel(panel.m_trimKnob);
+        check(panel.m_trimKnob->value() == -40 && controller.undoDepth() == depth + 1,
+              "scrolling over Trim changes the threshold");
+        controller.undo(); panel.refresh();
+        check(panel.m_trimKnob->value() == -96 && controller.audioClip(owner, id)->startSeconds == 4,
+              "Trim Undo does not synchronize the dial and timeline");
+        controller.redo(); panel.refresh();
+        if (qEnvironmentVariableIsSet("DAW_SAMPLE_TRIM_CHECK_DIR")) {
+            const QDir images(qEnvironmentVariable("DAW_SAMPLE_TRIM_CHECK_DIR"));
+            QDir().mkpath(images.path());
+            const auto previousTheme = th().id;
+            for (const QString& theme : {QStringLiteral("dark"), QStringLiteral("light")}) {
+                ThemeManager::instance().setThemeId(theme, false);
+                for (const QSize size : {QSize(1040, 770), QSize(860, 520)}) {
+                    panel.resize(size); QApplication::processEvents();
+                    panel.grab().save(images.filePath(QStringLiteral("trim-%1-%2.png").arg(theme).arg(size.width())));
+                }
+            }
+            ThemeManager::instance().setThemeId(previousTheme, false);
+        }
+        check(panel.m_trimKnob->value() == -40, "Trim Redo loses the threshold");
+    }
+    if (ok) std::fprintf(stderr, "PASS Sampler: full settings fit at 1040/960/860 px, silence Trim, tuning, wheel protection, drag and Undo/Redo\n");
     return ok;
 }

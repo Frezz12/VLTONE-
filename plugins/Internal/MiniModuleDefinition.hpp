@@ -2,6 +2,7 @@
 #include <algorithm>
 #include "Creator/FunctionDefinition.hpp"
 #include <optional>
+#include <span>
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <string_view>
@@ -116,6 +117,7 @@ bool sameAudioGraph(const MiniModuleDefinition &, std::string_view,
                     const MiniModuleDefinition &, std::string_view);
 bool validControlStyle(std::string_view);
 MiniModuleDefinition builtin(std::string_view id);
+std::span<const std::string_view> builtinIds() noexcept;
 nlohmann::json toJson(const MiniModuleDefinition &);
 MiniModuleDefinition fromJson(const nlohmann::json &);
 nlohmann::json subgraphToJson(const SubgraphDefinition &);

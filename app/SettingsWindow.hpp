@@ -44,6 +44,7 @@ public:
     SettingsWindow(daw::EngineController* controller, ShortcutManager* shortcuts,
                    QWidget* parent = nullptr);
     void refreshTimelineBackgroundSource();
+    void refreshProjectTabsPreference();
 
     /// The settings pages, by name. Contextual entry points use these stable
     /// IDs even though the sidebar presents them in semantic groups.
@@ -70,6 +71,7 @@ public:
         kPerformanceTab,
         kPluginsTab,
         kWebBrowserTab,
+        kMcpTab,
         kPageCount,
     };
 
@@ -89,6 +91,7 @@ public:
     QString importTrackIconFile();
 
 signals:
+    void projectTabsEnabledRequested(bool enabled);
     void transportPanelStyleChanged();
     /// A context-panel profile or its transparency setting changed.
     void contextPanelSettingsChanged();

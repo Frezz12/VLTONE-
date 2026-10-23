@@ -35,6 +35,9 @@ public:
         const std::function<void()>& beforeRetire = {});
     const std::vector<AudioPluginStateSnapshot>& lastImportedPluginStates() const noexcept { return m_imported; }
     audio::Result configureDevice(const audio::AudioDeviceConfig& requested, audio::AudioDeviceConfig& actual);
+    /// Called only after the device callback is detached. Drops every graph,
+    /// processor and transaction, retaining a lightweight, unprepared shell.
+    void reset();
 
 private:
     std::shared_ptr<AudioRuntime> m_runtime;

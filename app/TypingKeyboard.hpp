@@ -32,6 +32,8 @@ namespace daw { class EngineController; }
 class TypingKeyboard : public QObject {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
+    daw::EngineController* projectController() const { return m_controller; }
     explicit TypingKeyboard(daw::EngineController* controller,
                             QObject* parent = nullptr);
     /// Ends anything still held — a stuck note outlives this object otherwise.

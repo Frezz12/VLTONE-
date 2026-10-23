@@ -1,0 +1,6 @@
+{
+  "format": "vltscript", "sdk": 1, "id": "vlt.example.canvas-window",
+  "name": "Beat ruler drawing", "version": "1.0.0",
+  "permissions": ["project.read"],
+  "commands": [{"id": "open", "label": "Open beat ruler", "entry": "main.lua", "contexts": ["global", "arrangement"]}]
+}

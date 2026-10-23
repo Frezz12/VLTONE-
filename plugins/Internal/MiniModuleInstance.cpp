@@ -5,6 +5,7 @@
 #include "Graph/GraphProcessor.hpp"
 #include "Host/PluginNode.hpp"
 #include "ModulationInstance.hpp"
+#include "MiniEffectInstance.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -27,6 +28,7 @@ public:
       fx = std::make_unique<modulation::DoublerInstance>();
     if (type == "chorus")
       fx = std::make_unique<modulation::ChorusInstance>();
+    if (!fx) fx = createMiniEffect(type);
     target = type == "mix" ? .5 : 1.;
     for (const auto &p : d.parameters)
       set(index(p.id), p.value);
@@ -377,6 +379,8 @@ std::string MiniModuleInstance::parameterText(std::uint32_t i, double v) const {
     return {};
   char out[64];
   const auto &p = m_parameters[i];
+  if (m_definition.id == "filter" &&
+      ((p.id == "lowcut" && v <= 20) || (p.id == "highcut" && v >= 20000))) return "Off";
   std::snprintf(out, sizeof(out),
                 p.unit == "Hz"  ? "%.2f Hz"
                 : p.unit == "%" ? "%.0f%%"

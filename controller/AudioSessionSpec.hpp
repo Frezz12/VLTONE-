@@ -7,6 +7,8 @@
 #include "Nodes/BasicNodes.hpp"
 
 #include <optional>
+#include <functional>
+#include <string_view>
 #include <unordered_map>
 
 namespace daw {
@@ -47,6 +49,9 @@ struct AudioContentSpec {
 /// Resolved plugin slots, topology and prepared playback. This local resource
 /// description is not an IPC wire format.
 struct AudioSessionSpec {
+    // Control-thread preparation only. Never retained by the published graph.
+    using PluginLoadProgress = std::function<void(std::string_view, std::size_t, std::size_t)>;
+    PluginLoadProgress pluginLoadProgress;
     std::vector<AudioPluginChainSpec> pluginChains;
     AudioGraphSpec graph;
     struct Channel {

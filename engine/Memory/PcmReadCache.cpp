@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <new>
 #if !defined(_WIN32)
 #include <sys/mman.h>
 #endif
@@ -24,40 +25,100 @@ PcmReadCache::PcmReadCache(std::size_t budgetBytes) {
     m_count = kWays;
     while (m_count <= pages / 2) m_count *= 2;
     m_slots = std::make_unique<Slot[]>(m_count);
-    m_pcm = std::make_unique<float[]>(m_count * kPageSamples);
-    // Lock when permitted so memory pressure cannot swap the prepared PCM
-    // itself. A refused lock is exposed in diagnostics, not treated as proof
-    // of residency. No process-wide working-set limits are changed.
+    // Keep the full cache budget, but commit PCM only when a background reader
+    // fills a page. Opening one short sample must not touch 256 MiB of silence.
+    const auto bytes = m_count * kPageSamples * sizeof(float);
 #if defined(_WIN32)
-    m_locked = VirtualLock(m_pcm.get(), m_count * kPageSamples * sizeof(float)) != 0;
+    m_pcm = static_cast<float*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE, PAGE_READWRITE));
 #else
-    m_locked = mlock(m_pcm.get(), m_count * kPageSamples * sizeof(float)) == 0;
+    const auto address = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (address != MAP_FAILED) m_pcm = static_cast<float*>(address);
 #endif
-    // Value-initialization touches the pool before any audio reader sees it.
-    m_worker = std::thread([this] { worker(); });
+    if (!m_pcm) throw std::bad_alloc();
+    try {
+        m_worker = std::thread([this] { worker(); });
+    } catch (...) {
+#if defined(_WIN32)
+        VirtualFree(m_pcm, 0, MEM_RELEASE);
+#else
+        munmap(m_pcm, bytes);
+#endif
+        throw;
+    }
 }
 PcmReadCache::~PcmReadCache() {
     auto* self = this; s_instance.compare_exchange_strong(self, nullptr);
     m_running.store(false); m_worker.join();
-    if (m_locked) {
+    // Releasing the mapping also releases any remaining page locks.
 #if defined(_WIN32)
-        VirtualUnlock(m_pcm.get(), m_count * kPageSamples * sizeof(float));
+    VirtualFree(m_pcm, 0, MEM_RELEASE);
 #else
-        munlock(m_pcm.get(), m_count * kPageSamples * sizeof(float));
+    munmap(m_pcm, m_count * kPageSamples * sizeof(float));
 #endif
-    }
 }
-std::uint64_t PcmReadCache::addSource(const float* data, std::size_t samples) {
+void PcmReadCache::releasePage(Slot& slot) noexcept {
+    if (!slot.allocated) return;
+    auto* data = m_pcm + std::size_t(&slot - m_slots.get()) * kPageSamples;
+    if (slot.locked) {
+#if defined(_WIN32)
+        VirtualUnlock(data, kPageSamples * sizeof(float));
+#else
+        munlock(data, kPageSamples * sizeof(float));
+#endif
+        slot.locked = false;
+        m_lockedBytes.fetch_sub(kPageSamples * sizeof(float), std::memory_order_relaxed);
+    }
+#if defined(_WIN32)
+    VirtualFree(data, kPageSamples * sizeof(float), MEM_DECOMMIT);
+#else
+    madvise(data, kPageSamples * sizeof(float), MADV_DONTNEED);
+#endif
+    slot.allocated = false;
+    m_allocatedBytes.fetch_sub(kPageSamples * sizeof(float), std::memory_order_relaxed);
+}
+bool PcmReadCache::releaseSourcePages(std::uint64_t id) noexcept {
+    bool complete = true;
+    for (std::size_t i = 0; i < m_count; ++i) {
+        auto& slot = m_slots[i];
+        if (slot.source.load(std::memory_order_relaxed) != id) continue;
+        int unlocked = 0;
+        if (!slot.readers.compare_exchange_strong(unlocked, Slot::kWriter, std::memory_order_acquire)) {
+            complete = false;
+            continue;
+        }
+        slot.source.store(0, std::memory_order_relaxed);
+        slot.used.store(0, std::memory_order_relaxed);
+        releasePage(slot);
+        slot.readers.fetch_sub(Slot::kWriter, std::memory_order_release);
+    }
+    return complete;
+}
+std::uint64_t PcmReadCache::addSource(std::shared_ptr<const float> data, std::size_t samples) {
     std::lock_guard lock(m_sourcesMutex);
     const auto id = m_nextSource++;
-    m_sources.emplace(id, Source{data, samples});
+    m_sources.emplace(id, Source{std::move(data), samples});
     return id;
 }
 void PcmReadCache::removeSource(std::uint64_t id) {
-    // A background copy holds this mutex, so the mapping cannot disappear
-    // underneath it. Queued requests contain IDs only and become harmless.
+    decltype(m_sources)::node_type retired;
+    {
+        std::lock_guard lock(m_sourcesMutex);
+        retired = m_sources.extract(id);
+    }
+    // In-flight copies own the mapping; queued IDs simply stop resolving.
+    // Even a last-reference unmap/destructor runs outside the metadata lock.
+    {
+        const std::lock_guard lock(m_fillMutex);
+        if (!releaseSourcePages(id)) {
+            m_retiredSources.push_back(id);
+            m_retirementsPending.store(true, std::memory_order_release);
+        }
+    }
+}
+PcmReadCache::Source PcmReadCache::findSource(std::uint64_t id) {
     std::lock_guard lock(m_sourcesMutex);
-    m_sources.erase(id);
+    const auto found = m_sources.find(id);
+    return found == m_sources.end() ? Source{} : found->second;
 }
 std::size_t PcmReadCache::firstSlot(std::uint64_t source, std::uint64_t page) const noexcept {
     std::uint64_t hash = source * 0x9e3779b97f4a7c15ull + page;
@@ -137,9 +198,30 @@ void PcmReadCache::fill(std::uint64_t id, std::uint64_t page, const Source& sour
     if (!slot.readers.compare_exchange_strong(unlocked, Slot::kWriter, std::memory_order_acquire)) return;
     const auto start = std::size_t(page) * kPageSamples;
     const auto count = std::min(kPageSamples, source.samples - start);
-    float* destination = m_pcm.get() + selected * kPageSamples;
-    std::copy_n(source.data + start, count, destination);
+    float* destination = m_pcm + selected * kPageSamples;
+    const bool allocate = !slot.allocated;
+    if (allocate) {
+#if defined(_WIN32)
+        if (!VirtualAlloc(destination, kPageSamples * sizeof(float), MEM_COMMIT, PAGE_READWRITE)) {
+            slot.readers.fetch_sub(Slot::kWriter, std::memory_order_release);
+            m_dropped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+#endif
+        slot.allocated = true;
+        m_allocatedBytes.fetch_add(kPageSamples * sizeof(float), std::memory_order_relaxed);
+    }
+    std::copy_n(source.data.get() + start, count, destination);
     std::fill(destination + count, destination + kPageSamples, 0.f);
+    if (allocate) {
+        // Touch and optionally lock the entire page before RT publication.
+#if defined(_WIN32)
+        slot.locked = VirtualLock(destination, kPageSamples * sizeof(float)) != 0;
+#else
+        slot.locked = mlock(destination, kPageSamples * sizeof(float)) == 0;
+#endif
+        if (slot.locked) m_lockedBytes.fetch_add(kPageSamples * sizeof(float), std::memory_order_relaxed);
+    }
     slot.source.store(id, std::memory_order_relaxed); slot.page.store(page, std::memory_order_relaxed);
     // A warm-up can fill many pages within one worker tick. Giving them the
     // same age repeatedly selected the same tied victim, evicting pages that
@@ -150,11 +232,11 @@ void PcmReadCache::fill(std::uint64_t id, std::uint64_t page, const Source& sour
     slot.readers.fetch_sub(Slot::kWriter, std::memory_order_release);
 }
 void PcmReadCache::warm(std::uint64_t id, std::size_t first, std::size_t count) {
-    std::lock_guard lock(m_sourcesMutex);
-    const auto source = m_sources.find(id);
-    if (source == m_sources.end() || first >= source->second.samples || count == 0) return;
-    const auto end = first + std::min(count, source->second.samples - first);
-    for (auto page = first / kPageSamples; page <= (end - 1) / kPageSamples; ++page) fill(id, page, source->second);
+    const std::lock_guard lock(m_fillMutex);
+    const auto source = findSource(id);
+    if (!source.data || first >= source.samples || count == 0) return;
+    const auto end = first + std::min(count, source.samples - first);
+    for (auto page = first / kPageSamples; page <= (end - 1) / kPageSamples; ++page) fill(id, page, source);
 }
 void PcmReadCache::worker() {
 #if defined(__APPLE__)
@@ -169,21 +251,28 @@ void PcmReadCache::worker() {
         for (unsigned n = 0; n < 256 && m_requests.pop(request); ++n) {
             worked = true;
             if (request.epoch != m_epoch.load(std::memory_order_acquire)) { finishRequest(request); m_stale.fetch_add(1); continue; }
-            std::lock_guard lock(m_sourcesMutex);
-            const auto source = m_sources.find(request.source);
-            if (source == m_sources.end()) { finishRequest(request); continue; }
+            const std::lock_guard lock(m_fillMutex);
+            // Resolve under the fill lock so removal cannot be followed by a
+            // delayed fill that resurrects pages for the retired source.
+            const auto source = findSource(request.source);
+            if (!source.data) { finishRequest(request); continue; }
             for (unsigned ahead = 0; ahead < 4; ++ahead) {
                 if (request.epoch != m_epoch.load(std::memory_order_acquire)) break;
-                fill(request.source, request.page + ahead, source->second);
+                fill(request.source, request.page + ahead, source);
             }
             finishRequest(request);
+        }
+        if (m_retirementsPending.load(std::memory_order_acquire)) {
+            const std::lock_guard lock(m_fillMutex);
+            std::erase_if(m_retiredSources, [this](auto id) { return releaseSourcePages(id); });
+            m_retirementsPending.store(!m_retiredSources.empty(), std::memory_order_release);
         }
         if (!worked) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 PcmReadCache::Counters PcmReadCache::counters() const noexcept {
     return {m_misses.load(), m_dropped.load(), m_stale.load(), m_count * kPageSamples * sizeof(float),
-        m_locked ? m_count * kPageSamples * sizeof(float) : 0};
+        m_lockedBytes.load(std::memory_order_relaxed), m_allocatedBytes.load(std::memory_order_relaxed)};
 }
 PcmReadScope::PcmReadScope(bool realtime) noexcept : m_previous(s_current) { s_current = realtime ? this : nullptr; }
 PcmReadScope::~PcmReadScope() { for (unsigned i = 0; i < m_pinCount; ++i) release(m_pins[i]); s_current = m_previous; }
@@ -206,7 +295,7 @@ std::span<const float> PcmReadScope::view(PcmReadCache& cache, std::uint64_t sou
             }
             auto& pin = m_pins[found];
             const auto slot = cache.pin(source, page);
-            pin = {&cache, source, page, slot, slot < cache.m_count ? cache.m_pcm.get() + slot * PcmReadCache::kPageSamples : s_silence.data()};
+            pin = {&cache, source, page, slot, slot < cache.m_count ? cache.m_pcm + slot * PcmReadCache::kPageSamples : s_silence.data()};
             if (slot == cache.m_count) { cache.m_misses.fetch_add(1, std::memory_order_relaxed); cache.request(source, page); }
             else {
                 const auto stamp = (cache.m_epoch.load(std::memory_order_relaxed) << 32) |
@@ -226,7 +315,7 @@ std::span<const float> PcmReadScope::view(PcmReadCache& cache, std::uint64_t sou
             const auto slot = cache.pin(source, page);
             if (slot < cache.m_count) {
                 pin.slot = slot;
-                pin.data = cache.m_pcm.get() + slot * PcmReadCache::kPageSamples;
+                pin.data = cache.m_pcm + slot * PcmReadCache::kPageSamples;
             }
         }
     }

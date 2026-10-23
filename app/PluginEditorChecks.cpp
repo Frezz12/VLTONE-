@@ -15,14 +15,14 @@ bool MainWindow::checkEmbeddedEditorForTest(const std::string& fixturePath) {
     const auto descriptor = std::find_if(plugins.begin(), plugins.end(),
         [](const auto& plugin) { return plugin.uid == "54465831"; });
     if (descriptor == plugins.end()) return false;
-    const auto track = m_controller.addTrack(daw::TrackKind::Audio, "Embedded editor");
-    const auto slot = m_controller.addInsert(track, *descriptor);
+    const auto track = projectController().addTrack(daw::TrackKind::Audio, "Embedded editor");
+    const auto slot = projectController().addInsert(track, *descriptor);
     if (slot.empty()) return false;
     onTracksChanged();
     resize(1000, 700); show();
     const auto channel = QString::fromStdString(track), insert = QString::fromStdString(slot);
     const auto key = channel + '/' + insert;
-    const auto identity = m_controller.insertIdentity(track, slot);
+    const auto identity = projectController().insertIdentity(track, slot);
     const auto until = [&](const auto& condition) {
         QElapsedTimer timer; timer.start();
         while (!condition() && timer.elapsed() < 3000) {
@@ -35,9 +35,9 @@ bool MainWindow::checkEmbeddedEditorForTest(const std::string& fixturePath) {
     const auto attached = [&] {
         const auto* editor = m_pluginEditors.value(key);
         const auto* frame = editor ? qobject_cast<InternalEditorFrame*>(editor->parentWidget()) : nullptr;
-        const auto snapshot = m_controller.insertEditorSnapshot(track, slot);
-        return editor && editor->isEmbedded() && frame && !frame->isWindow() &&
-            isAncestorOf(frame) && snapshot &&
+        const auto snapshot = projectController().insertEditorSnapshot(track, slot);
+        return editor && editor->isEmbedded() && frame && frame->windowType() == Qt::Tool &&
+            frame->parentWidget() == m_editorHost && snapshot &&
             snapshot->identity == identity;
     };
     openPluginEditor(channel, insert);

@@ -74,6 +74,7 @@ public:
     unsigned realtimeWorkerCount() const noexcept { return m_jobs.realtimeWorkerCount(); }
     unsigned workgroupWorkerCount() const noexcept { return m_jobs.workgroupWorkerCount(); }
     void setProfiling(bool enabled) noexcept { m_jobs.setProfiling(enabled); }
+    void setDiagnosticsEnabled(bool enabled) noexcept { m_diagnosticsEnabled.store(enabled, std::memory_order_relaxed); }
     void setTaskFusion(bool enabled) noexcept { m_taskFusion.store(enabled, std::memory_order_relaxed); }
     bool popProfile(unsigned worker, rt::ProfileEvent& event) noexcept { return m_jobs.popProfile(worker, event); }
     std::uint64_t droppedProfileEvents() const noexcept { return m_jobs.droppedProfileEvents(); }
@@ -112,7 +113,6 @@ private:
                    FrameCount frames) noexcept;
     const CompiledGraph* acquireGraph() noexcept;
     void releaseGraph() noexcept;
-    void reclaimRetired();
 
     JobSystem m_jobs;
     /// Hazard-pointer publication: the renderer reads only raw atomics, while
@@ -123,7 +123,7 @@ private:
     std::atomic<const CompiledGraph*> m_graphHazard{nullptr};
     mutable std::mutex m_graphOwnerMutex;
     std::shared_ptr<const CompiledGraph> m_graphOwner;
-    std::vector<std::shared_ptr<const CompiledGraph>> m_retiredGraphs;
+    std::shared_ptr<const CompiledGraph> m_retiredGraph;
     const CompiledGraph* m_active = nullptr;              // valid while hazard held
 
     // Per-block state, written by the renderer before the pass opens and read
@@ -138,6 +138,8 @@ private:
     std::atomic<bool> m_taskFusion{true};
     bool m_fuseBlock = true;
     bool m_profileBlock = false;
+    std::atomic<bool> m_diagnosticsEnabled{false};
+    bool m_measureBlock = false;
     TransportInfo m_transport;
     /// Audio-thread-owned continuity stamp. A seek or loop wrap invalidates
     /// queued PDC MIDI from the old playhead; ordinary stopped/live/offline

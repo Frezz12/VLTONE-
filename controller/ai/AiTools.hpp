@@ -132,6 +132,9 @@ struct ToolContext {
         searchCommands;
     std::function<bool(const std::string&, InteractionMode, std::string&)>
         invokeCommand;
+    /// Installed extension commands share the host's checked runtime, including
+    /// the assistant interaction mode at every actual API call.
+    std::function<nlohmann::json(const std::string&, const nlohmann::json&, InteractionMode)> extensionTool;
     std::function<nlohmann::json()> uiContext;
     std::function<nlohmann::json(const nlohmann::json&)> focusInApp;
     std::vector<Attachment> attachments;

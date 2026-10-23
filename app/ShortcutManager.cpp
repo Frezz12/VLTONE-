@@ -187,7 +187,7 @@ bool belongsTo(QObject* object, QWidget* window) {
 
 bool isTextEntry(QWidget* widget) {
     for (QWidget* current = widget; current; current = current->parentWidget()) {
-        if (current->property("dawWebInput").toBool()) return true;
+        if ((current->property("dawWebInput").toBool() || current->property("vlt.scriptInput").toBool())) return true;
         if (qobject_cast<QLineEdit*>(current) ||
             qobject_cast<QTextEdit*>(current) ||
             qobject_cast<QPlainTextEdit*>(current) ||
@@ -226,6 +226,7 @@ ShortcutManager::RemoteScope ShortcutManager::remoteScopeForId(
     const QString& id) {
     const QString lower = id.toLower();
     if (lower.startsWith(QStringLiteral("file.")) ||
+        lower.startsWith(QStringLiteral("project.")) ||
         lower.startsWith(QStringLiteral("app.")) ||
         lower.startsWith(QStringLiteral("browser.")) ||
         lower.startsWith(QStringLiteral("timeline.")) ||
@@ -273,6 +274,7 @@ void ShortcutManager::registerCommand(const QString& id, const QString& label,
                                       const QString& category,
                                       const QKeySequence& def, QAction* action,
                                       Metadata metadata) {
+    unregisterCommand(id);
     Command c;
     c.id = id;
     c.label = label;
@@ -297,7 +299,23 @@ void ShortcutManager::registerCommand(const QString& id, const QString& label,
     // A command registered while the typing keyboard is on must not arrive with
     // a live letter shortcut. Nothing does today — the menus are built once, at
     // startup — but the invariant is cheap to keep.
-    if (m_suppressed) applySuppression();
+    applySuppression();
+    if (action) connect(action, &QObject::destroyed, this, [this, id, action] {
+        if (auto* current = find(id); current && current->action == action) {
+            current->action = nullptr;
+            unregisterCommand(id);
+        }
+    });
+    emit changed();
+}
+
+void ShortcutManager::unregisterCommand(const QString& id) {
+    const auto* current = command(id);
+    if (!current) return;
+    if (current->action) current->action->setShortcuts({});
+    m_parked.remove(id);
+    m_commands.removeIf([&](const Command& c) { return c.id == id; });
+    emit changed();
 }
 
 ShortcutManager::Command* ShortcutManager::find(const QString& id) {

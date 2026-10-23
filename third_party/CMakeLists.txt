@@ -1,8 +1,12 @@
-# Vendored third-party SDKs.
+# Vendored third-party SDKs and libraries.
 #
-# Each is exposed as an INTERFACE target so consumers get the include paths and
-# nothing else. Only the plugin host may link these — keeping them out of
+# Header-only SDKs use INTERFACE targets; compiled libraries have their own
+# targets. Only the plugin host may link these — keeping them out of
 # daw_engine is what lets that library keep its "standard library only" promise.
+
+# VLT Spectre's core owns capture/FFT; the host supplies its existing EQ views.
+# EXCLUDE_FROM_ALL keeps the standalone library's install rules out of the app.
+add_subdirectory(vlt-spectre EXCLUDE_FROM_ALL)
 
 # ── CLAP ──
 # Header-only and MIT, so the headers are the whole SDK. See clap/README.md for

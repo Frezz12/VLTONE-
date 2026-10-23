@@ -1,0 +1,10 @@
+{
+  "format": "vltscript",
+  "sdk": 1,
+  "id": "vlt.example.styled-workbench",
+  "name": "Custom window design",
+  "version": "1.0.0",
+  "description": "A styled tool with reusable cards, live palette switching and a custom drawing area.",
+  "permissions": [],
+  "commands": [{"id": "open", "label": "Open custom window design", "entry": "main.lua", "contexts": ["global"]}]
+}

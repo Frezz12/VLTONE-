@@ -15,6 +15,7 @@ const modulation::Rack& EngineController::rackModulation(const std::string& chan
     return track ? track->modulation : empty;
 }
 bool EngineController::setRackModulation(const std::string& channel, const modulation::Rack& rack, const std::string& label) {
+    if (!m_undo.isApplying() && isTrackEditLocked(channel)) return false;
     auto* current = mutableRackModulation(channel);
     if (cloudProjectBound() || !current || !modulation::valid(rack) || !validModulationRouting(m_project, channel, &rack)) return false;
     if (*current == rack) return true;
@@ -57,9 +58,11 @@ bool EngineController::setRackModulation(const std::string& channel, const modul
         [this, channel, rack, label] { setRackModulation(channel, rack, label); });
     return true;
 }
-std::string EngineController::addRackModulator(const std::string& channel, modulation::Kind kind) {
+std::string EngineController::addRackModulator(const std::string& channel, modulation::Kind kind, const std::string& ownerSlot) {
+    if (!ownerSlot.empty() && !insertModel(channel, ownerSlot)) return {};
     auto rack = rackModulation(channel); modulation::Source source;
     source.id = newUuid(); source.kind = kind; source.name = modulation::kindName(kind);
+    source.ownerSlotId = ownerSlot;
     if (kind == modulation::Kind::Steps) source.beats = .25;
     if (kind == modulation::Kind::Random) {
         // Persist the seed once; duplication intentionally preserves the same pattern.
@@ -68,6 +71,24 @@ std::string EngineController::addRackModulator(const std::string& channel, modul
     }
     rack.sources.push_back(source);
     return setRackModulation(channel, rack, "Add " + source.name) ? source.id : std::string{};
+}
+bool EngineController::setRackModulationDepth(const std::string& channel, const std::string& routeId, double depth) {
+    if (!std::isfinite(depth) || cloudProjectBound() || (!m_undo.isApplying() && isTrackEditLocked(channel))) return false;
+    auto rack = rackModulation(channel);
+    const auto route = std::find_if(rack.routes.begin(), rack.routes.end(), [&](const auto& r) { return r.id == routeId; });
+    if (route == rack.routes.end()) return false;
+    route->depth = std::clamp(depth, -1., 1.);
+    UndoStack::Suspend recording(m_undo);
+    return setRackModulation(channel, rack);
+}
+void EngineController::commitRackModulationDepth(const std::string& channel, const std::string& routeId, double before) {
+    for (const auto& route : rackModulation(channel).routes) if (route.id == routeId) {
+        const double after = route.depth;
+        if (std::abs(after - before) < 1e-9) return;
+        m_undo.push("Change modulation depth", [this, channel, routeId, before] { setRackModulationDepth(channel, routeId, before); },
+            [this, channel, routeId, after] { setRackModulationDepth(channel, routeId, after); });
+        return;
+    }
 }
 std::string EngineController::assignRackModulation(const std::string& channel, const std::string& sourceId,
     const std::string& slotId, const std::string& parameterId) {

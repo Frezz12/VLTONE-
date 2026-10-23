@@ -39,6 +39,8 @@ namespace ui { class LevelMeter; class FaderWidget; class PanKnob;
 class TrackListWidget : public QWidget {
     Q_OBJECT
 public:
+    void finishProjectEdits();
+    void setProjectController(daw::EngineController* controller);
     explicit TrackListWidget(daw::EngineController* controller,
                              QWidget* parent = nullptr);
 

@@ -113,8 +113,8 @@ Vst3Instance::~Vst3Instance() {
         }
     }
     if (m_component && m_componentInitialized) m_component->terminate();
-    // These plugin objects may release/query their host in their destructors.
-    // Member destruction would otherwise destroy the host context first.
+    // Release every interface before relinquishing the module. The shared
+    // host application also outlives plugin-owned globals and cached factories.
     m_controllerPoint = nullptr;
     m_componentPoint = nullptr;
     m_controller = nullptr;
@@ -163,7 +163,10 @@ bool Vst3Instance::initialize(IPluginFactory* factory) {
             listener->onRestartRequested();
     };
 
-    auto* hostContext = static_cast<IHostApplication*>(&m_hostContext);
+    // A plugin may retain IHostApplication in factory/module-owned objects,
+    // beyond the lifetime of this particular processor. Use the same stable
+    // context as IPluginFactory3::setHostContext, never an embedded member.
+    auto* hostContext = vst3::hostApplication();
     if (m_component->initialize(hostContext) != kResultOk) return false;
     m_componentInitialized = true;
 
@@ -737,11 +740,8 @@ std::vector<PluginEvent> Vst3Instance::pendingParameterEvents() {
     // Only performEdit values are pending processor input. Preset/cache
     // notifications must not turn controller readbacks into queued edits in
     // offline clones either: component state already contains the preset.
-    std::vector<QueuedEdit> edits;
-    edits.reserve(1024); // Allocate before touching the live queue.
-    QueuedEdit edit;
-    while (m_editorEdits.pop(edit)) edits.push_back(edit);
-    for (const auto& pending : edits) (void)m_editorEdits.push(pending);
+    const auto edits = m_editorEdits.snapshotFromProducer();
+    events.reserve(edits.size());
     for (const auto& pending : edits) {
         PluginEvent event;
         event.kind = PluginEvent::Kind::ParamValue;

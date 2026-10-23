@@ -97,6 +97,26 @@ target_include_directories(web_permission_link_check PRIVATE ${CMAKE_CURRENT_SOU
 target_link_libraries(web_permission_link_check PRIVATE Qt6::Widgets Qt6::WebEngineWidgets)
 
 if(DAW_BUILD_TESTS)
+    foreach(tabs_theme dark light)
+        foreach(tabs_locale en ru)
+            foreach(tabs_scale 1 1.5 2)
+                add_test(NAME project_tabs_ui_${tabs_theme}_${tabs_locale}_${tabs_scale}
+                    COMMAND $<TARGET_FILE:daw> --selftest --theme ${tabs_theme} --language ${tabs_locale})
+                set_tests_properties(project_tabs_ui_${tabs_theme}_${tabs_locale}_${tabs_scale} PROPERTIES
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${tabs_scale};DAW_SELFTEST_PROJECT_TABS_ONLY=1;DAW_PROJECT_TABS_SHOTS=${PROJECT_SOURCE_DIR}/artifacts/project-tabs/${tabs_theme}-${tabs_locale}-${tabs_scale}"
+                    TIMEOUT 120 RUN_SERIAL TRUE)
+            endforeach()
+        endforeach()
+    endforeach()
+    foreach(performance_theme dark light)
+        foreach(performance_locale en ru)
+            add_test(NAME performance_ui_${performance_theme}_${performance_locale}
+                COMMAND $<TARGET_FILE:daw> --selftest --theme ${performance_theme} --language ${performance_locale})
+            set_tests_properties(performance_ui_${performance_theme}_${performance_locale} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_PERFORMANCE_ONLY=1;DAW_PERFORMANCE_SHOTS=${PROJECT_SOURCE_DIR}/artifacts/performance-diagnostics/${performance_theme}-${performance_locale}"
+                TIMEOUT 90 RUN_SERIAL TRUE)
+        endforeach()
+    endforeach()
     foreach(creator_theme dark light)
         foreach(creator_locale en ru)
             foreach(creator_scale 1 1.5 2)
@@ -123,6 +143,11 @@ if(DAW_BUILD_TESTS)
         endforeach()
     endforeach()
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(file_search_test ../tests/file_search_test.cpp FileSearchWorker.cpp FileSearchWorker.hpp)
+    target_include_directories(file_search_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(file_search_test PRIVATE Qt6::Core)
+    add_test(NAME file_search_test COMMAND file_search_test)
+    set_tests_properties(file_search_test PROPERTIES TIMEOUT 60)
     qt_add_executable(numeric_field_test ../tests/numeric_field_test.cpp)
     target_include_directories(numeric_field_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(numeric_field_test PRIVATE Qt6::Widgets)
@@ -521,6 +546,53 @@ if(NOT DAW_ENABLE_REVERB)
 endif()
 
 qt_add_executable(daw ${DAW_APP_SOURCES})
+add_library(vlt_mcp_protocol STATIC mcp/McpProtocol.cpp)
+target_include_directories(vlt_mcp_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(vlt_mcp_protocol PUBLIC daw_json)
+add_executable(vlt_mcp mcp/McpBridge.cpp)
+target_link_libraries(vlt_mcp PRIVATE vlt_mcp_protocol Qt6::Network)
+target_link_libraries(daw PRIVATE vlt_mcp_protocol)
+add_dependencies(daw vlt_mcp)
+if(NOT (DAW_PACKAGE AND APPLE))
+    install(TARGETS vlt_mcp RUNTIME DESTINATION bin)
+endif()
+if(DAW_BUILD_TESTS)
+    add_executable(mcp_protocol_test ../tests/mcp_protocol_test.cpp)
+    target_link_libraries(mcp_protocol_test PRIVATE vlt_mcp_protocol)
+    add_test(NAME mcp_protocol COMMAND mcp_protocol_test)
+    add_test(NAME mcp_integration COMMAND $<TARGET_FILE:daw> --selftest)
+    set_tests_properties(mcp_integration PROPERTIES TIMEOUT 240 RUN_SERIAL TRUE LABELS mcp
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_MCP_ONLY=1")
+endif()
+target_link_libraries(daw PRIVATE vlt_script_api)
+add_dependencies(daw vlt_script_worker)
+if(DAW_BUILD_TESTS)
+    add_test(NAME scripting_clip_audio COMMAND $<TARGET_FILE:daw> --script-check)
+    set_tests_properties(scripting_clip_audio PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE LABELS scripting
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;VLT_SCRIPT_AUDIO_CHECK=1")
+    foreach(script_theme dark light)
+        foreach(script_language en ru)
+            foreach(script_scale 1 1.5 2)
+                add_test(NAME scripting_ui_${script_theme}_${script_language}_${script_scale}
+                    COMMAND $<TARGET_FILE:daw> --script-check --theme ${script_theme} --language ${script_language})
+                set_tests_properties(scripting_ui_${script_theme}_${script_language}_${script_scale} PROPERTIES
+                    TIMEOUT 90 RUN_SERIAL TRUE LABELS scripting
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;QT_SCALE_FACTOR=${script_scale};VLT_SCRIPT_CHECK_DIR=${PROJECT_SOURCE_DIR}/artifacts/scripting/${script_theme}-${script_language}-${script_scale}")
+                # The offscreen platform does not discover native system fonts.
+                # Exercise the same monospace faces that the desktop editor uses.
+                if(WIN32)
+                    set_property(TEST scripting_ui_${script_theme}_${script_language}_${script_scale}
+                        APPEND PROPERTY ENVIRONMENT "QT_QPA_FONTDIR=$ENV{WINDIR}/Fonts")
+                elseif(APPLE)
+                    set_property(TEST scripting_ui_${script_theme}_${script_language}_${script_scale}
+                        APPEND PROPERTY ENVIRONMENT "QT_QPA_FONTDIR=/System/Library/Fonts")
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
+endif()
+add_custom_command(TARGET daw POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/ScriptSDK" "$<TARGET_FILE_DIR:daw>/ScriptSDK")
 if(WIN32)
     # QImageReader discovers this at runtime; linking QtGui alone does not
     # deploy the optional image codec beside a development executable.
@@ -567,6 +639,10 @@ if(DAW_BUILD_TESTS)
     add_test(NAME plugin_drag_lifecycle_test COMMAND daw --plugin-interaction-check)
     set_tests_properties(plugin_drag_lifecycle_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0" TIMEOUT 30)
+    add_test(NAME native_owned_windows_ui_test COMMAND daw --selftest)
+    set_tests_properties(native_owned_windows_ui_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VLT_GPU_WORKSPACE=0;DAW_SELFTEST_NATIVE_WINDOWS_ONLY=1"
+        RUN_SERIAL TRUE TIMEOUT 90)
     add_test(NAME midi_sequence_ui_test COMMAND daw --pianoworkflowcheck)
     add_test(NAME piano_split_ui_test COMMAND daw --pianoworkflowcheck)
     add_test(NAME midi_tools_preview_ui_test COMMAND daw --pianoworkflowcheck)
@@ -672,6 +748,23 @@ if(DAW_ENABLE_COLLABORATION)
 endif()
 
 target_include_directories(daw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(vlt_script_tool ../scripting/PackageTool.cpp ScriptLibrary.cpp VltPackageArchive.cpp)
+target_include_directories(vlt_script_tool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(vlt_script_tool PRIVATE vlt_script_api Qt6::Core LibArchive::LibArchive)
+add_dependencies(vlt_script_tool vlt_script_worker)
+add_dependencies(daw vlt_script_tool vlt_script_sdk)
+if(DAW_BUILD_TESTS)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME scripting_runtime COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/script_runtime_test.py $<TARGET_FILE:vlt_script_worker>)
+    add_test(NAME scripting_packages COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/script_package_test.py $<TARGET_FILE:vlt_script_tool> ${PROJECT_SOURCE_DIR}/scripting/sdk/examples)
+    set_tests_properties(scripting_runtime scripting_packages PROPERTIES TIMEOUT 45 LABELS scripting)
+endif()
+if(NOT (DAW_PACKAGE AND APPLE))
+    install(TARGETS vlt_script_tool RUNTIME DESTINATION bin)
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/ScriptSDK/" DESTINATION bin/ScriptSDK)
+endif()
 target_link_libraries(daw PRIVATE daw_controller vlt_browser_surface vlt_gpu_scene vlt_graphics_preferences Qt6::Widgets Qt6::Network
                                   Qt6::Multimedia Qt6::MultimediaWidgets Qt6::WebChannel
                                   Qt6::WebEngineWidgets
@@ -975,11 +1068,12 @@ if(DAW_PACKAGE)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$<TARGET_FILE:daw_scan>" "$<TARGET_FILE:daw_guard>"
                 "$<TARGET_FILE:daw_reporter>" "$<TARGET_FILE:daw_worker>"
+                "$<TARGET_FILE:vlt_mcp>"
                 "$<TARGET_FILE_DIR:daw>"
             COMMAND ${CMAKE_COMMAND} -E rm -f
                 "$<TARGET_FILE_DIR:daw>/daw_audio"
                 "$<TARGET_FILE_DIR:daw>/daw_plugin_host"
-            DEPENDS daw_scan daw_guard daw_reporter daw_worker
+            DEPENDS daw_scan daw_guard daw_reporter daw_worker vlt_mcp
             VERBATIM)
         add_dependencies(daw daw_bundle_helpers)
     endif()
@@ -989,9 +1083,11 @@ endif()
 if(DAW_PACKAGE AND APPLE)
     set(DAW_STRETCH_LICENSE_DIR "${DAW_BUNDLE_NAME}.app/Contents/Resources/licenses/signalsmith")
     set(VLTONE_FONT_LICENSE_DIR "${DAW_BUNDLE_NAME}.app/Contents/Resources/licenses/inter")
+    set(VLTONE_SPECTRE_LICENSE_DIR "${DAW_BUNDLE_NAME}.app/Contents/Resources/licenses/vlt-spectre")
 else()
     set(DAW_STRETCH_LICENSE_DIR "bin/licenses/signalsmith")
     set(VLTONE_FONT_LICENSE_DIR "bin/licenses/inter")
+    set(VLTONE_SPECTRE_LICENSE_DIR "bin/licenses/vlt-spectre")
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/third_party/signalsmith/LICENSE-stretch.txt"
         DESTINATION "${DAW_STRETCH_LICENSE_DIR}")
@@ -999,6 +1095,8 @@ install(FILES "${CMAKE_SOURCE_DIR}/third_party/signalsmith/signalsmith-linear/LI
         DESTINATION "${DAW_STRETCH_LICENSE_DIR}" RENAME "LICENSE-linear.txt")
 install(FILES "${CMAKE_SOURCE_DIR}/fonts/OFL.txt"
         DESTINATION "${VLTONE_FONT_LICENSE_DIR}")
+install(FILES "${CMAKE_SOURCE_DIR}/third_party/vlt-spectre/LICENSE"
+        DESTINATION "${VLTONE_SPECTRE_LICENSE_DIR}")
 
 daw_install_audio_analysis(daw)
 
@@ -1015,11 +1113,12 @@ if(DAW_PACKAGE)
         # belong in Contents/MacOS. Installed from here rather than from their
         # own directories so they land after the bundle has been laid down and
         # before macdeployqt walks it.
-        install(TARGETS daw_scan daw_guard daw_reporter daw_worker
+        install(TARGETS daw_scan daw_guard daw_reporter daw_worker vlt_script_worker vlt_script_tool vlt_mcp
                 RUNTIME DESTINATION "${DAW_BUNDLE_NAME}.app/Contents/MacOS")
         # Every helper is a separate dyld root. It cannot inherit the main
         # application's search path for the deployed @rpath dependencies.
-        foreach(helper daw_scan daw_guard daw_reporter daw_worker)
+        install(DIRECTORY "${CMAKE_BINARY_DIR}/ScriptSDK/" DESTINATION "${DAW_BUNDLE_NAME}.app/Contents/MacOS/ScriptSDK")
+        foreach(helper daw_scan daw_guard daw_reporter daw_worker vlt_script_worker vlt_script_tool vlt_mcp)
             set_property(TARGET ${helper} APPEND PROPERTY INSTALL_RPATH
                          "@executable_path/../Frameworks")
         endforeach()

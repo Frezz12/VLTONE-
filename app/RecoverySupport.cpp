@@ -8,6 +8,9 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QLocale>
 #include <QMessageBox>
 #include <QAbstractButton>
@@ -84,6 +87,11 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
                        ? QObject::tr("an unsaved project")
                        : QString::fromStdString(session.projectName);
     if (name == QLatin1String("Untitled")) name = QObject::tr("Untitled");
+    QFile workspace(QDir(QString::fromStdString(session.directory)).filePath("workspace.json"));
+    int documentCount = 0;
+    if (workspace.open(QIODevice::ReadOnly))
+        documentCount = QJsonDocument::fromJson(workspace.readAll()).object().value("documents").toArray().size();
+    if (documentCount > 1) name = QObject::tr("%1 open projects").arg(documentCount);
 
     auto* box = new QMessageBox(parent);
     box->setIcon(QMessageBox::Warning);
@@ -101,6 +109,7 @@ QMessageBox* buildRecoveryPrompt(QWidget* parent,
             "from your original files, not from copies inside the project.")
             .arg(formatWhen(session.journalUnixMs))
             .arg(describeSession(session));
+    if (documentCount > 0) information += QObject::tr("\n\nAll project tabs will be restored with their audio engines off.");
     if (hasCloudRecordingSidecar(session)) {
         information += QObject::tr(
             "\n\nThis session also contains a finished cloud recording awaiting upload. Restore and Discard affect only the project recovery; VLTONE will preserve that recording.");
@@ -143,7 +152,7 @@ bool applySession(const daw::recovery::SessionInfo& session,
     return true;
 }
 
-Choice offerRecovery(QWidget* parent, daw::EngineController& controller) {
+Choice offerRecovery(QWidget* parent, daw::EngineController& controller, WorkspaceRestore restoreWorkspace) {
     Choice choice;
     auto sessions = daw::recovery::staleSessions(rootDir().toStdString());
     if (sessions.empty()) return choice;
@@ -174,7 +183,7 @@ Choice offerRecovery(QWidget* parent, daw::EngineController& controller) {
         if (role != QMessageBox::AcceptRole) continue;   // decide later
 
         QString error;
-        if (!applySession(session, controller, &error)) {
+        if (!(restoreWorkspace ? restoreWorkspace(session, &error) : applySession(session, controller, &error))) {
             QMessageBox::warning(
                 parent, QObject::tr("Recovery failed"),
                 QObject::tr("The recovered file could not be read: %1").arg(error));
@@ -182,6 +191,7 @@ Choice offerRecovery(QWidget* parent, daw::EngineController& controller) {
         }
 
         choice.restored = true;
+        choice.workspace = bool(restoreWorkspace);
         choice.projectPath = QString::fromStdString(session.projectPath);
         if (preserveCloudRecording)
             explainCloudRecordingPreserved(parent);

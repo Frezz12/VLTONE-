@@ -268,7 +268,7 @@ void ClipLibraryView::paintEvent(QPaintEvent* event) {
     QPainter p(viewport()); const auto& theme=ThemeManager::instance().theme();
     const QRectF area=viewport()->rect().adjusted(16,12,-16,-12);
     const QRectF icon(area.center().x()-15, area.top()+28, 30,30);
-    icons::paint(p, icons::Glyph::Layers, icon, theme.textSecondary);
+    icons::paint(p, icons::Glyph::ClipLibrary, icon, theme.textSecondary);
     p.setPen(theme.textPrimary); QFont font=p.font(); font.setPixelSize(int(12*m_zoom)); font.setWeight(QFont::DemiBold); p.setFont(font);
     p.drawText(QRectF(area.left(), icon.bottom()+14, area.width(),30), Qt::AlignHCenter|Qt::TextWordWrap, tr("Saved clips"));
     font.setPixelSize(int(10*m_zoom)); font.setWeight(QFont::Normal); p.setFont(font); p.setPen(theme.textSecondary);

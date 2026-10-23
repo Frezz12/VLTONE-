@@ -6,6 +6,7 @@
 #include "Graph/AudioGraph.hpp"
 #include "Graph/GraphProcessor.hpp"
 #include "MiniNodeRegistry.hpp"
+#include "MiniEffectInstance.hpp"
 #include "ModulationInstance.hpp"
 #include "Creator/WasmProgram.hpp"
 #include "CreatorKernelNode.hpp"
@@ -99,6 +100,7 @@ public:
             band == 0 ? 1 : 0);
       fx = std::move(eq);
     }
+    if (!fx) fx = createMiniEffect(n.type);
     if (fx)
       for (unsigned i = 0; i < values.size(); ++i)
         fx->setParameterFromHost(unsigned(desc.parameters[i].nativeIndex),

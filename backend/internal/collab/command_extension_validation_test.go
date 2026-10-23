@@ -125,6 +125,29 @@ func extensionSampleEdit() map[string]any {
 	}
 }
 
+func TestSampleSilenceTrimThresholdValidation(t *testing.T) {
+	for _, value := range []any{-96.0, -40.0, 0.0} {
+		edit := extensionSampleEdit()
+		edit["trimThresholdDb"] = value
+		raw, _ := json.Marshal(edit)
+		if err := validateClipSampleEdit(raw); err != nil {
+			t.Fatalf("valid Trim threshold %v rejected: %v", value, err)
+		}
+	}
+	for _, value := range []any{-97.0, 1.0, "-40", nil} {
+		edit := extensionSampleEdit()
+		edit["trimThresholdDb"] = value
+		raw, _ := json.Marshal(edit)
+		if err := validateClipSampleEdit(raw); err == nil {
+			t.Fatalf("invalid Trim threshold %v accepted", value)
+		}
+	}
+	raw, _ := json.Marshal(extensionSampleEdit())
+	if err := validateClipSampleEdit(raw); err != nil {
+		t.Fatalf("legacy sample edit without Trim rejected: %v", err)
+	}
+}
+
 func TestEmptySamplerBindingLifecycleValidation(t *testing.T) {
 	trackID, insertID, sampleID := uuid.New(), uuid.New(), uuid.New()
 	location := extensionLocation("instrument", trackID, uuid.Nil)

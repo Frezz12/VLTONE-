@@ -1,4 +1,5 @@
 #include "RackParameterBinding.hpp"
+#include "ScriptContextMenu.hpp"
 #include "Controls.hpp"
 #include <QAbstractItemView>
 #include <QComboBox>
@@ -19,7 +20,16 @@ RackParameterBinding::RackParameterBinding(daw::EngineController* controller, QS
 RackParameterBinding::~RackParameterBinding() {
     finishAll();
 }
+void RackParameterBinding::setDocumentPreviewParameters(std::vector<daw::plugins::ParameterInfo> parameters) {
+    if(!m_controller->documentOnly())return;
+    const auto* slot=m_controller->insertModel(m_channel,m_slot);if(!slot)return;
+    m_previewGeneration=m_controller->projectGeneration();m_previewUid=slot->uid;m_parameters=std::move(parameters);
+}
 bool RackParameterBinding::available() const {
+    if(m_previewGeneration) {
+        const auto* slot=m_controller->insertModel(m_channel,m_slot);
+        return m_controller->documentOnly()&&m_controller->projectGeneration()==m_previewGeneration&&slot&&slot->uid==m_previewUid;
+    }
     return m_identity && m_controller->hasInsert(m_channel, m_slot) &&
            m_controller->insertIdentity(m_channel, m_slot) == m_identity;
 }
@@ -34,8 +44,9 @@ double RackParameterBinding::value(const QString& id) const {
     return available() ? m_controller->insertParameter(m_channel, m_slot, id.toStdString()) : 0.;
 }
 void RackParameterBinding::write(const QString& id, double next) {
+    if (m_editGuard && !m_editGuard()) return;
     const auto* parameter = info(id);
-    if (!parameter || !available() || !std::isfinite(next))
+    if (!parameter || parameter->isReadOnly || !available() || !std::isfinite(next))
         return;
     if (!m_gestures.contains(id))
         m_gestures.insert(id, value(id));
@@ -48,6 +59,7 @@ void RackParameterBinding::finish(const QString& id) {
     if (!m_gestures.contains(id))
         return;
     const double before = m_gestures.take(id);
+    if (m_editGuard && !m_editGuard()) return;
     if (!available())
         return;
     m_controller->commitInsertParameterEdit(m_channel, m_slot, id.toStdString(), before,
@@ -55,6 +67,7 @@ void RackParameterBinding::finish(const QString& id) {
     emit edited();
 }
 void RackParameterBinding::finishAll() {
+    if(m_editGuard && !m_editGuard()){m_gestures.clear();return;}
     const auto keys = m_gestures.keys();
     if (keys.isEmpty())
         return;
@@ -72,8 +85,12 @@ void RackParameterBinding::automate(const QString& id) {
 ui::Knob* RackParameterBinding::knob(const QString& id, QWidget* parent, int width) {
     const auto* parameter = info(id);
     auto* control = new ui::Knob(parameter ? QString::fromStdString(parameter->name) : id, parent);
+    control->setContextMenuProvider([this,id](QMenu* menu){
+        ui::scripts::appendContextMenu(menu,m_controller,{{"type","parameter"},{"target",{{"track",m_channel},{"device",m_slot},{"parameter",id.toStdString()}}}});
+    });
     control->setObjectName(QStringLiteral("RackParameter.") + id);
     control->setVisualStyle(ui::Knob::VisualStyle::SamplerDigital);
+    control->setProperty("rackSeparatedDial", true);
     control->setFixedSize(width, 78);
     control->setFocusPolicy(Qt::StrongFocus);
     if (!parameter) {
@@ -89,7 +106,7 @@ ui::Knob* RackParameterBinding::knob(const QString& id, QWidget* parent, int wid
     control->setValue(value(id));
     const auto key = parameter->id;
     const auto index = parameter->index;
-    control->setValueMapping([this, index](double value) {
+    if(!m_previewGeneration)control->setValueMapping([this, index](double value) {
         const auto* plugin = available() ? m_controller->insertInstance(m_channel, m_slot) : nullptr;
         return plugin ? plugin->parameterToNormalized(index, value) : 0.;
     }, [this, index](double value) {
@@ -97,6 +114,7 @@ ui::Knob* RackParameterBinding::knob(const QString& id, QWidget* parent, int wid
         return plugin ? plugin->parameterFromNormalized(index, value) : 0.;
     });
     control->setFormatter([this, key, index](double plain) {
+        if(m_previewGeneration){const auto* p=info(QString::fromStdString(key));return QString::number(plain,'g',5)+(p?QString::fromStdString(p->unit):QString());}
         return QString::fromStdString(
             m_controller->insertParameterText(m_channel, m_slot, key, plain, index));
     });
@@ -283,10 +301,11 @@ void RackParameterBinding::refresh() {
     for (const auto& control : m_controls) {
         if (!control.widget->isVisible())
             continue;
-        control.widget->setEnabled(live);
+        const auto* metadata=info(control.id);
+        control.widget->setEnabled(live&&(!metadata||!metadata->isReadOnly)&&(!m_editGuard||m_editGuard()));
         const QSignalBlocker block(control.widget);
         if (auto* knob = qobject_cast<ui::Knob*>(control.widget.data())) {
-            refreshModulation(knob, m_controller, m_channel, m_slot, control.id.toStdString());
+            if(!m_previewGeneration)refreshModulation(knob, m_controller, m_channel, m_slot, control.id.toStdString());
             if (!knob->isEditing() && !m_gestures.contains(control.id))
                 knob->setValue(currentValue(control.id));
         } else if (auto* slider = qobject_cast<QSlider*>(control.widget.data())) {
@@ -311,18 +330,26 @@ void RackParameterBinding::refresh() {
 }
 
 void RackParameterBinding::refreshModulation(ui::Knob* knob, daw::EngineController* controller, const std::string& channel, const std::string& slot, const std::string& parameter) {
+            if (!knob) return;
+            // Creator's card preview deliberately has no live project controller.
+            if (!controller) {
+                knob->setModulation(false, 0., 0., 0.);
+                return;
+            }
             daw::PluginParameterReadout readout; readout.id = parameter;
             controller->readInsertParameters(channel, slot, std::span(&readout, 1));
             QString selected;
             for (auto* parent = knob->parentWidget(); parent; parent = parent->parentWidget())
                 if (parent->property("modulationSource").isValid()) { selected = parent->property("modulationSource").toString(); break; }
             double low = readout.baseNormalized, high = low;
+            bool assigned = false;
             for (const auto& route : controller->rackModulation(channel).routes) {
                 if (route.slotId != slot || route.parameterId != readout.id || (!selected.isEmpty() && route.sourceId != selected.toStdString())) continue;
+                assigned |= route.enabled;
                 daw::AutomationTarget target{daw::AutomationTargetKind::ModulationDepth, channel, route.id, "depth", {}};
                 const auto depth = controller->automationValueAtPlayhead(target).value_or(route.depth);
                 low += route.bipolar ? -std::abs(depth) : std::min(0., depth);
                 high += route.bipolar ? std::abs(depth) : std::max(0., depth);
             }
-            knob->setModulation(readout.modulated, low, high, readout.effectiveNormalized);
+            knob->setModulation(readout.modulated || assigned, low, high, readout.effectiveNormalized);
 }

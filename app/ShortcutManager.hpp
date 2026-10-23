@@ -83,6 +83,8 @@ public:
                          QAction* action, Metadata metadata);
 
     const QVector<Command>& commands() const { return m_commands; }
+    /// Removes only the live command, retaining its saved user assignment.
+    void unregisterCommand(const QString& id);
     /// Exact lookup by stable id. The pointer remains valid until another
     /// command is registered.
     const Command* command(const QString& id) const;

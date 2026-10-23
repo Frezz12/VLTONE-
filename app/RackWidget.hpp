@@ -35,6 +35,7 @@ class RackWidget final : public QWidget {
         return m_channel;
     }
     QString channelName() const;
+    std::function<bool(const QString&, const QString&)> editorIsOpen;
     void sync();
     void finishEdits();
     bool ownsFocus() const;
@@ -45,6 +46,7 @@ class RackWidget final : public QWidget {
   signals:
     void edited(bool structural);
     void editorRequested(const QString& channel, const QString& slot);
+    void editorToggleRequested(const QString& channel, const QString& slot);
     void automationRequested(const QString& channel, const QString& slot, const QString& parameter);
     void sendAutomationRequested(const QString& channel, const QString& send);
     void channelRequested(const QString&);
@@ -68,7 +70,7 @@ class RackWidget final : public QWidget {
     void startDrag(const QString&);
     void contextMenu(const QString&, const QPoint&, bool group = false);
     void addDevice(const QPoint&);
-    bool insertPlugin(const daw::plugins::PluginDescriptor&, int index);
+    bool insertPlugin(const daw::plugins::PluginDescriptor&, int index, const QString& group = {});
     std::optional<daw::plugins::PluginDescriptor> pluginFromMime(const QMimeData*) const;
     void addSend(const QPoint&, const QString& replace = {});
     void groupSelection(bool ungroup);
@@ -82,6 +84,7 @@ class RackWidget final : public QWidget {
     QString m_channel, m_project, m_anchor;
     QWidget *m_left = nullptr, *m_sends = nullptr, *m_chain = nullptr, *m_marker = nullptr;
     QScrollArea* m_scroll = nullptr;
+    QScrollArea* m_miniScroll = nullptr;
     QScrollArea* m_sendScroll = nullptr;
     QHBoxLayout* m_row = nullptr;
     ui::MiniModuleRack* m_mini = nullptr;
@@ -90,6 +93,7 @@ class RackWidget final : public QWidget {
     QToolButton* m_patternBack = nullptr;
     QHash<QString, QPointer<RackDeviceCard>> m_cards;
     QHash<QString, QPointer<QWidget>> m_groups;
+    std::vector<std::function<void()>> m_layerRefreshers, m_layerFinishers;
     QHash<QString, QPointer<ui::FaderWidget>> m_sendFaders;
     QHash<QString, QPointer<QLabel>> m_sendValues;
     QHash<QString, std::shared_ptr<std::optional<float>>> m_sendBefore;
@@ -103,6 +107,6 @@ class RackWidget final : public QWidget {
     QSet<QString> m_rubberBefore;
     QTimer *m_timer = nullptr, *m_scrollTimer = nullptr;
     int m_insertAt = -1, m_dropAt = -1;
-    QString m_dropGroup;
+    QString m_dropGroup, m_insertGroup, m_selectedGroup;
     bool m_rebuilding = false, m_rubberActive = false;
 };

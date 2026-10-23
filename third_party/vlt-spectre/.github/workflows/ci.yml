@@ -1,0 +1,39 @@
+name: Build and test
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVLT_SPECTRE_BUILD_WIDGETS=OFF
+      - run: cmake --build build --config Release --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: cmake --install build --config Release --prefix "${{ github.workspace }}/install"
+      - run: cmake -S tests/package-consumer -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install"
+      - run: cmake --build build-consumer --config Release --parallel 2
+      - run: ctest --test-dir build-consumer -C Release --output-on-failure
+  qt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install optional view dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVLT_SPECTRE_BUILD_WIDGETS=ON
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - run: cmake --install build --prefix "${{ github.workspace }}/install"
+      - run: cmake -S tests/package-consumer -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install" -DSPECTRE_CONSUME_WIDGETS=ON
+      - run: cmake --build build-consumer --parallel 2
+      - run: ctest --test-dir build-consumer --output-on-failure

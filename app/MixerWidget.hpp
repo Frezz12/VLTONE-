@@ -14,7 +14,7 @@ namespace daw { class EngineController; }
 class RackWidget;
 class QStackedWidget;
 class QHBoxLayout;
-class QLabel;
+class QAbstractButton;
 class QScrollArea;
 class QSplitter;
 class QToolButton;
@@ -26,6 +26,8 @@ namespace ui { class FrameTimer; }
 class MixerWidget : public QWidget {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
+    void finishProjectEdits() { finishChannelEdits(); }
     explicit MixerWidget(daw::EngineController* controller,
                          QWidget* parent = nullptr);
 
@@ -44,6 +46,7 @@ public:
     void setRackMode(bool enabled);
     bool rackCommand(const QString& command);
     RackWidget* rack() const { return m_rack; }
+    std::function<bool(const QString&, const QString&)> pluginEditorIsOpen;
 
     /// Presence encode/decode, mirroring TimelineWidget's pair. A pointer is
     /// described by the strip it is over and how far down that strip it sits,
@@ -76,6 +79,7 @@ signals:
     void createTracksRequested();
     void trackRemoved(const QString& trackId);
     void pluginEditorRequested(const QString& channelId, const QString& insertId);
+    void pluginEditorToggleRequested(const QString& channelId, const QString& insertId);
     void openPatternRequested(const QString& patternId);
     void automateControlRequested(const QString& trackId, bool pan);
     void automateMuteRequested(const QString& trackId);
@@ -119,12 +123,8 @@ private:
     daw::EngineController* m_controller = nullptr;
     RackWidget* m_rack = nullptr;
     QStackedWidget* m_views = nullptr;
-    QToolButton* m_viewToggle = nullptr;
-    QLabel* m_headerTitle = nullptr;
+    QAbstractButton* m_viewToggle = nullptr;
     bool m_rackMode = false;
-    QLabel* m_headerGlyph = nullptr;
-    QLabel* m_headerCount = nullptr;
-    QWidget* m_headerAccent = nullptr;
     QWidget* m_header = nullptr;
     QScrollArea* m_scroll = nullptr;
     QSplitter* m_splitter = nullptr;

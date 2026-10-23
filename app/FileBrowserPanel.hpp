@@ -17,7 +17,8 @@ class PreviewLoader;
 class WaveformStrip;
 class QLabel;
 class QLineEdit;
-class QHBoxLayout;
+class QListWidget;
+class QToolButton;
 class QPoint;
 class QTimer;
 namespace ui { class IconButton; }
@@ -32,6 +33,7 @@ namespace ui { class IconButton; }
 class FileBrowserPanel : public QWidget {
     Q_OBJECT
 public:
+    void setProjectController(daw::EngineController* controller);
     void setHeaderHeight(int height);
     explicit FileBrowserPanel(daw::EngineController* controller,
                               QWidget* parent = nullptr);
@@ -102,8 +104,8 @@ public:
     /// for its package-filtered result.
     QStringList searchForTest(const QString& query);
     bool checkSearchForTest(QObject* keyboardTarget = nullptr);
-    /// Headless regression for Favorites/custom collections, icon-tab limits,
-    /// shortcut membership and inherited folder colours.
+    /// Headless regression for collections, sidebar navigation, shortcut
+    /// membership and inherited folder colours.
     bool checkOrganizationForTest(const QString& filePath);
     bool selectedProjectTemplateForTest() const;
     bool activateSelectedProjectTemplateForTest();
@@ -111,6 +113,7 @@ public:
     bool loadSelectedSampleForTest();
 
 signals:
+    void audioEngineRequired();
     /// Something worth a line in the status bar.
     void statusMessage(const QString& text);
     /// The gear button: the shell opens the Browser page of Settings.
@@ -143,6 +146,9 @@ private:
     QWidget* buildHeader();
     QWidget* buildTabs();
     void rebuildTabs();
+    void updateSidebar();
+    QStringList searchRoots() const;
+    void prepareSearchIndex();
     void activateCollection(const QString& collectionId, bool persist = true);
     void createTab();
     void pinCollectionAsTab(const QString& collectionId);
@@ -182,7 +188,11 @@ private:
     QLineEdit* m_searchField = nullptr;
     QWidget* m_header = nullptr;
     QWidget* m_tabsBar = nullptr;
-    QHBoxLayout* m_tabsLayout = nullptr;
+    QListWidget* m_tabList = nullptr;
+    QToolButton* m_addTabButton = nullptr;
+    ui::IconButton* m_sidebarToggle = nullptr;
+    QLabel* m_sectionLabel = nullptr;
+    bool m_sidebarExpanded = false;
     QWidget* m_previewBar = nullptr;
     WaveformStrip* m_strip = nullptr;
     QLabel* m_fileLabel = nullptr;

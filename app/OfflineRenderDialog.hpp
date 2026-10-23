@@ -13,6 +13,7 @@ class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QTimer;
+class QTreeWidget;
 class QVBoxLayout;
 class QWidget;
 class ChannelStrip;
@@ -53,7 +54,9 @@ private:
     std::string m_chainTrackId;
 
     QLabel* m_clipSummary = nullptr;
-    QListWidget* m_clipList = nullptr;
+    QTreeWidget* m_clipList = nullptr;
+    QCheckBox* m_selectAll = nullptr;
+    QLabel* m_selectionDuration = nullptr;
     QWidget* m_rackHost = nullptr;
     QVBoxLayout* m_rackLayout = nullptr;
     ChannelStrip* m_rack = nullptr;
@@ -62,6 +65,7 @@ private:
     QPushButton* m_autoRender = nullptr;
     QCheckBox* m_includeTail = nullptr;
     QLabel* m_status = nullptr;
+    QLabel* m_renderDetails = nullptr;
     QLabel* m_progressPercent = nullptr;
     QProgressBar* m_progress = nullptr;
     QDialogButtonBox* m_buttons = nullptr;

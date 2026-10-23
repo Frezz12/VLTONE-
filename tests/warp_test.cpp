@@ -2,6 +2,7 @@
 #include "ProjectSerializer.hpp"
 #include "WarpAnalysis.hpp"
 #include "WarpTools.hpp"
+#include "SampleSilenceTrim.hpp"
 #include "Internal/EqualizerInstance.hpp"
 #include "cloud/PublishPreflight.hpp"
 #include "cloud/CloudDocumentProjection.hpp"
@@ -124,6 +125,115 @@ int main() {
     audio::AudioRecorder recorder; recorder.initialize(48000, 2); recorder.writeWAVFile(file, buffer, 48000);
     EngineController controller{};
     if (!controller.initialize(48000, 256, false)) return 1;
+    {
+        engine::SampleBuffer source(2, 48000, 48000);
+        audio::AudioBuffer fixture(2, 48000);
+        for (unsigned i = 0; i < 48000; ++i) {
+            const float peak = (i >= 9600 && i < 19200) || (i >= 28800 && i < 38400) ? .5f :
+                i >= 4800 && i < 43200 && (i < 9600 || i >= 38400) ? .002f : 0.f;
+            source.writableChannel(0)[i] = fixture.getChannel(0)[i] = peak;
+            source.writableChannel(1)[i] = fixture.getChannel(1)[i] = -peak;
+        }
+        const auto silence = analyzeSampleSilenceTrim(source, source.frames());
+        const auto high = silence.at(-40), low = silence.at(-70);
+        check(high.audible && high.first == 9600 && high.end == 38400,
+              "silence Trim finds both exact edges without cancelling antiphase stereo or splitting internal pauses");
+        check(low.first == 4800 && low.end == 43200 && silence.at(-96).end == 48000,
+              "lowering the Trim threshold restores quiet edges; Off selects the complete source");
+        source.writableChannel(1)[47000] = .5f;
+        check(analyzeSampleSilenceTrim(source, source.frames()).at(-40).end == 47001,
+              "silence in one channel never discards sound in the other");
+        engine::SampleBuffer empty(2, 100, 48000);
+        check(!analyzeSampleSilenceTrim(empty, 100).at(-40).audible &&
+              analyzeSampleSilenceTrim(source, source.frames(), [] { return false; }).frames == 0,
+              "silent sources stay empty in the analysis and background analysis cancels");
+        const auto trimFile = (dir / "trim.wav").string();
+        recorder.writeWAVFile(trimFile, fixture, 48000);
+        controller.setTempo(120);
+        const auto owner = controller.addTrack(TrackKind::Audio, "Sample region");
+        const auto id = controller.importAudio(trimFile, owner, 4);
+        const auto clip = [&] { return controller.audioClip(owner, id); };
+        const auto depth = controller.undoDepth();
+        const auto revision = controller.clipGeometryRevision();
+        controller.setClipSampleParameter(owner, id, "startoffset", .2);
+        check(near(clip()->startSeconds, 4.2) && near(clip()->offsetSeconds, .2) && near(clip()->durationSeconds, .8) &&
+              controller.clipGeometryRevision() > revision,
+              "Sampler Start trims the left edge live and leaves surviving audio and the right edge anchored");
+        controller.setClipSampleParameter(owner, id, "startoffset", .1);
+        controller.commitClipSampleParameterEdit(owner, id, "startoffset", 0, "Sample Start");
+        check(near(clip()->startSeconds, 4.1) && near(clip()->durationSeconds, .9) && controller.undoDepth() == depth + 1,
+              "reversing a Start drag restores material immediately in one gesture");
+        controller.undo(); check(near(clip()->startSeconds, 4) && near(clip()->offsetSeconds, 0) && near(clip()->durationSeconds, 1),
+                                 "Start Undo restores placement and source range together");
+        controller.redo(); check(near(clip()->startSeconds, 4.1) && near(clip()->offsetSeconds, .1), "Start Redo restores the trim");
+        controller.undo();
+        controller.setClipSampleParameter(owner, id, "stretch.time", 2);
+        controller.commitClipSampleParameterEdit(owner, id, "stretch.time", 1, "Stretch");
+        controller.setClipSampleParameter(owner, id, "startoffset", .25);
+        controller.commitClipSampleParameterEdit(owner, id, "startoffset", 0, "Stretched Start");
+        check(near(clip()->startSeconds, 4.5) && near(clip()->durationSeconds, 1.5),
+              "Start scales the left-edge movement by the playback stretch ratio");
+        controller.undo(); controller.undo();
+        const auto trimDepth = controller.undoDepth();
+        controller.setClipSampleTrim(owner, id, -40, high.first / 48000., high.end / 48000.);
+        controller.commitClipSampleParameterEdit(owner, id, "trim", -96, "Trim Silence");
+        check(near(clip()->startSeconds, 4.2) && near(clip()->offsetSeconds, .2) && near(clip()->durationSeconds, .6) &&
+              controller.undoDepth() == trimDepth + 1 && clip()->filePath == trimFile,
+              "threshold Trim changes only the two outer edges non-destructively in one Undo entry");
+        controller.setClipSampleTrim(owner, id, -70, low.first / 48000., low.end / 48000.);
+        controller.commitClipSampleParameterEdit(owner, id, "trim", -40, "Lower Trim");
+        check(near(clip()->startSeconds, 4.1) && near(clip()->durationSeconds, .8),
+              "lowering Trim after release restores previously removed quiet audio without shifting it");
+        std::string document; ProjectModel loaded;
+        check(ProjectSerializer::serializeDocument(controller.project(), document).isOk() &&
+              ProjectSerializer::deserializeDocument(loaded, document).isOk() &&
+              loaded.findTrack(owner)->clips.front().sampleEdit.trimThresholdDb == -70 &&
+              near(loaded.findTrack(owner)->clips.front().startSeconds, 4.1),
+              "Trim threshold and resulting placement survive project save and load");
+        controller.undo();
+        controller.setClipSampleTrim(owner, id, 0, 0, 0);
+        controller.commitClipSampleParameterEdit(owner, id, "trim", -40, "Inaudible Trim");
+        check(near(clip()->startSeconds, 4.2) && near(clip()->durationSeconds, .6) && clip()->sampleEdit.trimThresholdDb == 0,
+              "a threshold above the signal preserves the clip instead of deleting it or jumping the dial");
+        controller.undo();
+        controller.setClipSampleParameter(owner, id, "startoffset", .3);
+        controller.commitClipSampleParameterEdit(owner, id, "startoffset", .2, "Manual Start");
+        check(clip()->sampleEdit.trimThresholdDb == -96, "manual Start replaces the automatic Trim setting");
+        controller.undo(); check(clip()->sampleEdit.trimThresholdDb == -40 && near(clip()->startSeconds, 4.2),
+                                 "manual Start Undo restores the preceding Trim threshold and range");
+        controller.setClipSampleTrim(owner, id, -96, 0, 1);
+        controller.commitClipSampleParameterEdit(owner, id, "trim", -40, "Disable Trim");
+        check(near(clip()->startSeconds, 4) && near(clip()->offsetSeconds, 0) && near(clip()->durationSeconds, 1),
+              "turning Trim Off restores the full source at its original timeline anchor");
+        controller.undo();
+        controller.undo();
+        auto nonlinear = map; nonlinear.baselineDurationSeconds = 1.5;
+        nonlinear.markers.back().sourceSeconds = 1;
+        nonlinear.markers.back().targetBeats = 2;
+        controller.setClipWarp(owner, id, nonlinear);
+        const auto originalMap = clip()->warp;
+        controller.setClipSampleParameter(owner, id, "startoffset", .5);
+        controller.commitClipSampleParameterEdit(owner, id, "startoffset", 0, "Warp Start");
+        check(near(clip()->startSeconds, 4.75) && near(clip()->durationSeconds, .25) &&
+              near(clip()->startSeconds + beatsToSeconds(warpBeatAt(clip()->warp, .75), 120), 4.875),
+              "nonlinear Warp Start keeps the right edge and every remaining source position anchored");
+        controller.undo(); check(clip()->warp == originalMap && near(clip()->startSeconds, 4),
+                                 "Warp Start Undo restores exact marker identities and timeline placement");
+        controller.setClipSampleTrim(owner, id, -40, .2, .8);
+        controller.commitClipSampleParameterEdit(owner, id, "trim", -96, "Warp Silence Trim");
+        check(near(clip()->startSeconds, 4.3) && near(clip()->durationSeconds, .6) &&
+              near(clip()->startSeconds + beatsToSeconds(warpBeatAt(clip()->warp, .75), 120), 4.875),
+              "silence Trim preserves surviving nonlinear Warp timing at both edges");
+        controller.undo(); check(clip()->warp == originalMap && near(clip()->startSeconds, 4),
+                                 "silence Trim Undo restores the complete Warp map");
+        auto disabled = originalMap; disabled.enabled = false;
+        controller.setClipWarp(owner, id, disabled);
+        controller.setClipSampleParameter(owner, id, "startoffset", .2);
+        controller.commitClipSampleParameterEdit(owner, id, "startoffset", 0, "Disabled Warp Start");
+        check(near(clip()->startSeconds, 4.3) && near(clip()->durationSeconds, 1.2),
+              "Start uses baseline duration when a retained Warp map is disabled");
+        controller.undo(); check(clip()->warp == disabled && near(clip()->startSeconds, 4), "disabled Warp Start restores exactly");
+    }
     {
         controller.setTempo(120);
         const auto importedTrack = controller.addTrack(TrackKind::Audio, "Auto Warp");

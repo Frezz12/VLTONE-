@@ -2,6 +2,7 @@
 #include "NotificationCenter.hpp"
 #include "ChannelStrip.hpp"
 #include "SettingsWindow.hpp"
+#include "PerformanceWindow.hpp"
 #include <QApplication>
 
 namespace {
@@ -14,64 +15,83 @@ QString noticeKey(const daw::AudioFailureNotice& notice) {
 
 void MainWindow::serviceAudioHealth() {
     if (!m_audioNotifications) return;
-    const auto generation = m_controller.projectGeneration();
-    if (m_audioNotificationProject != generation) {
+    if (checkPluginProcessingHealth()) return;
+    const auto generation = audioController().projectGeneration();
+    const auto document = QString::fromStdString(audioController().documentIdentity());
+    if (m_audioNotificationProject != generation || m_audioNotifications->property("vlt.audioDocument").toString() != document) {
         m_audioNotifications->clear();
         m_audioNotificationProject = generation;
+        m_audioNotifications->setProperty("vlt.audioDocument", document);
     }
     const bool canMaintainPlugins = !m_projectFileJob && QApplication::mouseButtons() == Qt::NoButton && !QWidget::mouseGrabber();
     if (!m_audioDeviceHealthClock.isValid() || m_audioDeviceHealthClock.elapsed() >= 1000) {
         m_audioDeviceHealthClock.start();
-        if (m_controller.audioDeviceNeedsRecovery()) {
-            if (m_controller.isRecording()) {
-                m_controller.markRecordingInterrupted();
-                stopRecordingNow();
+        if (audioController().audioDeviceNeedsRecovery()) {
+            // The device watchdog and processor watchdog both use two seconds.
+            // Recheck without the UI cache before stopping a stream whose
+            // callback may still be inside a vendor call.
+            m_pluginHealthClock.invalidate();
+            if (checkPluginProcessingHealth()) return;
+            const auto processing = audioController().audioPerformanceSnapshot();
+            if (std::any_of(processing.rows.begin(), processing.rows.end(), [&](const auto& row) {
+                return row.timing.activeSinceNs > row.timing.completedAtNs &&
+                    processing.timestampNs > row.timing.activeSinceNs &&
+                    processing.timestampNs - row.timing.activeSinceNs > 100'000'000ull;
+            })) return;
+            if (audioController().isRecording()) {
+                audioController().markRecordingInterrupted();
+                finishAudioRecordingForHealth();
             }
-            cancelCountIn();
-            if (!m_controller.audioDeviceRecoveryExhausted()) (void)m_controller.recoverAudioDevice();
-        } else (void)m_controller.recoverAudioDevice();
+            audioController().cancelCountIn();
+            if (!audioController().audioDeviceRecoveryExhausted()) (void)audioController().recoverAudioDevice();
+        } else (void)audioController().recoverAudioDevice();
         // Native checkpoints remain available with recovery-to-disk disabled.
-        if (canMaintainPlugins && !m_journal.running()) m_controller.refreshRecoveryPluginStates(1);
+        if (canMaintainPlugins && !m_journal.running()) audioController().refreshRecoveryPluginStates(1);
     }
-    m_controller.serviceAudioHealth(canMaintainPlugins);
-    for (const auto& notice : m_controller.takeAudioFailureNotices()) {
-        if (notice.project != m_controller.projectGeneration()) continue;
+    audioController().serviceAudioHealth(canMaintainPlugins);
+    for (const auto& notice : audioController().takeAudioFailureNotices()) {
+        if (notice.project != audioController().projectGeneration()) continue;
         showAudioFailure(notice);
     }
 }
 
 void MainWindow::retryAudioFailure(const daw::AudioFailureNotice& notice) {
-    if (notice.project != m_controller.projectGeneration()) return;
+    if (notice.project != audioController().projectGeneration()) return;
     if (notice.source == daw::AudioFailureNotice::Source::Device) {
-        if (m_controller.isRecording()) {
-            m_controller.markRecordingInterrupted(); stopRecordingNow();
+        if (audioController().isRecording()) {
+            audioController().markRecordingInterrupted(); finishAudioRecordingForHealth();
         }
-        cancelCountIn();
-        (void)m_controller.recoverAudioDevice(true);
+        audioController().cancelCountIn();
+        (void)audioController().recoverAudioDevice(true);
     } else {
-        const auto current = m_controller.insertRuntimeStatus(notice.address.channelId, notice.address.slotId);
+        const auto current = audioController().insertRuntimeStatus(notice.address.channelId, notice.address.slotId);
         if (current.address.instance != notice.address.instance || !current.canRetry) return;
-        cancelCountIn();
-        if (m_controller.isRecording()) stopRecordingNow();
-        m_controller.pause();
-        m_controller.stopPreview();
-        m_controller.stopPluginAudition();
-        (void)m_controller.retryInsertRecovery(notice.address.channelId, notice.address.slotId,
+        audioController().cancelCountIn();
+        if (audioController().isRecording()) finishAudioRecordingForHealth();
+        audioController().pause();
+        audioController().stopPreview();
+        audioController().stopPluginAudition();
+        (void)audioController().retryInsertRecovery(notice.address.channelId, notice.address.slotId,
             {notice.project, notice.address.instance});
     }
-    for (const auto& update : m_controller.takeAudioFailureNotices()) showAudioFailure(update);
+    for (const auto& update : audioController().takeAudioFailureNotices()) showAudioFailure(update);
 }
 
 void MainWindow::showAudioFailure(const daw::AudioFailureNotice& notice, bool reveal) {
-    if (!m_audioNotifications || notice.project != m_controller.projectGeneration()) return;
+    if (!m_audioNotifications || notice.project != audioController().projectGeneration()) return;
+    const auto document = audioController().documentIdentity();
+    if (notice.state != daw::AudioFailureNotice::State::Retired) {
+        ensurePerformanceWindow();
+        m_performanceWindow->recordNotice(notice);
+    }
     using Source = daw::AudioFailureNotice::Source;
     using State = daw::AudioFailureNotice::State;
     if (notice.state == State::Stopped) {
-        if (m_controller.isRecording()) {
-            m_controller.markRecordingInterrupted();
-            stopRecordingNow();
+        if (audioController().isRecording()) {
+            audioController().markRecordingInterrupted();
+            finishAudioRecordingForHealth();
         }
-        cancelCountIn();
+        audioController().cancelCountIn();
     }
     ui::Notification card;
     card.id = noticeKey(notice);
@@ -84,7 +104,7 @@ void MainWindow::showAudioFailure(const daw::AudioFailureNotice& notice, bool re
     card.resolved = notice.state == State::Recovered;
     if (notice.source == Source::Plugin) {
         bool analysis = false;
-        if (const auto* chain = m_controller.channelInserts(notice.address.channelId))
+        if (const auto* chain = audioController().channelInserts(notice.address.channelId))
             for (const auto& slot : *chain)
                 if (slot.id == notice.address.slotId) analysis = slot.analysisOnly;
         for (auto* strip : findChildren<ChannelStrip*>())
@@ -104,14 +124,19 @@ void MainWindow::showAudioFailure(const daw::AudioFailureNotice& notice, bool re
         if (notice.canRetry && notice.state != State::Recovering && !card.resolved) {
             const auto label = notice.recording ? tr("Finish recording and restore")
                 : notice.requiresStop ? tr("Stop and restore") : tr("Retry recovery");
-            card.actions.push_back({label, [this, notice] { retryAudioFailure(notice); }});
+            card.actions.push_back({label, [this, notice, document] {
+                if (audioController().documentIdentity() == document) retryAudioFailure(notice);
+            }});
         }
+        card.actions.push_back({tr("Performance & diagnostics…"), [this] { openPerformanceWindow(); }});
     } else if (notice.source == Source::Device) {
         card.title = card.resolved ? tr("Audio reconnected") : tr("Audio device unavailable");
         card.message = card.resolved ? tr("Audio is ready. Recording has not been restarted.")
             : notice.state == State::Waiting ? tr("Trying to reconnect the audio device. Any interrupted take has been preserved.")
             : tr("Automatic reconnection failed. Check the device and try again.");
-        if (notice.canRetry) card.actions.push_back({tr("Reconnect"), [this, notice] { retryAudioFailure(notice); }});
+        if (notice.canRetry) card.actions.push_back({tr("Reconnect"), [this, notice, document] {
+            if (audioController().documentIdentity() == document) retryAudioFailure(notice);
+        }});
         card.actions.push_back({tr("Audio settings"), [this] { openSettings(SettingsWindow::kAudioTab); }});
     } else if (notice.source == Source::Overload) {
         card.title = tr("Too many plugin events");

@@ -71,21 +71,23 @@ void AudioRuntime::bindPluginSafety(const std::string& channelId, InsertSlot& sl
 }
 
 audio::Result AudioRuntime::recoverPlugin(const AudioPluginAddress& address,
-    const std::function<void()>& beforeRetire) {
+    const std::function<void()>& beforeRetire, bool restartHealthy) {
     if (safetyStopped.load(std::memory_order_acquire))
         return audio::Result::fail(audio::EngineError::AudioThreadError, "The audio engine is stopped. Save and reopen the project.");
     struct Prune { AudioRuntime* owner; ~Prune() { owner->prunePluginSnapshots(); } } prune{this};
     auto* slot = pluginSlot(address.channelId, address.slotId);
     auto* target = pluginNode(address);
-    if (!slot || !target || !address.instance || !target->faultBypassed())
+    if (!slot || !target || !address.instance || (!restartHealthy && !target->faultBypassed()))
         return audio::Result::fail(audio::EngineError::InvalidArgument, "The failed plugin instance no longer exists.");
+    if (hasUnresponsiveProcessing())
+        return audio::Result::fail(audio::EngineError::AudioThreadError, "A processor is still inside an unresponsive call. It cannot be safely restarted in this process.");
     if (engine.transport().isPlaying() || hasActiveCaptures() || auditionRuntime || auditionDriven)
         return audio::Result::fail(audio::EngineError::EngineRunning, "Stop playback, recording and audition before restoring the plugin.");
     try {
         std::shared_ptr<plugins::PluginNode> replacements[2];
         for (bool right : {false, true}) {
             const auto& old = right ? slot->rightNode : slot->node;
-            if (!old || old->fault() == plugins::PluginNode::Fault::None) continue;
+            if (!old || (!restartHealthy && old->fault() == plugins::PluginNode::Fault::None)) continue;
             const auto snapshot = pluginStateSnapshot({address.channelId, address.slotId, right, old->instanceId()}, true);
             if (!snapshot.exists || (snapshot.supportsState && !snapshot.stateCaptured))
                 return audio::Result::fail(audio::EngineError::PluginLoadFailed, "No valid plugin recovery state is available.");

@@ -97,13 +97,98 @@ AudioRuntimeDiagnostics AudioRuntime::diagnostics() const {
         engine.workerCount(), engine.realtimeWorkerCount(), engine.workgroupWorkerCount()};
 }
 
+bool AudioRuntime::hasUnresponsiveProcessing() const {
+    const auto graph = routingGraph();
+    if (!graph) return false;
+    const auto now = rt::nowNanos();
+    for (const auto& entry : graph->nodes)
+        if (processingUnresponsive(entry.node->diagnostics.snapshot(), now)) return true;
+    return false;
+}
+
+AudioPerformanceSnapshot AudioRuntime::performanceSnapshot() const {
+    AudioPerformanceSnapshot out;
+    out.timestampNs = rt::nowNanos();
+    const auto graph = routingGraph();
+    if (!graph) return out;
+    out.generation = graph->generation;
+    out.totalLatencySamples = graph->totalLatency;
+    out.graphNodes = std::uint32_t(graph->nodes.size());
+    out.graphEdges = std::uint32_t(graph->inputEdges.size());
+    std::unordered_map<const engine::Node*, AudioPerformanceRow> owners;
+    using Kind = AudioPerformanceRow::Kind;
+    for (const auto& [channelId, channel] : channels) {
+        const auto processing = [&](const auto& node, const std::string& clip = std::string{}) {
+            if (!node) return;
+            auto& row = owners[node.get()];
+            row.address.channelId = channelId;
+            row.clipId = clip;
+        };
+        const auto plugins = [&](const auto& chain, Kind kind, const std::string& clip = std::string{}) {
+            for (const auto& slot : chain) for (bool right : {false, true}) {
+                const auto& node = right ? slot.rightNode : slot.node;
+                if (!node) continue;
+                auto& row = owners[node.get()];
+                row.kind = kind;
+                row.address = {channelId, slot.slotId, right, node->instanceId()};
+                row.name = slot.configuration.name;
+                row.clipId = clip;
+                row.format = slot.configuration.requiredFormat;
+                row.bypassed = node->isBypassed();
+                row.health = pluginRuntimeStatus(channelId, slot.slotId);
+                row.latencySamples = node->latencySamples(); // host atomic, never vendor code
+                processing(right ? slot.rightSelector : slot.leftSelector, clip);
+                processing(slot.stereoMerge, clip);
+            }
+        };
+        processing(channel.clips); processing(channel.frozenPlayer); processing(channel.clipFxSum);
+        processing(channel.midiClips); processing(channel.fader); processing(channel.meter);
+        processing(channel.input); processing(channel.sum);
+        processing(channel.samplerFader); processing(channel.samplerMeter);
+        for (const auto& send : channel.sends) processing(send);
+        for (const auto& [id, modulator] : channel.modulators) processing(modulator);
+        plugins(channel.instrument, Kind::Instrument);
+        plugins(channel.inserts, Kind::Insert);
+        plugins(channel.samplerInserts, Kind::SamplerFx);
+        plugins(channel.miniModules, Kind::MiniModule);
+        for (const auto& [clipId, fx] : channel.clipFx) {
+            processing(fx.player, clipId); processing(fx.fader, clipId); processing(fx.meter, clipId);
+            plugins(fx.inserts, Kind::ClipFx, clipId);
+        }
+    }
+    if (masterSum) owners[masterSum.get()].address.channelId = AudioGraphSpec::masterChannelId;
+    if (masterFader) owners[masterFader.get()].address.channelId = AudioGraphSpec::masterChannelId;
+    for (const auto& entry : graph->nodes) {
+        auto found = owners.find(entry.node);
+        AudioPerformanceRow row = found != owners.end() ? found->second : AudioPerformanceRow{};
+        row.id = entry.node->diagnostics.id;
+        row.timing = entry.node->diagnostics.snapshot();
+        row.inGraph = true;
+        row.pathLatencySamples = entry.latency;
+        row.latencySamples = entry.latency - entry.inputLatency;
+        if (row.name.empty()) row.name = entry.node->name();
+        out.rows.push_back(std::move(row));
+        if (found != owners.end()) owners.erase(found);
+    }
+    // Retain dormant/frozen/recording Clip FX in the list, explicitly inactive.
+    for (auto& [node, row] : owners) {
+        if (row.kind == Kind::Processing) continue;
+        row.id = node->diagnostics.id;
+        row.timing = node->diagnostics.snapshot();
+        if (row.name.empty()) row.name = node->name();
+        out.rows.push_back(std::move(row));
+    }
+    return out;
+}
+
 AudioDeviceSnapshot AudioRuntime::deviceSnapshot() const {
     const auto counts = devices->xruns();
     return {devices->isRunning(), devices->hasStream(), devices->diagInputUsesDeviceTime(),
         devices->deviceState(), devices->sampleRate(), devices->bufferSize(),
         devices->diagCallbackCount(), devices->diagRenderCallCount(), devices->diagLastCallbackTimestamp(),
         devices->diagLastRenderStatus(),
-        {counts.inputUnderflow, counts.inputOverflow, counts.outputUnderflow, counts.outputOverflow}};
+        {counts.inputUnderflow, counts.inputOverflow, counts.outputUnderflow, counts.outputOverflow},
+        devices->inputLatencySeconds(), devices->outputLatencySeconds()};
 }
 
 AudioTimingSnapshot AudioRuntime::timingSnapshot(bool callback, bool drain) {

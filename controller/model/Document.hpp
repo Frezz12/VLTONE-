@@ -390,6 +390,7 @@ enum class ClipStretchMode : uint8_t {
 /// already drive timeline trim geometry, so keeping a second copy here would
 /// let the editor and arrangement disagree.
 struct ClipSampleEditModel {
+    double trimThresholdDb = -96.0; ///< silence Trim; -96 is Off, bounds live in ClipModel
     int loopMode = 0;              ///< 0 off, 1 forward, 2 ping-pong
     double loopStart = 0.0;        ///< normalized inside the trimmed source
     double loopEnd = 1.0;
@@ -845,12 +846,22 @@ struct TrackFreezeState {
     bool active() const { return !filePath.empty() || !asset.empty(); }
 };
 
-/// A named, non-nested, contiguous range of channel inserts. The insert vector
-/// remains the processing order; grouping never creates another audio node.
+struct RackLayerModel {
+    std::string id, name;
+    std::vector<std::string> insertIds;
+    float gain = 1.f;
+    bool muted = false, solo = false;
+    friend bool operator==(const RackLayerModel&, const RackLayerModel&) = default;
+};
+
+/// Groups own contiguous ranges. Children nest within one parent chain;
+/// layers split that range into parallel chains sharing the same input.
 struct RackGroupModel {
     std::string id;
     std::string name;
     std::vector<std::string> insertIds;
+    std::string parentId;
+    std::vector<RackLayerModel> layers;
     friend bool operator==(const RackGroupModel&, const RackGroupModel&) = default;
 };
 

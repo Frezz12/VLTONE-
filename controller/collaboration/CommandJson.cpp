@@ -286,7 +286,7 @@ bool sendFromJson(const json& value, SendModel& send) {
 }
 
 json sampleEditToJson(const ClipSampleEditModel& edit) {
-    return json{{"loopMode", edit.loopMode},
+    auto result = json{{"loopMode", edit.loopMode},
                 {"loopStart", edit.loopStart},
                 {"loopEnd", edit.loopEnd},
                 {"stretchMode", static_cast<int>(edit.stretchMode)},
@@ -312,6 +312,8 @@ json sampleEditToJson(const ClipSampleEditModel& edit) {
                 {"fadeStereo", edit.fadeStereo},
                 {"reverse", edit.reverse},
                 {"swapStereo", edit.swapStereo}};
+    if (edit.trimThresholdDb != -96.0) result["trimThresholdDb"] = edit.trimThresholdDb;
+    return result;
 }
 
 bool sampleEditFromJson(const json& value, ClipSampleEditModel& edit) {
@@ -321,9 +323,11 @@ bool sampleEditFromJson(const json& value, ClipSampleEditModel& edit) {
                        "boost", "eqLow", "eqMid", "eqHigh", "ringMix",
                        "ringFreq", "cut", "res", "reverbType", "reverb",
                        "stereoDelay", "pogo", "removeDc", "reversePolarity",
-                       "normalize", "fadeStereo", "reverse", "swapStereo"})) {
+                       "normalize", "fadeStereo", "reverse", "swapStereo"}, {"trimThresholdDb"})) {
         return false;
     }
+    if (value.contains("trimThresholdDb") && !value.at("trimThresholdDb").is_number()) return false;
+    edit.trimThresholdDb = value.value("trimThresholdDb", -96.0);
 	static constexpr const char* integer[] = {
 	    "loopMode", "stretchMode", "rootNote", "reverbType"};
 	for (const char* key : integer) {

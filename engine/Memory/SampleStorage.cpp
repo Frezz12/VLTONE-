@@ -54,7 +54,7 @@ SampleStorage::SampleStorage(std::size_t samples) {
         catch (...) { residentSampleBytes.fetch_sub(bytes); throw; }
         return;
     }
-    auto mapping = std::make_unique<Mapping>();
+    auto mapping = std::make_shared<Mapping>();
     mapping->bytes = bytes;
     mapping->file = std::tmpfile();
     if (!mapping->file) throw std::runtime_error("cannot create audio cache file");
@@ -105,7 +105,7 @@ SampleStorage::~SampleStorage() {
 SampleStorage::SampleStorage(const std::filesystem::path& path, std::size_t samples) {
     if (!samples || samples > std::numeric_limits<std::size_t>::max() / sizeof(float))
         throw std::length_error("invalid mapped audio size");
-    auto mapping = std::make_unique<Mapping>();
+    auto mapping = std::make_shared<Mapping>();
     mapping->bytes = samples * sizeof(float);
     mapping->readOnly = true;
 #if defined(_WIN32)
@@ -151,4 +151,7 @@ const float* SampleStorage::data() const noexcept {
 }
 bool SampleStorage::fileBacked() const noexcept { return bool(m_mapping); }
 bool SampleStorage::readOnly() const noexcept { return m_mapping && m_mapping->readOnly; }
+std::shared_ptr<const float> SampleStorage::mappedSamples() const noexcept {
+    return m_mapping ? std::shared_ptr<const float>(m_mapping, m_mapping->address) : nullptr;
+}
 } // namespace daw::engine

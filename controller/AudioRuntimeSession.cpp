@@ -94,6 +94,7 @@ AudioRuntime::TransactionId AudioRuntime::captureTransaction() {
     remember(masterFader);
     for (const auto& [id, channel] : channels) {
         for (const auto& [source, node] : channel.modulators) remember(node);
+        for (const auto& [layer, fader] : channel.layerFaders) remember(fader);
         remember(channel.clips); remember(channel.frozenPlayer); remember(channel.midiClips);
         remember(channel.input); remember(channel.fader); remember(channel.samplerFader);
         for (const auto& send : channel.sends) remember(send);
@@ -209,6 +210,7 @@ audio::Result AudioRuntime::applySession(AudioSessionSpec session, bool reconfig
         AudioSessionPublication preparedPublication;
         auto staging = stageSessionPlugins(session, restores, checkpoints,
             publication ? &preparedPublication : nullptr);
+        if (session.pluginLoadProgress) session.pluginLoadProgress({}, 0, 0);
         // Both leases outlive the gate: native construction, unused staged
         // processors and retired plugin destruction stay off the render stop.
         std::optional<ScopedAudioTransaction<AudioRuntime>> transaction;

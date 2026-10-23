@@ -9,11 +9,13 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -25,9 +27,8 @@ static bool check(bool condition, const char* message) {
     return condition;
 }
 
-static void writeTone(const std::string& path) {
+static void writeTone(const std::string& path, audio::BufferSize frames = 12000) {
     constexpr double rate = 48000.0;
-    constexpr audio::BufferSize frames = 12000;
     audio::AudioBuffer tone(2, frames);
     for (audio::BufferSize frame = 0; frame < frames; ++frame) {
         const float sample = 0.35f * std::sin(
@@ -64,7 +65,35 @@ static const daw::ClipModel* findClip(const daw::EngineController& controller,
     return found == track->clips.end() ? nullptr : &*found;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--benchmark") {
+        const auto root = fs::temp_directory_path() / ("vlt-offline-bench-" + daw::newUuid());
+        fs::create_directories(root);
+        const auto file = (root / "source.wav").string();
+        writeTone(file, 48000 * 30);
+        daw::EngineController controller, rack;
+        if (!controller.initialize(48000, 256, false) || !rack.initialize(48000, 256, false)) return 1;
+        controller.setRecordDirectory(root.string());
+        std::vector<daw::EngineController::ClipAddress> clips;
+        for (int i = 0; i < 8; ++i) {
+            const auto track = controller.addTrack(daw::TrackKind::Audio, "Benchmark");
+            clips.push_back({track, controller.importAudio(file, track, i * 35.0)});
+        }
+        const auto track = rack.addTrack(daw::TrackKind::Audio, "Effects");
+        for (int i = 0; i < 3; ++i)
+            rack.addInsert(track, daw::plugins::equalizer::EqualizerInstance::staticDescriptor());
+        const auto chain = rack.copyChannelStrip(track, false);
+        daw::EngineController::OfflineRenderReport report;
+        const auto start = std::chrono::steady_clock::now();
+        const auto result = controller.renderClipsOffline(clips, chain, false, {}, report);
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        std::printf("OFFLINE_BENCH clips=8 audio_seconds=240 eq_per_clip=3 elapsed=%.3f workers=%zu files=%zu success=%d\n",
+            elapsed, report.workerCount, report.files.size(), int(bool(result)));
+        if (!result) std::fprintf(stderr, "%s\n", result.message().c_str());
+        controller.shutdown(); rack.shutdown();
+        fs::remove_all(root);
+        return result && report.files.size() == 8 ? 0 : 1;
+    }
     const fs::path dir = fs::temp_directory_path() / "daw_processing_render_test";
     fs::remove_all(dir);
     fs::create_directories(dir);
@@ -420,8 +449,26 @@ int main() {
         rack.setInsertParameter(rackTrack, equalizer, "output.gain", -6.020599913);
         auto chain = rack.copyChannelStrip(rackTrack, false);
         daw::EngineController::OfflineRenderReport rendered;
-        check(controller.renderClipsOffline({address, second, address}, chain, false, {}, rendered).isOk() &&
+        const auto callerThread = std::this_thread::get_id();
+        bool callerProgress = true, monotonic = true;
+        double previousFraction = 0.0;
+        std::size_t peakActive = 0;
+        const auto progress = [&](const daw::rendering::Progress& value) {
+            callerProgress &= std::this_thread::get_id() == callerThread;
+            monotonic &= value.fraction >= previousFraction && value.fraction <= 1.0;
+            previousFraction = value.fraction;
+            using State = daw::EngineController::OfflineRenderReport::ClipProgress::State;
+            peakActive = std::max(peakActive, std::size_t(std::count_if(rendered.clips.begin(), rendered.clips.end(),
+                [](const auto& clip) { return clip.state == State::Preparing || clip.state == State::Rendering; })));
+            return true;
+        };
+        check(controller.renderClipsOffline({address, second, address}, chain, false, progress, rendered).isOk() &&
               rendered.files.size() == 2, "multi-clip render replaces each selected clip once");
+        check(callerProgress && monotonic && previousFraction == 1.0 && rendered.completedClips == 2,
+              "parallel progress stays monotonic on the controller thread and completes every clip");
+        check(peakActive == rendered.workerCount && rendered.workerCount >= 1 && rendered.workerCount <= 4 &&
+                  (std::thread::hardware_concurrency() < 4 || peakActive == 2),
+              "independent clips overlap within a bounded worker budget");
         const auto* processed = findClip(controller, track, clip);
         check(processed && processed->offlineHistory.size() == 2 && processed->offlineProcess.empty() &&
               controller.offlineProcessChain(address).inserts.empty(),
@@ -434,6 +481,16 @@ int main() {
               "render resets printed gain, retains realtime FX, identity and timeline position");
         check(std::abs(rmsFile(firstFile) / rmsFile(tone) - 0.25) < 0.015,
               "clip gain and offline plugin print exactly once; live clip FX do not print");
+        check(std::abs(rmsFile(rendered.files[1]) / rmsFile(tone) - 0.5) < 0.015 &&
+                  findClip(controller, track, other)->filePath == rendered.files[1],
+              "parallel workers keep independent gain and publish files in selection order");
+        audio::platform::DecodedAudio firstAudio, secondAudio;
+        bool independent = audio::platform::decodeAudioFile(firstFile, firstAudio).isOk() &&
+            audio::platform::decodeAudioFile(rendered.files[1], secondAudio).isOk() &&
+            firstAudio.interleaved.size() == secondAudio.interleaved.size();
+        if (independent) for (std::size_t i = 0; i < firstAudio.interleaved.size(); ++i)
+            independent &= std::abs(firstAudio.interleaved[i] * 2.f - secondAudio.interleaved[i]) < 1e-6f;
+        check(independent, "parallel clips have independent filter state and sample-accurate audio");
 
         controller.undo();
         check(findClip(controller, track, clip)->filePath == tone &&
@@ -569,13 +626,23 @@ int main() {
               "later cancellation rolls back the complete offline batch");
         check(!controller.offlineRenderInProgress(), "cancellation releases the controller");
         const auto failed = controller.renderClipsOffline({{track, first}, {track, second}}, chain, false,
-            [](const auto&) -> bool { throw std::runtime_error("progress failed"); }, report);
+            [&](const auto&) -> bool {
+                using State = daw::EngineController::OfflineRenderReport::ClipProgress::State;
+                if (std::any_of(report.clips.begin(), report.clips.end(),
+                    [](const auto& clip) { return clip.state != State::Pending; }))
+                    throw std::runtime_error("progress failed while workers were active");
+                return true;
+            }, report);
         check(!failed && fs::is_empty(renderDir) && !controller.offlineRenderInProgress(),
               "progress exceptions clean up every file and release the controller");
         bool changed = false;
         const auto stale = controller.renderClipsOffline({{track, first}, {track, second}}, chain, false,
             [&](const auto&) {
-                if (!changed) { changed = true; controller.removeClip(track, second); }
+                using State = daw::EngineController::OfflineRenderReport::ClipProgress::State;
+                if (!changed && std::any_of(report.clips.begin(), report.clips.end(),
+                    [](const auto& clip) { return clip.state != State::Pending; })) {
+                    changed = true; controller.removeClip(track, second);
+                }
                 return true;
             }, report);
         check(stale.isOk() && report.cancelled && fs::is_empty(renderDir) &&

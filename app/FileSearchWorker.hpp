@@ -2,44 +2,45 @@
 
 #include <QObject>
 #include <QStringList>
-
+#include <QElapsedTimer>
 #include <atomic>
 #include <memory>
 
-/// Searches the browser's folders by name or extension, off the UI thread.
-///
-/// A sample library is tens of thousands of files on a slow disk, so the walk
-/// cannot run where the interface does. It is also bounded in three directions
-/// — matches, entries visited and depth — because an unbounded recursive search
-/// of a home folder is a hang however many threads it uses.
-///
-/// Requests are generation-counted: typing produces a request per keystroke,
-/// and everything but the newest is dropped when it lands.
+class QFileSystemWatcher;
+class QTimer;
+
+/// A bounded filename index, built independently of the current search.
+/// Typing only filters immutable snapshots on a worker thread. Cancelling a
+/// query never throws away the disk walk already in progress.
 class FileSearchWorker : public QObject {
     Q_OBJECT
 public:
     explicit FileSearchWorker(QObject* parent = nullptr);
     ~FileSearchWorker() override;
-
-    /// Start a search. An empty query cancels whatever is running and emits
-    /// nothing — the caller shows the tree again.
+    /// Warm the index before the user starts typing. Unchanged roots are free.
+    void setRoots(const QStringList& roots);
+    void refresh();
     void search(const QStringList& roots, const QString& query,
                 const QStringList& ignoredExtensions = {});
-    /// Abandon the running search; its results will be dropped when they land.
     void cancel();
-
-    /// Does this name match the query? A leading "." or "*." makes it an
-    /// extension test, so both `wav` and `.wav` find WAV files, and any other
-    /// text matches anywhere in the name. Public because the panel uses the
-    /// same rule to describe what it searched for.
+    /// Case-insensitive words (in any order), or an exact .wav / *.wav suffix.
     static bool matches(const QString& fileName, const QString& query);
-
+    quint64 indexBuildCountForTest() const { return m_indexBuilds; }
+    bool indexReadyForTest() const;
 signals:
-    /// Cumulative results; `finished` is false while more folders remain.
-    /// `truncated` says a traversal or result cap was hit.
+    /// Cumulative results, including matches available during initial indexing.
     void results(const QStringList& paths, bool truncated, bool finished);
-
 private:
-    /// Bumped per request; a result carrying an older number is stale.
-    std::shared_ptr<std::atomic<quint64>> m_generation;
+    struct Index;
+    void runQuery();
+    void acceptIndex(std::shared_ptr<const Index> index);
+    QStringList m_roots, m_queryRoots, m_ignoredExtensions;
+    QString m_query;
+    std::shared_ptr<const Index> m_index;
+    std::shared_ptr<std::atomic<quint64>> m_generation, m_scanGeneration;
+    QFileSystemWatcher* m_watcher = nullptr;
+    QTimer* m_refreshTimer = nullptr;
+    QElapsedTimer m_indexAge;
+    bool m_watchIncomplete = false;
+    quint64 m_indexBuilds = 0;
 };

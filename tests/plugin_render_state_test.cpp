@@ -89,6 +89,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
     preset->stopProcessing(); preset->deactivate();
 
     for (const std::string scope : {"track", "group", "master", "clip", "dual-mono"}) {
+        std::cout << "RUN " << descriptor.name << " / " << scope << std::endl;
         EngineController controller{};
         require(bool(controller.initialize(48000, kBlock, false)), "initialize controller");
         const auto track = controller.addTrack(TrackKind::Audio, "Voice");
@@ -135,6 +136,17 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
                 std::abs(right[kBlock - 1] - 0.1f) < 1e-4f, "live preset halves both channels");
         require(controller.insertModel(channel, slot)->parameters.front().value == dryValue,
                 "document deliberately retains stale dry parameter");
+
+        // A cold engine activation must restore the component's preset without
+        // replaying stale controller readbacks (some VST MIDI helpers read 0).
+        live.setGraph(nullptr);
+        require(bool(controller.deactivateAudio()), "park native preset");
+        audio::AudioDeviceConfig reactivation; reactivation.sampleRate = 48000; reactivation.bufferSize = kBlock;
+        require(bool(controller.activateAudio(reactivation, false)), "reactivate native preset");
+        live.setGraph(controller.routingGraph());
+        play();
+        require(std::abs(left[kBlock - 1] - 0.1f) < 1e-4f && std::abs(right[kBlock - 1] - 0.1f) < 1e-4f,
+                descriptor.name + " / " + scope + ": engine restart preserves native sound despite stale parameter mirrors");
 
         rendering::Spec spec;
         spec.outputDir = temp.path.string(); spec.baseName = scope;
@@ -235,6 +247,7 @@ void checkFormat(PluginFactory& factory, const PluginDescriptor& descriptor,
 }
 
 int main() try {
+    std::cout << std::unitbuf;
 #if DAW_ENABLE_VST
     VstFactory vst;
     const auto vstPlugins = vst.inspect(DAW_TEST_VST_SHELL_PATH);

@@ -13,9 +13,6 @@ class RackBuiltinView final : public QWidget {
     void refresh();
     bool checkEqualizerForTest(QString* error);
 
-  protected:
-    void resizeEvent(QResizeEvent*) override;
-
   private:
     RackParameterBinding* m_binding;
     QString m_uid;
